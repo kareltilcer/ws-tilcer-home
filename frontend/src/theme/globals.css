@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens ported verbatim from design/Home.dc.html.
+ *
+ * DARK IS THE DEFAULT THEME (PRD D21): dark values live in :root, light values
+ * under .light — the INVERSE of shadcn/ui's usual .dark convention. There is no
+ * .dark class and we do not use Tailwind's `dark:` variant; the whole palette
+ * flips by toggling the single `.light` class on <html>.
+ *
+ * The `@theme inline` block maps Tailwind color/utility names to these CSS
+ * variables. `inline` makes utilities reference the variable (e.g.
+ * `bg-bg` -> background-color: var(--bg)), so they follow the theme switch.
+ */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-s1: var(--s1);
+  --color-s2: var(--s2);
+  --color-s3: var(--s3);
+  --color-s4: var(--s4);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-now: var(--now);
+  --color-now-soft: var(--now-soft);
+  --color-focus: var(--focus);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-l-byt: var(--l-byt);
+  --color-l-fin: var(--l-fin);
+  --color-l-auto: var(--l-auto);
+  --color-l-zdravi: var(--l-zdravi);
+  --color-l-zahrada: var(--l-zahrada);
+  --color-l-urgent: var(--l-urgent);
+  --color-diff-add-bg: var(--diff-add-bg);
+  --color-diff-add-fg: var(--diff-add-fg);
+  --color-diff-del-bg: var(--diff-del-bg);
+  --color-diff-del-fg: var(--diff-del-fg);
+  --color-c1: var(--c1);
+  --color-c2: var(--c2);
+  --color-c3: var(--c3);
+  --color-c4: var(--c4);
+  --color-c5: var(--c5);
+
+  --radius-md: var(--radius);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-lg: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font);
+  --font-mono: var(--mono);
+}
+
+:root {
+  --bg: oklch(0.165 0.008 264);
+  --s1: oklch(0.198 0.010 264);
+  --s2: oklch(0.232 0.012 264);
+  --s3: oklch(0.270 0.013 264);
+  --s4: oklch(0.310 0.014 264);
+  --border: oklch(0.320 0.012 264);
+  --border-strong: oklch(0.400 0.014 264);
+  --text: oklch(0.945 0.006 264);
+  --muted: oklch(0.740 0.010 264);
+  /* Raised from 0.560 → 0.660 so 12px meta text clears WCAG AA (4.5:1) on the
+     darkest surfaces; caught by the axe pass. Still dimmer than --muted. */
+  --subtle: oklch(0.660 0.012 264);
+  --accent: oklch(0.680 0.120 256);
+  /* Dark theme accent is intentionally bright (bloom-safe), so its foreground
+     must be DARK to clear WCAG AA — white text on it is only 2.76:1. */
+  --accent-fg: oklch(0.220 0.040 256);
+  --accent-soft: oklch(0.360 0.070 256);
+  --now: oklch(0.780 0.110 78);
+  --now-soft: oklch(0.360 0.055 78);
+  --focus: oklch(0.780 0.130 256);
+  --good: oklch(0.740 0.090 150);
+  --warn: oklch(0.800 0.100 78);
+  --danger: oklch(0.700 0.130 22);
+  --l-byt: oklch(0.700 0.100 250);
+  --l-fin: oklch(0.740 0.090 150);
+  --l-auto: oklch(0.790 0.100 78);
+  --l-zdravi: oklch(0.710 0.110 300);
+  --l-zahrada: oklch(0.740 0.090 190);
+  --l-urgent: oklch(0.690 0.125 22);
+  --diff-add-bg: oklch(0.320 0.055 150);
+  --diff-add-fg: oklch(0.860 0.090 150);
+  --diff-del-bg: oklch(0.320 0.060 22);
+  --diff-del-fg: oklch(0.850 0.100 22);
+  --c1: oklch(0.680 0.120 256);
+  --c2: oklch(0.740 0.090 150);
+  --c3: oklch(0.790 0.100 78);
+  --c4: oklch(0.710 0.110 300);
+  --c5: oklch(0.740 0.090 190);
+  --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
+  --radius: 10px;
+  --font: 'Hanken Grotesk', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Motion (from the design-system screen). */
+  --dur-1: 120ms;
+  --dur-2: 150ms;
+  --dur-3: 200ms;
+  --dur-4: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.light {
+  --bg: oklch(0.975 0.004 264);
+  --s1: oklch(1 0 0);
+  --s2: oklch(0.978 0.004 264);
+  --s3: oklch(0.955 0.006 264);
+  --s4: oklch(0.930 0.008 264);
+  --border: oklch(0.905 0.006 264);
+  --border-strong: oklch(0.840 0.008 264);
+  --text: oklch(0.240 0.014 264);
+  --muted: oklch(0.470 0.014 264);
+  --subtle: oklch(0.580 0.012 264);
+  --accent: oklch(0.530 0.150 256);
+  --accent-fg: oklch(0.990 0.004 256);
+  --accent-soft: oklch(0.930 0.045 256);
+  --now: oklch(0.640 0.130 66);
+  --now-soft: oklch(0.945 0.050 78);
+  --focus: oklch(0.550 0.150 256);
+  --good: oklch(0.520 0.120 150);
+  --warn: oklch(0.600 0.130 66);
+  --danger: oklch(0.550 0.170 25);
+  --l-byt: oklch(0.500 0.140 250);
+  --l-fin: oklch(0.480 0.120 150);
+  --l-auto: oklch(0.560 0.130 66);
+  --l-zdravi: oklch(0.500 0.150 300);
+  --l-zahrada: oklch(0.500 0.110 190);
+  --l-urgent: oklch(0.530 0.180 25);
+  --diff-add-bg: oklch(0.940 0.055 150);
+  --diff-add-fg: oklch(0.400 0.120 150);
+  --diff-del-bg: oklch(0.945 0.055 25);
+  --diff-del-fg: oklch(0.470 0.160 25);
+  --c1: oklch(0.530 0.150 256);
+  --c2: oklch(0.520 0.120 150);
+  --c3: oklch(0.600 0.130 66);
+  --c4: oklch(0.520 0.150 300);
+  --c5: oklch(0.500 0.110 190);
+  --shadow: 0 1px 2px oklch(0.2 0.02 264 / 0.10), 0 2px 8px oklch(0.2 0.02 264 / 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Focus ring on every interactive element (design-system rule). */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,31 @@
+# Offline end-to-end run of the production container image: one container
+# serving the API, websocket, and built SPA on http://localhost:8080 with the
+# dev auth bypass and no R2 replication. This is a smoke test of the image and
+# entrypoint — real deploys go through Coolify, not this file.
+#
+# Build + run:  docker compose up --build
+# Then open http://localhost:8080 (you are the fake dev admin; no login).
+services:
+  home:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # Offline harness: force the SPA off real auth so it runs against the
+        # backend's dev bypass instead of redirecting to auth.tilcer.cz.
+        VITE_REAL_AUTH: "false"
+        VITE_AUTH_BASE_URL: ""
+    ports:
+      - "8080:8080"
+    environment:
+      HOME_ENV: development
+      HOME_DEV_AUTH_BYPASS: "true"
+      HOME_DEV_ACTOR_ROLES: "admin"
+      LITESTREAM_ENABLED: "false"
+      HOME_DB_PATH: /data/home.db
+    volumes:
+      - home-data:/data
+    restart: unless-stopped
+
+volumes:
+  home-data:

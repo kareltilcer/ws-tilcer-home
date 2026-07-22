@@ -1,0 +1,22 @@
+# Build context is the repository root (the image needs both frontend/ and
+# backend/). Keep the context lean and reproducible — everything below is
+# rebuilt inside the image or is irrelevant to it.
+
+.git
+.idea
+**/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+backend/home.exe
+backend/*.db
+backend/*.db-*
+**/*.db-wal
+**/*.db-shm
+
+# Docs and design sources never enter the runtime image.
+handoff
+design
+plan.md
+**/*.md
+!README.md

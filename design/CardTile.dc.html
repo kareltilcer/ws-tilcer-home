@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div draggable="{{ card.draggable }}" onDragStart="{{ card.onDragStart }}" onDragEnd="{{ card.onDragEnd }}" onClick="{{ card.onOpen }}" style="{{ card.cardStyle }}" tabindex="0" role="button" aria-label="{{ card.title }}">
+  <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between">
+    <div style="font-size:13.5px;font-weight:600;line-height:1.4;color:var(--text);text-wrap:pretty;word-break:break-word">{{ card.title }}</div>
+    <sc-if value="{{ card.canMove }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ card.onMove }}" title="Přesunout do…" aria-label="Přesunout kartu do jiného sloupce" style="flex:none;width:28px;height:28px;margin:-3px -3px 0 0;border-radius:7px;border:1px solid var(--border);background:var(--s3);color:var(--muted);cursor:pointer;font-size:14px;line-height:1;display:grid;place-items:center">⇄</button>
+    </sc-if>
+  </div>
+  <sc-if value="{{ card.hasLabels }}" hint-placeholder-val="{{ false }}">
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
+      <sc-for list="{{ card.labelChips }}" as="lb" hint-placeholder-count="2">
+        <span style="display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:5px;font-size:11px;font-weight:600;{{ lb.style }}"><span style="width:7px;height:7px;flex:none;{{ lb.dotStyle }}"></span>{{ lb.name }}</span>
+      </sc-for>
+    </div>
+  </sc-if>
+  <div style="display:flex;align-items:center;gap:12px;margin-top:9px;font-size:11px;color:var(--subtle);font-family:var(--mono);min-height:14px">
+    <sc-if value="{{ card.checkShow }}" hint-placeholder-val="{{ false }}">
+      <span style="display:inline-flex;align-items:center;gap:6px" title="Postup checklistu">
+        <span style="width:32px;height:4px;border-radius:99px;background:var(--s4);overflow:hidden;display:inline-block"><span style="display:block;height:100%;width:{{ card.checkPct }}%;background:var(--good)"></span></span>{{ card.checkLabel }}
+      </span>
+    </sc-if>
+    <sc-if value="{{ card.hasNotes }}" hint-placeholder-val="{{ false }}"><span title="Má poznámky">≡</span></sc-if>
+    <sc-if value="{{ card.hasLinks }}" hint-placeholder-val="{{ false }}"><span title="Odkazy">↗ {{ card.linkCount }}</span></sc-if>
+    <sc-if value="{{ card.doneShow }}" hint-placeholder-val="{{ false }}"><span style="color:var(--good)">{{ card.doneLabel }}</span></sc-if>
+    <sc-if value="{{ card.pending }}" hint-placeholder-val="{{ false }}"><span style="color:var(--warn)">ukládám…</span></sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:300,&quot;height&quot;:120}}"></script>
+</body>
+</html>
