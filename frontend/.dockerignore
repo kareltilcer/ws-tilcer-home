@@ -1,0 +1,10 @@
+# The frontend image builds with context ./frontend, so the repo-root
+# .dockerignore doesn't apply here. Keep the context lean and reproducible —
+# node_modules and build outputs are recreated inside the image.
+node_modules
+dist
+test-results
+playwright-report
+.git
+*.db
+*.db-*

@@ -22,7 +22,8 @@ backend/    Go 1.26 + modernc SQLite; cmd/home is the entrypoint; Dockerfile her
 frontend/   Vite + React 19 + TS SPA
 litestream.yml         Litestream → Cloudflare R2 replica config (prefix `home`)
 docker-entrypoint.sh   restore-if-absent then run the app under litestream -exec
-docker-compose.yml     offline single-container smoke test
+frontend/Dockerfile    static SPA image (Nginx; proxies /api + /ws to the backend)
+docker-compose.yml     offline two-service smoke test (backend + Nginx frontend)
 ```
 
 ## Local development
@@ -54,11 +55,13 @@ cd frontend && npm run test:e2e       # Playwright + axe (a11y, both themes)
 
 ### Offline container smoke test
 
-Exercises the actual production image (multi-stage build, entrypoint, static
-serving) without R2:
+Exercises the actual production backend image (multi-stage build, entrypoint)
+plus an Nginx-served SPA, without R2. The backend API/websocket is published on
+`:7999`; the frontend Nginx serves the SPA on `:7001` and reverse-proxies
+`/api` + `/ws` to the backend:
 
 ```sh
-docker compose up --build     # → http://localhost:8080 as the fake dev admin
+docker compose up --build     # → http://localhost:7001 as the fake dev admin
 ```
 
 ## Deploy (Coolify)
