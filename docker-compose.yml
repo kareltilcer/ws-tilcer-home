@@ -21,6 +21,13 @@ services:
       HOME_ADDR: ${HOME_ADDR:-:7999}
       HOME_DEV_AUTH_BYPASS: ${HOME_DEV_AUTH_BYPASS:-true}
       HOME_DEV_ACTOR_ROLES: ${HOME_DEV_ACTOR_ROLES:-admin}
+      # Real auth — required only when the dev bypass is OFF (i.e. a real Coolify
+      # deploy). The defaults below are intentionally NONSENSE so a forgotten
+      # override fails loudly: REPLACE both in Coolify's env vars with the auth
+      # service URL and the shared BE→BE secret. With the bypass on (local
+      # harness) they are ignored, so these placeholders are harmless here.
+      AUTH_BASE_URL: ${AUTH_BASE_URL:-https://REPLACE-ME.auth.invalid}
+      HOME_AUTH_SERVICE_SECRET: ${HOME_AUTH_SERVICE_SECRET:-REPLACE_ME_shared_auth_secret}
       LITESTREAM_ENABLED: ${LITESTREAM_ENABLED:-false}
       HOME_DB_PATH: ${HOME_DB_PATH:-/data/home.db}
     volumes:
