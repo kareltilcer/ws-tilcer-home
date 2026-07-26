@@ -1,11 +1,10 @@
 # syntax=docker/dockerfile:1
 #
 # Static SPA image for the `home` frontend, mirroring ws-tilcer-fin: build the
-# Vite bundle, then serve it with Nginx. Unlike fin (whose SPA can target an
-# absolute VITE_API_BASE), home's client is hardwired same-origin — it uses
-# relative /api paths and connects the websocket to location.host (see
-# frontend/src/api/client.ts and ws.ts). So the Nginx config also reverse-proxies
-# /api and /ws to the backend service; the browser only ever talks to this image.
+# Vite bundle, then serve it with Nginx. home's client is hardwired same-origin —
+# relative /api paths, websocket to location.host (see frontend/src/api/client.ts
+# and ws.ts). Which Nginx config is baked is chosen by the NGINX_CONF build arg in
+# stage 2 (static-only for the two-apps model; proxying for the compose harness).
 #
 # Build context is ./frontend (see docker-compose.yml).
 
@@ -25,11 +24,15 @@ ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
 RUN npm run build            # emits /app/dist
 
 # ── Stage 2: serve with Nginx ──────────────────────────────────────────
-# Static-only, exactly like ws-tilcer-fin: this image serves the bundle and does
-# NOT proxy the API. In production Coolify/Traefik routes /api + /ws on the shared
-# origin to the backend app; the offline harness mounts nginx.harness.conf over
-# default.conf to add that proxy locally (see docker-compose.yml).
+# Which Nginx config to bake, selected at BUILD time (no runtime bind-mount — a
+# Coolify compose deploy can't bind repo files from the host):
+#   * nginx.conf          — static-only (default). For the two-separate-apps model
+#     (like ws-tilcer-fin), where the platform routes /api + /ws to the backend.
+#   * nginx.harness.conf  — also reverse-proxies /api + /ws to the compose `backend`
+#     service. Used by docker-compose (and any single-stack deploy that has no
+#     platform-level path routing), so the SPA stays same-origin.
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+ARG NGINX_CONF=nginx.conf
+COPY ${NGINX_CONF} /etc/nginx/conf.d/default.conf
 EXPOSE 80
