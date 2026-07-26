@@ -51,11 +51,16 @@ func mintTestToken(t *testing.T, secret, iss, aud, sub, email, name string, role
 	return s
 }
 
+// testAuthr enforces the issuer (issuer == testIssuer) so the issuer-related
+// cases exercise a real check. Note baseURL is deliberately DIFFERENT from the
+// issuer (mirrors production: home calls .../api but the token's iss is the bare
+// host) to prove the two are decoupled.
 func testAuthr() *httpAuthenticator {
 	return &httpAuthenticator{
-		baseURL:   testIssuer,
+		baseURL:   testIssuer + "/api",
 		secret:    "svc",
 		jwtSecret: []byte(testJWTSecret),
+		issuer:    testIssuer,
 		site:      testSite,
 	}
 }
@@ -124,14 +129,31 @@ func TestVerifyToken_Rejects(t *testing.T) {
 	}
 }
 
-// Tolerate a trailing slash difference between AUTH_BASE_URL and the token issuer
-// so a benign config-format mismatch doesn't lock every user out.
+// Tolerate a trailing slash difference between the configured issuer and the
+// token's iss so a benign config-format mismatch doesn't lock every user out.
 func TestVerifyToken_IssuerTrailingSlashTolerated(t *testing.T) {
 	h := testAuthr()
-	h.baseURL = testIssuer + "/"
+	h.issuer = testIssuer + "/"
 	raw := mintTestToken(t, testJWTSecret, testIssuer, testSite, "u1", "e@x", "N", []string{"admin"}, time.Now().Add(time.Minute), jwt.SigningMethodHS256)
 	if _, err := h.verifyToken(raw); err != nil {
 		t.Errorf("trailing-slash issuer should verify, got: %v", err)
+	}
+}
+
+// The default (issuer unset) must NOT enforce the iss claim — this is the config
+// that unblocks production, where home calls auth at .../api but auth stamps a
+// different iss. Signature + audience still gate the token.
+func TestVerifyToken_IssuerUnset_NotEnforced(t *testing.T) {
+	h := testAuthr()
+	h.issuer = "" // not configured
+	raw := mintTestToken(t, testJWTSecret, "https://whatever.example/some/path", testSite,
+		"u1", "e@x", "N", []string{"*"}, time.Now().Add(time.Minute), jwt.SigningMethodHS256)
+	id, err := h.verifyToken(raw)
+	if err != nil {
+		t.Fatalf("issuer unset should skip the iss check, got: %v", err)
+	}
+	if len(id.Roles) != 1 || id.Roles[0] != "*" {
+		t.Errorf("roles = %v, want [*]", id.Roles)
 	}
 }
 

@@ -47,6 +47,14 @@ type Config struct {
 	// must equal the auth service's JWT signing secret. Never logged.
 	AuthJWTSecret string
 
+	// AuthJWTIssuer, when set, is the exact `iss` claim home requires on those
+	// access tokens (auth stamps its OWN base URL, e.g. https://auth.tilcer.cz —
+	// which is NOT the same as AuthBaseURL, the URL home CALLS auth at, e.g.
+	// https://auth.tilcer.cz/api). Left empty (the default) the issuer is not
+	// checked; the token signature + audience already bind it to auth and this
+	// site. Set it only as extra hardening when you know auth's exact issuer.
+	AuthJWTIssuer string
+
 	// AllowedOrigins is the CSRF Origin allowlist for cookie-authenticated
 	// mutations (Mode B, FR-A5). Entries may be exact origins or wildcards
 	// ("https://*.tilcer.cz"). Home's own calls are same-origin (no CORS).
@@ -105,11 +113,15 @@ func (c *Config) Redacted() string {
 	if static == "" {
 		static = "none"
 	}
+	jwtIssuer := c.AuthJWTIssuer
+	if jwtIssuer == "" {
+		jwtIssuer = "any"
+	}
 	return fmt.Sprintf(
-		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s tz=%s "+
+		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
 			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t",
-		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, c.TimezoneName,
+		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
 		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.AllowedOrigins, c.DevAuthBypass,
 	)
@@ -172,6 +184,9 @@ func Load(getenv Getenv) (*Config, error) {
 		c.AuthServiceSecret = l.strRequired("HOME_AUTH_SERVICE_SECRET")
 		c.AuthJWTSecret = l.strRequired("HOME_AUTH_JWT_SECRET")
 	}
+	// Optional in both modes: the expected token issuer (auth's own base URL).
+	// Empty = do not enforce (see AuthJWTIssuer).
+	c.AuthJWTIssuer = l.strDefault("HOME_AUTH_JWT_ISSUER", "")
 
 	c.AllowedOrigins = l.csvDefault("HOME_ALLOWED_ORIGINS", defaultAllowedOrigins)
 

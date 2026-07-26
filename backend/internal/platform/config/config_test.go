@@ -55,6 +55,22 @@ func TestLoad_Defaults(t *testing.T) {
 	if c.DevAuthBypass {
 		t.Error("DevAuthBypass = true, want false")
 	}
+	// The JWT issuer pin is optional and defaults to unset (not enforced).
+	if c.AuthJWTIssuer != "" {
+		t.Errorf("AuthJWTIssuer = %q, want empty (issuer not enforced by default)", c.AuthJWTIssuer)
+	}
+}
+
+func TestLoad_JWTIssuerOptional(t *testing.T) {
+	env := validBase()
+	env["HOME_AUTH_JWT_ISSUER"] = "https://auth.tilcer.cz"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.AuthJWTIssuer != "https://auth.tilcer.cz" {
+		t.Errorf("AuthJWTIssuer = %q, want the configured issuer", c.AuthJWTIssuer)
+	}
 }
 
 func TestLoad_MissingRequiredAreAggregated(t *testing.T) {

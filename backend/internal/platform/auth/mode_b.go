@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -37,25 +38,39 @@ import (
 //	  403/404/409 -> user closed (disabled/deleted/unverified)
 //	  5xx -> unreachable (transient)
 type httpAuthenticator struct {
-	baseURL   string
-	secret    string
-	jwtSecret []byte // shared HS256 secret used to VERIFY the returned access token
-	site      string // expected JWT audience + `site` claim
-	client    *http.Client
+	baseURL   string       // where home CALLS auth (e.g. https://auth.tilcer.cz/api)
+	secret    string       // X-Service-Secret (BE→BE)
+	jwtSecret []byte       // shared HS256 secret used to VERIFY the returned access token
+	issuer    string       // expected token `iss`; "" = do not enforce
+	site      string       // expected JWT audience + `site` claim
+	client    *http.Client //
+	logger    *slog.Logger //
 }
 
 // NewHTTPAuthenticator returns an Authenticator backed by the auth service.
-// jwtSecret is the shared HS256 signing secret (HOME_AUTH_JWT_SECRET) home uses to
-// verify the site-scoped access tokens auth returns; it must equal the auth
-// service's JWT secret. The token issuer is auth's base URL (== baseURL).
-func NewHTTPAuthenticator(baseURL, serviceSecret, jwtSecret, site string) Authenticator {
+//   - jwtSecret is the shared HS256 signing secret (HOME_AUTH_JWT_SECRET); it must
+//     equal the auth service's JWT secret.
+//   - issuer, when non-empty, is the exact `iss` claim required on returned tokens
+//     (auth stamps its OWN base URL, which differs from baseURL — the URL home
+//     calls auth at). Empty disables the issuer check; the signature + audience
+//     still bind the token to auth and this site.
+func NewHTTPAuthenticator(baseURL, serviceSecret, jwtSecret, issuer, site string, logger *slog.Logger) Authenticator {
 	return &httpAuthenticator{
 		baseURL:   baseURL,
 		secret:    serviceSecret,
 		jwtSecret: []byte(jwtSecret),
+		issuer:    issuer,
 		site:      site,
 		client:    &http.Client{Timeout: 5 * time.Second},
+		logger:    logger,
 	}
+}
+
+func (h *httpAuthenticator) log() *slog.Logger {
+	if h.logger != nil {
+		return h.logger
+	}
+	return slog.Default()
 }
 
 // tokenResponse is auth's TokenResponse envelope. The identity + roles are inside
@@ -105,9 +120,11 @@ func (h *httpAuthenticator) verifyToken(raw string) (Identity, error) {
 	if claims.Site != h.site {
 		return Identity{}, fmt.Errorf("token site claim %q != %q", claims.Site, h.site)
 	}
-	// Issuer is auth's base URL; compare tolerant of a trailing slash so a benign
-	// config-format difference does not lock everyone out.
-	if want := strings.TrimRight(h.baseURL, "/"); want != "" {
+	// Optional issuer pin. auth's `iss` is its OWN base URL, which is NOT the URL
+	// home calls auth at (h.baseURL) — so this must be configured explicitly, not
+	// derived from baseURL. Empty = skip (signature + audience already suffice).
+	// Compared tolerant of a trailing slash.
+	if want := strings.TrimRight(h.issuer, "/"); want != "" {
 		if got := strings.TrimRight(claims.Issuer, "/"); got != want {
 			return Identity{}, fmt.Errorf("token issuer %q != %q", claims.Issuer, want)
 		}
@@ -142,7 +159,10 @@ func (h *httpAuthenticator) Login(ctx context.Context, email, password string) (
 		id, err := h.verifyToken(tr.AccessToken)
 		if err != nil {
 			// A token we cannot verify means a broken integration (wrong shared
-			// secret) or a hostile response — fail closed.
+			// secret, wrong issuer/audience) or a hostile response — fail closed.
+			// Log the real reason: the caller only sees a generic 502, and "auth
+			// unreachable" would be misleading (auth answered 200).
+			h.log().Error("login: access token verification failed", "err", err)
 			return Identity{}, ErrUnreachable
 		}
 		return id, nil
@@ -174,7 +194,9 @@ func (h *httpAuthenticator) Mint(ctx context.Context, userID string) (Identity, 
 		id, err := h.verifyToken(tr.AccessToken)
 		if err != nil {
 			// Treat an unverifiable mint like a transient failure: the caller keeps
-			// the session's cached roles and retries on the next interval.
+			// the session's cached roles and retries on the next interval. Log why,
+			// since a persistent config error would otherwise hide here forever.
+			h.log().Error("mint: access token verification failed", "err", err)
 			return Identity{}, ErrUnreachable
 		}
 		if id.UserID == "" {

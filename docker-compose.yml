@@ -33,6 +33,11 @@ services:
       # claims). MUST equal the auth service's JWT signing secret, or every login
       # fails closed with empty roles.
       HOME_AUTH_JWT_SECRET: ${HOME_AUTH_JWT_SECRET:-REPLACE_ME_shared_jwt_secret}
+      # Optional issuer pin. auth stamps `iss` = its OWN base URL (e.g.
+      # https://auth.tilcer.cz), which is NOT AUTH_BASE_URL above when that ends
+      # in /api. Leave unset to skip the issuer check (signature + audience still
+      # apply); set it only if you know auth's exact iss.
+      HOME_AUTH_JWT_ISSUER: ${HOME_AUTH_JWT_ISSUER:-}
       LITESTREAM_ENABLED: ${LITESTREAM_ENABLED:-false}
       HOME_DB_PATH: ${HOME_DB_PATH:-/data/home.db}
     volumes:

@@ -115,7 +115,7 @@ func run(logger *slog.Logger) error {
 	} else {
 		sessions = auth.NewSessionStore(sqldb)
 		authConf.Sessions = sessions
-		authConf.Authr = auth.NewHTTPAuthenticator(cfg.AuthBaseURL, cfg.AuthServiceSecret, cfg.AuthJWTSecret, cfg.SiteKey)
+		authConf.Authr = auth.NewHTTPAuthenticator(cfg.AuthBaseURL, cfg.AuthServiceSecret, cfg.AuthJWTSecret, cfg.AuthJWTIssuer, cfg.SiteKey, logger)
 	}
 	authHandler := auth.NewHandler(authConf, sqldb, sink)
 	sessionMW := auth.NewSessionAuth(authConf)

@@ -123,6 +123,7 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `AUTH_BASE_URL` | auth service base (BE→BE `/internal/login` + `/internal/token/mint`; also the target of reset/MFA out-links) | `https://auth.tilcer.cz` |
 | `HOME_AUTH_SERVICE_SECRET` | `home` service-client secret (Mode B: authenticates `/internal/login` + `/internal/token/mint`) | *(secret)* |
 | `HOME_AUTH_JWT_SECRET` | shared HS256 secret to **verify** the access tokens auth returns (identity + roles live in the JWT claims); **must equal** auth's JWT signing secret | *(secret)* |
+| `HOME_AUTH_JWT_ISSUER` | *(optional)* exact `iss` to require on those tokens = **auth's own base URL** (e.g. `https://auth.tilcer.cz`), which is **not** `AUTH_BASE_URL` when that ends in `/api`. Unset = don't check the issuer (signature + audience already bind the token) | *(unset)* |
 | `HOME_SITE_KEY` | auth site key | `home` (default) |
 | `HOME_ALLOWED_ORIGINS` | CSRF Origin allowlist for cookie-authenticated mutations | `https://*.tilcer.cz` (default) |
 | `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B) | `90` (default) |
