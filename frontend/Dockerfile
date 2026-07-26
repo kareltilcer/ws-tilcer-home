@@ -25,6 +25,10 @@ ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
 RUN npm run build            # emits /app/dist
 
 # ── Stage 2: serve with Nginx ──────────────────────────────────────────
+# Static-only, exactly like ws-tilcer-fin: this image serves the bundle and does
+# NOT proxy the API. In production Coolify/Traefik routes /api + /ws on the shared
+# origin to the backend app; the offline harness mounts nginx.harness.conf over
+# default.conf to add that proxy locally (see docker-compose.yml).
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf

@@ -15,11 +15,14 @@ audit-logging spine:
   contributes the *Připomínky* and *Tento měsíc* widgets.
 - **Log** (`logging`) — admin-only audit browser over the logging spine.
 
-One Coolify container serves everything on a single origin: Go handles
-`/api/**`, `/ws`, `/healthz`, `/readyz`, and serves the built SPA on every other
-path (`index.html` fallback for client-side routes). See `plan.md` for build
-status and `handoff/v2/` for the PRD, OpenAPI spec (0.3.0), and engineering
-handoffs.
+Deployed on Coolify as **two apps sharing one origin** (`home.tilcer.cz`),
+mirroring ws-tilcer-fin: an API-only Go image and a static Nginx SPA image. The
+platform (Coolify/Traefik) routes `home.tilcer.cz/api` and `/ws` to the backend
+and everything else to the frontend — there is **no nginx→backend proxy**. The SPA
+calls the API host-relative (relative `/api`, websocket to `location.host` — see
+`src/api/client.ts` and `ws.ts`), so it stays same-origin with no CORS. Go handles
+`/api/**`, `/ws`, `/healthz`, `/readyz`. See `plan.md` for build status and
+`handoff/v2/` for the PRD, OpenAPI spec (0.3.0), and engineering handoffs.
 
 ## Layout
 
@@ -28,7 +31,8 @@ backend/    Go 1.26 + modernc SQLite; cmd/home is the entrypoint; Dockerfile her
 frontend/   Vite + React 19 + TS SPA
 litestream.yml         Litestream → Cloudflare R2 replica config (prefix `home`)
 docker-entrypoint.sh   restore-if-absent then run the app under litestream -exec
-frontend/Dockerfile    static SPA image (Nginx; proxies /api + /ws to the backend)
+frontend/Dockerfile    static SPA image (Nginx; static-only — the platform routes /api + /ws)
+frontend/nginx.harness.conf  local-only proxy config, mounted by docker-compose
 docker-compose.yml     offline two-service smoke test (backend + Nginx frontend)
 ```
 
@@ -72,32 +76,50 @@ docker compose up --build     # → http://localhost:7001 as the fake dev admin
 
 ## Deploy (Coolify)
 
-Single app on `home.tilcer.cz`, built from the Dockerfile.
+**Two apps sharing one origin** (`home.tilcer.cz`), exactly like ws-tilcer-fin.
+Each is a separate Coolify app built from its own Dockerfile in this repo, and
+**both are mapped to `home.tilcer.cz`** — Coolify/Traefik path-routes between them:
 
-**Build settings**
+- **`home-backend`** — the API-only Go image. Domains: **`home.tilcer.cz/api`** and
+  **`home.tilcer.cz/ws`** (path routing; these prefixes go to the backend).
+- **`home-frontend`** — the static Nginx SPA image. Domain: **`home.tilcer.cz`**
+  (the catch-all; serves the bundle for everything not claimed above).
+
+There is **no nginx→backend proxy** and no shared internal network to wire — the
+platform does the split. A longer path prefix wins, so `/api` and `/ws` reach the
+backend and all other paths reach the SPA. The SPA calls the API host-relative, so
+it is same-origin (no CORS). Coolify health-checks each container directly on its
+own port, so `/healthz` + `/readyz` need no public route.
+
+> The backend serves its routes **under** `/api` (see `httpx/router.go`), so the
+> prefix must be **preserved**, not stripped — do **not** enable Strip Prefix on
+> the backend's path domain, or it receives `/auth/login` instead of
+> `/api/auth/login` and 404s.
+>
+> If the backend app is **not** mapped to `home.tilcer.cz/api` (+`/ws`), those
+> requests fall through to the SPA (or 404), and **login fails** — that path
+> routing is the whole mechanism.
+
+### Backend app (`home-backend`)
 
 | Setting             | Value                  |
 | ------------------- | ---------------------- |
 | Build Pack          | Dockerfile             |
-| Base Directory      | `/` (repo root context — the image needs both `frontend/` and `backend/`) |
+| Base Directory      | `/` (repo-root context — the image needs `backend/`, `litestream.yml`, `docker-entrypoint.sh`) |
 | Dockerfile Location | `/backend/Dockerfile`  |
-| Port                | `8080`                 |
+| Port                | `7999` (matches `HOME_ADDR`) |
+| Domains             | `home.tilcer.cz/api` and `home.tilcer.cz/ws` (path-routed) |
 | Health check path   | `/readyz`              |
 | Persistent volume   | mount at `/data` (holds the SQLite DB) |
 
-**Frontend build args** (baked into the SPA at image build time)
-
-| Arg                  | Value                       |
-| -------------------- | --------------------------- |
-| `VITE_AUTH_BASE_URL` | `https://auth.tilcer.cz` (only for the "Zapomněli jste heslo?" / MFA out-links; Mode B carries no browser token) |
-
-**Runtime env vars** (Coolify — nothing secret in the repo, PRD §9)
+**Runtime env vars** (Coolify — nothing secret in the repo, PRD §9). The API-only
+image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 
 | Var | Purpose | Value |
 | --- | --- | --- |
 | `HOME_ENV` | environment; **must be `production`** so the dev bypass is hard-refused | `production` |
+| `HOME_ADDR` | TCP listen address | `:7999` (image default) |
 | `HOME_DB_PATH` | SQLite file on the persisted volume | `/data/home.db` (image default) |
-| `HOME_STATIC_DIR` | built SPA directory | `/srv/web` (image default) |
 | `AUTH_BASE_URL` | auth service base (BE→BE `/internal/login` + `/internal/token/mint`; also the target of reset/MFA out-links) | `https://auth.tilcer.cz` |
 | `HOME_AUTH_SERVICE_SECRET` | `home` service-client secret (Mode B: authenticates `/internal/login` + `/internal/token/mint`) | *(secret)* |
 | `HOME_SITE_KEY` | auth site key | `home` (default) |
@@ -118,6 +140,24 @@ Single app on `home.tilcer.cz`, built from the Dockerfile.
 > **Do not** set `HOME_DEV_AUTH_BYPASS` in production — with `HOME_ENV=production`
 > the server refuses to start if it is enabled (fake auth in prod is a security
 > hole). `/readyz` also reports `insecure_auth` whenever the bypass is active.
+
+### Frontend app (`home-frontend`)
+
+Static-only image — **no runtime env vars**.
+
+| Setting             | Value                  |
+| ------------------- | ---------------------- |
+| Build Pack          | Dockerfile             |
+| Base Directory      | `/frontend`            |
+| Dockerfile Location | `/frontend/Dockerfile` |
+| Port                | `80`                   |
+| Domain              | `home.tilcer.cz` (catch-all) |
+
+**Build args** (baked into the SPA at image build time)
+
+| Arg                  | Value                       |
+| -------------------- | --------------------------- |
+| `VITE_AUTH_BASE_URL` | `https://auth.tilcer.cz` (only for the "Zapomněli jste heslo?" / MFA out-links; Mode B carries no browser token) |
 
 ### Prerequisites before the first deploy (Karel)
 

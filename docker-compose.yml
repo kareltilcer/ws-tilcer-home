@@ -46,6 +46,11 @@ services:
         VITE_AUTH_BASE_URL: ${VITE_AUTH_BASE_URL:-}
     image: tilcer-home-frontend:dev
     container_name: tilcer-home-frontend
+    # The production image is static-only (like fin). Locally there is no Traefik
+    # to route /api + /ws, so mount the harness config that proxies them to the
+    # `backend` service — keeping the SPA same-origin on :7001.
+    volumes:
+      - ./frontend/nginx.harness.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
       - "7001:80"
     depends_on:
