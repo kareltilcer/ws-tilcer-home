@@ -310,6 +310,41 @@ func TestSession_GatesAndBootstrap(t *testing.T) {
 	}
 }
 
+// A user whose auth identity has no display name is stored with display_name =
+// NULL (Create uses nullStr). Lookup must scan that NULL without erroring —
+// regression for the 500 where display_name was scanned into a plain string.
+func TestSession_NullDisplayName_NoError(t *testing.T) {
+	h := newHarness(t)
+	h.fake.loginID = auth.Identity{UserID: "u1", Email: "marie@tilcer.cz", Roles: []string{"editor"}}
+
+	rr := h.do(t, loginReq("marie@tilcer.cz"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("login = %d, want 200", rr.Code)
+	}
+	sess := cookie(rr, "session")
+
+	// Confirm the row really stored NULL, so the test exercises the NULL path.
+	var dn sql.NullString
+	if err := h.db.QueryRow("SELECT display_name FROM sessions LIMIT 1").Scan(&dn); err != nil {
+		t.Fatal(err)
+	}
+	if dn.Valid {
+		t.Fatalf("display_name = %q, want NULL", dn.String)
+	}
+
+	// Bootstrap must succeed (200), not 500. Gated reads must also work.
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
+	req.AddCookie(sess)
+	if rr := h.do(t, req); rr.Code != http.StatusOK {
+		t.Fatalf("bootstrap with NULL display_name = %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/things", nil)
+	req.AddCookie(sess)
+	if rr := h.do(t, req); rr.Code != http.StatusOK {
+		t.Errorf("gated GET with NULL display_name = %d, want 200", rr.Code)
+	}
+}
+
 func TestSession_RoleRefreshFailClosed(t *testing.T) {
 	h := newHarness(t)
 	sess, _ := h.authed(t)

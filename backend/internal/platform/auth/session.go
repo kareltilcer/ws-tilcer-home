@@ -87,9 +87,9 @@ func (s *SessionStore) Lookup(ctx context.Context, rawToken string, now time.Tim
 		`SELECT id, user_id, email, display_name, roles, roles_refreshed_at, last_seen_at, expires_at, revoked_at
 		   FROM sessions WHERE token_hash = ?`, hashToken(rawToken))
 	var (
-		sess                                       Session
-		displayName, rolesJSON                     string
-		rolesRefreshed, lastSeen, expires, revoked sql.NullString
+		sess                                                    Session
+		rolesJSON                                               string
+		displayName, rolesRefreshed, lastSeen, expires, revoked sql.NullString
 	)
 	if err := row.Scan(&sess.ID, &sess.UserID, &sess.Email, &displayName, &rolesJSON,
 		&rolesRefreshed, &lastSeen, &expires, &revoked); err != nil {
@@ -101,7 +101,7 @@ func (s *SessionStore) Lookup(ctx context.Context, rawToken string, now time.Tim
 	if revoked.Valid && revoked.String != "" {
 		return Session{}, false, nil
 	}
-	sess.DisplayName = displayName
+	sess.DisplayName = displayName.String
 	_ = json.Unmarshal([]byte(rolesJSON), &sess.Roles)
 	sess.RolesRefreshedAt = parseTS(rolesRefreshed.String)
 	sess.LastSeenAt = parseTS(lastSeen.String)
