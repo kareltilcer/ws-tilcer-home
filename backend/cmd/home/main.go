@@ -21,21 +21,20 @@ import (
 	_ "time/tzdata"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/auth"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/config"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/dashboard"
-	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/db"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/events"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/httpx"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/reqctx"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/todo"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/ws"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/config"
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
-
-// tokenTTLCap bounds how long an introspection result is cached (tokens live
-// ~15 minutes; PRD D2).
-const tokenTTLCap = 15 * time.Minute
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -66,7 +65,11 @@ func run(logger *slog.Logger) error {
 	}
 	defer func() { _ = sqldb.Close() }()
 
-	if err := appdb.Migrate(sqldb); err != nil {
+	migFS, err := bootstrap.MigrationFS()
+	if err != nil {
+		return err
+	}
+	if err := appdb.Migrate(sqldb, migFS); err != nil {
 		return err
 	}
 	if err := appdb.ProbeFTS5(context.Background(), sqldb); err != nil {
@@ -78,62 +81,88 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("database ready", "path", cfg.DBPath, "seeded_default_board", seeded)
 
+	// The audit spine writer — every module (and login/logout) records through it.
+	sink := audit.NewSink()
+
 	// Optional audit retention (FR-L7). Default 0 = keep forever (no-op). There is
 	// no scheduler (D9); prune runs once on boot when configured.
 	if cfg.LogRetentionDays > 0 {
-		pruned, err := audit.Prune(context.Background(), sqldb, audit.NewSink(), cfg.LogRetentionDays)
+		pruned, err := logging.Prune(context.Background(), sqldb, sink, cfg.LogRetentionDays)
 		if err != nil {
 			return err
 		}
 		logger.Info("audit prune", "retention_days", cfg.LogRetentionDays, "pruned", pruned)
 	}
 
-	// 3. Auth: real introspection (cached) in normal operation; a fake actor when
-	// the dev bypass is active (development only — config refuses it in prod).
-	var authCfg httpx.AuthConfig
+	// 3. Mode B auth + session (D23, D29). Home hosts login and owns its session;
+	// the browser carries no token. Under the dev bypass a fixed actor is injected
+	// and no auth service / session store is used, so the app runs offline.
+	authConf := auth.Config{
+		RoleRefresh: time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
+		SessionTTL:  time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
+		Secure:      cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
+		Origins:     cfg.AllowedOrigins,
+		Logger:      logger,
+	}
+	var sessions *auth.SessionStore
 	if cfg.DevAuthBypass {
-		authCfg.BypassActor = &reqctx.Actor{
+		authConf.BypassActor = &reqctx.Actor{
 			UserID: cfg.DevActorID,
 			Type:   "user",
 			Label:  cfg.DevActorID,
 			Roles:  cfg.DevActorRoles,
 		}
 	} else {
-		introspector := auth.NewHTTPIntrospector(cfg.AuthBaseURL, cfg.AuthServiceSecret, cfg.SiteKey)
-		authCfg.Introspector = auth.NewCachingIntrospector(introspector, tokenTTLCap)
+		sessions = auth.NewSessionStore(sqldb)
+		authConf.Sessions = sessions
+		authConf.Authr = auth.NewHTTPAuthenticator(cfg.AuthBaseURL, cfg.AuthServiceSecret, cfg.SiteKey)
 	}
+	authHandler := auth.NewHandler(authConf, sqldb, sink)
+	sessionMW := auth.NewSessionAuth(authConf)
+	csrfMW := auth.NewCSRF(cfg.AllowedOrigins, cfg.DevAuthBypass)
 
-	// 4. Websocket hub (feature modules publish change events to it in later
-	// phases so open boards and dashboards stay live).
+	// 4. Websocket hub — session-authenticated on connect (the browser sends the
+	// session cookie on a same-origin upgrade; no bearer token). Feature modules
+	// publish change events so open boards and dashboards stay live.
 	hub := ws.NewHub()
-	wsHandler := hub.Handler(ws.Config{
-		Introspector: authCfg.Introspector,
-		BypassActor:  authCfg.BypassActor,
-		Logger:       logger,
-	})
+	wsCfg := ws.Config{BypassActor: authConf.BypassActor, Logger: logger}
+	if sessions != nil {
+		wsCfg.Authenticate = func(r *http.Request) (reqctx.Actor, bool) {
+			c, err := r.Cookie("session")
+			if err != nil || c.Value == "" {
+				return reqctx.Actor{}, false
+			}
+			s, ok, err := sessions.Lookup(r.Context(), c.Value, time.Now())
+			if err != nil || !ok {
+				return reqctx.Actor{}, false
+			}
+			return reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles}, true
+		}
+	}
+	wsHandler := hub.Handler(wsCfg)
 
-	// 5. Feature API surface. Modules publish websocket change events via the hub
-	// after commit; the audit log browser is admin-only.
+	// 5. Feature modules, composed through the registry (PRD §10 D25). Each module
+	// owns its routes/migrations/audit actions/widgets; the core only wires them.
+	// Modules publish websocket change events via the hub after commit.
 	notify := func(typ string, payload any) { hub.Publish(ws.Message{Type: typ, Payload: payload}) }
-	sink := audit.NewSink()
 
-	logs := audit.NewHTTPHandler(audit.NewStore(sqldb))
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)
-	dashSvc := dashboard.NewService(todoSvc.Store(), eventsSvc.Store(), cfg.Timezone, cfg.DashboardLookbackDays, cfg.RRuleMaxOccurrences)
 
-	todoHandler := todo.NewHandler(todoSvc)
-	eventsHandler := events.NewHandler(eventsSvc)
-	dashHandler := dashboard.NewHandler(dashSvc)
-	mountAPI := func(api chi.Router) {
-		todoHandler.Mount(api)
-		eventsHandler.Mount(api)
-		dashHandler.Mount(api)
-		api.Route("/logs", func(r chi.Router) {
-			r.Use(httpx.RequireAdmin)
-			logs.Mount(r)
-		})
+	loggingMod := logging.New(sqldb)
+	todoMod := todo.NewModule(todoSvc)
+	eventsMod := events.NewModule(eventsSvc, cfg.Timezone, cfg.DashboardLookbackDays)
+
+	// The dashboard host renders widgets contributed by the feature modules — it
+	// reaches feature data only through this catalog, never their tables (D28).
+	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod}))
+	if err != nil {
+		return err
 	}
+	dashMod := dashboard.NewModule(catalog, sqldb)
+
+	modules := []registry.Module{loggingMod, todoMod, eventsMod, dashMod}
+	mountAPI := func(api chi.Router) { registry.MountAll(api, modules) }
 
 	// 6. HTTP server.
 	handler := httpx.NewRouter(httpx.Deps{
@@ -141,9 +170,11 @@ func run(logger *slog.Logger) error {
 		DB:           sqldb,
 		Site:         cfg.SiteKey,
 		InsecureAuth: cfg.DevAuthBypass,
-		Auth:         authCfg,
-		WS:           wsHandler,
+		MountAuth:    func(api chi.Router) { authHandler.Mount(api, csrfMW) },
+		SessionMW:    sessionMW,
+		CSRFMW:       csrfMW,
 		MountAPI:     mountAPI,
+		WS:           wsHandler,
 		StaticDir:    cfg.StaticDir,
 	})
 	srv := &http.Server{

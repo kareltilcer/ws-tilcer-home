@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>home — návrhový dodatek v2 (přihlášení + widgety)</title>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ---- Tokens: reused from the v1 prototype (Home.dc.html). Dark is default (D21). ---- */
+  .theme{
+    --bg:oklch(0.165 0.008 264); --s1:oklch(0.198 0.010 264); --s2:oklch(0.232 0.012 264);
+    --s3:oklch(0.270 0.013 264); --s4:oklch(0.310 0.014 264);
+    --border:oklch(0.320 0.012 264); --border-strong:oklch(0.400 0.014 264);
+    --text:oklch(0.945 0.006 264); --muted:oklch(0.740 0.010 264); --subtle:oklch(0.560 0.012 264);
+    --accent:oklch(0.680 0.120 256); --accent-fg:oklch(0.985 0.004 256); --accent-soft:oklch(0.360 0.070 256);
+    --now:oklch(0.780 0.110 78); --now-soft:oklch(0.360 0.055 78);
+    --focus:oklch(0.780 0.130 256); --good:oklch(0.740 0.090 150); --warn:oklch(0.800 0.100 78); --danger:oklch(0.700 0.130 22);
+    --l-byt:oklch(0.700 0.100 250); --l-fin:oklch(0.740 0.090 150); --l-auto:oklch(0.790 0.100 78);
+    --l-zdravi:oklch(0.710 0.110 300); --l-zahrada:oklch(0.740 0.090 190); --l-urgent:oklch(0.690 0.125 22);
+    --radius:10px; --font:'Hanken Grotesk',system-ui,sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  .theme.light{
+    --bg:oklch(0.975 0.004 264); --s1:oklch(1 0 0); --s2:oklch(0.978 0.004 264);
+    --s3:oklch(0.955 0.006 264); --s4:oklch(0.930 0.008 264);
+    --border:oklch(0.905 0.006 264); --border-strong:oklch(0.840 0.008 264);
+    --text:oklch(0.240 0.014 264); --muted:oklch(0.470 0.014 264); --subtle:oklch(0.580 0.012 264);
+    --accent:oklch(0.530 0.150 256); --accent-fg:oklch(0.990 0.004 256); --accent-soft:oklch(0.930 0.045 256);
+    --now:oklch(0.640 0.130 66); --now-soft:oklch(0.945 0.050 78);
+    --focus:oklch(0.550 0.150 256); --good:oklch(0.520 0.120 150); --warn:oklch(0.600 0.130 66); --danger:oklch(0.550 0.170 25);
+    --l-byt:oklch(0.500 0.140 250); --l-fin:oklch(0.520 0.120 150); --l-auto:oklch(0.560 0.130 66);
+    --l-zdravi:oklch(0.520 0.150 300); --l-zahrada:oklch(0.520 0.110 190); --l-urgent:oklch(0.520 0.170 25);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:#0b0d12;color:#c9ced8;font-family:'Hanken Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+
+  /* harness */
+  .bar{position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+    padding:12px 18px;background:#11141b;border-bottom:1px solid #232838}
+  .bar h1{margin:0;font-size:14px;font-weight:800;letter-spacing:-.01em;color:#eaeef6}
+  .bar .sub{font-size:11px;color:#7f8798;font-family:'IBM Plex Mono',monospace}
+  .grp{display:flex;gap:4px;align-items:center;background:#0c0f15;border:1px solid #232838;border-radius:9px;padding:3px}
+  .grp .lbl{font-size:10px;color:#7f8798;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.05em;padding:0 6px}
+  .seg{border:none;background:transparent;color:#aab2c2;font-family:inherit;font-size:12px;font-weight:600;padding:5px 10px;border-radius:6px;cursor:pointer}
+  .seg.on{background:#2b6ef0;color:#fff}
+  .stagewrap{padding:26px;display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;justify-content:center}
+  .framelabel{font-size:11px;color:#7f8798;font-family:'IBM Plex Mono',monospace;margin:0 0 8px 2px}
+
+  /* device frames */
+  .desktop{width:1180px;max-width:100%}
+  .win{border-radius:14px;overflow:hidden;border:1px solid #232838;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .winbar{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:#161a23;border-bottom:1px solid #232838}
+  .dot{width:11px;height:11px;border-radius:99px}
+  .url{margin-left:10px;font-size:12px;color:#8b93a4;font-family:'IBM Plex Mono',monospace}
+  .phone{width:375px;height:812px;border-radius:44px;border:10px solid #23293a;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5);position:relative}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:150px;height:26px;background:#23293a;border-radius:0 0 16px 16px;z-index:5}
+
+  /* app surface (themed) */
+  .theme{background:var(--bg);color:var(--text);font-family:var(--font);height:100%;display:flex;flex-direction:column;min-height:0}
+  .win .theme{height:760px}
+  .phone .theme{height:100%}
+
+  a{color:var(--accent)}
+  .mono{font-family:var(--mono)}
+
+  /* ---------- LOGIN ---------- */
+  .login-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;min-height:0}
+  .login-card{width:100%;max-width:360px;background:var(--s1);border:1px solid var(--border);border-radius:16px;padding:26px 24px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .brand .mark{width:34px;height:34px;border-radius:9px;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-weight:800;font-size:17px}
+  .brand b{font-size:16px;letter-spacing:-.01em}
+  .h-title{font-size:19px;font-weight:800;letter-spacing:-.02em;margin:2px 0 2px}
+  .h-sub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:11px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--subtle);margin-bottom:6px}
+  .inp{width:100%;height:42px;border-radius:10px;border:1px solid var(--border-strong);background:var(--s3);color:var(--text);font-family:var(--font);font-size:14px;padding:0 12px;outline:none}
+  .inp:focus{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in oklch,var(--focus) 30%,transparent)}
+  .btn{height:44px;width:100%;border:none;border-radius:10px;background:var(--accent);color:var(--accent-fg);font-family:var(--font);font-weight:700;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px}
+  .btn:disabled{opacity:.7;cursor:default}
+  .spin{width:16px;height:16px;border-radius:99px;border:2px solid color-mix(in oklch,var(--accent-fg) 40%,transparent);border-top-color:var(--accent-fg);animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .banner{border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.45;margin-bottom:14px;display:flex;gap:9px}
+  .banner .i{flex:none;font-size:14px}
+  .banner.err{background:color-mix(in oklch,var(--danger) 12%,var(--s2));border:1px solid color-mix(in oklch,var(--danger) 40%,transparent);color:var(--text)}
+  .banner.warn{background:color-mix(in oklch,var(--warn) 14%,var(--s2));border:1px solid color-mix(in oklch,var(--warn) 42%,transparent);color:var(--text)}
+  .linkrow{margin-top:16px;display:flex;flex-direction:column;gap:7px;font-size:12.5px;color:var(--muted)}
+  .linkrow a{text-decoration:none;font-weight:600}
+  .btn-ghost{height:36px;border:1px solid var(--border-strong);border-radius:9px;background:transparent;color:var(--text);font-weight:600;font-size:12.5px;cursor:pointer;padding:0 14px;display:inline-flex;align-items:center;gap:7px}
+
+  /* redirect */
+  .redir{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
+  .redir .m{width:44px;height:44px;border-radius:12px;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-weight:800;font-size:22px}
+  .redir .t{font-size:13.5px;color:var(--muted)}
+  .redir .spin{width:22px;height:22px;border-color:color-mix(in oklch,var(--accent) 30%,transparent);border-top-color:var(--accent)}
+
+  /* ---------- APP SHELL ---------- */
+  .app{flex:1;display:flex;min-height:0}
+  .side{width:210px;flex:none;border-right:1px solid var(--border);padding:16px 12px;display:flex;flex-direction:column;gap:4px;background:var(--s1)}
+  .side .logo{display:flex;align-items:center;gap:9px;padding:6px 8px 14px}
+  .side .logo .mark{width:26px;height:26px;border-radius:7px;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;font-weight:800;font-size:14px}
+  .nav{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;color:var(--muted);font-size:13.5px;font-weight:600;cursor:pointer;border:none;background:transparent;font-family:var(--font);text-align:left}
+  .nav.on{background:var(--s3);color:var(--text)}
+  .nav .ic{font-size:15px;width:18px;text-align:center}
+  .side .me{margin-top:auto;display:flex;align-items:center;gap:9px;padding:8px;border-top:1px solid var(--border)}
+  .avatar{width:28px;height:28px;border-radius:99px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:700;font-size:12px}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .top{padding:20px 22px 8px;display:flex;align-items:flex-start;gap:14px}
+  .top h2{margin:0;font-size:21px;font-weight:800;letter-spacing:-.02em}
+  .top .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .top .sp{flex:1}
+  .chip{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:99px;background:var(--s3);border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600}
+  .scroll{flex:1;overflow:auto;padding:12px 22px 26px}
+
+  /* grid */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .phone .grid{grid-template-columns:1fr}
+  .wide{grid-column:span 2}
+  .phone .wide{grid-column:span 1}
+
+  /* widget frame */
+  .wg{background:var(--s1);border:1px solid var(--border);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .wg-h{display:flex;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid var(--border)}
+  .wg-h .t{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle)}
+  .wg-h .ct{font-size:12px;color:var(--muted)}
+  .wg-h .sp{flex:1}
+  .wg-b{padding:8px 10px 12px;display:flex;flex-direction:column;gap:8px}
+  .grouphdr{font-size:11px;font-weight:700;color:var(--muted);padding:8px 6px 3px;letter-spacing:.01em}
+
+  .row{display:flex;align-items:center;gap:11px;padding:10px 11px;border:1px solid var(--border);border-radius:11px;background:var(--s2)}
+  .row.overdue{border-color:color-mix(in oklch,var(--danger) 45%,var(--border));background:color-mix(in oklch,var(--danger) 9%,var(--s2))}
+  .row .body{flex:1;min-width:0}
+  .row .ttl{font-size:13.5px;font-weight:600;line-height:1.3}
+  .row .meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:5px;font-size:11.5px;color:var(--muted)}
+  .dotlab{display:inline-flex;align-items:center;gap:5px}
+  .dotlab i{width:8px;height:8px;border-radius:2px;display:inline-block}
+  .badge{font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px}
+  .badge.now{background:var(--now-soft);color:var(--now)}
+  .badge.od{background:color-mix(in oklch,var(--danger) 20%,transparent);color:var(--danger)}
+  .done-line{text-decoration:line-through;color:var(--subtle)}
+
+  /* hold-to-complete control (D22) */
+  .hold{position:relative;flex:none;width:34px;height:34px;border-radius:99px;border:1.6px solid var(--border-strong);background:var(--s3);cursor:pointer;overflow:hidden;display:grid;place-items:center}
+  .hold .fill{position:absolute;inset:0;background:var(--good);transform:scaleX(0);transform-origin:left;opacity:.9}
+  .hold .ck{position:relative;color:var(--muted);font-size:15px;z-index:2}
+  .hold.holding .fill{transform:scaleX(1);transition:transform 1.9s linear}
+  .hold.done .fill{transform:scaleX(1)}
+  .hold.done .ck{color:var(--accent-fg)}
+  .hold:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+  .readonly-tag{font-size:11px;color:var(--subtle)}
+  .empty{border:1px dashed var(--border);border-radius:12px;padding:26px 18px;text-align:center;color:var(--subtle);font-size:13px}
+  .empty .big{font-size:15px;color:var(--muted);font-weight:600;margin-bottom:6px}
+
+  /* arrange mode */
+  .app.arrange .wg{border-color:color-mix(in oklch,var(--accent) 45%,var(--border));box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 30%,transparent)}
+  .wg-arr{display:none;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px dashed var(--border);background:color-mix(in oklch,var(--accent) 7%,var(--s1))}
+  .app.arrange .wg-arr{display:flex}
+  .grip{width:30px;height:30px;border-radius:8px;border:1px solid var(--border-strong);background:var(--s3);color:var(--muted);cursor:grab;display:grid;place-items:center;font-size:14px}
+  .grip:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+  .arr-sp{flex:1}
+  .segsize{display:flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+  .segsize button{border:none;background:transparent;color:var(--muted);font-family:var(--font);font-size:11.5px;font-weight:600;padding:5px 9px;cursor:pointer}
+  .segsize button.on{background:var(--accent);color:var(--accent-fg)}
+  .xbtn{height:30px;border:1px solid var(--border-strong);border-radius:8px;background:transparent;color:var(--muted);font-size:11.5px;font-weight:600;padding:0 10px;cursor:pointer}
+  .app.arrange .wg.dragging{opacity:.5}
+  .app.arrange .wg.over{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+  .addbar{grid-column:span 2;display:flex;justify-content:center;padding:6px}
+  .phone .addbar{grid-column:span 1}
+  .app:not(.arrange) .addbar{display:none}
+  .addbtn{height:38px;border:1px dashed var(--border-strong);border-radius:10px;background:transparent;color:var(--accent);font-family:var(--font);font-weight:700;font-size:13px;cursor:pointer;padding:0 16px}
+
+  /* catalog sheet */
+  .cat-ov{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:20;padding:18px}
+  .cat{width:340px;max-width:100%;background:var(--s1);border:1px solid var(--border-strong);border-radius:14px;overflow:hidden}
+  .cat-h{padding:14px 16px;border-bottom:1px solid var(--border);font-size:15px;font-weight:700}
+  .cat-b{padding:10px;display:flex;flex-direction:column;gap:8px}
+  .cat-row{display:flex;align-items:center;gap:11px;padding:10px 11px;border:1px solid var(--border);border-radius:10px;background:var(--s2)}
+  .cat-row .body{flex:1}
+  .cat-row .t{font-size:13.5px;font-weight:600}
+  .cat-row .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .toggle{width:44px;height:26px;border-radius:99px;border:1px solid var(--border-strong);background:var(--s3);position:relative;cursor:pointer;flex:none}
+  .toggle.on{background:var(--accent);border-color:var(--accent)}
+  .toggle .k{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:99px;background:var(--text);transition:left .14s}
+  .toggle.on .k{left:20px;background:var(--accent-fg)}
+  .cat-f{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end}
+
+  .phone .side{display:none}
+  .tabbar{display:none}
+  .phone .tabbar{display:flex;border-top:1px solid var(--border);background:var(--s1)}
+  .phone .tabbar button{flex:1;border:none;background:transparent;color:var(--muted);font-family:var(--font);padding:9px 0;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:600;cursor:pointer}
+  .phone .tabbar button.on{color:var(--accent)}
+  .phone .tabbar .ic{font-size:18px}
+  .phone .top{padding:16px 16px 6px}
+  .phone .scroll{padding:10px 14px 14px}
+  .hint{max-width:1180px;margin:0 auto;padding:2px 26px 30px;color:#7f8798;font-size:12.5px;line-height:1.5}
+  .hint code{font-family:'IBM Plex Mono',monospace;color:#aab2c2}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div><h1>home — návrhový dodatek v2</h1><div class="sub">přihlášení (Mode B) · widgetová Nástěnka · reuse v1 tokenů</div></div>
+    <div style="flex:1"></div>
+    <div class="grp"><span class="lbl">Obraz</span>
+      <button class="seg on" data-screen="login">Přihlášení</button>
+      <button class="seg" data-screen="dashboard">Nástěnka</button>
+      <button class="seg" data-screen="redirect">Přesměrování</button>
+    </div>
+    <div class="grp" id="loginGrp"><span class="lbl">Stav přihl.</span>
+      <button class="seg on" data-ls="idle">Klid</button>
+      <button class="seg" data-ls="submitting">Odesílání</button>
+      <button class="seg" data-ls="bad">Chyba údajů</button>
+      <button class="seg" data-ls="disabled">Zablokován</button>
+      <button class="seg" data-ls="mfa">MFA→auth</button>
+    </div>
+    <div class="grp" id="dashGrp" style="display:none"><span class="lbl">Nástěnka</span>
+      <button class="seg" data-dash="arrange">Uspořádat</button>
+      <button class="seg" data-dash="empty">Prázdná</button>
+      <button class="seg" data-dash="reset">Reset</button>
+    </div>
+    <div class="grp"><span class="lbl">Motiv</span>
+      <button class="seg on" data-theme="dark">Tmavý</button>
+      <button class="seg" data-theme="light">Světlý</button>
+    </div>
+    <div class="grp"><span class="lbl">Šířka</span>
+      <button class="seg on" data-bp="both">Obojí</button>
+      <button class="seg" data-bp="desktop">1440</button>
+      <button class="seg" data-bp="mobile">375</button>
+    </div>
+  </div>
+
+  <div class="stagewrap" id="stage"></div>
+  <div class="hint" id="hint"></div>
+
+<script>
+const S = {
+  screen:'login', ls:'idle', theme:'dark', bp:'both',
+  arrange:false, empty:false, catalog:false,
+  widgets:[
+    {key:'todo.pravedelam', title:'Právě dělám', module:'todo', size:'wide', visible:true},
+    {key:'events.pripominky', title:'Připomínky', module:'events', size:'narrow', visible:true},
+    {key:'events.tento-mesic', title:'Tento měsíc', module:'events', size:'narrow', visible:true},
+  ],
+};
+const DEFAULTS = JSON.parse(JSON.stringify(S.widgets));
+
+const CATALOG = {
+  'todo.pravedelam':{desc:'Karty ve sloupcích „Právě dělám" ze všech tabulí.'},
+  'events.pripominky':{desc:'Aktivní připomínky událostí, prošlé nahoře.'},
+  'events.tento-mesic':{desc:'Nadcházející události do konce měsíce (jen ke čtení).'},
+};
+
+/* demo content (reuses v1 household data) */
+const TASKS = [
+  {board:'Domácnost', title:'Objednat servis kotle', labels:['byt'], prog:'1/3'},
+  {board:'Domácnost', title:'Zaplatit plyn', labels:['fin','urgent'], prog:'1/2'},
+  {board:'Chata', title:'Zazimovat okapy před mrazy', labels:['zahrada'], prog:'0/4'},
+];
+const REM = [
+  {title:'STK a emise — Octavia', date:'18. 7. 2026', when:'před 3 dny', overdue:true, lead:'2 týdny', rec:true},
+  {title:'Odečet vody', date:'26. 7. 2026', when:'zítra', overdue:false, lead:'1 týden', rec:true},
+  {title:'Narozeniny — Marie', date:'2. 8. 2026', when:'za 7 dní', overdue:false, lead:'1 týden', rec:true},
+];
+const MONTH = [
+  {d:'26. 7.', title:'Odečet vody'},
+  {d:'29. 7.', title:'Sraz SVJ — schůze'},
+  {d:'2. 8.', title:'Narozeniny — Marie'},
+];
+const LABELVAR={byt:'--l-byt',fin:'--l-fin',auto:'--l-auto',zdravi:'--l-zdravi',zahrada:'--l-zahrada',urgent:'--l-urgent'};
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* ---------- screen renderers (return inner HTML of .theme) ---------- */
+function loginHTML(){
+  let banner='';
+  if(S.ls==='bad') banner=`<div class="banner err"><span class="i">⚠</span><div>Nesprávný e‑mail nebo heslo.</div></div>`;
+  if(S.ls==='disabled') banner=`<div class="banner err"><span class="i">⛔</span><div>Účet je zablokovaný. Kontaktuj správce domácnosti.</div></div>`;
+  if(S.ls==='mfa') banner=`<div class="banner warn"><span class="i">🔐</span><div>Tento účet má dvoufázové ověření. Dokonči přihlášení na <b>auth.tilcer.cz</b>.</div></div>`;
+  const submitting = S.ls==='submitting';
+  const mfa = S.ls==='mfa';
+  return `<div class="login-wrap"><div class="login-card">
+    <div class="brand"><div class="mark">h</div><b>home</b></div>
+    <div class="h-title">Přihlášení</div>
+    <div class="h-sub">Domácí systém — přístup jen pro členy domácnosti.</div>
+    ${banner}
+    ${mfa ? `<button class="btn" style="text-decoration:none">Pokračovat na auth.tilcer.cz →</button>
+      <div class="linkrow"><a href="#" onclick="return false">← Zpět na přihlášení</a></div>`
+    : `
+    <div class="field"><label>E‑mail</label><input class="inp" value="marie@tilcer.cz" ${submitting?'disabled':''}></div>
+    <div class="field"><label>Heslo</label><input class="inp" type="password" value="••••••••••" ${submitting?'disabled':''}></div>
+    <button class="btn" ${submitting?'disabled':''}>${submitting?'<span class="spin"></span> Přihlašování…':'Přihlásit'}</button>
+    <div class="linkrow">
+      <a href="#" onclick="return false">Zapomněli jste heslo?</a>
+      <span>Nemáte účet? Požádejte správce domácnosti.</span>
+    </div>`}
+  </div></div>`;
+}
+function redirectHTML(){
+  return `<div class="redir"><div class="m">h</div><div class="spin"></div><div class="t">Ověřuji přihlášení…</div></div>`;
+}
+
+function holdHTML(idx){ return `<button class="hold" data-hold="${idx}" title="Podržet pro dokončení" aria-label="Označit jako hotové (podržet, nebo Enter)"><span class="fill"></span><span class="ck">✓</span></button>`; }
+
+function widgetBody(key){
+  if(key==='todo.pravedelam'){
+    const byBoard={};TASKS.forEach((t,i)=>{(byBoard[t.board]=byBoard[t.board]||[]).push({t,i})});
+    let h='';let idx=0;
+    for(const b in byBoard){
+      h+=`<div class="grouphdr">${esc(b)}</div>`;
+      byBoard[b].forEach(({t})=>{
+        const labs=t.labels.map(l=>`<span class="dotlab"><i style="background:var(${LABELVAR[l]})"></i>${l}</span>`).join('');
+        h+=`<div class="row"><div class="body"><div class="ttl">${esc(t.title)}</div>
+          <div class="meta">${labs}<span>☑ ${t.prog}</span></div></div>${holdHTML('t'+(idx++))}</div>`;
+      });
+    }
+    return h;
+  }
+  if(key==='events.pripominky'){
+    return REM.map((r,i)=>`<div class="row ${r.overdue?'overdue':''}"><div class="body">
+      <div class="ttl">${esc(r.title)}</div>
+      <div class="meta">${r.overdue?'<span class="badge od">'+esc(r.when)+'</span>':'<span>'+esc(r.when)+'</span>'}
+      <span>${esc(r.date)}</span>${r.rec?'<span>↻ opakuje se</span>':''}</div></div>${holdHTML('r'+i)}</div>`).join('');
+  }
+  if(key==='events.tento-mesic'){
+    return `<div class="readonly-tag" style="padding:2px 6px 8px">Jen ke čtení — nadcházející</div>`+
+      MONTH.map(m=>`<div class="row"><div class="body"><div class="ttl">${esc(m.title)}</div>
+      <div class="meta"><span class="mono">${esc(m.d)}</span></div></div></div>`).join('');
+  }
+  return '';
+}
+
+function widgetHTML(w, idx){
+  const count = w.key==='todo.pravedelam'?TASKS.length+' úkoly':w.key==='events.pripominky'?REM.length+' připomínky':MONTH.length+' události';
+  return `<section class="wg ${w.size==='wide'?'wide':''}" data-idx="${idx}" draggable="false">
+    <div class="wg-arr">
+      <button class="grip" data-grip="${idx}" tabindex="0" title="Přetáhnout (nebo šipky)" aria-label="Přesunout widget ${esc(w.title)}">⠿</button>
+      <span style="font-weight:700;font-size:12.5px">${esc(w.title)}</span>
+      <span class="arr-sp"></span>
+      <div class="segsize">
+        <button class="${w.size==='narrow'?'on':''}" data-size="${idx}|narrow">Úzký</button>
+        <button class="${w.size==='wide'?'on':''}" data-size="${idx}|wide">Široký</button>
+      </div>
+      <button class="xbtn" data-hide="${idx}">Skrýt</button>
+    </div>
+    <div class="wg-h"><span class="t">${esc(w.title)}</span><span class="sp"></span><span class="ct">${count}</span></div>
+    <div class="wg-b">${widgetBody(w.key)}</div>
+  </section>`;
+}
+
+function dashHTML(){
+  const vis = S.widgets.filter(w=>w.visible);
+  const showEmpty = S.empty || vis.length===0;
+  const roleChip = `<span class="chip">◔ ${S.arrange?'Uspořádání':'Admin'}</span>`;
+  let body;
+  if(showEmpty){
+    body=`<div class="empty"><div class="big">Nástěnka je prázdná</div>
+      Zatím nemáš žádné widgety. Přidej si je z katalogu.
+      <div style="margin-top:14px"><button class="addbtn" data-dash="opencat">＋ Přidat widget</button></div></div>`;
+  } else {
+    body=`<div class="grid">${S.widgets.map((w,i)=>w.visible?widgetHTML(w,i):'').join('')}
+      <div class="addbar"><button class="addbtn" data-dash="opencat">＋ Přidat widget</button></div></div>`;
+  }
+  const cat = S.catalog ? catalogHTML() : '';
+  return `<div class="app ${S.arrange?'arrange':''}">
+    <aside class="side">
+      <div class="logo"><div class="mark">h</div><b>home</b></div>
+      <button class="nav on"><span class="ic">▦</span> Nástěnka</button>
+      <button class="nav"><span class="ic">▤</span> Úkoly</button>
+      <button class="nav"><span class="ic">⊞</span> Okno</button>
+      <button class="nav"><span class="ic">≣</span> Log</button>
+      <div class="me"><div class="avatar">M</div><div style="font-size:12.5px"><div style="font-weight:700">Marie</div><div style="color:var(--muted);font-size:11px">admin</div></div></div>
+    </aside>
+    <div class="main">
+      <div class="top"><div><h2>Nástěnka</h2><div class="sub">Co teď potřebuje tvou pozornost</div></div>
+        <div class="sp"></div>
+        <button class="btn-ghost" data-dash="arrange">${S.arrange?'✓ Hotovo':'⇅ Uspořádat'}</button>
+        ${roleChip}
+      </div>
+      <div class="scroll">${body}</div>
+      <div class="tabbar">
+        <button class="on"><span class="ic">▦</span>Nástěnka</button>
+        <button><span class="ic">▤</span>Úkoly</button>
+        <button><span class="ic">⊞</span>Okno</button>
+        <button><span class="ic">≣</span>Log</button>
+      </div>
+    </div>
+    ${cat}
+  </div>`;
+}
+
+function catalogHTML(){
+  return `<div class="cat-ov" data-dash="closecat"><div class="cat" onclick="event.stopPropagation()">
+    <div class="cat-h">Přidat / spravovat widgety</div>
+    <div class="cat-b">
+      ${S.widgets.map((w,i)=>`<div class="cat-row"><div class="body"><div class="t">${esc(w.title)}</div>
+        <div class="d">${esc(CATALOG[w.key].desc)} · <span class="mono">${esc(w.key)}</span></div></div>
+        <div class="toggle ${w.visible?'on':''}" data-toggle="${i}"><span class="k"></span></div></div>`).join('')}
+    </div>
+    <div class="cat-f"><button class="btn-ghost" data-dash="closecat">Hotovo</button></div>
+  </div></div>`;
+}
+
+function screenInner(){
+  if(S.screen==='login') return loginHTML();
+  if(S.screen==='redirect') return redirectHTML();
+  return dashHTML();
+}
+
+function frame(kind){
+  const inner = `<div class="theme ${S.theme==='light'?'light':''}">${screenInner()}</div>`;
+  if(kind==='desktop'){
+    return `<div class="desktop"><p class="framelabel">Desktop · 1440 px</p><div class="win">
+      <div class="winbar"><span class="dot" style="background:#ec6a5e"></span><span class="dot" style="background:#f4bf4f"></span><span class="dot" style="background:#61c454"></span><span class="url">home.tilcer.cz${S.screen==='login'?'/login':''}</span></div>
+      ${inner}</div></div>`;
+  }
+  return `<div><p class="framelabel">Mobil · 375 px</p><div class="phone"><div class="notch"></div>${inner}</div></div>`;
+}
+
+function render(){
+  document.getElementById('loginGrp').style.display = S.screen==='login'?'flex':'none';
+  document.getElementById('dashGrp').style.display = S.screen==='dashboard'?'flex':'none';
+  const stage=document.getElementById('stage');
+  let html='';
+  if(S.bp==='both'){ html=frame('desktop')+frame('mobile'); }
+  else if(S.bp==='desktop'){ html=frame('desktop'); }
+  else { html=frame('mobile'); }
+  stage.innerHTML=html;
+  wireStage();
+  document.getElementById('hint').innerHTML = hintFor();
+}
+
+function hintFor(){
+  if(S.screen==='login') return `<b>Přihlášení (Mode B).</b> Home hostuje vlastní přihlašovací obrazovku a ověřuje proti auth přes <code>/internal/login</code>. Žádný registrační ani reset formulář (reset a Google/2FA zůstávají na auth). shadcn: <code>Card, Input, Button, Alert</code>.`;
+  if(S.screen==='redirect') return `<b>Přesměrování / signed‑out.</b> Minimální rám, dokud SPA neověří session přes <code>GET /api/auth/session</code>.`;
+  return `<b>Nástěnka = widgetový host.</b> Přepni <b>Uspořádat</b>: přidat z katalogu, skrýt, přetáhnout (grip má i klávesovou obsluhu — <code>↑/↓</code>), změnit šířku Úzký/Široký. Widgety dodávají moduly (todo, events); host nesahá do jejich dat. „Podržet pro dokončení" = 2 s (D22) s okamžitou klávesovou cestou.`;
+}
+
+/* ---------- interactions ---------- */
+function wireStage(){
+  // hold-to-complete
+  document.querySelectorAll('.hold').forEach(el=>{
+    let timer=null;
+    const start=()=>{ if(el.classList.contains('done'))return; el.classList.add('holding');
+      timer=setTimeout(()=>{ el.classList.remove('holding'); el.classList.add('done'); const row=el.closest('.row'); if(row){row.querySelector('.ttl').classList.add('done-line');} },2000); };
+    const cancel=()=>{ if(timer){clearTimeout(timer);timer=null;} el.classList.remove('holding'); };
+    el.addEventListener('pointerdown',e=>{e.preventDefault();start();});
+    el.addEventListener('pointerup',cancel); el.addEventListener('pointerleave',cancel);
+    el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); // keyboard = immediate (a11y path)
+      el.classList.add('done'); const row=el.closest('.row'); if(row){row.querySelector('.ttl').classList.add('done-line');} } });
+  });
+  // arrange: size/hide/toggle/open-close catalog
+  document.querySelectorAll('[data-size]').forEach(b=>b.onclick=()=>{const[i,s]=b.dataset.size.split('|');S.widgets[+i].size=s;render();});
+  document.querySelectorAll('[data-hide]').forEach(b=>b.onclick=()=>{S.widgets[+b.dataset.hide].visible=false;render();});
+  document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>{const w=S.widgets[+b.dataset.toggle];w.visible=!w.visible;render();});
+  document.querySelectorAll('#stage [data-dash]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.dash;
+    if(a==='arrange'){S.arrange=!S.arrange;}
+    if(a==='opencat'){S.catalog=true;}
+    if(a==='closecat'){S.catalog=false;}
+    render();
+  });
+  // drag reorder (mouse) + keyboard on grip
+  let dragIdx=null;
+  document.querySelectorAll('.wg').forEach(wg=>{
+    const grip=wg.querySelector('.grip'); if(!grip)return;
+    grip.addEventListener('mousedown',()=>{wg.setAttribute('draggable','true');});
+    wg.addEventListener('dragstart',e=>{dragIdx=+wg.dataset.idx;wg.classList.add('dragging');});
+    wg.addEventListener('dragend',()=>{wg.classList.remove('dragging');wg.setAttribute('draggable','false');document.querySelectorAll('.wg.over').forEach(x=>x.classList.remove('over'));});
+    wg.addEventListener('dragover',e=>{e.preventDefault();wg.classList.add('over');});
+    wg.addEventListener('dragleave',()=>wg.classList.remove('over'));
+    wg.addEventListener('drop',e=>{e.preventDefault();const to=+wg.dataset.idx;move(dragIdx,to);});
+    grip.addEventListener('keydown',e=>{const i=+grip.dataset.grip;
+      if(e.key==='ArrowUp'){e.preventDefault();move(i,Math.max(0,i-1));}
+      if(e.key==='ArrowDown'){e.preventDefault();move(i,Math.min(S.widgets.length-1,i+1));}});
+  });
+}
+function move(from,to){ if(from==null||from===to)return; const a=S.widgets.splice(from,1)[0]; S.widgets.splice(to,0,a); render();
+  // refocus a grip after keyboard move
+  setTimeout(()=>{const g=document.querySelector('.grip[data-grip="'+to+'"]');if(g)g.focus();},0); }
+
+/* harness bar */
+document.querySelectorAll('[data-screen]').forEach(b=>b.onclick=()=>{setSeg('data-screen',b);S.screen=b.dataset.screen;render();});
+document.querySelectorAll('[data-ls]').forEach(b=>b.onclick=()=>{setSeg('data-ls',b);S.ls=b.dataset.ls;render();});
+document.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{setSeg('data-theme',b);S.theme=b.dataset.theme;render();});
+document.querySelectorAll('[data-bp]').forEach(b=>b.onclick=()=>{setSeg('data-bp',b);S.bp=b.dataset.bp;render();});
+document.querySelectorAll('#dashGrp [data-dash]').forEach(b=>b.onclick=()=>{
+  const a=b.dataset.dash;
+  if(a==='arrange'){S.arrange=!S.arrange;}
+  if(a==='empty'){S.empty=!S.empty;}
+  if(a==='reset'){S.widgets=JSON.parse(JSON.stringify(DEFAULTS));S.empty=false;S.arrange=false;S.catalog=false;}
+  render();
+});
+function setSeg(attr,btn){ btn.parentElement.querySelectorAll('['+attr+']').forEach(x=>x.classList.remove('on')); btn.classList.add('on'); }
+
+render();
+</script>
+</body>
+</html>

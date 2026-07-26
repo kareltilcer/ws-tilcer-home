@@ -1,44 +1,39 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Repeat } from 'lucide-react'
+import { ChevronDown, ChevronUp, EyeOff, Plus, SlidersHorizontal, X } from 'lucide-react'
 import { qk } from '@/api/keys'
 import * as api from '@/api/endpoints'
-import type { Dashboard, DashboardReminder, DashboardTask } from '@/api/types'
+import type { Dashboard, DashboardReminder, DashboardTask, LayoutItem, WidgetCatalogEntry, WidgetSize } from '@/api/types'
 import { cs } from '@/i18n/cs'
-import { count, PLURAL } from '@/i18n/plural'
-import { daysUntilLabel } from '@/i18n/format'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/app/auth'
 import { Spinner } from '@/components/ui/ui'
-import { EmptySuccess, ScreenHeader } from '@/components/common/states'
-import { HoldToComplete } from '@/components/common/HoldToComplete'
 import { CardDetail } from '@/components/common/CardDetail'
 import { EventDetail } from '@/components/common/EventDetail'
+import { widgetRegistry } from '@/platform/widgets/registry'
+
+const catalogKey = ['dashboard', 'catalog'] as const
 
 export function NastenkaPage() {
   const { canWrite } = useAuth()
   const qc = useQueryClient()
-  const dash = useQuery({ queryKey: qk.dashboard, queryFn: api.getDashboard })
 
+  const dash = useQuery({ queryKey: qk.dashboard, queryFn: api.getDashboard })
+  const catalog = useQuery({ queryKey: catalogKey, queryFn: api.getDashboardCatalog })
+
+  const [arrange, setArrange] = useState(false)
+  const [picker, setPicker] = useState(false)
   const [card, setCard] = useState<{ cardId: string; boardId: string } | null>(null)
   const [reminder, setReminder] = useState<{ eventId: string; occurrenceOn: string } | null>(null)
 
-  const completeReminder = useMutation({
-    mutationFn: (r: DashboardReminder) => api.completeReminder(r.event_id, r.occurrence_on, 'dashboard'),
-    onMutate: async (r) => {
-      await qc.cancelQueries({ queryKey: qk.dashboard })
-      const prev = qc.getQueryData<Dashboard>(qk.dashboard)
-      qc.setQueryData<Dashboard>(qk.dashboard, (d) =>
-        d ? { ...d, reminders: d.reminders.filter((x) => x.event_id !== r.event_id) } : d,
-      )
-      return { prev }
+  const saveLayout = useMutation({
+    mutationFn: api.saveDashboardLayout,
+    onError: () => {
+      toast.error('Nepodařilo se uložit rozvržení')
+      void qc.invalidateQueries({ queryKey: qk.dashboard })
     },
-    onError: (_e, _r, ctx) => {
-      if (ctx?.prev) qc.setQueryData(qk.dashboard, ctx.prev)
-      toast.error('Nepodařilo se odškrtnout připomínku')
-    },
-    onSettled: () => void qc.invalidateQueries({ queryKey: qk.dashboard }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.dashboard }),
   })
 
   const completeTask = useMutation({
@@ -46,25 +41,20 @@ export function NastenkaPage() {
       t.done_column_id
         ? api.moveCard(t.card_id, { column_id: t.done_column_id }, 'dashboard')
         : api.updateCard(t.card_id, { archived: true }),
-    onMutate: async (t) => {
-      await qc.cancelQueries({ queryKey: qk.dashboard })
-      const prev = qc.getQueryData<Dashboard>(qk.dashboard)
-      qc.setQueryData<Dashboard>(qk.dashboard, (d) =>
-        d ? { ...d, tasks: d.tasks.filter((x) => x.card_id !== t.card_id) } : d,
-      )
-      return { prev }
-    },
-    onError: (_e, _t, ctx) => {
-      if (ctx?.prev) qc.setQueryData(qk.dashboard, ctx.prev)
-      toast.error('Nepodařilo se dokončit úkol')
-    },
+    onError: () => toast.error('Nepodařilo se dokončit úkol'),
+    onSettled: () => void qc.invalidateQueries({ queryKey: qk.dashboard }),
+  })
+
+  const completeReminder = useMutation({
+    mutationFn: (r: DashboardReminder) => api.completeReminder(r.event_id, r.occurrence_on, 'dashboard'),
+    onError: () => toast.error('Nepodařilo se odškrtnout připomínku'),
     onSettled: () => void qc.invalidateQueries({ queryKey: qk.dashboard }),
   })
 
   if (dash.isLoading) {
     return (
-      <div className="mx-auto max-w-3xl">
-        <ScreenHeader title={cs.dashboard.title} subtitle={cs.dashboard.subtitle} />
+      <div className="mx-auto max-w-5xl">
+        <Header arrange={arrange} onToggleArrange={() => setArrange((a) => !a)} onAdd={() => setPicker(true)} />
         <div className="grid place-items-center py-16">
           <Spinner />
         </div>
@@ -72,47 +62,88 @@ export function NastenkaPage() {
     )
   }
 
-  const data = dash.data ?? { reminders: [], tasks: [] }
-  const empty = data.reminders.length === 0 && data.tasks.length === 0
+  const layout = dash.data?.layout ?? []
+  const widgetsByKey = new Map((dash.data?.widgets ?? []).map((w) => [w.key, w]))
+  const entries = catalog.data ?? []
+  const titleOf = (key: string) => entries.find((e) => e.key === key)?.title ?? key
+  const visible = layout.filter((li) => li.visible)
+
+  // Layout edits (optimistic; positions are re-derived server-side from order).
+  const persist = (next: LayoutItem[]) => {
+    qc.setQueryData<Dashboard>(qk.dashboard, (d) => (d ? { ...d, layout: next } : d))
+    saveLayout.mutate(next.map((li) => ({ widget_key: li.widget_key, visible: li.visible, size: li.size })))
+  }
+  const move = (key: string, dir: -1 | 1) => {
+    // The arrows (and canUp/canDown) act on the visible ordering, so swap with the
+    // adjacent *visible* neighbor. Hidden widgets keep their place in the layout
+    // instead of silently absorbing the move.
+    const vi = visible.findIndex((li) => li.widget_key === key)
+    const vj = vi + dir
+    if (vi < 0 || vj < 0 || vj >= visible.length) return
+    const i = layout.findIndex((li) => li.widget_key === key)
+    const j = layout.findIndex((li) => li.widget_key === visible[vj].widget_key)
+    const next = [...layout]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    persist(next)
+  }
+  const resize = (key: string, size: WidgetSize) =>
+    persist(layout.map((li) => (li.widget_key === key ? { ...li, size } : li)))
+  const hide = (key: string) => persist(layout.map((li) => (li.widget_key === key ? { ...li, visible: false } : li)))
+  const toggle = (key: string, on: boolean) => {
+    if (layout.some((li) => li.widget_key === key)) {
+      persist(layout.map((li) => (li.widget_key === key ? { ...li, visible: on } : li)))
+    } else {
+      const size = entries.find((e) => e.key === key)?.default_size ?? 'narrow'
+      persist([...layout, { widget_key: key, visible: on, position: '', size }])
+    }
+  }
 
   return (
-    <div className="mx-auto max-w-3xl">
-      <ScreenHeader title={cs.dashboard.title} subtitle={cs.dashboard.subtitle} />
+    <div className="mx-auto max-w-5xl">
+      <Header arrange={arrange} onToggleArrange={() => setArrange((a) => !a)} onAdd={() => setPicker(true)} />
 
-      {empty ? (
-        <EmptySuccess title={cs.dashboard.emptyTitle} body={cs.dashboard.emptyBody} />
+      {visible.length === 0 ? (
+        <EmptyDashboard onAdd={() => setPicker(true)} />
       ) : (
-        <div className="space-y-8">
-          {data.reminders.length > 0 && (
-            <section>
-              <SectionHeader label={cs.dashboard.remindersHeading} n={data.reminders.length} forms={PLURAL.reminders} />
-              <ul className="space-y-2">
-                {data.reminders.map((r) => (
-                  <ReminderRow
-                    key={r.event_id}
-                    r={r}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {visible.map((li, idx) => {
+            const Comp = widgetRegistry[li.widget_key]
+            if (!Comp) return null
+            const inst = widgetsByKey.get(li.widget_key)
+            return (
+              <WidgetFrame
+                key={li.widget_key}
+                title={titleOf(li.widget_key)}
+                size={li.size}
+                arrange={arrange}
+                canUp={idx > 0}
+                canDown={idx < visible.length - 1}
+                onResize={(s) => resize(li.widget_key, s)}
+                onHide={() => hide(li.widget_key)}
+                onUp={() => move(li.widget_key, -1)}
+                onDown={() => move(li.widget_key, 1)}
+              >
+                {inst ? (
+                  <Comp
+                    data={inst.data}
                     canWrite={canWrite}
-                    onOpen={() => setReminder({ eventId: r.event_id, occurrenceOn: r.occurrence_on })}
-                    onComplete={() => completeReminder.mutate(r)}
+                    onOpenCard={(cardId, boardId) => setCard({ cardId, boardId })}
+                    onOpenReminder={(eventId, occurrenceOn) => setReminder({ eventId, occurrenceOn })}
+                    onCompleteTask={(t) => completeTask.mutate(t)}
+                    onCompleteReminder={(r) => completeReminder.mutate(r)}
                   />
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {data.tasks.length > 0 && (
-            <section>
-              <SectionHeader label={cs.dashboard.tasksHeading} n={data.tasks.length} forms={PLURAL.tasks} />
-              <TaskList
-                tasks={data.tasks}
-                canWrite={canWrite}
-                onOpen={(t) => setCard({ cardId: t.card_id, boardId: t.board_id })}
-                onComplete={(t) => completeTask.mutate(t)}
-              />
-            </section>
-          )}
+                ) : (
+                  <div className="grid place-items-center py-6">
+                    <Spinner />
+                  </div>
+                )}
+              </WidgetFrame>
+            )
+          })}
         </div>
       )}
+
+      {picker && <CatalogPicker entries={entries} layout={layout} onToggle={toggle} onClose={() => setPicker(false)} />}
 
       {card && (
         <CardDetail
@@ -130,152 +161,204 @@ export function NastenkaPage() {
           open
           onOpenChange={(o) => !o && setReminder(null)}
           readOnly={!canWrite}
-          onComplete={
-            canWrite
-              ? () => {
-                  const r = data.reminders.find((x) => x.event_id === reminder.eventId)
-                  if (r) completeReminder.mutate(r)
-                }
-              : undefined
-          }
         />
       )}
     </div>
   )
 }
 
-function SectionHeader({ label, n, forms }: { label: string; n: number; forms: readonly [string, string, string] }) {
+function Header({ arrange, onToggleArrange, onAdd }: { arrange: boolean; onToggleArrange: () => void; onAdd: () => void }) {
   return (
-    <div className="mb-3 flex items-baseline justify-between">
-      <h2 className="text-lg font-bold">{label}</h2>
-      <span className="text-[13px] text-subtle">{count(n, forms)}</span>
+    <div className="mb-5 flex items-end justify-between gap-3">
+      <div>
+        <h1 className="text-2xl font-extrabold tracking-tight">{cs.dashboard.title}</h1>
+        <p className="mt-0.5 text-sm text-muted">{cs.dashboard.subtitle}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {arrange && (
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex h-9 items-center gap-1.5 rounded-md border border-border bg-s2 px-3 text-sm font-semibold text-fg hover:bg-s3"
+          >
+            <Plus size={16} aria-hidden /> {cs.dashboard.addWidget}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onToggleArrange}
+          aria-pressed={arrange}
+          className={cn(
+            'flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-semibold',
+            arrange ? 'bg-accent text-accent-fg' : 'border border-border bg-s2 text-fg hover:bg-s3',
+          )}
+        >
+          <SlidersHorizontal size={16} aria-hidden /> {arrange ? cs.dashboard.arrangeDone : cs.dashboard.arrange}
+        </button>
+      </div>
     </div>
   )
 }
 
-function Row({
-  onOpen,
-  canWrite,
-  onComplete,
-  completeLabel,
-  tint,
+function WidgetFrame({
+  title,
+  size,
+  arrange,
+  canUp,
+  canDown,
+  onResize,
+  onHide,
+  onUp,
+  onDown,
   children,
 }: {
-  onOpen: () => void
-  canWrite: boolean
-  onComplete: () => void
-  completeLabel: string
-  tint?: boolean
-  children: React.ReactNode
+  title: string
+  size: WidgetSize
+  arrange: boolean
+  canUp: boolean
+  canDown: boolean
+  onResize: (s: WidgetSize) => void
+  onHide: () => void
+  onUp: () => void
+  onDown: () => void
+  children: ReactNode
 }) {
   return (
-    <li
+    <section
       className={cn(
-        'flex items-center gap-3 rounded-lg border bg-s1 p-3',
-        tint ? 'border-danger/40 bg-danger/5' : 'border-border',
+        'rounded-xl border bg-s1 p-4',
+        arrange ? 'border-dashed border-accent/50 ring-1 ring-accent/30' : 'border-border',
+        size === 'wide' && 'md:col-span-2',
       )}
     >
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        {children}
-      </button>
-      {canWrite && <HoldToComplete label={completeLabel} onComplete={onComplete} />}
-    </li>
-  )
-}
-
-function ReminderRow({
-  r,
-  canWrite,
-  onOpen,
-  onComplete,
-}: {
-  r: DashboardReminder
-  canWrite: boolean
-  onOpen: () => void
-  onComplete: () => void
-}) {
-  return (
-    <Row onOpen={onOpen} canWrite={canWrite} onComplete={onComplete} completeLabel={`Odškrtnout „${r.title}“`} tint={r.overdue}>
-      <div className="flex items-center gap-2">
-        <span className={cn('text-sm font-semibold', r.overdue ? 'text-danger' : 'text-fg')}>{r.title}</span>
-        {r.recurring && <Repeat size={13} className="text-subtle" aria-label="opakuje se" />}
-      </div>
-      <div className={cn('mt-0.5 text-[12.5px]', r.overdue ? 'text-danger/90' : 'text-muted')}>
-        {daysUntilLabel(r.days_until)} · {r.occurrence_on}
-      </div>
-    </Row>
-  )
-}
-
-function TaskList({
-  tasks,
-  canWrite,
-  onOpen,
-  onComplete,
-}: {
-  tasks: DashboardTask[]
-  canWrite: boolean
-  onOpen: (t: DashboardTask) => void
-  onComplete: (t: DashboardTask) => void
-}) {
-  // Group by board only when more than one board contributes (design gap #2).
-  const boards = Array.from(new Set(tasks.map((t) => t.board_id)))
-  const grouped = boards.length > 1
-
-  if (!grouped) {
-    return (
-      <ul className="space-y-2">
-        {tasks.map((t) => (
-          <TaskRow key={t.card_id} t={t} canWrite={canWrite} onOpen={() => onOpen(t)} onComplete={() => onComplete(t)} showBoard={false} />
-        ))}
-      </ul>
-    )
-  }
-  return (
-    <div className="space-y-4">
-      {boards.map((bid) => {
-        const inBoard = tasks.filter((t) => t.board_id === bid)
-        return (
-          <div key={bid}>
-            <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-subtle">{inBoard[0].board_name}</h3>
-            <ul className="space-y-2">
-              {inBoard.map((t) => (
-                <TaskRow key={t.card_id} t={t} canWrite={canWrite} onOpen={() => onOpen(t)} onComplete={() => onComplete(t)} showBoard={false} />
-              ))}
-            </ul>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-base font-bold">{title}</h2>
+        {arrange && (
+          <div className="flex items-center gap-1">
+            <IconBtn label="Nahoru" disabled={!canUp} onClick={onUp}>
+              <ChevronUp size={15} />
+            </IconBtn>
+            <IconBtn label="Dolů" disabled={!canDown} onClick={onDown}>
+              <ChevronDown size={15} />
+            </IconBtn>
+            <div className="mx-1 flex overflow-hidden rounded-md border border-border" role="group" aria-label="Šířka">
+              <SizeBtn active={size === 'narrow'} onClick={() => onResize('narrow')}>
+                {cs.dashboard.narrow}
+              </SizeBtn>
+              <SizeBtn active={size === 'wide'} onClick={() => onResize('wide')}>
+                {cs.dashboard.wide}
+              </SizeBtn>
+            </div>
+            <IconBtn label="Skrýt" onClick={onHide}>
+              <EyeOff size={15} />
+            </IconBtn>
           </div>
-        )
-      })}
+        )}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function IconBtn({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="grid h-8 w-8 place-items-center rounded-md border border-border bg-s2 text-fg hover:bg-s3 disabled:opacity-40"
+    >
+      {children}
+    </button>
+  )
+}
+
+function SizeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn('h-8 px-2.5 text-[12px] font-semibold', active ? 'bg-accent text-accent-fg' : 'bg-s2 text-muted hover:bg-s3')}
+    >
+      {children}
+    </button>
+  )
+}
+
+function EmptyDashboard({ onAdd }: { onAdd: () => void }) {
+  return (
+    <div className="grid place-items-center rounded-xl border border-dashed border-border bg-s1 py-16 text-center">
+      <p className="mb-1 text-lg font-bold">{cs.dashboard.emptyTitle}</p>
+      <p className="mb-4 max-w-sm text-sm text-muted">{cs.dashboard.emptyBody}</p>
+      <button
+        type="button"
+        onClick={onAdd}
+        className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-3.5 text-sm font-bold text-accent-fg"
+      >
+        <Plus size={16} aria-hidden /> {cs.dashboard.addWidget}
+      </button>
     </div>
   )
 }
 
-function TaskRow({
-  t,
-  canWrite,
-  onOpen,
-  onComplete,
-  showBoard,
+function CatalogPicker({
+  entries,
+  layout,
+  onToggle,
+  onClose,
 }: {
-  t: DashboardTask
-  canWrite: boolean
-  onOpen: () => void
-  onComplete: () => void
-  showBoard: boolean
+  entries: WidgetCatalogEntry[]
+  layout: LayoutItem[]
+  onToggle: (key: string, on: boolean) => void
+  onClose: () => void
 }) {
-  const prog = t.checklist_progress
   return (
-    <Row onOpen={onOpen} canWrite={canWrite} onComplete={onComplete} completeLabel={`Dokončit „${t.title}“`}>
-      <div className="text-sm font-medium text-fg">{t.title}</div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12px] text-subtle">
-        <span>{showBoard ? `${t.board_name} · ${t.column_name}` : t.column_name}</span>
-        {prog.total > 0 && (
-          <span>
-            ☑ {prog.done}/{prog.total}
-          </span>
-        )}
-        {t.label_ids.length > 0 && <span>🏷 {t.label_ids.length}</span>}
+    <div
+      className="fixed inset-0 z-40 grid place-items-end bg-black/40 sm:place-items-center sm:p-6"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-label={cs.dashboard.catalogTitle}
+        className="w-full rounded-t-2xl border border-border bg-s1 p-4 sm:max-w-md sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-bold">{cs.dashboard.catalogTitle}</h2>
+          <button type="button" aria-label="Zavřít" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md hover:bg-s2">
+            <X size={16} />
+          </button>
+        </div>
+        <ul className="divide-y divide-border">
+          {entries.map((e) => {
+            const on = layout.find((li) => li.widget_key === e.key)?.visible ?? false
+            return (
+              <li key={e.key} className="flex items-center justify-between gap-3 py-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-fg">{e.title}</div>
+                  {e.description && <div className="text-[12.5px] text-subtle">{e.description}</div>}
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={on}
+                  onClick={() => onToggle(e.key, !on)}
+                  className={cn(
+                    'h-8 shrink-0 rounded-md px-3 text-[12.5px] font-semibold',
+                    on ? 'bg-accent text-accent-fg' : 'border border-border bg-s2 text-fg hover:bg-s3',
+                  )}
+                >
+                  {on ? cs.dashboard.shown : cs.dashboard.add}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
       </div>
-    </Row>
+    </div>
   )
 }

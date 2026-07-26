@@ -1,19 +1,25 @@
 # home — household management (`home.tilcer.cz`)
 
 A Czech-language household-management SPA over a Go + embedded-SQLite backend,
-and the second consumer of the shared `auth` service. Four modules, all built
-around a central audit-logging spine:
+and the second consumer of the shared `auth` service. **v2** — a compile-time
+**modular monolith**: each module owns its routes, migrations, audit actions, and
+dashboard widgets, wired through a central registry (`internal/platform`,
+`internal/modules/*`). Auth is **Mode B**: home hosts its own login and owns its
+session (no JWT in the browser). Four modules, all built around a central
+audit-logging spine:
 
-- **Nástěnka** (`dashboard`) — landing page: active reminders + every card in a
-  `now` column across all boards.
-- **Úkoly** (`todo`) — a Trello-style board.
-- **Okno do budoucnosti** (`events`) — all-day, optionally recurring reminders.
+- **Nástěnka** (`dashboard`) — landing page: a per-user **widget host** that
+  renders widgets contributed by the other modules (owns no feature data).
+- **Úkoly** (`todo`) — a Trello-style board; contributes the *Právě dělám* widget.
+- **Okno do budoucnosti** (`events`) — all-day, optionally recurring reminders;
+  contributes the *Připomínky* and *Tento měsíc* widgets.
 - **Log** (`logging`) — admin-only audit browser over the logging spine.
 
 One Coolify container serves everything on a single origin: Go handles
 `/api/**`, `/ws`, `/healthz`, `/readyz`, and serves the built SPA on every other
 path (`index.html` fallback for client-side routes). See `plan.md` for build
-status and `handoff/v1/` for the PRD, OpenAPI spec, and engineering handoffs.
+status and `handoff/v2/` for the PRD, OpenAPI spec (0.3.0), and engineering
+handoffs.
 
 ## Layout
 
@@ -83,8 +89,7 @@ Single app on `home.tilcer.cz`, built from the Dockerfile.
 
 | Arg                  | Value                       |
 | -------------------- | --------------------------- |
-| `VITE_AUTH_BASE_URL` | `https://auth.tilcer.cz`    |
-| `VITE_REAL_AUTH`     | *unset* (a production build turns real auth on automatically) |
+| `VITE_AUTH_BASE_URL` | `https://auth.tilcer.cz` (only for the "Zapomněli jste heslo?" / MFA out-links; Mode B carries no browser token) |
 
 **Runtime env vars** (Coolify — nothing secret in the repo, PRD §9)
 
@@ -93,10 +98,12 @@ Single app on `home.tilcer.cz`, built from the Dockerfile.
 | `HOME_ENV` | environment; **must be `production`** so the dev bypass is hard-refused | `production` |
 | `HOME_DB_PATH` | SQLite file on the persisted volume | `/data/home.db` (image default) |
 | `HOME_STATIC_DIR` | built SPA directory | `/srv/web` (image default) |
-| `AUTH_BASE_URL` | auth service base (server-side introspect/refresh) | `https://auth.tilcer.cz` |
-| `HOME_AUTH_SERVICE_SECRET` | `home` service-client secret for `/introspect` | *(secret)* |
+| `AUTH_BASE_URL` | auth service base (BE→BE `/internal/login` + `/internal/token/mint`; also the target of reset/MFA out-links) | `https://auth.tilcer.cz` |
+| `HOME_AUTH_SERVICE_SECRET` | `home` service-client secret (Mode B: authenticates `/internal/login` + `/internal/token/mint`) | *(secret)* |
 | `HOME_SITE_KEY` | auth site key | `home` (default) |
-| `HOME_ALLOWED_ORIGINS` | CORS allowlist for the cross-subdomain refresh flow | `https://home.tilcer.cz` |
+| `HOME_ALLOWED_ORIGINS` | CSRF Origin allowlist for cookie-authenticated mutations | `https://*.tilcer.cz` (default) |
+| `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B) | `90` (default) |
+| `HOME_ROLE_REFRESH_MINUTES` | how often home re-mints to refresh cached roles | `15` (default) |
 | `HOME_TIMEZONE` | IANA zone for “today”/recurrence | `Europe/Prague` (default) |
 | `HOME_DASHBOARD_LOOKBACK_DAYS` | reminder lookback | `30` (default) |
 | `HOME_RRULE_MAX_OCCURRENCES` | expansion cap | `500` (default) |
@@ -114,9 +121,12 @@ Single app on `home.tilcer.cz`, built from the Dockerfile.
 
 ### Prerequisites before the first deploy (Karel)
 
-1. **Auth registration** — register the `home` site in auth (roles
-   `admin`/`editor`/`reader`) and provision a `home` service client bound to
-   site `home`; put its secret in Coolify as `HOME_AUTH_SERVICE_SECRET`.
+1. **Auth registration (Mode B)** — register the `home` site in auth (roles
+   `admin`/`editor`/`reader`), provision a `home` service client bound to site
+   `home`, and put its secret in Coolify as `HOME_AUTH_SERVICE_SECRET`. In Mode B
+   this client authenticates **`/internal/login`** and **`/internal/token/mint`**
+   (not just introspect) — confirm the auth service exposes both. Create the
+   household member accounts in auth (no self-signup on home).
 2. **R2** — create the bucket and an access key; set the four `LITESTREAM_*`
    vars above. Backups land under the `home/` prefix.
 3. **Verify the Litestream image tag** in `backend/Dockerfile`

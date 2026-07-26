@@ -1,25 +1,26 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import { REAL_AUTH, decodeJwt, redirectToLogin } from '@/api/authTransport'
-import { ensureRefreshed } from '@/api/client'
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import * as api from '@/api/endpoints'
+import { setUnauthorizedHandler } from '@/api/client'
+import type { UserPublic } from '@/api/types'
 import { RedirectingShell } from '@/components/common/RedirectingShell'
+import { LoginScreen } from '@/components/auth/LoginScreen'
 
-// Auth identity for the SPA. Roles come from the site-scoped JWT's `roles` claim
-// (PRD §3): reads for any authenticated user, writes for editor|admin, the Log
-// browser for admin only ("*" is superuser).
+// Auth identity for the SPA (Mode B). The browser holds NO token — the app learns
+// who it is from GET /api/auth/session, and every request is authorized by the
+// session cookie. Roles come from home's session (refreshed server-side).
 export interface Identity {
   userId: string
+  email: string
   label: string
   roles: string[]
 }
-
-// Dev stub: an admin identity so the app is exercisable offline (mirrors the
-// backend HOME_DEV_AUTH_BYPASS). Used whenever REAL_AUTH is off (dev / e2e).
-const DEV_IDENTITY: Identity = { userId: 'dev-user', label: 'Vývojář', roles: ['admin'] }
 
 interface AuthContextValue {
   identity: Identity
   canWrite: boolean
   isAdmin: boolean
+  logout: () => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -28,52 +29,56 @@ function hasRole(roles: string[], ...allowed: string[]): boolean {
   return roles.some((r) => r === '*' || allowed.includes(r))
 }
 
-function provide(identity: Identity): AuthContextValue {
-  return {
-    identity,
-    canWrite: hasRole(identity.roles, 'editor', 'admin'),
-    isAdmin: hasRole(identity.roles, 'admin'),
-  }
+function toIdentity(u: UserPublic): Identity {
+  return { userId: u.id, email: u.email, label: u.display_name || u.email, roles: u.roles }
 }
+
+type State = { status: 'loading' } | { status: 'anon' } | { status: 'auth'; identity: Identity }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Dev / e2e: use the stub identity, render immediately.
-  if (!REAL_AUTH) {
-    return <AuthContext.Provider value={provide(DEV_IDENTITY)}>{children}</AuthContext.Provider>
-  }
-  return <RealAuthProvider>{children}</RealAuthProvider>
-}
+  const [state, setState] = useState<State>({ status: 'loading' })
+  const qc = useQueryClient()
 
-function RealAuthProvider({ children }: { children: ReactNode }) {
-  const [identity, setIdentity] = useState<Identity | null>(null)
-  const [resolved, setResolved] = useState(false)
-
-  // Mode A boot: refresh from the session cookie; on success decode the JWT for
-  // the identity, else hand off to the auth-hosted login.
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      const token = await ensureRefreshed()
-      if (cancelled) return
-      if (!token) {
-        redirectToLogin()
-        return // keep showing the redirecting shell during the browser handoff
-      }
-      const claims = decodeJwt(token)
-      setIdentity({
-        userId: claims?.sub ?? '',
-        label: claims?.email ?? '',
-        roles: claims?.roles ?? [],
-      })
-      setResolved(true)
-    })()
-    return () => {
-      cancelled = true
+  const resolve = useCallback(async () => {
+    try {
+      const { user } = await api.getSession()
+      setState({ status: 'auth', identity: toIdentity(user) })
+    } catch {
+      setState({ status: 'anon' })
     }
   }, [])
 
-  if (!resolved || !identity) return <RedirectingShell />
-  return <AuthContext.Provider value={provide(identity)}>{children}</AuthContext.Provider>
+  useEffect(() => {
+    // Any 401 mid-session (e.g. the session was revoked or a mint failed closed)
+    // drops the app to the login screen and clears cached data.
+    setUnauthorizedHandler(() => {
+      qc.clear()
+      setState({ status: 'anon' })
+    })
+    void resolve()
+    return () => setUnauthorizedHandler(null)
+  }, [resolve, qc])
+
+  if (state.status === 'loading') return <RedirectingShell />
+  if (state.status === 'anon') {
+    return <LoginScreen onSuccess={(user) => setState({ status: 'auth', identity: toIdentity(user) })} />
+  }
+
+  const logout = () => {
+    void api.logout().finally(() => {
+      qc.clear()
+      setState({ status: 'anon' })
+    })
+  }
+
+  const identity = state.identity
+  const value: AuthContextValue = {
+    identity,
+    canWrite: hasRole(identity.roles, 'editor', 'admin'),
+    isAdmin: hasRole(identity.roles, 'admin'),
+    logout,
+  }
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth(): AuthContextValue {

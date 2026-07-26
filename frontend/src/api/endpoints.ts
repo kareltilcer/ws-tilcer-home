@@ -17,9 +17,14 @@ import type {
   EventSeriesPage,
   EventWithLinks,
   Label,
+  LayoutItem,
+  LayoutItemInput,
   OccurrenceMonths,
   ReminderLead,
+  SessionUser,
   StatsResponse,
+  WidgetCatalogEntry,
+  WidgetInstance,
 } from './types'
 
 function qs(params: Record<string, string | boolean | number | string[] | undefined>): string {
@@ -117,8 +122,19 @@ export const completeReminder = (eventId: string, occurrenceOn: string, via?: st
 export const uncompleteReminder = (eventId: string, occurrenceOn: string) =>
   apiFetch<void>(`/api/events/${eventId}/complete${qs({ occurrence_on: occurrenceOn })}`, { method: 'DELETE' })
 
-// ---- Dashboard ----
+// ---- Auth (Mode B) ----
+export const login = (email: string, password: string) =>
+  apiFetch<SessionUser>('/api/auth/login', { method: 'POST', body: { email, password }, skipAuthRedirect: true })
+export const logout = () => apiFetch<void>('/api/auth/logout', { method: 'POST', skipAuthRedirect: true })
+export const getSession = () => apiFetch<SessionUser>('/api/auth/session', { skipAuthRedirect: true })
+
+// ---- Dashboard host (widget host) ----
 export const getDashboard = () => apiFetch<Dashboard>('/api/dashboard')
+export const getDashboardCatalog = () => apiFetch<WidgetCatalogEntry[]>('/api/dashboard/catalog')
+export const saveDashboardLayout = (items: LayoutItemInput[]) =>
+  apiFetch<LayoutItem[]>('/api/dashboard/layout', { method: 'PUT', body: items })
+export const getWidget = (key: string) =>
+  apiFetch<WidgetInstance>(`/api/dashboard/widgets/${encodeURIComponent(key)}`)
 
 // ---- Logs (admin) ----
 export interface LogFilters {

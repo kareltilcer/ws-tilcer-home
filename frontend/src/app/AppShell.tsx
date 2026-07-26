@@ -3,6 +3,7 @@ import {
   CalendarClock,
   LayoutDashboard,
   ListTodo,
+  LogOut,
   Moon,
   ScrollText,
   Sun,
@@ -31,7 +32,7 @@ const NAV: NavItem[] = [
 
 export function AppShell() {
   const { theme, toggle } = useTheme()
-  const { isAdmin } = useAuth()
+  const { isAdmin, identity, logout } = useAuth()
   const items = NAV.filter((i) => !i.adminOnly || isAdmin)
   useLiveSync()
 
@@ -51,8 +52,19 @@ export function AppShell() {
             <SideLink key={item.to} item={item} />
           ))}
         </nav>
-        <div className="p-3">
+        <div className="space-y-2 p-3">
+          <div className="truncate px-1 text-[12px] text-subtle" title={identity.email}>
+            {identity.label}
+          </div>
           <ThemeToggle theme={theme} onToggle={toggle} />
+          <button
+            type="button"
+            onClick={logout}
+            className="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-s2 text-sm font-semibold text-fg hover:bg-s3"
+          >
+            <LogOut size={16} aria-hidden />
+            <span>{cs.app.signOut}</span>
+          </button>
         </div>
       </aside>
 
@@ -60,7 +72,18 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-border px-4 py-3 md:hidden">
           <span className="text-base font-extrabold tracking-tight">{cs.app.name}</span>
-          <ThemeToggle theme={theme} onToggle={toggle} compact />
+          <div className="flex items-center gap-2">
+            <ThemeToggle theme={theme} onToggle={toggle} compact />
+            <button
+              type="button"
+              onClick={logout}
+              aria-label={cs.app.signOut}
+              title={cs.app.signOut}
+              className="grid h-9 w-9 place-items-center rounded-md border border-border bg-s2 text-fg hover:bg-s3"
+            >
+              <LogOut size={16} aria-hidden />
+            </button>
+          </div>
         </header>
         <main className="flex-1 px-4 py-5 pb-24 md:px-8 md:py-8 md:pb-8">
           <Outlet />

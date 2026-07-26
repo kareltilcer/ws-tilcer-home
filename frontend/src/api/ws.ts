@@ -1,15 +1,12 @@
 import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { qk } from './keys'
-import { getAccessToken } from './client'
 
-// useLiveSync opens the authenticated websocket and applies pushed changes by
-// invalidating the affected query caches (refetch-on-focus is the reconnect
-// fallback, configured on the QueryClient). Reconnects with capped backoff.
-//
-// TODO(auth): in production a browser websocket cannot send an Authorization
-// header — append the auth-service's token transport (a ?access_token= ticket
-// or the `bearer` subprotocol) here. In dev the backend bypass needs none.
+// useLiveSync opens the session-authenticated websocket and applies pushed
+// changes by invalidating the affected query caches (refetch-on-focus is the
+// reconnect fallback, configured on the QueryClient). Reconnects with capped
+// backoff. In Mode B the browser sends the session cookie automatically on the
+// same-origin upgrade — there is no bearer token.
 export function useLiveSync(): void {
   const qc = useQueryClient()
   useEffect(() => {
@@ -21,12 +18,9 @@ export function useLiveSync(): void {
     const connect = () => {
       if (closed) return
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      // A browser websocket can't send an Authorization header, so the bearer
-      // rides as ?access_token= (the /ws handler accepts it). In dev the backend
-      // bypass needs none.
-      const token = getAccessToken()
-      const q = token ? `?access_token=${encodeURIComponent(token)}` : ''
-      ws = new WebSocket(`${proto}://${location.host}/ws${q}`)
+      // The session cookie rides the same-origin upgrade automatically (Mode B) —
+      // no token in the URL.
+      ws = new WebSocket(`${proto}://${location.host}/ws`)
       ws.onopen = () => {
         attempt = 0
       }

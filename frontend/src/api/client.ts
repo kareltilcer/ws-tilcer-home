@@ -1,37 +1,27 @@
-// The API fetch wrapper. Same-origin: paths are relative ("/api/..."), so no
-// CORS. In dev, Vite proxies /api and /ws to the Go backend.
+// The API fetch wrapper (Mode B). Same-origin: paths are relative ("/api/..."),
+// so no CORS; in dev Vite proxies /api and /ws to Go.
 //
-// Mode A (production): attach the in-memory bearer; on 401 do a single shared
-// /token/refresh → retry once → redirect to login on failure. In dev the backend
-// bypass authenticates every request, so no token is attached and 401 never
-// occurs (REAL_AUTH is false).
+// Authorization is the home SESSION COOKIE — sent automatically with
+// credentials:'include'. There is NO bearer token in JS. State-changing requests
+// carry the double-submit CSRF token read from the (JS-readable) `csrf` cookie.
+// On 401 we hand off to the login screen (home refreshes roles server-side, so
+// there is no client-side token refresh).
 
-import { REAL_AUTH, redirectToLogin, refreshToken } from './authTransport'
+let onUnauthorized: (() => void) | null = null
 
-let accessToken: string | null = null
-let refreshing: Promise<string | null> | null = null
-
-/** setAccessToken stores the in-memory bearer (never persisted — XSS). */
-export function setAccessToken(token: string | null): void {
-  accessToken = token
+/** setUnauthorizedHandler registers what to do on a 401 (the auth provider routes
+ *  to the login screen). */
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn
 }
 
-/** getAccessToken returns the current bearer (used by the websocket client). */
-export function getAccessToken(): string | null {
-  return accessToken
+/** csrfToken reads the double-submit token from the `csrf` cookie (not HttpOnly). */
+function csrfToken(): string {
+  const m = document.cookie.match(/(?:^|;\s*)csrf=([^;]+)/)
+  return m ? decodeURIComponent(m[1]) : ''
 }
 
-/** ensureRefreshed coalesces concurrent 401s into one in-flight refresh. */
-export async function ensureRefreshed(): Promise<string | null> {
-  if (!refreshing) {
-    refreshing = refreshToken().then((t) => {
-      accessToken = t
-      refreshing = null
-      return t
-    })
-  }
-  return refreshing
-}
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 export class ApiError extends Error {
   status: number
@@ -50,35 +40,31 @@ export interface RequestOptions {
   method?: string
   body?: unknown
   signal?: AbortSignal
+  // skipAuthRedirect leaves a 401 to the caller instead of routing to login —
+  // used by the auth endpoints themselves (login bad-creds, the session probe).
+  skipAuthRedirect?: boolean
 }
 
-function rawFetch(path: string, opts: RequestOptions, token: string | null): Promise<Response> {
+export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const method = opts.method ?? 'GET'
   const headers: Record<string, string> = {}
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return fetch(path, {
-    method: opts.method ?? 'GET',
+  if (!SAFE_METHODS.has(method)) {
+    const t = csrfToken()
+    if (t) headers['X-CSRF-Token'] = t
+  }
+
+  const res = await fetch(path, {
+    method,
     credentials: 'include',
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     signal: opts.signal,
   })
-}
 
-export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  let res = await rawFetch(path, opts, accessToken)
-
-  if (res.status === 401 && REAL_AUTH) {
-    const token = await ensureRefreshed()
-    if (!token) {
-      redirectToLogin()
-      throw new ApiError(401, 'unauthorized')
-    }
-    res = await rawFetch(path, opts, token)
-    if (res.status === 401) {
-      redirectToLogin()
-      throw new ApiError(401, 'unauthorized')
-    }
+  if (res.status === 401 && !opts.skipAuthRedirect) {
+    onUnauthorized?.()
+    throw new ApiError(401, 'unauthorized')
   }
 
   if (!res.ok) {

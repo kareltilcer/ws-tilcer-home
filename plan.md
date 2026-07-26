@@ -1,5 +1,38 @@
 # Implementation Plan — `home` (household management service)
 
+> ## v2 status (2026-07-26) — modular monolith + Mode B + widget host
+>
+> **v2 is implemented on the backend (fully green) and the frontend (builds +
+> unit tests green).** v2 reshaped the built v1 into: (1) a **compile-time modular
+> monolith** — `backend/internal/platform/*` (core) + `backend/internal/modules/*`
+> (logging, todo, events, dashboard), each self-contained with its own routes,
+> **per-module Goose migrations** assembled in one sequence by a central
+> **registry**, audit actions, and widget providers; a CI **import-lint**
+> (`internal/arch`) fails on any cross-module import. (2) **Mode B auth** —
+> `platform/auth` hosts `/api/auth/login|logout|session`, owns a hashed **session
+> store**, session middleware with **role re-mint + fail-closed revocation**,
+> **CSRF** double-submit + Origin allowlist, and login rate-limiting; no JWT in the
+> browser; `/ws` is session-authenticated. Mode A introspection is removed. (3)
+> **Nástěnka is a widget host** — `user_dashboard_layout`, `GET /api/dashboard`
+> fan-out `{layout, widgets[]}`, `/catalog`, `PUT /layout` (reader-allowed),
+> `/widgets/{key}`; the three widgets (`todo.pravedelam`, `events.pripominky`,
+> `events.tento-mesic`) are **module-owned providers**; the host imports no feature
+> module. **`go build/vet/test ./...` all green** (incl. auth, dashboard host,
+> providers, arch-boundary tests); a real boot serves the new endpoints.
+> **Frontend**: Mode B (login screen, session bootstrap, CSRF fetch wrapper,
+> cookie-auth WS, logout) + widget-host Nástěnka (registry + responsive grid +
+> keyboard-operable arrange mode + catalog picker + empty/first-run) — `tsc` +
+> `vite build` + Vitest (6) green. **Remaining (polish/config):** live Coolify
+> deploy (register `home` in auth incl. the Mode B `/internal/login` +
+> `/internal/token/mint` endpoints, R2 creds); optional dnd-kit pointer-drag for
+> widget reorder (keyboard ↑/↓ + size toggle already ship); optional full
+> relocation of the *legacy* v1 screens into `src/modules/*` (their v2 widgets
+> already live under `src/platform/widgets` + `src/modules/*/widgets`); refresh the
+> Playwright/e2e specs for the Mode B login flow.
+>
+> _The v1 detail below is retained for history; where it conflicts with the v2
+> status above, v2 wins._
+>
 > **How to use this file:** this is the living build tracker. Each phase and step has a
 > checkbox — **mark it `[x]` as soon as it's done and verified** (tests green / behaviour
 > confirmed), and keep the "Status" line current. Update this file in the same commit as

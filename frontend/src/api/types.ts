@@ -131,8 +131,57 @@ export interface EventSeriesPage {
   next_cursor: string | null
 }
 
-// ---- Dashboard ----
+// ---- Auth (Mode B) ----
 
+export interface UserPublic {
+  id: string
+  email: string
+  display_name: string | null
+  roles: string[]
+}
+
+export interface SessionUser {
+  user: UserPublic
+}
+
+// ---- Dashboard (widget host, v2) ----
+
+export type WidgetSize = 'narrow' | 'wide'
+
+export interface WidgetCatalogEntry {
+  key: string
+  title: string
+  module: string
+  description: string | null
+  default_size: WidgetSize
+  admin_only: boolean
+}
+
+export interface LayoutItem {
+  widget_key: string
+  visible: boolean
+  position: string
+  size: WidgetSize
+}
+
+export interface LayoutItemInput {
+  widget_key: string
+  visible: boolean
+  size: WidgetSize
+}
+
+export interface WidgetInstance {
+  key: string
+  size: WidgetSize
+  data: unknown
+}
+
+export interface Dashboard {
+  layout: LayoutItem[]
+  widgets: WidgetInstance[]
+}
+
+// Widget payloads (data field of WidgetInstance, keyed by widget key).
 export interface DashboardReminder {
   event_id: string
   occurrence_on: string
@@ -155,9 +204,14 @@ export interface DashboardTask {
   done_column_id: string | null
 }
 
-export interface Dashboard {
-  reminders: DashboardReminder[]
+export interface PravedelamWidget {
   tasks: DashboardTask[]
+}
+export interface PripominkyWidget {
+  reminders: DashboardReminder[]
+}
+export interface TentoMesicWidget {
+  occurrences: Occurrence[]
 }
 
 // ---- Logs ----
