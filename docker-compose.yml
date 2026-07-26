@@ -28,6 +28,11 @@ services:
       # harness) they are ignored, so these placeholders are harmless here.
       AUTH_BASE_URL: ${AUTH_BASE_URL:-https://REPLACE-ME.auth.invalid}
       HOME_AUTH_SERVICE_SECRET: ${HOME_AUTH_SERVICE_SECRET:-REPLACE_ME_shared_auth_secret}
+      # Shared HS256 secret used to VERIFY the access tokens auth returns from
+      # /internal/login + /internal/token/mint (identity + roles live in the JWT
+      # claims). MUST equal the auth service's JWT signing secret, or every login
+      # fails closed with empty roles.
+      HOME_AUTH_JWT_SECRET: ${HOME_AUTH_JWT_SECRET:-REPLACE_ME_shared_jwt_secret}
       LITESTREAM_ENABLED: ${LITESTREAM_ENABLED:-false}
       HOME_DB_PATH: ${HOME_DB_PATH:-/data/home.db}
     volumes:

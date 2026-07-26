@@ -122,6 +122,7 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `HOME_DB_PATH` | SQLite file on the persisted volume | `/data/home.db` (image default) |
 | `AUTH_BASE_URL` | auth service base (BE→BE `/internal/login` + `/internal/token/mint`; also the target of reset/MFA out-links) | `https://auth.tilcer.cz` |
 | `HOME_AUTH_SERVICE_SECRET` | `home` service-client secret (Mode B: authenticates `/internal/login` + `/internal/token/mint`) | *(secret)* |
+| `HOME_AUTH_JWT_SECRET` | shared HS256 secret to **verify** the access tokens auth returns (identity + roles live in the JWT claims); **must equal** auth's JWT signing secret | *(secret)* |
 | `HOME_SITE_KEY` | auth site key | `home` (default) |
 | `HOME_ALLOWED_ORIGINS` | CSRF Origin allowlist for cookie-authenticated mutations | `https://*.tilcer.cz` (default) |
 | `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B) | `90` (default) |
@@ -165,8 +166,12 @@ Static-only image — **no runtime env vars**.
    `admin`/`editor`/`reader`), provision a `home` service client bound to site
    `home`, and put its secret in Coolify as `HOME_AUTH_SERVICE_SECRET`. In Mode B
    this client authenticates **`/internal/login`** and **`/internal/token/mint`**
-   (not just introspect) — confirm the auth service exposes both. Create the
-   household member accounts in auth (no self-signup on home).
+   (not just introspect) — confirm the auth service exposes both. Both endpoints
+   return a **signed access token** whose claims carry the identity + roles, so
+   also set `HOME_AUTH_JWT_SECRET` in Coolify to the **same HS256 secret the auth
+   service signs with** — home verifies the token and reads roles from it; a
+   mismatch makes every login fail closed with empty roles (no admin, no write).
+   Create the household member accounts in auth (no self-signup on home).
 2. **R2** — create the bucket and an access key; set the four `LITESTREAM_*`
    vars above. Backups land under the `home/` prefix.
 3. **Verify the Litestream image tag** in `backend/Dockerfile`

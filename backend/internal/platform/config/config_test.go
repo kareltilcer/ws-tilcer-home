@@ -19,6 +19,7 @@ func validBase() map[string]string {
 		"HOME_DB_PATH":             "/data/home.db",
 		"AUTH_BASE_URL":            "https://auth.tilcer.cz",
 		"HOME_AUTH_SERVICE_SECRET": "s3cret",
+		"HOME_AUTH_JWT_SECRET":     "jwt-s3cret",
 	}
 }
 
@@ -61,7 +62,7 @@ func TestLoad_MissingRequiredAreAggregated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty environment")
 	}
-	for _, want := range []string{"HOME_DB_PATH", "AUTH_BASE_URL", "HOME_AUTH_SERVICE_SECRET"} {
+	for _, want := range []string{"HOME_DB_PATH", "AUTH_BASE_URL", "HOME_AUTH_SERVICE_SECRET", "HOME_AUTH_JWT_SECRET"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error missing mention of %s:\n%v", want, err)
 		}

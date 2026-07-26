@@ -41,6 +41,12 @@ type Config struct {
 	// used to authenticate /introspect calls. Never logged.
 	AuthServiceSecret string
 
+	// AuthJWTSecret is the shared HS256 secret home uses to VERIFY the site-scoped
+	// access tokens returned by auth's /internal/login and /internal/token/mint
+	// (their identity + roles live in the JWT claims, not the JSON envelope). It
+	// must equal the auth service's JWT signing secret. Never logged.
+	AuthJWTSecret string
+
 	// AllowedOrigins is the CSRF Origin allowlist for cookie-authenticated
 	// mutations (Mode B, FR-A5). Entries may be exact origins or wildcards
 	// ("https://*.tilcer.cz"). Home's own calls are same-origin (no CORS).
@@ -91,15 +97,19 @@ func (c *Config) Redacted() string {
 	if c.AuthServiceSecret != "" {
 		secret = "set(***)"
 	}
+	jwtSecret := "unset"
+	if c.AuthJWTSecret != "" {
+		jwtSecret = "set(***)"
+	}
 	static := c.StaticDir
 	if static == "" {
 		static = "none"
 	}
 	return fmt.Sprintf(
-		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s tz=%s "+
+		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
 			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t",
-		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, c.TimezoneName,
+		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
 		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.AllowedOrigins, c.DevAuthBypass,
 	)
@@ -156,9 +166,11 @@ func Load(getenv Getenv) (*Config, error) {
 	if c.DevAuthBypass {
 		c.AuthBaseURL = l.strDefault("AUTH_BASE_URL", "")
 		c.AuthServiceSecret = l.strDefault("HOME_AUTH_SERVICE_SECRET", "")
+		c.AuthJWTSecret = l.strDefault("HOME_AUTH_JWT_SECRET", "")
 	} else {
 		c.AuthBaseURL = l.strRequired("AUTH_BASE_URL")
 		c.AuthServiceSecret = l.strRequired("HOME_AUTH_SERVICE_SECRET")
+		c.AuthJWTSecret = l.strRequired("HOME_AUTH_JWT_SECRET")
 	}
 
 	c.AllowedOrigins = l.csvDefault("HOME_ALLOWED_ORIGINS", defaultAllowedOrigins)
