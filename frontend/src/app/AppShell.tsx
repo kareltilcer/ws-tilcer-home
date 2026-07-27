@@ -37,7 +37,7 @@ export function AppShell() {
   useLiveSync()
 
   return (
-    <div className="min-h-full md:flex">
+    <div className="min-h-full md:flex md:h-screen md:overflow-hidden">
       <Toaster theme={theme} position="top-center" richColors />
       {/* Desktop side nav */}
       <aside className="hidden md:flex md:w-60 md:flex-col md:border-r md:border-border md:bg-s1">
@@ -85,7 +85,7 @@ export function AppShell() {
             </button>
           </div>
         </header>
-        <main className="flex-1 px-4 py-5 pb-24 md:px-8 md:py-8 md:pb-8">
+        <main className="flex-1 px-4 py-5 pb-24 md:min-h-0 md:overflow-y-auto md:px-8 md:py-8 md:pb-8">
           <Outlet />
         </main>
       </div>

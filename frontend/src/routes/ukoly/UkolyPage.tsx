@@ -52,7 +52,7 @@ export function UkolyPage() {
   const activeBoardId = boardId ?? boards.data?.[0]?.id ?? null
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="flex flex-col md:h-full">
       <ScreenHeader title="Úkoly" subtitle="Trello-style nástěnka úkolů" />
       {boards.isLoading ? (
         <div className="grid place-items-center py-16">
@@ -410,7 +410,7 @@ function BoardView({
             </p>
           )}
           <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={onDragCancel}>
-            <div className={cn(desktop ? 'flex items-stretch gap-4 overflow-x-auto pb-2 om-scroll' : 'flex flex-col gap-4')}>
+            <div className={cn(desktop ? 'flex min-h-0 flex-1 items-stretch gap-4 overflow-x-auto pb-2 om-scroll' : 'flex flex-col gap-4')}>
               <SortableContext items={columnIds} strategy={desktop ? horizontalListSortingStrategy : verticalListSortingStrategy}>
                 {displayColumns.map(({ column, cards }) => {
                   const oi = displayColumns.findIndex((c) => c.column.id === column.id)
@@ -722,7 +722,7 @@ function ColumnView({
       style={{ ...nowTint, ...sortableStyle }}
       className={cn(
         'flex flex-col overflow-hidden rounded-xl border border-border bg-s1',
-        desktop ? 'max-h-[calc(100vh-16rem)] w-[304px] flex-none' : 'w-full',
+        desktop ? 'h-full w-[304px] flex-none' : 'w-full',
         isOver && 'ring-2 ring-accent',
         isDragging && 'opacity-50',
       )}
