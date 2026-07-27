@@ -59,6 +59,9 @@ export const deleteColumn = (id: string, cascade = false) =>
   apiFetch<void>(`/api/columns/${id}${qs({ cascade })}`, { method: 'DELETE' })
 export const moveColumn = (id: string, position: string) =>
   apiFetch<Column>(`/api/columns/${id}/move`, { method: 'POST', body: { position } })
+// Atomic multi-column reorder — all positions rewritten in one transaction.
+export const reorderColumns = (boardId: string, columns: { id: string; position: string }[]) =>
+  apiFetch<Column[]>(`/api/boards/${boardId}/columns/reorder`, { method: 'POST', body: { columns } })
 
 // ---- Cards ----
 export const createCard = (columnId: string, body: { title: string; notes?: string }) =>
@@ -68,7 +71,7 @@ export const updateCard = (id: string, body: Partial<{ title: string; notes: str
   apiFetch<Card>(`/api/cards/${id}`, { method: 'PATCH', body })
 export const deleteCard = (id: string, hard = false) =>
   apiFetch<void>(`/api/cards/${id}${qs({ hard })}`, { method: 'DELETE' })
-export const moveCard = (id: string, body: { column_id: string; position?: string }, via?: string) =>
+export const moveCard = (id: string, body: { column_id: string; position?: string; before_card_id?: string }, via?: string) =>
   apiFetch<Card>(`/api/cards/${id}/move${qs({ via })}`, { method: 'POST', body })
 
 // ---- Card links / checklist ----

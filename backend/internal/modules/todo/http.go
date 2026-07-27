@@ -30,6 +30,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.With(httpx.RequireWrite).Patch("/columns/{id}", h.updateColumn)
 	r.With(httpx.RequireWrite).Delete("/columns/{id}", h.deleteColumn)
 	r.With(httpx.RequireWrite).Post("/columns/{id}/move", h.moveColumn)
+	r.With(httpx.RequireWrite).Post("/boards/{id}/columns/reorder", h.reorderColumns)
 
 	// Cards
 	r.With(httpx.RequireWrite).Post("/columns/{id}/cards", h.createCard)
@@ -146,6 +147,16 @@ func (h *Handler) moveColumn(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := h.svc.MoveColumn(r.Context(), chi.URLParam(r, "id"), in.Position)
 	respond(w, http.StatusOK, c, err)
+}
+
+func (h *Handler) reorderColumns(w http.ResponseWriter, r *http.Request) {
+	var in ColumnReorderRequest
+	if err := httpx.DecodeJSON(r, &in); err != nil {
+		httpx.WriteError(w, httpx.ErrUnprocessable(err.Error()))
+		return
+	}
+	cols, err := h.svc.ReorderColumns(r.Context(), chi.URLParam(r, "id"), in.Columns)
+	respond(w, http.StatusOK, cols, err)
 }
 
 // ---- Cards ----

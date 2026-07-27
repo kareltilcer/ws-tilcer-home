@@ -290,6 +290,86 @@ func (s *Service) MoveColumn(ctx context.Context, id, position string) (*Column,
 	return out, nil
 }
 
+// ReorderColumns rewrites several column positions on one board in a single
+// transaction, so a multi-column renumber (the UI's priority→manual conversion)
+// applies all-or-nothing — no half-applied order if one write fails. Every column
+// must belong to boardID.
+func (s *Service) ReorderColumns(ctx context.Context, boardID string, items []ColumnPositionInput) ([]Column, error) {
+	if len(items) == 0 {
+		return nil, httpx.ErrUnprocessable("columns is required")
+	}
+	// Validate the batch shape before opening a transaction: every column needs a
+	// position, and neither ids nor positions may repeat within the batch. A
+	// duplicate position would leave two columns sharing one order key (an
+	// ambiguous, unstable ListColumns order); a duplicate id would write the same
+	// column twice. The UI's renumber always sends distinct keys, so this only
+	// catches a malformed or buggy caller.
+	seenID := make(map[string]bool, len(items))
+	seenPos := make(map[string]bool, len(items))
+	for _, it := range items {
+		if it.Position == "" {
+			return nil, httpx.ErrUnprocessable("position is required")
+		}
+		if seenID[it.ID] {
+			return nil, httpx.ErrUnprocessable("duplicate column id in batch")
+		}
+		if seenPos[it.Position] {
+			return nil, httpx.ErrUnprocessable("duplicate position in batch")
+		}
+		seenID[it.ID] = true
+		seenPos[it.Position] = true
+	}
+	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		// Global uniqueness: a target position must not collide with a column that is
+		// not part of this batch. The within-batch check above only proves the listed
+		// columns are distinct; a partial batch could still drop a column onto an order
+		// key an untouched column already holds, leaving two columns sharing one key —
+		// the ambiguous, unstable ListColumns order this endpoint must prevent.
+		existing, err := s.store.ListColumns(ctx, tx, boardID)
+		if err != nil {
+			return err
+		}
+		for _, c := range existing {
+			if !seenID[c.ID] && seenPos[c.Position] {
+				return httpx.ErrUnprocessable("position collides with a column outside the batch")
+			}
+		}
+		for _, it := range items {
+			before, err := s.store.GetColumn(ctx, tx, it.ID)
+			if err != nil {
+				return err
+			}
+			if before == nil {
+				return httpx.ErrNotFound("column not found")
+			}
+			if before.BoardID != boardID {
+				return httpx.ErrUnprocessable("column does not belong to this board")
+			}
+			if before.Position == it.Position {
+				continue
+			}
+			if err := s.store.MoveColumn(ctx, tx, it.ID, it.Position); err != nil {
+				return err
+			}
+			if err := s.record(ctx, tx, "column.move", "column", it.ID,
+				fmt.Sprintf("Přesunut sloupec „%s“", before.Name),
+				[]audit.Change{{Field: "position", Old: ap(before.Position), New: ap(it.Position)}}, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.store.ListColumns(ctx, s.db, boardID)
+	if err != nil {
+		return nil, err
+	}
+	s.notify("column.changed", map[string]string{"board_id": boardID})
+	return out, nil
+}
+
 func (s *Service) DeleteColumn(ctx context.Context, id string, cascade bool) error {
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		before, err := s.store.GetColumn(ctx, tx, id)

@@ -38,6 +38,7 @@ export interface Card {
   done_at: string | null
   label_ids: string[]
   checklist_progress: ChecklistProgress
+  link_count: number
   created_by: string | null
   created_at: string
   updated_at: string
@@ -64,6 +65,7 @@ export interface Label {
   board_id: string
   name: string
   color: string
+  card_count?: number
 }
 
 export interface CardDetail extends Card {
@@ -75,6 +77,7 @@ export interface CardDetail extends Card {
 export interface BoardTreeColumn {
   column: Column
   cards: Card[]
+  card_count: number // total cards in the column, ignoring tree filters (matches the delete-cascade count)
 }
 
 export interface BoardTree {

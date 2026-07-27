@@ -353,6 +353,32 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/boards/{id}/columns/reorder:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [columns]
+      summary: Reorder several columns on a board atomically
+      description: >-
+        Rewrites the position of each listed column in one transaction
+        (all-or-nothing). Used when converting a priority-sorted view back to a
+        manual arrangement. Every column must belong to the board.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ColumnReorderRequest" }
+      responses:
+        "200":
+          description: Reordered; returns the board's columns in the new order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Column" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   # ---------------- Cards ----------------
   /api/columns/{id}/cards:
     parameters:
@@ -1161,6 +1187,7 @@ components:
           items: { type: string }
         checklist_progress:
           $ref: "#/components/schemas/ChecklistProgress"
+        link_count: { type: integer, description: Number of links on the card (board read model). }
         created_by: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1195,7 +1222,14 @@ components:
       required: [column_id]
       properties:
         column_id: { type: string, description: Target column. }
-        position: { type: string, description: Target order key within the column. }
+        position: { type: string, description: Target order key within the column. Ignored when before_card_id is set. }
+        before_card_id:
+          type: string
+          description: >-
+            When set, the card is placed immediately before this card in the target
+            column and the server computes the order key from the true stored order
+            (correct even when a filter hides cards around the drop). Empty ⇒ use
+            position, or append to the tail when position is also empty.
     ChecklistProgress:
       type: object
       required: [done, total]
@@ -1248,6 +1282,7 @@ components:
         board_id: { type: string }
         name: { type: string }
         color: { type: string, description: Hex or named token }
+        card_count: { type: integer, description: Non-archived cards using this label. Present only in the board labels list. }
     LabelCreate:
       type: object
       required: [name, color]
@@ -1261,6 +1296,20 @@ components:
       properties:
         position: { type: string, description: New order key. }
 
+    ColumnReorderRequest:
+      type: object
+      required: [columns]
+      properties:
+        columns:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [id, position]
+            properties:
+              id: { type: string }
+              position: { type: string, description: New order key. }
+
     BoardTree:
       type: object
       required: [board, columns]
@@ -1270,12 +1319,15 @@ components:
           type: array
           items:
             type: object
-            required: [column, cards]
+            required: [column, cards, card_count]
             properties:
               column: { $ref: "#/components/schemas/Column" }
               cards:
                 type: array
                 items: { $ref: "#/components/schemas/Card" }
+              card_count:
+                type: integer
+                description: Total cards in the column, ignoring the tree's label/q/archived filters (matches the delete-cascade count).
 
     # ----- Events (Okno do budoucnosti) -----
     Event:

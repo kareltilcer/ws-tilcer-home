@@ -241,6 +241,258 @@ func TestTree_ShapeAndFilters(t *testing.T) {
 	}
 }
 
+func TestTree_LinkCount(t *testing.T) {
+	f := newFixture(t)
+	b := f.board(t)
+	col := f.column(t, b.ID, "Zásobník", todo.KindNormal)
+	withLinks := f.card(t, col.ID, "S odkazy")
+	noLinks := f.card(t, col.ID, "Bez odkazů")
+
+	for _, u := range []string{"https://a.example", "https://b.example"} {
+		if _, err := f.svc.CreateCardLink(f.ctx, withLinks.ID, todo.CardLinkCreate{URL: u}); err != nil {
+			t.Fatalf("create link: %v", err)
+		}
+	}
+
+	tree, err := f.svc.Tree(f.ctx, b.ID, nil, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, c := range tree.Columns[0].Cards {
+		got[c.ID] = c.LinkCount
+	}
+	if got[withLinks.ID] != 2 {
+		t.Errorf("card with 2 links: link_count = %d, want 2", got[withLinks.ID])
+	}
+	if got[noLinks.ID] != 0 {
+		t.Errorf("card with no links: link_count = %d, want 0", got[noLinks.ID])
+	}
+}
+
+func TestListLabels_CardCount(t *testing.T) {
+	f := newFixture(t)
+	b := f.board(t)
+	col := f.column(t, b.ID, "Zásobník", todo.KindNormal)
+
+	label, err := f.svc.CreateLabel(f.ctx, b.ID, todo.LabelCreate{Name: "Byt", Color: "#fff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused, err := f.svc.CreateLabel(f.ctx, b.ID, todo.LabelCreate{Name: "Nepoužitý", Color: "#000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c1 := f.card(t, col.ID, "Karta 1")
+	c2 := f.card(t, col.ID, "Karta 2")
+	archived := f.card(t, col.ID, "Archivovaná")
+	for _, id := range []string{c1.ID, c2.ID, archived.ID} {
+		if err := f.svc.AttachLabel(f.ctx, id, label.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Soft-delete (archive) the third card — archived cards must not count.
+	if err := f.svc.DeleteCard(f.ctx, archived.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	labels, err := f.svc.ListLabels(f.ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]*int{}
+	for i := range labels {
+		counts[labels[i].ID] = labels[i].CardCount
+	}
+	assertCount := func(name, id string, want int) {
+		t.Helper()
+		got := counts[id]
+		if got == nil {
+			t.Errorf("%s: card_count is nil, want %d", name, want)
+			return
+		}
+		if *got != want {
+			t.Errorf("%s: card_count = %d, want %d", name, *got, want)
+		}
+	}
+	assertCount("used label (archived excluded)", label.ID, 2)
+	assertCount("unused label", unused.ID, 0)
+}
+
+func TestTree_CardCountIgnoresFilters(t *testing.T) {
+	f := newFixture(t)
+	b := f.board(t)
+	col := f.column(t, b.ID, "Zásobník", todo.KindNormal)
+	empty := f.column(t, b.ID, "Prázdný", todo.KindNormal)
+	f.card(t, col.ID, "Vyměnit baterii")
+	archived := f.card(t, col.ID, "Hotová")
+	if err := f.svc.DeleteCard(f.ctx, archived.ID, false); err != nil { // soft-delete (archive)
+		t.Fatal(err)
+	}
+
+	// A query that matches nothing hides every card, but card_count still reports
+	// the true total (including the archived card) so column delete stays honest.
+	tree, err := f.svc.Tree(f.ctx, b.ID, nil, "nenajdenic", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	visible := 0
+	for _, c := range tree.Columns {
+		counts[c.Column.ID] = c.CardCount
+		visible += len(c.Cards)
+	}
+	if visible != 0 {
+		t.Fatalf("filtered cards visible = %d, want 0 (filter hides all)", visible)
+	}
+	if counts[col.ID] != 2 {
+		t.Errorf("card_count = %d, want 2 (incl. archived, ignoring filter)", counts[col.ID])
+	}
+	if counts[empty.ID] != 0 {
+		t.Errorf("empty column card_count = %d, want 0", counts[empty.ID])
+	}
+}
+
+func TestReorderColumns_AtomicAndValidated(t *testing.T) {
+	f := newFixture(t)
+	b := f.board(t)
+	c1 := f.column(t, b.ID, "A", todo.KindNormal)
+	c2 := f.column(t, b.ID, "B", todo.KindNormal)
+	c3 := f.column(t, b.ID, "C", todo.KindNormal)
+
+	// Reorder to C, A, B in one batch.
+	cols, err := f.svc.ReorderColumns(f.ctx, b.ID, []todo.ColumnPositionInput{
+		{ID: c3.ID, Position: "1"},
+		{ID: c1.ID, Position: "2"},
+		{ID: c2.ID, Position: "3"},
+	})
+	if err != nil {
+		t.Fatalf("reorder: %v", err)
+	}
+	got := []string{cols[0].ID, cols[1].ID, cols[2].ID}
+	want := []string{c3.ID, c1.ID, c2.ID}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+
+	// A batch that includes a column from another board is rejected whole — the
+	// valid write in the same batch must NOT persist (single transaction).
+	other := f.board(t)
+	oc := f.column(t, other.ID, "X", todo.KindNormal)
+	if _, err := f.svc.ReorderColumns(f.ctx, b.ID, []todo.ColumnPositionInput{
+		{ID: c1.ID, Position: "9"},
+		{ID: oc.ID, Position: "9"},
+	}); err == nil {
+		t.Fatal("expected error for a column not on this board")
+	}
+	var pos string
+	if err := f.db.QueryRow(`SELECT position FROM columns WHERE id=?`, c1.ID).Scan(&pos); err != nil {
+		t.Fatal(err)
+	}
+	if pos != "2" {
+		t.Errorf("c1 position = %q after failed batch, want unchanged %q (rollback)", pos, "2")
+	}
+
+	// A batch with two columns sharing one position key is rejected up front — two
+	// columns on the same order key would give an ambiguous, unstable sort order.
+	if _, err := f.svc.ReorderColumns(f.ctx, b.ID, []todo.ColumnPositionInput{
+		{ID: c1.ID, Position: "5"},
+		{ID: c2.ID, Position: "5"},
+	}); err == nil {
+		t.Fatal("expected error for duplicate position in batch")
+	}
+
+	// Current keys: c3="1", c1="2", c2="3". A partial batch that drops c1 onto "3"
+	// collides with c2 — which is untouched, so the within-batch dedupe can't see it.
+	// It must still be rejected (global uniqueness), and c1 must stay put (rollback).
+	if _, err := f.svc.ReorderColumns(f.ctx, b.ID, []todo.ColumnPositionInput{
+		{ID: c1.ID, Position: "3"},
+	}); err == nil {
+		t.Fatal("expected error for a position colliding with a column outside the batch")
+	}
+	if err := f.db.QueryRow(`SELECT position FROM columns WHERE id=?`, c1.ID).Scan(&pos); err != nil {
+		t.Fatal(err)
+	}
+	if pos != "2" {
+		t.Errorf("c1 position = %q after rejected collision, want unchanged %q", pos, "2")
+	}
+
+	// A partial batch onto a free key still succeeds — the guard rejects only real
+	// collisions, not every partial reorder.
+	if _, err := f.svc.ReorderColumns(f.ctx, b.ID, []todo.ColumnPositionInput{
+		{ID: c1.ID, Position: "0"},
+	}); err != nil {
+		t.Fatalf("partial batch onto a free key: %v", err)
+	}
+}
+
+func TestMoveCard_BeforeCardIDAnchor(t *testing.T) {
+	f := newFixture(t)
+	b := f.board(t)
+	col := f.column(t, b.ID, "Zásobník", todo.KindNormal)
+
+	a := f.card(t, col.ID, "A")
+	bCard := f.card(t, col.ID, "B")
+	c := f.card(t, col.ID, "C") // order: A < B < C
+
+	// Move C to sit immediately before B. The server computes the slot from the true
+	// stored order, so C lands strictly between A and B regardless of client keys.
+	moved, err := f.svc.MoveCard(f.ctx, c.ID, todo.CardMoveRequest{ColumnID: col.ID, BeforeCardID: bCard.ID}, "")
+	if err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if !(moved.Position > a.Position && moved.Position < bCard.Position) {
+		t.Errorf("moved position %q, want strictly between %q and %q", moved.Position, a.Position, bCard.Position)
+	}
+	// Anchoring rewrites one row: A and B keep their positions.
+	assertPosition(t, f.db, a.ID, a.Position)
+	assertPosition(t, f.db, bCard.ID, bCard.Position)
+
+	// An anchor that does not exist (concurrent delete) falls back to appending at
+	// the tail rather than erroring the drop.
+	moved, err = f.svc.MoveCard(f.ctx, a.ID, todo.CardMoveRequest{ColumnID: col.ID, BeforeCardID: "does-not-exist"}, "")
+	if err != nil {
+		t.Fatalf("move with missing anchor: %v", err)
+	}
+	if moved.Position < bCard.Position {
+		t.Errorf("missing-anchor fallback position %q, want at the tail (> %q)", moved.Position, bCard.Position)
+	}
+}
+
+func TestCardMutations_CarryLinkCount(t *testing.T) {
+	f := newFixture(t)
+	b := f.board(t)
+	c1 := f.column(t, b.ID, "Zásobník", todo.KindNormal)
+	c2 := f.column(t, b.ID, "Hotovo", todo.KindDone)
+	card := f.card(t, c1.ID, "S odkazy")
+	for _, u := range []string{"https://a.example", "https://b.example"} {
+		if _, err := f.svc.CreateCardLink(f.ctx, card.ID, todo.CardLinkCreate{URL: u}); err != nil {
+			t.Fatalf("create link: %v", err)
+		}
+	}
+
+	// The mutation responses (not just Tree/GetCardDetail) must report the true
+	// link_count. A consumer that trusts the response directly, rather than
+	// refetching the tree, would otherwise render a linked card as having none.
+	moved, err := f.svc.MoveCard(f.ctx, card.ID, todo.CardMoveRequest{ColumnID: c2.ID}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.LinkCount != 2 {
+		t.Errorf("MoveCard link_count = %d, want 2", moved.LinkCount)
+	}
+	updated, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Title: strPtr("Nový")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LinkCount != 2 {
+		t.Errorf("UpdateCard link_count = %d, want 2", updated.LinkCount)
+	}
+}
+
 func TestAudit_CardUpdateProducesDiff(t *testing.T) {
 	f := newFixture(t)
 	b := f.board(t)

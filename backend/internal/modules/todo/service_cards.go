@@ -9,6 +9,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
 )
 
 // ---- Cards ----
@@ -115,7 +116,28 @@ func (s *Service) MoveCard(ctx context.Context, id string, in CardMoveRequest, v
 			return httpx.ErrUnprocessable("target column does not exist")
 		}
 		pos := in.Position
-		if pos == "" {
+		if bid := strings.TrimSpace(in.BeforeCardID); bid != "" {
+			// Anchor before a card in the target column and derive the slot from the
+			// true stored order (correct even when a filter hid cards around it on the
+			// client). If the anchor vanished or moved away (concurrent edit), fall
+			// back to appending at the tail.
+			anchor, err := s.store.GetCard(ctx, tx, bid)
+			if err != nil {
+				return err
+			}
+			if anchor == nil || anchor.ColumnID != in.ColumnID {
+				pos, err = s.store.lastCardPosition(ctx, tx, in.ColumnID)
+				if err != nil {
+					return err
+				}
+			} else {
+				prev, err := s.store.cardPositionBefore(ctx, tx, in.ColumnID, anchor.Position, id)
+				if err != nil {
+					return err
+				}
+				pos = lexorank.Between(prev, anchor.Position)
+			}
+		} else if pos == "" {
 			pos, err = s.store.lastCardPosition(ctx, tx, in.ColumnID)
 			if err != nil {
 				return err

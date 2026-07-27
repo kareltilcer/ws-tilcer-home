@@ -53,7 +53,7 @@ export function AppShell() {
           ))}
         </nav>
         <div className="space-y-2 p-3">
-          <div className="truncate px-1 text-[12px] text-subtle" title={identity.email}>
+          <div className="truncate px-1 text-[12px] text-muted" title={identity.email}>
             {identity.label}
           </div>
           <ThemeToggle theme={theme} onToggle={toggle} />

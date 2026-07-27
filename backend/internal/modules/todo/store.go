@@ -267,6 +267,11 @@ func (s *Store) loadCard(ctx context.Context, q DBTX, id string) (*Card, error) 
 		return nil, err
 	}
 	c.ChecklistProgress = prog
+	links, err := s.cardLinkCount(ctx, q, id)
+	if err != nil {
+		return nil, err
+	}
+	c.LinkCount = links
 	return &c, nil
 }
 
@@ -285,6 +290,7 @@ func (s *Store) GetCardDetail(ctx context.Context, id string) (*CardDetail, erro
 	if err != nil {
 		return nil, err
 	}
+	card.LinkCount = len(links)
 	checklist, err := s.ListChecklist(ctx, s.db, id)
 	if err != nil {
 		return nil, err
@@ -320,6 +326,15 @@ func (s *Store) checklistProgress(ctx context.Context, q DBTX, cardID string) (C
 	return ChecklistProgress{Done: done, Total: total}, err
 }
 
+// cardLinkCount returns the number of links on a card. loadCard calls it so every
+// single-card response — CreateCard/UpdateCard/MoveCard — carries an accurate
+// link_count, matching what Tree reports (Tree fills it via a batched query).
+func (s *Store) cardLinkCount(ctx context.Context, q DBTX, cardID string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM card_links WHERE card_id = ?`, cardID).Scan(&n)
+	return n, err
+}
+
 func (s *Store) lastCardPosition(ctx context.Context, tx DBTX, columnID string) (string, error) {
 	var pos sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(position) FROM cards WHERE column_id = ?`, columnID).Scan(&pos); err != nil {
@@ -329,6 +344,23 @@ func (s *Store) lastCardPosition(ctx context.Context, tx DBTX, columnID string) 
 		return lexorank.First(), nil
 	}
 	return lexorank.Tail(pos.String), nil
+}
+
+// cardPositionBefore returns the greatest card position strictly less than pos
+// within a column, ignoring excludeID (the card being moved, so its own current
+// row never anchors the computation). An empty string means there is no earlier
+// card — the anchor is the column head.
+func (s *Store) cardPositionBefore(ctx context.Context, tx DBTX, columnID, pos, excludeID string) (string, error) {
+	var prev sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MAX(position) FROM cards WHERE column_id = ? AND position < ? AND id != ?`,
+		columnID, pos, excludeID).Scan(&prev); err != nil {
+		return "", err
+	}
+	if !prev.Valid {
+		return "", nil
+	}
+	return prev.String, nil
 }
 
 func (s *Store) InsertCard(ctx context.Context, tx DBTX, columnID, title, notes, position, createdBy string) (*Card, error) {
@@ -536,14 +568,43 @@ func (s *Store) ListLabels(ctx context.Context, q DBTX, boardID string) ([]Label
 	}
 	defer rows.Close()
 	out := []Label{}
+	index := map[string]int{}
 	for rows.Next() {
 		var l Label
 		if err := rows.Scan(&l.ID, &l.BoardID, &l.Name, &l.Color); err != nil {
 			return nil, err
 		}
+		zero := 0
+		l.CardCount = &zero // every label in the list reports a count (0 if unused)
+		index[l.ID] = len(out)
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Usage counts: non-archived cards per label on this board, one grouped query.
+	counts, err := q.QueryContext(ctx,
+		`SELECT cl.label_id, COUNT(*) FROM card_labels cl
+		 JOIN cards c ON c.id = cl.card_id
+		 JOIN labels l ON l.id = cl.label_id
+		 WHERE l.board_id = ? AND c.archived = 0
+		 GROUP BY cl.label_id`, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer counts.Close()
+	for counts.Next() {
+		var labelID string
+		var n int
+		if err := counts.Scan(&labelID, &n); err != nil {
+			return nil, err
+		}
+		if i, ok := index[labelID]; ok {
+			*out[i].CardCount = n
+		}
+	}
+	return out, counts.Err()
 }
 
 func (s *Store) GetLabel(ctx context.Context, q DBTX, id string) (*Label, error) {

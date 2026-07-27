@@ -80,11 +80,21 @@ func (s *Store) Tree(ctx context.Context, boardID string, labelIDs []string, q s
 	if err := s.fillProgress(ctx, cardIDs, cards, index); err != nil {
 		return nil, err
 	}
+	if err := s.fillLinkCounts(ctx, cardIDs, cards, index); err != nil {
+		return nil, err
+	}
 
 	// Group into columns (order preserved by the SQL ORDER BY).
 	byColumn := map[string][]Card{}
 	for _, c := range cards {
 		byColumn[c.ColumnID] = append(byColumn[c.ColumnID], c)
+	}
+
+	// True card counts, ignoring the filters above, so structural actions (column
+	// delete) see the real count rather than what the filter left visible.
+	counts, err := s.columnCardCounts(ctx, boardID)
+	if err != nil {
+		return nil, err
 	}
 
 	tree := &BoardTree{Board: *board}
@@ -93,9 +103,33 @@ func (s *Store) Tree(ctx context.Context, boardID string, labelIDs []string, q s
 		if colCards == nil {
 			colCards = []Card{}
 		}
-		tree.Columns = append(tree.Columns, BoardTreeColumn{Column: col, Cards: colCards})
+		tree.Columns = append(tree.Columns, BoardTreeColumn{Column: col, Cards: colCards, CardCount: counts[col.ID]})
 	}
 	return tree, nil
+}
+
+// columnCardCounts returns the total number of cards per column on the board,
+// ignoring the tree's label/q/archived filters (and counting archived cards, so
+// it matches DeleteColumn's cascade check).
+func (s *Store) columnCardCounts(ctx context.Context, boardID string) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT c.column_id, COUNT(*) FROM cards c
+		 JOIN columns col ON col.id = c.column_id
+		 WHERE col.board_id = ? GROUP BY c.column_id`, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var colID string
+		var n int
+		if err := rows.Scan(&colID, &n); err != nil {
+			return nil, err
+		}
+		out[colID] = n
+	}
+	return out, rows.Err()
 }
 
 // fillLabelIDs loads label ids for all cards in one query and assigns them.
@@ -141,6 +175,31 @@ func (s *Store) fillProgress(ctx context.Context, cardIDs []string, cards []Card
 		}
 		if i, ok := index[cardID]; ok {
 			cards[i].ChecklistProgress = ChecklistProgress{Done: done, Total: total}
+		}
+	}
+	return rows.Err()
+}
+
+// fillLinkCounts loads the number of links per card in one grouped query.
+func (s *Store) fillLinkCounts(ctx context.Context, cardIDs []string, cards []Card, index map[string]int) error {
+	if len(cardIDs) == 0 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT card_id, COUNT(*) FROM card_links
+		 WHERE card_id IN (`+placeholders(len(cardIDs))+`) GROUP BY card_id`, toArgs(cardIDs)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cardID string
+		var n int
+		if err := rows.Scan(&cardID, &n); err != nil {
+			return err
+		}
+		if i, ok := index[cardID]; ok {
+			cards[i].LinkCount = n
 		}
 	}
 	return rows.Err()

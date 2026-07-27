@@ -31,3 +31,12 @@ export function between(a: string, b: string): string {
 export const first = () => between('', '')
 export const head = (next: string) => between('', next)
 export const tail = (prev: string) => between(prev, '')
+
+/** comparePositions is a sort comparator over lexorank keys (ascending). */
+export const comparePositions = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+/** canInsertBetween reports whether a key k with a < k < b can exist ('' bounds
+ *  mean ∓∞). It is false only when the neighbours are equal or inverted — no single
+ *  key separates them, so a caller must renumber rather than write one ambiguous
+ *  row (between() would otherwise fall back to tail(a), placing the item after BOTH). */
+export const canInsertBetween = (a: string, b: string): boolean => a === '' || b === '' || a < b

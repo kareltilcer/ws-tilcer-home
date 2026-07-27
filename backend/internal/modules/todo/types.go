@@ -41,6 +41,7 @@ type Card struct {
 	DoneAt            *string           `json:"done_at"`
 	LabelIDs          []string          `json:"label_ids"`
 	ChecklistProgress ChecklistProgress `json:"checklist_progress"`
+	LinkCount         int               `json:"link_count"`
 	CreatedBy         *string           `json:"created_by"`
 	CreatedAt         string            `json:"created_at"`
 	UpdatedAt         string            `json:"updated_at"`
@@ -70,15 +71,17 @@ type ChecklistItem struct {
 }
 
 type Label struct {
-	ID      string `json:"id"`
-	BoardID string `json:"board_id"`
-	Name    string `json:"name"`
-	Color   string `json:"color"`
+	ID        string `json:"id"`
+	BoardID   string `json:"board_id"`
+	Name      string `json:"name"`
+	Color     string `json:"color"`
+	CardCount *int   `json:"card_count,omitempty"` // non-archived cards using this label; set only in ListLabels
 }
 
 type BoardTreeColumn struct {
-	Column Column `json:"column"`
-	Cards  []Card `json:"cards"`
+	Column    Column `json:"column"`
+	Cards     []Card `json:"cards"`
+	CardCount int    `json:"card_count"` // total cards in the column, ignoring the tree's filters (matches the delete-cascade count)
 }
 
 type BoardTree struct {
@@ -125,10 +128,26 @@ type CardUpdate struct {
 type CardMoveRequest struct {
 	ColumnID string `json:"column_id"`
 	Position string `json:"position"`
+	// BeforeCardID, when set, anchors the move immediately before this card in the
+	// target column; the server computes the order key from the true stored order,
+	// so the drop lands correctly even when a filter hid the cards around it on the
+	// client. Empty ⇒ use Position, or append to the tail when Position is empty too.
+	BeforeCardID string `json:"before_card_id"`
 }
 
 type MoveRequest struct {
 	Position string `json:"position"`
+}
+
+// ColumnPositionInput is one column's new order key in a batch reorder.
+type ColumnPositionInput struct {
+	ID       string `json:"id"`
+	Position string `json:"position"`
+}
+
+// ColumnReorderRequest rewrites several column positions on one board atomically.
+type ColumnReorderRequest struct {
+	Columns []ColumnPositionInput `json:"columns"`
 }
 
 type CardLinkCreate struct {
