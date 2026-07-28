@@ -177,6 +177,25 @@ body {
   outline-offset: 2px;
 }
 
+/*
+ * Tailwind v4's Preflight dropped the default `cursor: pointer` on buttons
+ * (they now inherit the arrow). Restore it here for buttons and role-based
+ * clickables so every interactive control/card signals it is clickable.
+ * This lives in the `base` layer, so explicit `cursor-*` utilities
+ * (e.g. `cursor-grab` on drag handles) still win. Disabled controls keep the
+ * default arrow.
+ */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  [role='switch']:not(:disabled):not([aria-disabled='true']),
+  [role='tab']:not([aria-disabled='true']),
+  [role='menuitem']:not([aria-disabled='true']),
+  [role='option']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
