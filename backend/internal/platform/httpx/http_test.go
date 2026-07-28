@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	cws "github.com/coder/websocket"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 )
 
@@ -93,6 +95,59 @@ func TestRequestID_GeneratedAndEchoed(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if got := rr.Header().Get("X-Request-Id"); got != "abc-123" {
 		t.Errorf("X-Request-Id = %q, want abc-123", got)
+	}
+}
+
+// TestWebsocketUpgradeThroughMiddleware guards the /ws 501 regression: the
+// Logger middleware wraps the ResponseWriter to record the status, and that
+// wrapper must still forward Hijack. Without it, coder/websocket's Accept can't
+// take over the connection and fails the upgrade with 501 Not Implemented.
+// (The ws package's own tests mount the handler WITHOUT this middleware, so the
+// break only shows through the real router — exercised here.)
+func TestWebsocketUpgradeThroughMiddleware(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	// accepted closes once the server-side hijack has returned, which is also
+	// when Logger emits the 101 access line; the close establishes a
+	// happens-before so the later buf read below is race-free.
+	accepted := make(chan struct{})
+	wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := cws.Accept(w, r, nil)
+		if err != nil {
+			return // Accept already wrote the failing response
+		}
+		close(accepted)
+		c.Close(cws.StatusNormalClosure, "")
+	})
+	h := httpx.NewRouter(httpx.Deps{Logger: logger, DB: fakePinger{}, Site: "home", WS: wsHandler})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws", nil)
+	if err != nil {
+		t.Fatalf("websocket upgrade through the router middleware failed: %v", err)
+	}
+	conn.Close(cws.StatusNormalClosure, "")
+
+	select {
+	case <-accepted:
+	case <-ctx.Done():
+		t.Fatal("server never completed the websocket accept")
+	}
+	// The upgrade must be logged exactly once, as a 101 on /ws. Logger fires
+	// this from the hijack (not from WriteHeader), so it lands only on a real
+	// handshake — a hijack that failed after the 101 would log its true status.
+	log := buf.String()
+	if !strings.Contains(log, `"status":101`) {
+		t.Errorf("access log missing the 101 upgrade line:\n%s", log)
+	}
+	if !strings.Contains(log, `"path":"/ws"`) {
+		t.Errorf("access log missing /ws path:\n%s", log)
+	}
+	if n := strings.Count(log, `"status":101`); n != 1 {
+		t.Errorf("expected exactly one 101 upgrade line, got %d:\n%s", n, log)
 	}
 }
 
