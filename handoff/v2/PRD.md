@@ -201,7 +201,7 @@ Full detail in `openapi.yaml` (0.3.0). Grouped by module. **The browser carries 
 - **To-do:** boards/columns/cards/links/checklist/labels + `/tree` (as v1).
 - **Events:** `/api/events` CRUD, `/api/events/occurrences`, links, `/api/events/{id}/complete` (+ undo) (as v1).
 - **Logs (admin):** `/api/logs`, `/api/logs/{id}`, `/api/logs/entity/{type}/{id}`, `/api/logs/stats` (as v1).
-- **Real-time:** `GET /ws` — session-authenticated websocket; pushes board/column/card **and** event/completion changes so open boards and **dashboard widgets** update live. Not modeled in `openapi.yaml`.
+- **Real-time:** `GET /ws` — session-authenticated websocket; pushes board/column/card **and** event/completion changes so open boards and **dashboard widgets** update live. Each push carries an **`origin`** (the originating tab's `X-Client-Id`, stamped via `reqctx`) so a client can distinguish its own echo from a change made elsewhere. Not modeled in `openapi.yaml`.
 - **Health (public):** `/healthz`, `/readyz`.
 
 **Routing:** register static `/api/events/occurrences` before `/api/events/{id}`, and `/api/dashboard/catalog` + `/api/dashboard/widgets/{key}` before any parameterised dashboard route.
@@ -227,7 +227,7 @@ React + TS + TanStack Query SPA, **Czech UI** (D20), **dark-default** (D21), org
 
 **Úkoly / Okno / Log** — as v1 (board kanban+accordion; month list + event form with series-edit warning; log browser with filters/diffs/timeline/analytics), now living in their module folders.
 
-**Data fetching (TanStack Query):** keys `['auth','session']`, `['dashboard']`, `['dashboard','catalog']`, `['dashboard','widget',key]`, plus the v1 module keys. Move/complete/layout mutations invalidate `['dashboard']`. Websocket pushes refresh affected widgets and boards. Explicit empty/loading/error/`reader` states everywhere.
+**Data fetching (TanStack Query):** keys `['auth','session']`, `['dashboard']`, `['dashboard','catalog']`, `['dashboard','widget',key]`, plus the v1 module keys. Move/complete/layout mutations invalidate `['dashboard']`. Websocket pushes refresh affected widgets and boards. A push whose **`origin` differs from this tab** (i.e. a change made on another device/tab) that touches the **route currently on screen** also raises a brief **"changed elsewhere" toast** while the tab is visible, so the live update isn't a silent surprise; a tab never toasts its own change. Explicit empty/loading/error/`reader` states everywhere.
 
 ## 8. Non-Functional Requirements
 

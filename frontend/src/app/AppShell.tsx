@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { useTheme } from '@/theme/theme'
 import { useAuth } from '@/app/auth'
+import { routes } from '@/app/routes'
 import { useLiveSync } from '@/api/ws'
 
 interface NavItem {
@@ -24,10 +25,10 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: '/', label: cs.nav.nastenka, icon: LayoutDashboard },
-  { to: '/ukoly', label: cs.nav.ukoly, icon: ListTodo },
-  { to: '/okno', label: cs.nav.oknoShort, icon: CalendarClock },
-  { to: '/log', label: cs.nav.log, icon: ScrollText, adminOnly: true },
+  { to: routes.nastenka, label: cs.nav.nastenka, icon: LayoutDashboard },
+  { to: routes.ukoly, label: cs.nav.ukoly, icon: ListTodo },
+  { to: routes.okno, label: cs.nav.oknoShort, icon: CalendarClock },
+  { to: routes.log, label: cs.nav.log, icon: ScrollText, adminOnly: true },
 ]
 
 export function AppShell() {

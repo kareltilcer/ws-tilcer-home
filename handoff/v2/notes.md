@@ -48,7 +48,7 @@ Recurring events are a well-known source of data-model mistakes; the design foll
 - **Append-only audit;** full untruncated diff values; FTS5 for free-text search.
 - **Mobile UX:** Nástěnka completion is a deliberate 2000 ms press-and-hold (D22, with an immediate keyboard path); board is a vertical accordion with `now` columns pinned; collapse state is client-side.
 - **Ordering:** lexorank-style string position keys.
-- **Real-time:** authenticated `/ws` pushes board, event, and completion changes; refetch-on-focus is the reconnect fallback.
+- **Real-time:** authenticated `/ws` pushes board, event, and completion changes; refetch-on-focus is the reconnect fallback. Pushes are **origin-tagged** with the originating tab's `X-Client-Id`: a tab suppresses the toast for its own echo (still invalidating cache) and shows a brief "changed elsewhere" toast only for a change made on another device/tab that affects the current, visible route.
 
 ## Resolved decisions (see PRD §10 for full text)
 

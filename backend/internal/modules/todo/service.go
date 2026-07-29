@@ -14,8 +14,9 @@ import (
 )
 
 // Notifier publishes a change event to the websocket hub after commit. Kept as a
-// function so this package does not depend on the ws package.
-type Notifier func(typ string, payload any)
+// function so this package does not depend on the ws package. The ctx carries the
+// request's client id (reqctx), which the hub stamps as the push's origin.
+type Notifier func(ctx context.Context, typ string, payload any)
 
 // Service orchestrates todo mutations: each opens a transaction, performs the
 // change, records an audit event through the spine in the SAME transaction, and
@@ -30,7 +31,7 @@ type Service struct {
 // NewService builds a todo service. notify may be nil (no websocket).
 func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
 	if notify == nil {
-		notify = func(string, any) {}
+		notify = func(context.Context, string, any) {}
 	}
 	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify}
 }
@@ -109,7 +110,7 @@ func (s *Service) CreateBoard(ctx context.Context, in BoardCreate) (*Board, erro
 	if err != nil {
 		return nil, err
 	}
-	s.notify("board.changed", out)
+	s.notify(ctx, "board.changed", out)
 	return out, nil
 }
 
@@ -143,7 +144,7 @@ func (s *Service) UpdateBoard(ctx context.Context, id string, in BoardUpdate) (*
 	if err != nil {
 		return nil, err
 	}
-	s.notify("board.changed", out)
+	s.notify(ctx, "board.changed", out)
 	return out, nil
 }
 
@@ -173,7 +174,7 @@ func (s *Service) DeleteBoard(ctx context.Context, id string, hard bool) error {
 	if err != nil {
 		return err
 	}
-	s.notify("board.changed", map[string]string{"id": id})
+	s.notify(ctx, "board.changed", map[string]string{"id": id})
 	return nil
 }
 
@@ -218,7 +219,7 @@ func (s *Service) CreateColumn(ctx context.Context, boardID string, in ColumnCre
 	if err != nil {
 		return nil, err
 	}
-	s.notify("column.changed", out)
+	s.notify(ctx, "column.changed", out)
 	return out, nil
 }
 
@@ -255,7 +256,7 @@ func (s *Service) UpdateColumn(ctx context.Context, id string, in ColumnUpdate) 
 	if err != nil {
 		return nil, err
 	}
-	s.notify("column.changed", out)
+	s.notify(ctx, "column.changed", out)
 	return out, nil
 }
 
@@ -286,7 +287,7 @@ func (s *Service) MoveColumn(ctx context.Context, id, position string) (*Column,
 	if err != nil {
 		return nil, err
 	}
-	s.notify("column.changed", out)
+	s.notify(ctx, "column.changed", out)
 	return out, nil
 }
 
@@ -366,7 +367,7 @@ func (s *Service) ReorderColumns(ctx context.Context, boardID string, items []Co
 	if err != nil {
 		return nil, err
 	}
-	s.notify("column.changed", map[string]string{"board_id": boardID})
+	s.notify(ctx, "column.changed", map[string]string{"board_id": boardID})
 	return out, nil
 }
 
@@ -409,7 +410,7 @@ func (s *Service) DeleteColumn(ctx context.Context, id string, cascade bool) err
 	if err != nil {
 		return err
 	}
-	s.notify("column.changed", map[string]string{"id": id})
+	s.notify(ctx, "column.changed", map[string]string{"id": id})
 	return nil
 }
 

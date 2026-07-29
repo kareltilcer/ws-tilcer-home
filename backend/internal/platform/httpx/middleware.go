@@ -16,6 +16,11 @@ import (
 // requestHeaderID is the inbound/outbound correlation header.
 const requestHeaderID = "X-Request-Id"
 
+// clientHeaderID carries the browser's opaque per-tab id. It is echoed as the
+// `origin` of any websocket push a request triggers, letting a client suppress
+// the toast for its own change (see reqctx.RequestInfo.ClientID).
+const clientHeaderID = "X-Client-Id"
+
 // statusRecorder captures the response status for the access log. It forwards
 // optional ResponseWriter capabilities via Unwrap and ReadFrom so wrapping the
 // writer does not defeat websocket upgrades, streaming, or the sendfile fast
@@ -122,6 +127,7 @@ func RequestID(site string) func(http.Handler) http.Handler {
 				IP:        clientIP(r),
 				UserAgent: r.UserAgent(),
 				Site:      site,
+				ClientID:  r.Header.Get(clientHeaderID),
 			}
 			next.ServeHTTP(w, r.WithContext(reqctx.WithRequest(r.Context(), info)))
 		})

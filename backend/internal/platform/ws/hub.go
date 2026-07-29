@@ -16,8 +16,14 @@ import (
 // Message is a change notification broadcast to clients. Type names the change
 // (e.g. "card.moved", "event.completed"); the frontend keys its cache updates
 // off it. Payload is optional structured data.
+//
+// Origin is the client id (X-Client-Id) of the request that caused the change.
+// The broadcast still reaches every client including the originator; a client
+// compares Origin to its own id to skip the "changed elsewhere" toast for its
+// own echo, while still applying the cache invalidation.
 type Message struct {
 	Type    string `json:"type"`
+	Origin  string `json:"origin,omitempty"`
 	Payload any    `json:"payload,omitempty"`
 }
 

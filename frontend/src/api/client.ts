@@ -7,6 +7,8 @@
 // On 401 we hand off to the login screen (home refreshes roles server-side, so
 // there is no client-side token refresh).
 
+import { clientId } from './clientId'
+
 let onUnauthorized: (() => void) | null = null
 
 /** setUnauthorizedHandler registers what to do on a 401 (the auth provider routes
@@ -52,6 +54,9 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   if (!SAFE_METHODS.has(method)) {
     const t = csrfToken()
     if (t) headers['X-CSRF-Token'] = t
+    // Identifies this tab so the resulting websocket push echoes back with our
+    // id as `origin` — we then skip toasting our own change (see api/ws.ts).
+    headers['X-Client-Id'] = clientId
   }
 
   const res = await fetch(path, {

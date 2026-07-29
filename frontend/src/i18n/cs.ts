@@ -37,6 +37,13 @@ export const cs = {
     accessDeniedDetail: 'Tato sekce je jen pro administrátory.',
     empty: 'Nic tu zatím není',
   },
+  live: {
+    // Shown when a websocket push made elsewhere (another device or tab) changes
+    // what's on the screen the user is currently looking at — so the live update
+    // isn't a silent surprise. "mezitím" (in the meantime) fits both cases.
+    tasksUpdated: 'Úkoly byly mezitím upraveny',
+    eventsUpdated: 'Události byly mezitím upraveny',
+  },
   dashboard: {
     title: 'Nástěnka',
     subtitle: 'Co teď potřebuje tvou pozornost',

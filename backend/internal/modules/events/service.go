@@ -15,8 +15,9 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
-// Notifier publishes a websocket change after commit.
-type Notifier func(typ string, payload any)
+// Notifier publishes a websocket change after commit. The ctx carries the
+// request's client id (reqctx), which the hub stamps as the push's origin.
+type Notifier func(ctx context.Context, typ string, payload any)
 
 // Service orchestrates events mutations (WithTx + audit-in-tx + notify) and the
 // read-time occurrence expansion.
@@ -33,7 +34,7 @@ type Service struct {
 // maxWindowMonths bounds the occurrences window span.
 func NewService(db *sql.DB, sink audit.Sink, notify Notifier, maxOccurrences, maxWindowMonths int) *Service {
 	if notify == nil {
-		notify = func(string, any) {}
+		notify = func(context.Context, string, any) {}
 	}
 	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify, maxOccurrences: maxOccurrences, maxWindowMonths: maxWindowMonths}
 }
@@ -146,7 +147,7 @@ func (s *Service) CreateEvent(ctx context.Context, in EventCreate) (*Event, erro
 	if err != nil {
 		return nil, err
 	}
-	s.notify("event.changed", out)
+	s.notify(ctx, "event.changed", out)
 	return out, nil
 }
 
@@ -210,7 +211,7 @@ func (s *Service) UpdateEvent(ctx context.Context, id string, in EventUpdate) (*
 	if err != nil {
 		return nil, err
 	}
-	s.notify("event.changed", out)
+	s.notify(ctx, "event.changed", out)
 	return out, nil
 }
 
@@ -240,7 +241,7 @@ func (s *Service) DeleteEvent(ctx context.Context, id string, hard bool) error {
 	if err != nil {
 		return err
 	}
-	s.notify("event.changed", map[string]string{"id": id})
+	s.notify(ctx, "event.changed", map[string]string{"id": id})
 	return nil
 }
 
@@ -284,7 +285,7 @@ func (s *Service) CreateLink(ctx context.Context, eventID string, in EventLinkCr
 	if err != nil {
 		return nil, err
 	}
-	s.notify("event.changed", map[string]string{"id": eventID})
+	s.notify(ctx, "event.changed", map[string]string{"id": eventID})
 	return out, nil
 }
 
@@ -353,7 +354,7 @@ func (s *Service) Complete(ctx context.Context, eventID, occurrenceOn, via strin
 	if err != nil {
 		return nil, err
 	}
-	s.notify("event.completed", map[string]string{"event_id": eventID, "occurrence_on": occDate.String()})
+	s.notify(ctx, "event.completed", map[string]string{"event_id": eventID, "occurrence_on": occDate.String()})
 	return out, nil
 }
 
@@ -380,7 +381,7 @@ func (s *Service) Uncomplete(ctx context.Context, eventID, occurrenceOn string) 
 	if err != nil {
 		return err
 	}
-	s.notify("event.completed", map[string]string{"event_id": eventID, "occurrence_on": occDate.String()})
+	s.notify(ctx, "event.uncompleted", map[string]string{"event_id": eventID, "occurrence_on": occDate.String()})
 	return nil
 }
 

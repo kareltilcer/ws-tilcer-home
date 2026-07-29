@@ -53,7 +53,7 @@ func (s *Service) CreateCard(ctx context.Context, columnID string, in CardCreate
 	if err != nil {
 		return nil, err
 	}
-	s.notify("card.changed", out)
+	s.notify(ctx, "card.changed", out)
 	return out, nil
 }
 
@@ -87,7 +87,7 @@ func (s *Service) UpdateCard(ctx context.Context, id string, in CardUpdate) (*Ca
 	if err != nil {
 		return nil, err
 	}
-	s.notify("card.changed", out)
+	s.notify(ctx, "card.changed", out)
 	return out, nil
 }
 
@@ -163,7 +163,7 @@ func (s *Service) MoveCard(ctx context.Context, id string, in CardMoveRequest, v
 	if err != nil {
 		return nil, err
 	}
-	s.notify("card.changed", out)
+	s.notify(ctx, "card.changed", out)
 	return out, nil
 }
 
@@ -193,7 +193,7 @@ func (s *Service) DeleteCard(ctx context.Context, id string, hard bool) error {
 	if err != nil {
 		return err
 	}
-	s.notify("card.changed", map[string]string{"id": id})
+	s.notify(ctx, "card.changed", map[string]string{"id": id})
 	return nil
 }
 
@@ -237,7 +237,7 @@ func (s *Service) CreateCardLink(ctx context.Context, cardID string, in CardLink
 	if err != nil {
 		return nil, err
 	}
-	s.notify("card.changed", map[string]string{"id": cardID})
+	s.notify(ctx, "card.changed", map[string]string{"id": cardID})
 	return out, nil
 }
 
@@ -302,7 +302,7 @@ func (s *Service) CreateChecklistItem(ctx context.Context, cardID string, in Che
 	if err != nil {
 		return nil, err
 	}
-	s.notify("card.changed", map[string]string{"id": cardID})
+	s.notify(ctx, "card.changed", map[string]string{"id": cardID})
 	return out, nil
 }
 
@@ -335,7 +335,7 @@ func (s *Service) UpdateChecklistItem(ctx context.Context, id string, in Checkli
 	if err != nil {
 		return nil, err
 	}
-	s.notify("card.changed", map[string]string{"id": out.CardID})
+	s.notify(ctx, "card.changed", map[string]string{"id": out.CardID})
 	return out, nil
 }
 
@@ -359,7 +359,7 @@ func (s *Service) DeleteChecklistItem(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.notify("card.changed", map[string]string{"id": cardID})
+	s.notify(ctx, "card.changed", map[string]string{"id": cardID})
 	return nil
 }
 
@@ -403,7 +403,7 @@ func (s *Service) CreateLabel(ctx context.Context, boardID string, in LabelCreat
 	if err != nil {
 		return nil, err
 	}
-	s.notify("label.changed", out)
+	s.notify(ctx, "label.changed", out)
 	return out, nil
 }
 
@@ -439,7 +439,7 @@ func (s *Service) UpdateLabel(ctx context.Context, id string, in LabelCreate) (*
 	if err != nil {
 		return nil, err
 	}
-	s.notify("label.changed", out)
+	s.notify(ctx, "label.changed", out)
 	return out, nil
 }
 
@@ -461,7 +461,7 @@ func (s *Service) DeleteLabel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.notify("label.changed", map[string]string{"id": id})
+	s.notify(ctx, "label.changed", map[string]string{"id": id})
 	return nil
 }
 
@@ -490,7 +490,7 @@ func (s *Service) AttachLabel(ctx context.Context, cardID, labelID string) error
 	if err != nil {
 		return err
 	}
-	s.notify("card.changed", map[string]string{"id": cardID})
+	s.notify(ctx, "card.changed", map[string]string{"id": cardID})
 	return nil
 }
 
@@ -505,6 +505,6 @@ func (s *Service) DetachLabel(ctx context.Context, cardID, labelID string) error
 	if err != nil {
 		return err
 	}
-	s.notify("card.changed", map[string]string{"id": cardID})
+	s.notify(ctx, "card.changed", map[string]string{"id": cardID})
 	return nil
 }

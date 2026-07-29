@@ -127,6 +127,8 @@ Build the `registry` (§3). SQLite (WAL); Goose runner that assembles **per-modu
 ### F5. Websocket hub
 `GET /ws`, **session-authenticated** on connect (not a JWT), role-aware. Module-agnostic broadcast hub in `platform/ws`. Modules publish; the frontend applies pushes via `setQueryData`/invalidation with refetch-on-focus fallback.
 
+Each push carries an **`origin`** — the id of the browser tab whose request caused the change. The browser mints a per-tab id (in-memory) and sends it as `X-Client-Id` on every mutation; middleware stamps it into `reqctx.RequestInfo.ClientID`, and the `notify` closure copies it onto the `ws.Message`. The frontend uses `origin` two ways: (1) it **suppresses the self-echo** — a tab never toasts its own change (already applied optimistically), though it still runs the cache invalidation; (2) for a change made **elsewhere** (another device/tab) that affects the route currently on screen and while the tab is visible, it raises a brief **"changed elsewhere" toast** so the live update isn't a silent surprise. Bursts collapse to one toast per category (stable toast id); the admin log receives no pushes so never toasts.
+
 ### F6. Frontend shell + auth screens
 - **Login screen** (new v2): email+password → `POST /api/auth/login`; error states incl. the MFA-required → "dokončete přihlášení na auth.tilcer.cz" message; a "Zapomněli jste heslo?" link out to auth; "Nemáte účet? Požádejte správce". **No token handling in JS.**
 - SPA calls `GET /api/auth/session` on load → app or login. Fetch wrapper: `credentials:'include'`, attaches `X-CSRF-Token` (read from the `csrf` cookie) on mutations; on `401` route to login (no client token refresh).

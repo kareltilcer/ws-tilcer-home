@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { queryClient } from '@/app/queryClient'
+import { routes } from '@/app/routes'
 import { ThemeProvider } from '@/theme/theme'
 import { AuthProvider, useAuth } from '@/app/auth'
 import { AppShell } from '@/app/AppShell'
@@ -26,11 +27,11 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route element={<AppShell />}>
-                <Route path="/" element={<NastenkaPage />} />
-                <Route path="/ukoly" element={<UkolyPage />} />
-                <Route path="/okno" element={<OknoPage />} />
+                <Route path={routes.nastenka} element={<NastenkaPage />} />
+                <Route path={routes.ukoly} element={<UkolyPage />} />
+                <Route path={routes.okno} element={<OknoPage />} />
                 <Route
-                  path="/log"
+                  path={routes.log}
                   element={
                     <RequireAdmin>
                       <LogPage />

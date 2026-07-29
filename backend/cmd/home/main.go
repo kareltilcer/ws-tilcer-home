@@ -143,8 +143,16 @@ func run(logger *slog.Logger) error {
 
 	// 5. Feature modules, composed through the registry (PRD §10 D25). Each module
 	// owns its routes/migrations/audit actions/widgets; the core only wires them.
-	// Modules publish websocket change events via the hub after commit.
-	notify := func(typ string, payload any) { hub.Publish(ws.Message{Type: typ, Payload: payload}) }
+	// Modules publish websocket change events via the hub after commit. The push
+	// carries the originating request's client id (from reqctx) so each browser
+	// tab can tell its own echo apart from a change made on another device.
+	notify := func(ctx context.Context, typ string, payload any) {
+		origin := ""
+		if info, ok := reqctx.RequestFrom(ctx); ok {
+			origin = info.ClientID
+		}
+		hub.Publish(ws.Message{Type: typ, Origin: origin, Payload: payload})
+	}
 
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)

@@ -20,6 +20,12 @@ type RequestInfo struct {
 	IP        string
 	UserAgent string
 	Site      string
+	// ClientID is an opaque per-tab identifier the browser sends on mutating
+	// requests (X-Client-Id). It is echoed back as the `origin` of the resulting
+	// websocket push so a client can tell its OWN change (already applied
+	// optimistically) apart from one made on another device or tab. Empty for
+	// non-browser callers.
+	ClientID string
 }
 
 type ctxKey int
