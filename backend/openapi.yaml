@@ -1,26 +1,38 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.2.0
+  version: 0.4.0
   description: >-
-    API for the `home` household-management service. Companion to PRD.md.
-    Four modules in v1: `logging` (a spine; read/browse endpoints only — writes are
+    API for the `home` household-management service (v3). Companion to PRD.md.
+    Five modules: `logging` (a spine; read/browse endpoints only — writes are
     in-process, not HTTP), `todo` (Trello-style board), `events` (Okno do
-    budoucnosti — all-day, optionally recurring events with in-app reminders), and
-    `dashboard` (Nástěnka — the landing aggregation). Identifiers are English; the
-    UI is Czech. All /api endpoints require a site-scoped JWT (site `home`); writes
-    require the `editor` or `admin` role, and /api/logs/** require `admin`. Health
-    probes are public. Real-time updates (board, event, and completion changes) are
-    delivered over an authenticated websocket at GET /ws, not modeled here since
-    OpenAPI describes HTTP only. Recurrence is stored as an RFC 5545 RRULE subset
-    and expanded on read — occurrences are never persisted; the only per-occurrence
-    row is a reminder completion. No BE->BE endpoints in v1 — the /internal/logs
-    ingest is a documented future extraction seam only.
+    budoucnosti — all-day, optionally recurring events with reminders), `notes`
+    (Poznámky — Markdown notes in a folder tree, slug-path URLs, a pinned-notes
+    widget; new in v3), and `dashboard` (Nástěnka — a per-user WIDGET HOST).
+    Identifiers are English; the UI is Czech.
+
+    AUTH IS MODE B (v2): home hosts its own login and owns its own SESSION. The
+    browser carries NO bearer token — every /api endpoint is authorized by the
+    home SESSION COOKIE, and cookie-authenticated state-changing routes additionally
+    require the CSRF header (X-CSRF-Token matching the csrf cookie). Home verifies
+    credentials against auth BE->BE (/internal/login) and refreshes roles via
+    /internal/token/mint; that BE->BE traffic is not part of THIS API. Writes require
+    the `editor` or `admin` role; /api/logs/** require `admin`; /api/auth/* and
+    health are reachable before a session exists.
+
+    The dashboard is a widget host: GET /api/dashboard returns the user's layout plus
+    each visible widget's data (the host fans out to module-provided widget providers;
+    it owns no feature data). Recurrence is stored as an RFC 5545 RRULE subset and
+    expanded on read — occurrences are never persisted; the only per-occurrence row is
+    a reminder completion. Real-time updates are delivered over a session-authenticated
+    websocket at GET /ws, not modeled here since OpenAPI describes HTTP only.
 servers:
   - url: https://home.tilcer.cz
     description: Production (Coolify)
 
 tags:
+  - name: auth
+    description: Home-hosted login/logout and session (Mode B)
   - name: health
     description: Liveness/readiness probes (baseline for every backend)
   - name: boards
@@ -33,12 +45,88 @@ tags:
     description: Board-scoped labels/tags
   - name: events
     description: Okno do budoucnosti — all-day, optionally recurring future events
+  - name: notes
+    description: Poznámky — Markdown notes in a folder tree (slug-path URLs, pinning); new in v3
   - name: dashboard
-    description: Nástěnka — landing aggregation of active reminders and current to-dos
+    description: Nástěnka — per-user widget host (layout + module-provided widget data)
   - name: logs
     description: Audit-log browser (admin only)
 
 paths:
+  # ---------------- Auth (Mode B, home-hosted) ----------------
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in (home-hosted)
+      description: >-
+        Verifies credentials against auth BE->BE (/internal/login) and, on success,
+        creates a home session. Sets the session + csrf cookies. The browser
+        receives NO bearer token. Password is never logged or persisted. Rate-limited
+        per email and per IP. CSRF-exempt (no session yet).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Logged in; session established
+          headers:
+            Set-Cookie:
+              description: "`session` (HttpOnly) and `csrf` (JS-readable), host-only, Secure, SameSite=Lax."
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionUser" }
+        "401":
+          description: Bad credentials (generic)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Account disabled/unverified, or no access to site home
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >-
+            Auth demands MFA, which home does not handle (v1 of Mode B). Body error
+            is `mfa_required`; the UI directs the user to auth-hosted login.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Too many attempts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Auth service unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out (revoke the home session)
+      description: Requires the CSRF header (cookie-authenticated mutation).
+      responses:
+        "204": { description: Session revoked; cookies cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/auth/session:
+    get:
+      tags: [auth]
+      summary: Current session (SPA bootstrap)
+      description: Returns the signed-in user for a valid session, else 401. Used on app load.
+      responses:
+        "200":
+          description: Valid session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   # ---------------- Health ----------------
   /healthz:
     get:
@@ -783,19 +871,342 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  # ---------------- Dashboard (Nástěnka) ----------------
+  # ---------------- Notes (Poznámky) ----------------
+  /api/notes:
+    get:
+      tags: [notes]
+      summary: List/search notes (FTS5 when q is present)
+      description: >-
+        Without `q`, lists notes (newest-updated first, paged). With `q`, runs an
+        FTS5 free-text search over note title + body. Reads only.
+      parameters:
+        - name: q
+          in: query
+          description: Free-text search over title + body_md (FTS5).
+          schema: { type: string }
+        - name: folder_id
+          in: query
+          description: Restrict to a folder (omit for all; use `root` for unfiled).
+          schema: { type: string }
+        - name: include_archived
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    post:
+      tags: [notes]
+      summary: Create a note
+      description: Body is stored as canonical Markdown. Slug is derived from the title.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NoteCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Note" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/notes/tree:
+    get:
+      tags: [notes]
+      summary: Folder tree with lightweight note nodes (navigation read model)
+      description: >-
+        The whole folder tree with each folder's child folders and notes as
+        lightweight nodes for the sidebar/browser. One bounded query set (no N+1).
+      parameters:
+        - name: include_archived
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotesTree" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/notes/resolve:
+    get:
+      tags: [notes]
+      summary: Resolve a slug path to a note or folder id
+      description: >-
+        Maps a human-readable slug path (e.g. `recepty/gulas`) to the item it
+        addresses. Renamed/moved items are NOT redirected — a stale path returns 404
+        (PRD D32). Session-required like every route (sharing is household-only, D33).
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Slug path without the `/poznamky/` prefix, e.g. `recepty/gulas`.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResolveResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/notes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [notes]
+      summary: Get a note (body_md, folder path, caller's pin state)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NoteDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [notes]
+      summary: Update a note (title, body_md, archived)
+      description: >-
+        Last-write-wins (PRD D38). Renaming re-derives the slug (URL changes).
+        Restoring (archived=false) requires a live parent folder (else 422) and
+        re-frees the slug against live siblings.
+      parameters:
+        - $ref: "#/components/parameters/Via"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NoteUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Note" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [notes]
+      summary: Delete a note (soft by default)
+      parameters:
+        - name: hard
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/notes/{id}/move:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [notes]
+      summary: Move a note to a folder and/or position
+      description: Reparenting may re-derive the slug and changes the note's URL (PRD D32).
+      parameters:
+        - $ref: "#/components/parameters/Via"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NoteMoveRequest" }
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Note" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/notes/{id}/pin:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [notes]
+      summary: Pin a note (scope household | personal)
+      description: >-
+        `household` ("pro všechny") is a shared, audited mutation requiring
+        editor/admin — one per note. `personal` ("jen pro mě") is a per-user view
+        preference any member (incl. reader) may set and is NOT audited — one per
+        note per user (PRD D35). Requires the CSRF header.
+      parameters:
+        - $ref: "#/components/parameters/Via"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PinRequest" }
+      responses:
+        "200":
+          description: The caller's pin state for the note after the (idempotent) pin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PinState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Non-editor setting a household pin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [notes]
+      summary: Unpin a note in a scope
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema: { type: string, enum: [household, personal] }
+        - $ref: "#/components/parameters/Via"
+      responses:
+        "200":
+          description: The caller's pin state for the note after the (idempotent) unpin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PinState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/notes/folders:
+    post:
+      tags: [notes]
+      summary: Create a folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FolderCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Folder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/notes/folders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [notes]
+      summary: Get a folder (breadcrumb path + children)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FolderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [notes]
+      summary: Update a folder (rename → new slug, archive)
+      description: >-
+        Archiving must cascade: a non-empty folder cannot be archived here (409) —
+        use DELETE with cascade=true, which archives the whole subtree. Restoring
+        (archived=false) requires a live parent (else 422) and re-frees the slug
+        against live siblings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FolderUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Folder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [notes]
+      summary: Delete a folder (soft by default)
+      description: >-
+        A non-empty folder requires `cascade=true` (else 409 with the child count).
+        `hard=true` purges and is admin-gated per the app-wide destructive-op rule.
+      parameters:
+        - name: cascade
+          in: query
+          description: Delete even if it holds subfolders/notes (each child logged).
+          schema: { type: boolean, default: false }
+        - name: hard
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Folder not empty and cascade not set (returns child count)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/notes/folders/{id}/move:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [notes]
+      summary: Move a folder to a new parent and/or position
+      description: >-
+        Reparenting changes the folder's (and its descendants') URLs. Moving a folder
+        into itself or a descendant is rejected (422, cycle guard).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FolderMoveRequest" }
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Folder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Target parent is the folder itself or one of its descendants
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ---------------- Dashboard host (Nástěnka) ----------------
   /api/dashboard:
     get:
       tags: [dashboard]
-      summary: Landing aggregation — active reminders + current to-dos
+      summary: The user's dashboard — layout + each visible widget's data
       description: >-
-        Two computed lists. `reminders`: for each non-archived event with a
-        reminder, the earliest uncompleted occurrence within the lookback window,
-        included only when today >= occurrence_on - lead (at most one per event,
-        overdue flagged). `tasks`: every non-archived card in any column with
-        kind=now, across all non-archived boards. Marking items done is done via
-        the owning module's endpoints (POST /api/cards/{id}/move,
-        POST /api/events/{id}/complete).
+        The host reads the caller's layout and fans out to each VISIBLE widget's
+        registered provider, returning the layout and the widgets' data in one
+        response. The host owns no feature data; widget payloads come from the owning
+        modules (todo, events) through the widget-provider contract. A single widget
+        can be refreshed via GET /api/dashboard/widgets/{key} (used on websocket push).
       responses:
         "200":
           description: OK
@@ -803,6 +1214,67 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Dashboard" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/dashboard/catalog:
+    get:
+      tags: [dashboard]
+      summary: Widgets available to this user
+      description: >-
+        Every registered widget the user may add (non-admin widgets for everyone,
+        admin-only widgets for admins). The set from which a user builds their layout.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WidgetCatalogEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/dashboard/layout:
+    put:
+      tags: [dashboard]
+      summary: Save this user's widget layout (show/hide, order, size)
+      description: >-
+        Upserts the caller's layout. Order is the array order; size is narrow|wide.
+        Unknown or unavailable widget keys are ignored. Layout is a personal view
+        preference, so a `reader` may also set it. Requires the CSRF header.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/LayoutItemInput" }
+      responses:
+        "200":
+          description: Saved layout
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LayoutItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/dashboard/widgets/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema: { type: string }
+        description: Widget key, e.g. todo.pravedelam.
+    get:
+      tags: [dashboard]
+      summary: Refresh a single widget's data
+      description: Same payload as one entry of GET /api/dashboard; used for targeted refresh.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WidgetInstance" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ---------------- Logs (admin) ----------------
   /api/logs:
@@ -898,15 +1370,24 @@ paths:
 
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
       description: >-
-        Site-scoped JWT (site `home`), 15-minute expiry, obtained via auth (Mode A).
-        Verified by the backend through auth's POST /introspect (home service client)
-        with short-TTL caching. Role gating (from the JWT `roles` claim): to-do writes
-        require `editor` or `admin`; /api/logs/** require `admin`.
+        Home's own session (Mode B), set by POST /api/auth/login. HttpOnly, Secure,
+        SameSite=Lax, host-only on home.tilcer.cz. The browser carries NO bearer
+        token. Home authorizes each request from this session and gates roles
+        server-side (writes require `editor`/`admin`; /api/logs/** require `admin`).
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: >-
+        Double-submit CSRF token matching the `csrf` cookie. Required on all
+        cookie-authenticated STATE-CHANGING routes (mutations + logout), together with
+        an Origin/Referer allowlist check. Not required on safe (GET) requests or on
+        login (which has no session yet).
 
   parameters:
     PathId:
@@ -922,6 +1403,14 @@ components:
       name: cursor
       in: query
       description: UUIDv7 keyset cursor from the previous page.
+      schema: { type: string }
+    Via:
+      name: via
+      in: query
+      description: >-
+        Cross-module attribution recorded into the audit event's `meta` (e.g.
+        `via=dashboard` when the mutation originates from a Nástěnka overlay
+        edit rather than the Poznámky page). Free-form; omitted when absent.
       schema: { type: string }
 
   responses:
@@ -1034,7 +1523,6 @@ components:
           items: { type: string }
         checklist_progress:
           $ref: "#/components/schemas/ChecklistProgress"
-        link_count: { type: integer, description: Number of links on the card (board read model). }
         created_by: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -1069,14 +1557,7 @@ components:
       required: [column_id]
       properties:
         column_id: { type: string, description: Target column. }
-        position: { type: string, description: Target order key within the column. Ignored when before_card_id is set. }
-        before_card_id:
-          type: string
-          description: >-
-            When set, the card is placed immediately before this card in the target
-            column and the server computes the order key from the true stored order
-            (correct even when a filter hides cards around the drop). Empty ⇒ use
-            position, or append to the tail when position is also empty.
+        position: { type: string, description: Target order key within the column. }
     ChecklistProgress:
       type: object
       required: [done, total]
@@ -1129,7 +1610,6 @@ components:
         board_id: { type: string }
         name: { type: string }
         color: { type: string, description: Hex or named token }
-        card_count: { type: integer, description: Non-archived cards using this label. Present only in the board labels list. }
     LabelCreate:
       type: object
       required: [name, color]
@@ -1166,15 +1646,12 @@ components:
           type: array
           items:
             type: object
-            required: [column, cards, card_count]
+            required: [column, cards]
             properties:
               column: { $ref: "#/components/schemas/Column" }
               cards:
                 type: array
                 items: { $ref: "#/components/schemas/Card" }
-              card_count:
-                type: integer
-                description: Total cards in the column, ignoring the tree's label/q/archived filters (matches the delete-cascade count).
 
     # ----- Events (Okno do budoucnosti) -----
     Event:
@@ -1292,17 +1769,295 @@ components:
         completed_by: { type: [string, "null"] }
         completed_at: { type: string, format: date-time }
 
-    # ----- Dashboard (Nástěnka) -----
+    # ----- Notes (Poznámky) -----
+    Folder:
+      type: object
+      required: [id, name, slug, position, created_at]
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, "null"], description: NULL = root. }
+        name: { type: string }
+        slug: { type: string, description: "URL segment; unique among sibling folders+notes." }
+        position: { type: string, description: Lexorank order key among siblings. }
+        archived: { type: boolean, default: false }
+        created_by: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FolderCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+        parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
+    FolderUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        archived: { type: boolean }
+    FolderMoveRequest:
+      type: object
+      required: [position]
+      properties:
+        parent_id: { type: [string, "null"], description: New parent (null = root). Must not be the folder itself or a descendant. }
+        position: { type: string, description: New order key among the target siblings. }
+    PathSegment:
+      type: object
+      required: [name, slug]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+    FolderDetail:
+      allOf:
+        - $ref: "#/components/schemas/Folder"
+        - type: object
+          properties:
+            path:
+              type: array
+              description: Breadcrumb from root to this folder (inclusive).
+              items: { $ref: "#/components/schemas/PathSegment" }
+            slug_path: { type: string, description: "Full slug path, e.g. recepty/dezerty." }
+            subfolders:
+              type: array
+              items: { $ref: "#/components/schemas/Folder" }
+            notes:
+              type: array
+              items: { $ref: "#/components/schemas/NoteSummary" }
+
+    Note:
+      type: object
+      required: [id, title, slug, position, created_at]
+      properties:
+        id: { type: string }
+        folder_id: { type: [string, "null"], description: NULL = root (unfiled). }
+        title: { type: string }
+        slug: { type: string, description: "URL segment; unique among sibling folders+notes." }
+        body_md: { type: [string, "null"], description: The single canonical Markdown body (PRD D30). }
+        position: { type: string }
+        archived: { type: boolean, default: false }
+        created_by: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    NoteSummary:
+      type: object
+      required: [id, title, slug, position]
+      description: Lightweight note node for the tree/list (no body).
+      properties:
+        id: { type: string }
+        folder_id: { type: [string, "null"] }
+        title: { type: string }
+        slug: { type: string }
+        position: { type: string }
+        archived: { type: boolean, default: false }
+        updated_at: { type: string, format: date-time }
+        pinned: { $ref: "#/components/schemas/PinState" }
+    NoteDetail:
+      allOf:
+        - $ref: "#/components/schemas/Note"
+        - type: object
+          properties:
+            path:
+              type: array
+              description: Breadcrumb of the containing folders (empty for a root note).
+              items: { $ref: "#/components/schemas/PathSegment" }
+            slug_path: { type: string, description: "Full slug path, e.g. recepty/gulas." }
+            pinned: { $ref: "#/components/schemas/PinState" }
+    NoteCreate:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1 }
+        folder_id: { type: [string, "null"], description: Omit/null for a root note. }
+        body_md: { type: string, description: Markdown. }
+    NoteUpdate:
+      type: object
+      properties:
+        title: { type: string, minLength: 1 }
+        body_md: { type: [string, "null"] }
+        archived: { type: boolean }
+    NoteMoveRequest:
+      type: object
+      required: [position]
+      properties:
+        folder_id: { type: [string, "null"], description: Target folder (null = root). }
+        position: { type: string, description: New order key within the target. }
+    NotePage:
+      type: object
+      required: [items]
+      description: A note list / search result. Search is capped (100) and the folder listing is a full slice, so there is no cursor.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NoteSummary" }
+    NotesTree:
+      type: object
+      required: [roots]
+      description: The folder tree plus root-level (unfiled) notes.
+      properties:
+        roots:
+          type: array
+          description: Top-level folders (parent_id null), each recursive.
+          items: { $ref: "#/components/schemas/FolderNode" }
+        root_notes:
+          type: array
+          description: Notes with no folder (folder_id null).
+          items: { $ref: "#/components/schemas/NoteSummary" }
+    FolderNode:
+      type: object
+      required: [folder, subfolders, notes]
+      properties:
+        folder: { $ref: "#/components/schemas/Folder" }
+        subfolders:
+          type: array
+          items: { $ref: "#/components/schemas/FolderNode" }
+        notes:
+          type: array
+          items: { $ref: "#/components/schemas/NoteSummary" }
+    ResolveResult:
+      type: object
+      required: [type, id]
+      properties:
+        type: { type: string, enum: [folder, note] }
+        id: { type: string }
+        slug_path: { type: string }
+    PinState:
+      type: object
+      description: The caller's view of a note's pin state.
+      required: [household, personal]
+      properties:
+        household: { type: boolean, description: "Pinned pro všechny (household)." }
+        personal: { type: boolean, description: "Pinned jen pro mě by the caller." }
+    PinRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [household, personal] }
+
+    # ----- Auth (Mode B) -----
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    UserPublic:
+      type: object
+      required: [id, email, roles]
+      properties:
+        id: { type: string, description: auth user id }
+        email: { type: string, format: email }
+        display_name: { type: [string, "null"] }
+        roles:
+          type: array
+          items: { type: string, enum: [admin, editor, reader] }
+    SessionUser:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: "#/components/schemas/UserPublic" }
+
+    # ----- Dashboard host (Nástěnka) -----
     Dashboard:
       type: object
-      required: [reminders, tasks]
+      required: [layout, widgets]
+      properties:
+        layout:
+          type: array
+          items: { $ref: "#/components/schemas/LayoutItem" }
+        widgets:
+          type: array
+          description: One entry per VISIBLE widget, in layout order.
+          items: { $ref: "#/components/schemas/WidgetInstance" }
+    LayoutItem:
+      type: object
+      required: [widget_key, visible, position, size]
+      properties:
+        widget_key: { type: string, examples: ["todo.pravedelam"] }
+        visible: { type: boolean }
+        position: { type: string, description: Lexorank order key. }
+        size: { type: string, enum: [narrow, wide] }
+    LayoutItemInput:
+      type: object
+      required: [widget_key, visible, size]
+      description: Order is taken from the array order; position keys are derived server-side.
+      properties:
+        widget_key: { type: string }
+        visible: { type: boolean }
+        size: { type: string, enum: [narrow, wide] }
+    WidgetCatalogEntry:
+      type: object
+      required: [key, title, module, default_size]
+      properties:
+        key: { type: string, examples: ["events.pripominky"] }
+        title: { type: string, description: Czech display title. }
+        module: { type: string, enum: [todo, events, notes, logging] }
+        description: { type: [string, "null"] }
+        default_size: { type: string, enum: [narrow, wide] }
+        admin_only: { type: boolean, default: false }
+    WidgetInstance:
+      type: object
+      required: [key, size, data]
+      properties:
+        key: { type: string }
+        size: { type: string, enum: [narrow, wide] }
+        data:
+          description: >-
+            Shape depends on `key`: todo.pravedelam -> PravedelamWidget,
+            events.pripominky -> PripominkyWidget, events.tento-mesic -> TentoMesicWidget,
+            notes.pripnute -> PripnutePoznamkyWidget.
+          oneOf:
+            - $ref: "#/components/schemas/PravedelamWidget"
+            - $ref: "#/components/schemas/PripominkyWidget"
+            - $ref: "#/components/schemas/TentoMesicWidget"
+            - $ref: "#/components/schemas/PripnutePoznamkyWidget"
+    PravedelamWidget:
+      type: object
+      required: [tasks]
+      description: Provided by the todo module (FR-T8).
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardTask" }
+    PripominkyWidget:
+      type: object
+      required: [reminders]
+      description: Provided by the events module (FR-E7).
       properties:
         reminders:
           type: array
           items: { $ref: "#/components/schemas/DashboardReminder" }
-        tasks:
+    TentoMesicWidget:
+      type: object
+      required: [occurrences]
+      description: Read-only look-ahead provided by the events module (FR-E8).
+      properties:
+        occurrences:
           type: array
-          items: { $ref: "#/components/schemas/DashboardTask" }
+          items: { $ref: "#/components/schemas/Occurrence" }
+    PripnutePoznamkyWidget:
+      type: object
+      required: [notes]
+      description: >-
+        Provided by the notes module (FR-P8): household pins ∪ the caller's personal
+        pins, de-duplicated (household precedence), household block then personal block.
+      properties:
+        notes:
+          type: array
+          items: { $ref: "#/components/schemas/PinnedNote" }
+    PinnedNote:
+      type: object
+      required: [note_id, title, slug_path, scope]
+      properties:
+        note_id: { type: string }
+        title: { type: string }
+        slug_path: { type: string, description: "Full slug path for the row link, e.g. recepty/gulas." }
+        scope:
+          type: string
+          enum: [household, personal, both]
+          description: How this note is pinned for the caller.
+        excerpt: { type: [string, "null"], description: Short plain-text preview of the body. }
+        updated_at: { type: string, format: date-time }
+        position: { type: string, description: Pin order key within its block. }
     DashboardReminder:
       type: object
       required: [event_id, occurrence_on, title, overdue]
@@ -1417,6 +2172,8 @@ components:
               key: { type: string }
               count: { type: integer }
 
-# Default auth for all endpoints; health probes override with security: [].
+# Default auth for all endpoints: the home session cookie. Health and the login
+# endpoint override with `security: []`. State-changing routes additionally require
+# the CSRF header (csrfToken) — enforced in handlers; documented per the scheme above.
 security:
-  - bearerAuth: []
+  - sessionCookie: []

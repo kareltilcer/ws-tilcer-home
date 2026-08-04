@@ -6,5 +6,6 @@ export const routes = {
   nastenka: '/',
   ukoly: '/ukoly',
   okno: '/okno',
+  poznamky: '/poznamky',
   log: '/log',
 } as const

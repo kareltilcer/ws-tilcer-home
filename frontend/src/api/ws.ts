@@ -108,10 +108,17 @@ const eventsModule: LiveModule = {
   toast: { id: 'live-events', message: cs.live.eventsUpdated },
 }
 
+const notesModule: LiveModule = {
+  route: routes.poznamky,
+  keys: [['notes']],
+  toast: { id: 'live-notes', message: cs.live.notesUpdated },
+}
+
 // classify maps a change type to the module it belongs to, or null for types no
 // screen tracks (which then invalidate only the dashboard and never toast).
 function classify(type: string): LiveModule | null {
   if (type.startsWith('event')) return eventsModule
+  if (type.startsWith('note') || type.startsWith('folder')) return notesModule
   if (
     type.startsWith('card') ||
     type.startsWith('column') ||

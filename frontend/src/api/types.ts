@@ -263,3 +263,109 @@ export interface StatsResponse {
   buckets: { ts: string; counts: Record<string, number> }[]
   totals: { key: string; count: number }[]
 }
+
+// ---- Notes (Poznámky, v3) ----
+
+// The caller's view of a note's pin state.
+export interface PinState {
+  household: boolean
+  personal: boolean
+}
+
+export type PinScope = 'household' | 'personal'
+
+export interface Folder {
+  id: string
+  parent_id: string | null
+  name: string
+  slug: string
+  position: string
+  archived: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Note {
+  id: string
+  folder_id: string | null
+  title: string
+  slug: string
+  body_md: string | null
+  position: string
+  archived: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+// A folder breadcrumb segment.
+export interface PathSegment {
+  id: string
+  name: string
+  slug: string
+}
+
+// Lightweight note node for the tree/list (no body).
+export interface NoteSummary {
+  id: string
+  folder_id: string | null
+  title: string
+  slug: string
+  position: string
+  archived: boolean
+  updated_at: string
+  pinned: PinState
+}
+
+export interface NoteDetail extends Note {
+  path: PathSegment[]
+  slug_path: string
+  pinned: PinState
+}
+
+export interface FolderDetail extends Folder {
+  path: PathSegment[]
+  slug_path: string
+  subfolders: Folder[]
+  notes: NoteSummary[]
+}
+
+// Recursive node of GET /api/notes/tree.
+export interface FolderNode {
+  folder: Folder
+  subfolders: FolderNode[]
+  notes: NoteSummary[]
+}
+
+export interface NotesTree {
+  roots: FolderNode[]
+  root_notes: NoteSummary[]
+}
+
+// Search is capped at 100 and the folder listing is a full slice, so there is no
+// cursor to page with.
+export interface NotePage {
+  items: NoteSummary[]
+}
+
+export interface ResolveResult {
+  type: 'folder' | 'note'
+  id: string
+  slug_path: string
+}
+
+// notes.pripnute widget payload.
+export interface PinnedNote {
+  note_id: string
+  title: string
+  slug_path: string
+  scope: 'household' | 'personal' | 'both'
+  excerpt: string | null
+  updated_at: string
+  position: string
+}
+
+export interface PripnutePoznamkyWidget {
+  notes: PinnedNote[]
+}

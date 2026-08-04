@@ -16,11 +16,19 @@ import type {
   EventLink,
   EventSeriesPage,
   EventWithLinks,
+  Folder,
+  FolderDetail,
   Label,
   LayoutItem,
   LayoutItemInput,
+  NoteDetail,
+  NotePage,
+  NotesTree,
   OccurrenceMonths,
+  PinScope,
+  PinState,
   ReminderLead,
+  ResolveResult,
   SessionUser,
   StatsResponse,
   WidgetCatalogEntry,
@@ -138,6 +146,38 @@ export const saveDashboardLayout = (items: LayoutItemInput[]) =>
   apiFetch<LayoutItem[]>('/api/dashboard/layout', { method: 'PUT', body: items })
 export const getWidget = (key: string) =>
   apiFetch<WidgetInstance>(`/api/dashboard/widgets/${encodeURIComponent(key)}`)
+
+// ---- Notes (Poznámky, v3) ----
+export const getNotesTree = (includeArchived = false) =>
+  apiFetch<NotesTree>(`/api/notes/tree${qs({ include_archived: includeArchived })}`)
+export const resolveNotePath = (path: string) =>
+  apiFetch<ResolveResult>(`/api/notes/resolve${qs({ path })}`)
+export const searchNotes = (q: string) => apiFetch<NotePage>(`/api/notes${qs({ q })}`)
+export const getNote = (id: string) => apiFetch<NoteDetail>(`/api/notes/${encodeURIComponent(id)}`)
+export const createNote = (body: { title: string; folder_id?: string | null; body_md?: string }) =>
+  apiFetch<NoteDetail>('/api/notes', { method: 'POST', body })
+export const updateNote = (
+  id: string,
+  body: Partial<{ title: string; body_md: string | null; archived: boolean }>,
+  via?: string,
+) => apiFetch<NoteDetail>(`/api/notes/${encodeURIComponent(id)}${qs({ via })}`, { method: 'PATCH', body })
+export const deleteNote = (id: string, hard = false) =>
+  apiFetch<void>(`/api/notes/${encodeURIComponent(id)}${qs({ hard })}`, { method: 'DELETE' })
+export const moveNote = (id: string, body: { folder_id?: string | null; position: string }) =>
+  apiFetch<NoteDetail>(`/api/notes/${encodeURIComponent(id)}/move`, { method: 'POST', body })
+export const pinNote = (id: string, scope: PinScope, via?: string) =>
+  apiFetch<PinState>(`/api/notes/${encodeURIComponent(id)}/pin${qs({ via })}`, { method: 'POST', body: { scope } })
+export const unpinNote = (id: string, scope: PinScope, via?: string) =>
+  apiFetch<PinState>(`/api/notes/${encodeURIComponent(id)}/pin${qs({ scope, via })}`, { method: 'DELETE' })
+
+export const createFolder = (body: { name: string; parent_id?: string | null }) =>
+  apiFetch<FolderDetail>('/api/notes/folders', { method: 'POST', body })
+export const updateFolder = (id: string, body: Partial<{ name: string; archived: boolean }>) =>
+  apiFetch<FolderDetail>(`/api/notes/folders/${encodeURIComponent(id)}`, { method: 'PATCH', body })
+export const deleteFolder = (id: string, opts: { cascade?: boolean; hard?: boolean } = {}) =>
+  apiFetch<void>(`/api/notes/folders/${encodeURIComponent(id)}${qs(opts)}`, { method: 'DELETE' })
+export const moveFolder = (id: string, body: { parent_id?: string | null; position: string }) =>
+  apiFetch<Folder>(`/api/notes/folders/${encodeURIComponent(id)}/move`, { method: 'POST', body })
 
 // ---- Logs (admin) ----
 export interface LogFilters {

@@ -12,6 +12,7 @@ export interface WidgetComponentProps {
   canWrite: boolean
   onOpenCard: (cardId: string, boardId: string) => void
   onOpenReminder: (eventId: string, occurrenceOn: string) => void
+  onOpenNote: (noteId: string) => void
   onCompleteTask: (t: DashboardTask) => void
   onCompleteReminder: (r: DashboardReminder) => void
 }

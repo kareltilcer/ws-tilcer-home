@@ -17,8 +17,14 @@ import (
 // pooled connection; the pool is capped at a single connection to keep SQLite's
 // single-writer model simple and free of lock contention at household scale.
 func Open(path string) (*sql.DB, error) {
+	// _txlock=immediate makes every BeginTx issue BEGIN IMMEDIATE, taking the write
+	// lock up front. Every WithTx transaction is a mutation, and several do a
+	// read-then-write (e.g. notes' freeSlug check-then-insert); acquiring the write
+	// lock at BEGIN serializes those atomically. Belt-and-suspenders alongside the
+	// single-connection pool below — it keeps the invariant if MaxOpenConns ever grows.
 	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=busy_timeout(5000)" +
+		"?_txlock=immediate" +
+		"&_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
 		"&_pragma=foreign_keys(1)" +
 		"&_pragma=synchronous(NORMAL)"

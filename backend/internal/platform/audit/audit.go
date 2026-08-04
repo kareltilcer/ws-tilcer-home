@@ -19,6 +19,7 @@ const (
 	ModuleLogging   = "logging"
 	ModuleTodo      = "todo"
 	ModuleEvents    = "events"
+	ModuleNotes     = "notes"
 	ModuleDashboard = "dashboard"
 )
 
@@ -48,7 +49,7 @@ type Sink interface {
 type Event struct {
 	Module     string         // one of the Module* constants
 	Action     string         // dotted verb: "card.move", "event.update", "reminder.complete"
-	EntityType string         // "card" | "column" | "board" | "label" | "checklist_item" | "event" | ""
+	EntityType string         // "card" | "column" | "board" | "label" | "checklist_item" | "event" | "note" | "folder" | ""
 	EntityID   string         // entity id, or ""
 	Summary    string         // human-readable Czech summary shown in the log browser
 	Level      string         // "" defaults to info

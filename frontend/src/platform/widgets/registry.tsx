@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import { PravedelamWidget } from '@/modules/todo/widgets/PravedelamWidget'
 import { PripominkyWidget } from '@/modules/events/widgets/PripominkyWidget'
 import { TentoMesicWidget } from '@/modules/events/widgets/TentoMesicWidget'
+import { PripnuteWidget } from '@/modules/notes/widgets/PripnuteWidget'
 import type { WidgetComponentProps } from './shared'
 
 export type { WidgetComponentProps } from './shared'
@@ -14,4 +15,5 @@ export const widgetRegistry: Record<string, ComponentType<WidgetComponentProps>>
   'todo.pravedelam': PravedelamWidget,
   'events.pripominky': PripominkyWidget,
   'events.tento-mesic': TentoMesicWidget,
+  'notes.pripnute': PripnuteWidget,
 }

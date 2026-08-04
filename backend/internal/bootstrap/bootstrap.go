@@ -15,15 +15,19 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 )
 
-// MigrationSources returns every migration contributor in the fixed order
-// logging → platform → todo → events → dashboard (PRD §5 D25). The logging
-// (audit) tables must exist before any feature table because every module writes
-// through the audit spine.
+// MigrationSources returns every migration contributor. Goose applies migrations
+// globally by their numeric filename prefix, so the effective order is
+// logging(01) → platform(02) → todo(03) → events(04) → dashboard(05) → notes(06),
+// regardless of the slice order below (PRD §5 D25). The logging (audit) tables
+// must exist before any feature table because every module writes through the
+// audit spine; its 01xxx prefix guarantees that. The slice is listed in prefix
+// order purely so it reads the way the migrations actually run.
 func MigrationSources() []registry.MigrationSource {
 	return []registry.MigrationSource{
 		{Name: "logging", FS: logging.MigrationsFS},
@@ -31,6 +35,7 @@ func MigrationSources() []registry.MigrationSource {
 		{Name: "todo", FS: todo.MigrationsFS},
 		{Name: "events", FS: events.MigrationsFS},
 		{Name: "dashboard", FS: dashboard.MigrationsFS},
+		{Name: "notes", FS: notes.MigrationsFS},
 	}
 }
 

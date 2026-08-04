@@ -1,0 +1,37 @@
+/* Map Milkdown Crepe's theme variables onto the app's design tokens, scoped to
+   .note-crepe. Because the app's tokens flip with the `.light` class (dark in
+   :root), the editor follows the app's dark/light toggle automatically — one
+   mapping, both themes, no separate Crepe light/dark stylesheet to load. */
+.note-crepe {
+  --crepe-color-background: var(--s1);
+  --crepe-color-on-background: var(--text);
+  --crepe-color-surface: var(--s1);
+  --crepe-color-surface-low: var(--s2);
+  --crepe-color-on-surface: var(--text);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--border);
+  --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--accent-soft);
+  --crepe-color-on-secondary: var(--text);
+  --crepe-color-inverse: var(--text);
+  --crepe-color-on-inverse: var(--bg);
+  --crepe-color-inline-code: var(--danger);
+  --crepe-color-inline-area: var(--s2);
+  --crepe-color-error: var(--danger);
+  --crepe-color-hover: var(--s2);
+  --crepe-color-selected: var(--accent-soft);
+  --crepe-font-title: var(--font);
+  --crepe-font-default: var(--font);
+  --crepe-font-code: var(--mono);
+  --crepe-shadow-1: 0 2px 8px oklch(0 0 0 / 0.25);
+  --crepe-shadow-2: 0 12px 32px oklch(0 0 0 / 0.35);
+}
+
+.note-crepe .milkdown {
+  background: transparent;
+}
+.note-crepe .milkdown .ProseMirror {
+  padding: 6px 2px;
+  outline: none;
+  min-height: 240px;
+}

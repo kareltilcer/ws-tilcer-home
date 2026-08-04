@@ -25,6 +25,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
@@ -156,20 +157,22 @@ func run(logger *slog.Logger) error {
 
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)
+	notesSvc := notes.NewService(sqldb, sink, notify)
 
 	loggingMod := logging.New(sqldb)
 	todoMod := todo.NewModule(todoSvc)
 	eventsMod := events.NewModule(eventsSvc, cfg.Timezone, cfg.DashboardLookbackDays)
+	notesMod := notes.NewModule(notesSvc)
 
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
-	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod}))
+	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod}))
 	if err != nil {
 		return err
 	}
 	dashMod := dashboard.NewModule(catalog, sqldb)
 
-	modules := []registry.Module{loggingMod, todoMod, eventsMod, dashMod}
+	modules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, dashMod}
 	mountAPI := func(api chi.Router) { registry.MountAll(api, modules) }
 
 	// 6. HTTP server.

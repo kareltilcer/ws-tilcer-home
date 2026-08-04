@@ -11,4 +11,7 @@ export const qk = {
   logs: (filters?: unknown) => ['logs', filters ?? {}] as const,
   logsEntity: (type: string, id: string) => ['logs', 'entity', type, id] as const,
   logsStats: (params?: unknown) => ['logs', 'stats', params ?? {}] as const,
+  notesTree: ['notes', 'tree'] as const,
+  noteDetail: (id: string) => ['notes', 'detail', id] as const,
+  noteSearch: (q: string) => ['notes', 'search', q] as const,
 }
