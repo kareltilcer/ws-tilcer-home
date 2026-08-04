@@ -8,6 +8,7 @@ import type { Dashboard, DashboardReminder, DashboardTask, LayoutItem, WidgetCat
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/app/auth'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { Spinner } from '@/components/ui/ui'
 import { CardDetail } from '@/components/common/CardDetail'
 import { EventDetail } from '@/components/common/EventDetail'
@@ -17,6 +18,7 @@ import { widgetRegistry } from '@/platform/widgets/registry'
 const catalogKey = ['dashboard', 'catalog'] as const
 
 export function NastenkaPage() {
+  useDocumentTitle(cs.dashboard.title)
   const { canWrite } = useAuth()
   const qc = useQueryClient()
 

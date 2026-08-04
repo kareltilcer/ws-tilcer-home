@@ -9,6 +9,8 @@ import type { AuditChange, AuditEvent } from '@/api/types'
 import { fmtDateTime } from '@/i18n/format'
 import { cn } from '@/lib/utils'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
+import { cs } from '@/i18n/cs'
 import { Button, Input, Spinner } from '@/components/ui/ui'
 import { ScreenHeader } from '@/components/common/states'
 import { ResponsiveModal } from '@/components/ui/modal'
@@ -20,6 +22,7 @@ const selectCls =
   'h-10 rounded-md border border-border bg-s1 px-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-focus'
 
 export function LogPage() {
+  useDocumentTitle(cs.nav.log)
   return (
     <div className="mx-auto max-w-5xl">
       <ScreenHeader title="Log" subtitle="Auditní záznam všech změn" />

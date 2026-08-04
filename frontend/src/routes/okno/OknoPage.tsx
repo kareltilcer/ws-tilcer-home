@@ -6,6 +6,8 @@ import { qk } from '@/api/keys'
 import * as api from '@/api/endpoints'
 import type { Occurrence } from '@/api/types'
 import { useAuth } from '@/app/auth'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
+import { cs } from '@/i18n/cs'
 import { fmtDateISO, monthLabel } from '@/i18n/format'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ScreenHeader } from '@/components/common/states'
@@ -16,6 +18,7 @@ const WINDOW_MONTHS = 6
 const pad = (n: number) => String(n).padStart(2, '0')
 
 export function OknoPage() {
+  useDocumentTitle(cs.nav.okno)
   const { canWrite } = useAuth()
   const qc = useQueryClient()
   const now = new Date()

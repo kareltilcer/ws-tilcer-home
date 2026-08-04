@@ -27,7 +27,9 @@ import * as api from '@/api/endpoints'
 import type { Board, BoardTree, Card, Column, ColumnKind, Label } from '@/api/types'
 import { between, comparePositions } from '@/lib/lexorank'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { useAuth } from '@/app/auth'
+import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { count, PLURAL } from '@/i18n/plural'
 import { Button, Input, Spinner } from '@/components/ui/ui'
@@ -46,6 +48,7 @@ import { useBoardSort } from './useBoardSort'
 import { useColumnMove } from './useColumnMove'
 
 export function UkolyPage() {
+  useDocumentTitle(cs.nav.ukoly)
   const { canWrite } = useAuth()
   const boards = useQuery({ queryKey: qk.boards, queryFn: api.listBoards })
   const [boardId, setBoardId] = useState<string | null>(null)

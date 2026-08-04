@@ -11,6 +11,7 @@ import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { count, PLURAL } from '@/i18n/plural'
 import { useAuth } from '@/app/auth'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { Spinner } from '@/components/ui/ui'
 import { routes } from '@/app/routes'
@@ -22,6 +23,7 @@ import { CreateDialog, DeleteDialog, MoveDialog, RenameDialog, type MoveTarget }
 
 interface TreeIndex {
   folderById: Map<string, Folder>
+  noteById: Map<string, NoteSummary> // note id → summary (for the open note's tab title)
   slugPathById: Map<string, string>
   folderNamePathById: Map<string, string> // folder id → human name path ("Práce / Projekty")
   folderIdByNoteId: Map<string, string | null> // note id → containing folder id (null = root)
@@ -34,6 +36,7 @@ interface TreeIndex {
 
 function indexTree(tree: NotesTree): TreeIndex {
   const folderById = new Map<string, Folder>()
+  const noteById = new Map<string, NoteSummary>()
   const slugPathById = new Map<string, string>()
   const folderNamePathById = new Map<string, string>()
   const folderIdByNoteId = new Map<string, string | null>()
@@ -53,6 +56,7 @@ function indexTree(tree: NotesTree): TreeIndex {
       childNotes.set(f.id, node.notes)
       flatFolders.push({ id: f.id, name: f.name, depth })
       for (const nt of node.notes) {
+        noteById.set(nt.id, nt)
         slugPathById.set(nt.id, path ? `${path}/${nt.slug}` : nt.slug)
         folderIdByNoteId.set(nt.id, f.id)
       }
@@ -63,6 +67,7 @@ function indexTree(tree: NotesTree): TreeIndex {
   childFolders.set(null, tree.roots)
   childNotes.set(null, tree.root_notes)
   for (const nt of tree.root_notes) {
+    noteById.set(nt.id, nt)
     slugPathById.set(nt.id, nt.slug)
     folderIdByNoteId.set(nt.id, null)
   }
@@ -71,7 +76,7 @@ function indexTree(tree: NotesTree): TreeIndex {
   const folderPositions = new Map<string | null, string[]>()
   for (const [k, v] of childNotes) notePositions.set(k, v.map((n) => n.position))
   for (const [k, v] of childFolders) folderPositions.set(k, v.map((n) => n.folder.position))
-  return { folderById, slugPathById, folderNamePathById, folderIdByNoteId, childFolders, childNotes, notePositions, folderPositions, flatFolders }
+  return { folderById, noteById, slugPathById, folderNamePathById, folderIdByNoteId, childFolders, childNotes, notePositions, folderPositions, flatFolders }
 }
 
 function tailOf(positions: string[]): string {
@@ -111,6 +116,15 @@ export function PoznamkyPage() {
   >(null)
 
   const idx = useMemo(() => (tree.data ? indexTree(tree.data) : null), [tree.data])
+
+  // Tab title reflects the open note/folder ("<name> · Poznámky · home"); falls
+  // back to just the module while the tree loads or at the root.
+  const openTitle = sel.noteId
+    ? idx?.noteById.get(sel.noteId)?.title
+    : sel.folderId
+      ? idx?.folderById.get(sel.folderId)?.name
+      : undefined
+  useDocumentTitle(openTitle, cs.notes.title)
 
   // Where a new note/folder should land. Opening a note clears sel.folderId, so a
   // "New note" while viewing a note would otherwise create at the root — resolve
