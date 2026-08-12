@@ -5,6 +5,8 @@
 > Status: v2 issued 2026-07-21 · Owner: Karel. **v2 supersedes v1.** Where any v1 note conflicts with v2, v2 wins.
 >
 > **v3 (2026-07-29):** adds a fifth module, **Poznámky (`notes`)** — build guide `HANDOFF-5-notes.md`, design brief `HANDOFF-design.md` §v3, `PRD.md` v3 + `openapi.yaml` 0.4.0, decisions D30–D38. It's additive and self-contained: the foundation, auth, and modules 1–4 below are unchanged. If building v3, read this foundation, then `HANDOFF-5-notes.md`.
+>
+> **v4 (2026-08-11):** adds a sixth module, **Dokumenty (`documents`)** — build guide `HANDOFF-6-documents.md`, design brief `HANDOFF-design.md` §v4 (**design delivered**: `design/Home.dc.html`, `design/DocumentView.dc.html`), `PRD.md` v4 + `openapi.yaml` 0.5.0, decisions D39–D50. Additive and self-contained (foundation, auth, and modules 1–5 unchanged), and the **first module with blob storage** — it owns a dedicated **R2 bucket** for file bytes (metadata stays in SQLite/Litestream). New ops prerequisites: primary + backup R2 buckets (versioning on the primary) and **headless LibreOffice + poppler-utils** in the runtime image. If building v4, read this foundation, then `HANDOFF-6-documents.md`.
 
 ## 0. What's different from v1 (read this before scaffolding)
 
@@ -23,8 +25,9 @@ Two structural changes reshape the whole build, so don't lift the v1 structure w
 | `HANDOFF-3-events.md` | `events` — Okno **+ its Připomínky and Tento měsíc widgets** | foundation, spine |
 | `HANDOFF-4-dashboard.md` | `dashboard` — the widget host (catalog, layout, grid) | foundation, spine, todo, events |
 | `HANDOFF-5-notes.md` *(v3)* | `notes` — Poznámky (Markdown notes, folder tree, `notes.pripnute` widget) | foundation, spine |
+| `HANDOFF-6-documents.md` *(v4)* | `documents` — Dokumenty (files in a folder tree, R2 blobs, preview/download, `documents.pripnute` widget) | foundation, spine, **`platform/blobstore` (R2)** |
 
-Build the foundation, then 1 → 2 → 3 → 4. The spine is first (every mutation writes through it in the same transaction); the dashboard host is last (it renders the others' widgets). **v3:** `notes` (module 5) slots in as another feature module — migrations after `events`/before `dashboard`; the live host discovers its widget through the registry with **no host edit**.
+Build the foundation, then 1 → 2 → 3 → 4. The spine is first (every mutation writes through it in the same transaction); the dashboard host is last (it renders the others' widgets). **v3:** `notes` (module 5) slots in as another feature module — migrations after `events`/before `dashboard`; the live host discovers its widget through the registry with **no host edit**. **v4:** `documents` (module 6) slots in the same way — migrations **after `notes`/before `dashboard`** — but additionally introduces a **`platform/blobstore`** R2 client (infra, like `db`/`ws`) and an in-process **preview worker** + **backup-mirror** job; see `HANDOFF-6-documents.md` §2/§4/§13.
 
 > **Module packaging note for docs 1–3:** each of those handoffs now includes, at the end, the module's **widget provider(s)** and a **"module packaging"** reminder (own routes/migrations/audit, registered via the core; no reaching into other modules). The behaviour of todo/events/logging is otherwise unchanged from v1.
 
