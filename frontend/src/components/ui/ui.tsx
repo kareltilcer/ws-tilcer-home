@@ -17,6 +17,16 @@ const buttonSizes: Record<ButtonSize, string> = {
   md: 'h-10 px-4 text-sm gap-2',
 }
 
+const buttonBase =
+  'inline-flex items-center justify-center rounded-md font-semibold transition-colors disabled:opacity-50 disabled:pointer-events-none'
+
+/** buttonClass exposes the button styling for the cases that must NOT be a
+ *  <button>: a download link, for instance, has to be an <a href> so the browser
+ *  handles the Content-Disposition response itself. */
+export function buttonClass(variant: ButtonVariant = 'secondary', size: ButtonSize = 'md', className?: string): string {
+  return cn(buttonBase, buttonVariants[variant], buttonSizes[size], className)
+}
+
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
   size?: ButtonSize
@@ -32,12 +42,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       type="button"
       disabled={disabled || loading}
-      className={cn(
-        'inline-flex items-center justify-center rounded-md font-semibold transition-colors disabled:opacity-50 disabled:pointer-events-none',
-        buttonVariants[variant],
-        buttonSizes[size],
-        className,
-      )}
+      className={buttonClass(variant, size, className)}
       {...props}
     >
       {loading && <Loader2 className="animate-spin" size={size === 'sm' ? 14 : 16} aria-hidden />}

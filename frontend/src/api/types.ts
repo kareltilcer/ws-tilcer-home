@@ -369,3 +369,133 @@ export interface PinnedNote {
 export interface PripnutePoznamkyWidget {
   notes: PinnedNote[]
 }
+
+// ---- Documents (Dokumenty, v4) ----
+//
+// Documents live in their OWN folder tree (DocFolder), isolated from Poznámky's
+// folders. Two properties shape the client code:
+//   - The bytes are immutable: there is no "update content" call, and a changed
+//     file is a new document.
+//   - The permanent link is the ID-based `urls` block, not the slug path. The slug
+//     path is navigation only and 404s after a rename or move.
+
+export interface DocFolder {
+  id: string
+  parent_id: string | null
+  name: string
+  slug: string
+  position: string
+  archived: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+// native = the original previews directly (PDF/image/text); pdf = a derived
+// preview PDF exists (Office→PDF); none = download-only.
+export type PreviewKind = 'native' | 'pdf' | 'none'
+export type PreviewStatus = 'pending' | 'ready' | 'failed' | 'none'
+
+// Permanent, household-only, id-based content URLs. Stable for the document's
+// life; unaffected by rename/move. All require the session cookie.
+export interface DocumentUrls {
+  permalink: string
+  raw: string
+  download: string
+  preview: string
+  thumbnail: string
+}
+
+export interface DocumentItem {
+  id: string
+  folder_id: string | null
+  title: string
+  slug: string
+  description: string | null
+  original_filename: string
+  content_type: string
+  byte_size: number
+  checksum: string
+  preview_kind: PreviewKind
+  preview_status: PreviewStatus
+  position: string
+  archived: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+  urls: DocumentUrls
+}
+
+// Lightweight document node for the tree/list/grid.
+export interface DocumentSummary {
+  id: string
+  folder_id: string | null
+  title: string
+  slug: string
+  content_type: string
+  byte_size: number
+  preview_kind: PreviewKind
+  preview_status: PreviewStatus
+  position: string
+  archived: boolean
+  updated_at: string
+  thumbnail_url: string | null
+  pinned: PinState
+}
+
+export interface DocumentDetail extends DocumentItem {
+  path: PathSegment[]
+  slug_path: string
+  pinned: PinState
+}
+
+export interface DocFolderDetail extends DocFolder {
+  path: PathSegment[]
+  slug_path: string
+  subfolders: DocFolder[]
+  documents: DocumentSummary[]
+}
+
+// Recursive node of GET /api/documents/tree.
+export interface DocFolderNode {
+  folder: DocFolder
+  subfolders: DocFolderNode[]
+  documents: DocumentSummary[]
+}
+
+export interface DocumentsTree {
+  roots: DocFolderNode[]
+  root_documents: DocumentSummary[]
+  /** Server's per-file upload cap (HOME_DOCS_MAX_UPLOAD_MB), for the client pre-check. */
+  max_upload_mb?: number
+}
+
+export interface DocumentPage {
+  items: DocumentSummary[]
+  next_cursor: string | null
+}
+
+export interface DocResolveResult {
+  type: 'folder' | 'document'
+  id: string
+  slug_path: string
+}
+
+// documents.pripnute widget payload.
+export interface PinnedDocument {
+  document_id: string
+  title: string
+  slug_path: string
+  scope: 'household' | 'personal' | 'both'
+  content_type: string
+  byte_size: number
+  preview_kind: PreviewKind
+  preview_status: PreviewStatus
+  thumbnail_url: string | null
+  updated_at: string
+  position: string
+}
+
+export interface PripnuteDokumentyWidget {
+  documents: PinnedDocument[]
+}

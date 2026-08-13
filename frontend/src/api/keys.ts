@@ -14,4 +14,15 @@ export const qk = {
   notesTree: ['notes', 'tree'] as const,
   noteDetail: (id: string) => ['notes', 'detail', id] as const,
   noteSearch: (q: string) => ['notes', 'search', q] as const,
+  // Documents (v4). The content endpoints (raw/preview/thumbnail) are addressed as
+  // URLs by <img>/<iframe>/anchors and deliberately not query-cached.
+  documentsTree: ['documents', 'tree'] as const,
+  documentDetail: (id: string) => ['documents', 'detail', id] as const,
+  documentsSearch: (q: string) => ['documents', 'search', q] as const,
+  // Every search result, whatever the query — the prefix to invalidate when a change
+  // affects rows the user may be looking at through search rather than the tree.
+  documentsSearchAll: ['documents', 'search'] as const,
+  documentsResolve: (path: string) => ['documents', 'resolve', path] as const,
+  // Widget payloads arrive inside the dashboard response, so there is no per-widget
+  // query to key — invalidate `dashboard` (a prefix of everything under it) instead.
 }

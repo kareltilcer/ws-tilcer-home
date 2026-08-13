@@ -13,6 +13,9 @@ export interface WidgetComponentProps {
   onOpenCard: (cardId: string, boardId: string) => void
   onOpenReminder: (eventId: string, occurrenceOn: string) => void
   onOpenNote: (noteId: string) => void
+  // Opens a document in a preview overlay ON Nástěnka — never a navigation away
+  // (FR-DOC11).
+  onOpenDocument: (documentId: string) => void
   onCompleteTask: (t: DashboardTask) => void
   onCompleteReminder: (r: DashboardReminder) => void
 }

@@ -27,11 +27,16 @@ export const cs = {
     okno: 'Okno do budoucnosti',
     oknoShort: 'Okno',
     poznamky: 'Poznámky',
+    dokumenty: 'Dokumenty',
     log: 'Log',
     more: 'Více',
     moreHeading: 'Další',
-    moreHint: 'Čtyři hlavní moduly zůstávají v dosahu palce. Méně častý Log je tady.',
+    // v4 (D49): with Dokumenty there are five member destinations, so the overflow
+    // sheet is no longer admin-only — the four daily modules stay on the bar and
+    // everyone finds Dokumenty (and admins the Log) here.
+    moreHint: 'Čtyři denní moduly zůstávají v dosahu palce. Zbytek je tady.',
     logDesc: 'Auditní historie — jen pro správce',
+    dokumentyDesc: 'Soubory — náhled, stažení, připnutí',
   },
   common: {
     loading: 'Načítání…',
@@ -49,6 +54,7 @@ export const cs = {
     tasksUpdated: 'Úkoly byly mezitím upraveny',
     eventsUpdated: 'Události byly mezitím upraveny',
     notesUpdated: 'Poznámky byly mezitím upraveny',
+    documentsUpdated: 'Dokumenty byly mezitím upraveny',
   },
   dashboard: {
     title: 'Nástěnka',
@@ -140,5 +146,124 @@ export const cs = {
     copyLinkNote: 'Přejmenování nebo přesun poznámky odkaz změní.',
     // widget
     widgetEmpty: 'Žádné připnuté poznámky.',
+  },
+  documents: {
+    title: 'Dokumenty',
+    subtitle: 'Soubory ve složkách — trvalý odkaz, náhled i stažení',
+    search: 'Hledat (název + popis)…',
+    // Search covers metadata only — say so, so nobody expects full-text search.
+    searchScope: 'Hledání v názvech a popisech — ne v obsahu souborů',
+    root: 'Dokumenty',
+    rootLocation: 'Dokumenty (kořen)',
+    tree: 'Strom složek',
+    newFolder: 'Složka',
+    upload: 'Nahrát dokument',
+    uploadShort: 'Nahrát',
+    viewList: 'Seznam',
+    viewGrid: 'Mřížka',
+    readOnly: 'Jen pro čtení',
+    readOnlyHint: 'náhled a stažení k dispozici',
+    // states
+    emptyRootTitle: 'Zatím žádné dokumenty',
+    emptyRootBody: 'Nahrajte první dokument — PDF, obrázek nebo soubor z Office.',
+    emptyFolderTitle: 'Prázdná složka',
+    emptyFolderBody: 'Zatím tu nejsou žádné dokumenty.',
+    noResultsTitle: 'Nic nenalezeno',
+    noResultsBody: 'Zkus jiný výraz. Prohledáváme názvy a popisy, ne obsah.',
+    errorTitle: 'Nepodařilo se načíst dokumenty',
+    pickPrompt: 'Vyberte dokument ze stromu složek.',
+    goneTitle: 'Dokument už není dostupný',
+    goneBody: 'Někdo ho mezitím smazal. Zavři toto okno.',
+    // viewer
+    download: 'Stáhnout',
+    downloadOriginal: 'Stáhnout originál',
+    immutable: 'neměnný — nová verze = nový dokument',
+    previewPendingTitle: 'Náhled se připravuje…',
+    previewPendingBody:
+      'Dokument z Office převádíme na PDF. Objeví se automaticky, jakmile bude hotový. Mezitím lze soubor stáhnout.',
+    previewFailedBody: 'Náhled se nepodařilo vytvořit. Soubor je v pořádku — lze ho stáhnout.',
+    previewNoneBody: 'Pro tento typ souboru náhled neumíme. Stáhni si ho a otevři v aplikaci.',
+    previewTooLargeBody: (mb: number) =>
+      `Textový soubor je větší než ${mb} MB — náhled v prohlížeči by ho zbytečně zdržel. Stáhni si ho.`,
+    previewOpenInTab: 'Otevřít v novém okně',
+    previewPinchHint: 'Sevřením lze přiblížit',
+    previewFrameLabel: 'Náhled dokumentu',
+    chipPending: 'Náhled se připravuje…',
+    chipFailed: 'Bez náhledu',
+    chipDownloadOnly: 'Jen ke stažení',
+    // upload queue
+    uploadHeading: 'Nahrávání',
+    uploadDropHint: 'Přetáhni soubory sem',
+    uploadDone: 'Nahráno',
+    uploadFailed: 'Nepodařilo se nahrát',
+    uploadTooLarge: (mb: number) => `Soubor je větší než ${mb} MB.`,
+    uploadRejectedType: 'Tento typ souboru nepřijímáme.',
+    uploadPreviewPending: 'Náhled se připravuje…',
+    uploadRemove: 'Odebrat',
+    uploadCloseWhenDone: 'Zavřít',
+    // organisation
+    rename: 'Přejmenovat / popis',
+    renameHeading: 'Přejmenovat dokument',
+    descriptionLabel: 'Popis (nepovinný)',
+    descriptionPlaceholder: 'Např. kde v dokumentu najdeš číslo smlouvy',
+    move: 'Přesunout',
+    moveDocumentInto: 'Přesunout dokument do…',
+    moveFolderInto: 'Přesunout složku do…',
+    moveDone: 'Dokument přesunut — odkaz zůstává stejný',
+    delete: 'Smazat',
+    cancel: 'Zrušit',
+    createFolderHeading: 'Nová složka',
+    renameFolderHeading: 'Přejmenovat složku',
+    folderNamePlaceholder: 'Název složky',
+    documentNamePlaceholder: 'Název dokumentu',
+    locationLabel: 'Ve složce:',
+    submitCreate: 'Vytvořit',
+    submitRename: 'Uložit',
+    saveError: 'Nepodařilo se uložit',
+    emptyFolderLabel: 'prázdná',
+    // delete confirm — soft vs the admin hard delete that also removes the file
+    deleteDocumentTitle: (t: string) => `Smazat dokument „${t}“?`,
+    deleteDocumentBody: 'Dokument se archivuje a zmizí ze složek. Historie zůstane v auditním logu.',
+    deleteFolderTitle: (t: string) => `Smazat složku „${t}“?`,
+    deleteFolderEmpty: 'Prázdnou složku lze bezpečně smazat.',
+    deleteFolderCascade: 'Smaže se i obsah složky (podsložky a dokumenty). Akci nelze vzít zpět.',
+    // 409 on a trvalé smazání: somewhere in the folder's subtree sit archived rows
+    // a hard delete would purge for good. They never show in the tree, so the
+    // confirm dialog could not have counted them — hence the refusal.
+    deleteFolderArchivedConflict: 'Složka obsahuje dříve smazané dokumenty. Trvalé smazání by je odstranilo i se soubory — smaž je nejdřív jednotlivě.',
+    // 409 "conflict": the folder turned out not to be empty, i.e. the tree the dialog
+    // counted from was stale. It is refetched before this shows, so confirming again
+    // deletes the content the dialog now names.
+    deleteFolderStaleConflict: 'Ve složce mezitím něco přibylo. Zkontroluj obsah a potvrď smazání znovu.',
+    confirmDelete: 'Smazat',
+    hardDeleteLabel: 'Smazat trvale i soubor',
+    hardDeleteHint: 'Nevratné — odstraní i uložený soubor. Jen pro správce.',
+    hardDeleteDone: 'Dokument trvale smazán (i soubor)',
+    softDeleteDone: 'Dokument archivován',
+    hardDeleteFolderDone: 'Složka trvale smazána (i soubory)',
+    softDeleteFolderDone: 'Složka archivována',
+    // pinning — `pin` is the button (imperative), `pinned`/`unpinned` are the
+    // confirmations (past tense); a toast must never use the imperative form.
+    pin: 'Připnout',
+    pinned: 'Připnuto',
+    unpinned: 'Odepnuto',
+    pinHousehold: 'Připnout pro všechny',
+    pinHouseholdHint: 'Sdílené — vidí celá domácnost',
+    pinPersonal: 'Připnout jen pro mě',
+    pinPersonalHint: 'Osobní — jen tvoje zařízení',
+    badgeHousehold: 'Připnuto pro všechny',
+    badgePersonal: 'Jen pro mě',
+    badgeBoth: 'Pro všechny',
+    // sharing — the documents link is PERMANENT, unlike the notes one
+    copyLink: 'Odkaz',
+    copyLinkTitle: 'Zkopírovat trvalý odkaz — otevře se jen přihlášeným členům domácnosti',
+    copyLinkDone: 'Trvalý odkaz zkopírován — otevře se jen členům domácnosti',
+    copyLinkError: 'Odkaz se nepodařilo zkopírovat',
+    // Deliberately quotes no path: the permalink is /d/{full id}, and printing a
+    // shortened one in a 236px popover would just be a link that 404s if typed out.
+    copyLinkNote: 'Zkopírovaný odkaz je trvalý — nemění se při přejmenování ani přesunu.',
+    // widget
+    widgetEmpty: 'Žádné připnuté dokumenty.',
+    overlayTitle: 'Dokument · z Nástěnky',
   },
 } as const

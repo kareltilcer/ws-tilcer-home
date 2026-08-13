@@ -7,5 +7,11 @@ export const routes = {
   ukoly: '/ukoly',
   okno: '/okno',
   poznamky: '/poznamky',
+  dokumenty: '/dokumenty',
   log: '/log',
 } as const
+
+// There is deliberately no permalink helper here: /d/{id} (D42) is minted by the
+// backend and handed to the client as `urls.permalink` on the document detail, so
+// that HOME_DOCS_PUBLIC_BASE_URL can absolutise it. Building it client-side would
+// bypass that setting. The route itself is registered in App.tsx.

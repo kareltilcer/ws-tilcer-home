@@ -88,3 +88,63 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
+
+/** apiUpload posts a multipart body (a document upload) and reports progress.
+ *
+ *  It uses XMLHttpRequest rather than fetch for one reason: fetch has no upload
+ *  progress event, and the upload queue shows a per-file progress bar. Everything
+ *  else matches apiFetch — the session cookie rides along, the CSRF token and the
+ *  client id are attached, and a 401 routes to login.
+ *
+ *  Content-Type is deliberately NOT set: the browser must write the multipart
+ *  boundary itself. */
+export async function apiUpload<T>(
+  path: string,
+  form: FormData,
+  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', path, true)
+    xhr.withCredentials = true
+    const t = csrfToken()
+    if (t) xhr.setRequestHeader('X-CSRF-Token', t)
+    xhr.setRequestHeader('X-Client-Id', clientId)
+
+    if (opts.onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) opts.onProgress?.(e.loaded / e.total)
+      }
+    }
+    opts.signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        onUnauthorized?.()
+        reject(new ApiError(401, 'unauthorized'))
+        return
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve((xhr.responseText ? JSON.parse(xhr.responseText) : undefined) as T)
+        } catch {
+          reject(new ApiError(xhr.status, 'bad_response'))
+        }
+        return
+      }
+      let code = 'error'
+      let detail: string | undefined
+      try {
+        const parsed = JSON.parse(xhr.responseText) as { error?: string; detail?: string }
+        code = parsed.error ?? code
+        detail = parsed.detail
+      } catch {
+        // non-JSON error body
+      }
+      reject(new ApiError(xhr.status, code, detail))
+    }
+    xhr.onerror = () => reject(new ApiError(0, 'network_error'))
+    xhr.onabort = () => reject(new ApiError(0, 'aborted'))
+    xhr.send(form)
+  })
+}

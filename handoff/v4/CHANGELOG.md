@@ -59,6 +59,37 @@ No public/unauthenticated access or share tokens; no content replace/overwrite/v
 
 v3 (Poznámky) is a spec addition on the live v2; v4 layers `documents` on top. Because the module is self-contained and additive, nothing in v1/v2/v3 changes to build it — the one new operational dependency is the R2 documents bucket(s) + headless LibreOffice in the runtime image.
 
+### Implementation notes (2026-08-12) — three deviations from this spec
+
+`documents` is now implemented (backend + frontend; `plan.md` Phase 7). Three
+things were built differently from `HANDOFF-6-documents.md` §13/§16, decided with
+Karel during the build. The behaviour the PRD requires is unchanged in each case:
+
+1. **Office→PDF runs in a Gotenberg sidecar**, not a headless LibreOffice binary
+   inside the backend image (§16 assumed the latter). `HOME_DOCS_GOTENBERG_URL`
+   replaces `HOME_DOCS_SOFFICE_PATH`; the image keeps only `poppler-utils` +
+   `libwebp-tools` for thumbnails and stays ~100 MB instead of ~1 GB. The worker is
+   still in-process and event-driven, and a missing/absent converter still leaves
+   Office files download-only rather than failing an upload (D44 intact).
+2. **The blob mirror runs daily, and `HOME_DOCS_MIRROR_CRON` is a Go duration**
+   (default `24h`; `0` disables), not a cron expression — no cron parser, and a
+   cron-looking value is rejected at boot with an explicit message. Mirroring is
+   copy-if-absent, so a longer interval costs nothing in correctness (D45 intact).
+3. **`GET /api/documents/{id}/preview` serves PDFs with
+   `Content-Security-Policy: sandbox allow-scripts`** instead of a bare `sandbox`.
+   A bare sandbox blocks the browsers' built-in PDF viewer, which the frontend uses
+   in a sandboxed `<iframe>` (Karel's choice over bundling PDF.js). `allow-scripts`
+   without `allow-same-origin` keeps the frame in an **opaque origin** — it still
+   cannot reach home's cookies, storage, or DOM — and the relaxation applies **only**
+   to `application/pdf` responses on `/preview`. `/raw` keeps the strict sandbox for
+   everything, and active types (HTML/SVG) remain `attachment` + download-only, so
+   D48's isolation guarantee holds.
+
+Also worth recording: the module's migration block is **07001** (after `notes`).
+§1's "after `notes`, before `dashboard`" is not achievable by prefix — `dashboard`
+is already 05 — and not needed: its single layout table has no dependency on
+`documents`.
+
 ---
 
 ## v3 — 2026-07-29 (spec) · Poznámky (notes) module

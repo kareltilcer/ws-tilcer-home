@@ -28,7 +28,15 @@ FROM litestream/litestream:0.3.13 AS litestream
 
 # ── Stage 3: runtime ───────────────────────────────────────────────────
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates && update-ca-certificates
+# poppler-utils (pdftoppm) rasters a PDF's first page and libwebp-tools (cwebp)
+# encodes the thumbnail — the two helpers the documents preview worker shells out
+# to. Both are small; together they cost a few MB.
+#
+# NOTE: there is deliberately NO LibreOffice here. Office→PDF conversion runs in a
+# separate Gotenberg service (HOME_DOCS_GOTENBERG_URL), which keeps this image ~100 MB
+# instead of ~1 GB. If either helper is missing at runtime the worker skips the
+# thumbnail and the document stays fully usable — it never fails an upload.
+RUN apk add --no-cache ca-certificates poppler-utils libwebp-tools && update-ca-certificates
 COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
 COPY --from=backend    /out/home                 /usr/local/bin/home
 COPY litestream.yml       /etc/litestream.yml
@@ -39,7 +47,8 @@ RUN chmod +x /usr/local/bin/entrypoint
 # API-only: HOME_STATIC_DIR is intentionally unset, so the Go server serves no
 # static assets (the SPA is the frontend image).
 ENV HOME_ADDR=:7999 \
-    HOME_DB_PATH=/data/home.db
+    HOME_DB_PATH=/data/home.db \
+    HOME_DOCS_LOCAL_DIR=/data/blobs
 EXPOSE 7999
 VOLUME ["/data"]
 ENTRYPOINT ["/usr/local/bin/entrypoint"]

@@ -48,6 +48,16 @@ export function fmtNumber(n: number): string {
   return czNumber.format(n)
 }
 
+/** fmtBytes renders a file size in Czech: `B` / `kB` / `MB` with a decimal comma
+ *  (ported from the design prototype's fmtBytes, so the UI matches the bundle). */
+export function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} kB`
+  const mb = n / (1024 * 1024)
+  return `${(Math.round(mb * 10) / 10).toString().replace('.', ',')} MB`
+}
+
 /** compareCz compares strings using Czech collation (č ř š ž sort after c r s z). */
 export function compareCz(a: string, b: string): number {
   return czCollator.compare(a, b)

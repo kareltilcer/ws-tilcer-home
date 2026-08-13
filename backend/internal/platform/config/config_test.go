@@ -143,6 +143,161 @@ func TestLoad_AllowedOriginsCSV(t *testing.T) {
 	}
 }
 
+// ---- documents (v4) ----
+
+func TestLoad_DocsDefaults(t *testing.T) {
+	c, err := Load(envMap(validBase()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	d := c.Docs
+	if d.UsesObjectStorage() {
+		t.Error("UsesObjectStorage = true with no bucket configured")
+	}
+	// Development falls back to a filesystem store beside the database file, so
+	// the docker harness keeps blobs on the same persisted volume.
+	if d.LocalDir == "" || !strings.Contains(strings.ReplaceAll(d.LocalDir, "\\", "/"), "/data/blobs") {
+		t.Errorf("LocalDir = %q, want a blobs dir next to the DB", d.LocalDir)
+	}
+	if d.MaxUploadMB != 50 {
+		t.Errorf("MaxUploadMB = %d, want 50", d.MaxUploadMB)
+	}
+	if !d.PreviewEnabled {
+		t.Error("PreviewEnabled = false, want true by default")
+	}
+	if d.PreviewTimeout.Seconds() != 60 {
+		t.Errorf("PreviewTimeout = %s, want 60s", d.PreviewTimeout)
+	}
+	if d.MirrorInterval.Hours() != 24 {
+		t.Errorf("MirrorInterval = %s, want 24h (daily)", d.MirrorInterval)
+	}
+	// No backup bucket configured ⇒ the mirror stays off even with an interval.
+	if d.MirrorEnabled() {
+		t.Error("MirrorEnabled = true with no backup bucket")
+	}
+	if len(d.AllowedMIME) != 0 {
+		t.Errorf("AllowedMIME = %v, want empty (allow all, still sniffed)", d.AllowedMIME)
+	}
+}
+
+func TestLoad_DocsBucketRequiresEndpointAndKeys(t *testing.T) {
+	env := validBase()
+	env["HOME_DOCS_R2_BUCKET"] = "home-docs"
+	_, err := Load(envMap(env))
+	if err == nil {
+		t.Fatal("expected an error for a half-configured bucket")
+	}
+	for _, want := range []string{"HOME_DOCS_R2_ENDPOINT", "HOME_DOCS_R2_ACCESS_KEY_ID"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing mention of %s:\n%v", want, err)
+		}
+	}
+}
+
+func TestLoad_DocsProductionRequiresObjectStorage(t *testing.T) {
+	env := validBase()
+	env["HOME_ENV"] = "production"
+	_, err := Load(envMap(env))
+	if err == nil || !strings.Contains(err.Error(), "HOME_DOCS_R2_BUCKET") {
+		t.Fatalf("expected production to refuse the filesystem document store, got: %v", err)
+	}
+}
+
+func TestLoad_DocsBackupInheritsPrimaryCredentials(t *testing.T) {
+	env := validBase()
+	env["HOME_DOCS_R2_BUCKET"] = "home-docs"
+	env["HOME_DOCS_R2_ENDPOINT"] = "https://acct.r2.cloudflarestorage.com"
+	env["HOME_DOCS_R2_ACCESS_KEY_ID"] = "ak"
+	env["HOME_DOCS_R2_SECRET_ACCESS_KEY"] = "sk-r2-secret"
+	env["HOME_DOCS_R2_BACKUP_BUCKET"] = "home-docs-backup"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	d := c.Docs
+	if !d.UsesObjectStorage() || d.LocalDir != "" {
+		t.Errorf("expected object storage with no local dir, got bucket=%q dir=%q", d.R2Bucket, d.LocalDir)
+	}
+	if d.BackupEndpoint != d.R2Endpoint || d.BackupAccessKeyID != "ak" || d.BackupSecretAccessKey != "sk-r2-secret" {
+		t.Error("backup connection details should default to the primary's")
+	}
+	if !d.MirrorEnabled() {
+		t.Error("MirrorEnabled = false with a backup bucket and a 24h interval")
+	}
+	if s := c.Redacted(); strings.Contains(s, "sk-r2-secret") {
+		t.Errorf("Redacted leaked the R2 secret: %s", s)
+	}
+}
+
+// A backup bucket with no primary has nothing to inherit its endpoint and keys
+// from. Config must name the missing variables; without this check the store
+// constructor aborts the boot with a bare "s3 needs an endpoint".
+func TestLoad_DocsBackupWithoutAPrimaryNamesTheMissingVars(t *testing.T) {
+	env := validBase()
+	env["HOME_DOCS_R2_BACKUP_BUCKET"] = "home-docs-backup"
+	_, err := Load(envMap(env))
+	if err == nil {
+		t.Fatal("expected a backup bucket with no connection details to be refused")
+	}
+	for _, want := range []string{"HOME_DOCS_R2_BACKUP_ENDPOINT", "HOME_DOCS_R2_BACKUP_ACCESS_KEY_ID"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing mention of %s:\n%v", want, err)
+		}
+	}
+}
+
+func TestLoad_DocsMirrorCronRejectsCronExpression(t *testing.T) {
+	env := validBase()
+	env["HOME_DOCS_MIRROR_CRON"] = "0 * * * *"
+	_, err := Load(envMap(env))
+	if err == nil || !strings.Contains(err.Error(), "HOME_DOCS_MIRROR_CRON") {
+		t.Fatalf("expected a cron-expression rejection, got: %v", err)
+	}
+}
+
+func TestLoad_DocsMirrorCronZeroDisables(t *testing.T) {
+	env := validBase()
+	env["HOME_DOCS_MIRROR_CRON"] = "0"
+	env["HOME_DOCS_R2_BUCKET"] = "home-docs"
+	env["HOME_DOCS_R2_ENDPOINT"] = "https://acct.r2.cloudflarestorage.com"
+	env["HOME_DOCS_R2_ACCESS_KEY_ID"] = "ak"
+	env["HOME_DOCS_R2_SECRET_ACCESS_KEY"] = "sk-r2-secret"
+	env["HOME_DOCS_R2_BACKUP_BUCKET"] = "home-docs-backup"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Docs.MirrorInterval != 0 || c.Docs.MirrorEnabled() {
+		t.Errorf("MirrorInterval = %s / enabled = %t, want disabled", c.Docs.MirrorInterval, c.Docs.MirrorEnabled())
+	}
+}
+
+func TestLoad_DocsAllowlistAndRangeChecks(t *testing.T) {
+	env := validBase()
+	env["HOME_DOCS_ALLOWED_MIME"] = "application/pdf, image/jpeg ,"
+	env["HOME_DOCS_MAX_UPLOAD_MB"] = "0"
+	env["HOME_DOCS_THUMB_MAX_PX"] = "8"
+	_, err := Load(envMap(env))
+	if err == nil {
+		t.Fatal("expected range errors")
+	}
+	for _, want := range []string{"HOME_DOCS_MAX_UPLOAD_MB", "HOME_DOCS_THUMB_MAX_PX"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing mention of %s:\n%v", want, err)
+		}
+	}
+
+	env["HOME_DOCS_MAX_UPLOAD_MB"] = "25"
+	env["HOME_DOCS_THUMB_MAX_PX"] = "320"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(c.Docs.AllowedMIME) != 2 || c.Docs.AllowedMIME[0] != "application/pdf" {
+		t.Errorf("AllowedMIME = %v, want two trimmed types", c.Docs.AllowedMIME)
+	}
+}
+
 func TestRedacted_MasksSecret(t *testing.T) {
 	c, err := Load(envMap(validBase()))
 	if err != nil {

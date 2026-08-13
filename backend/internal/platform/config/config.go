@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,91 @@ type Config struct {
 	// DevActorID and DevActorRoles configure the fake actor used under the bypass.
 	DevActorID    string
 	DevActorRoles []string
+
+	// Docs is the documents module's configuration (v4): object storage for the
+	// file bytes, the preview pipeline, and the blob backup mirror.
+	Docs DocsConfig
+}
+
+// DocsConfig configures the documents module (PRD §9, HANDOFF-6 §16). The file
+// BYTES live in object storage (SQLite keeps only metadata), so this is the one
+// module with storage configuration of its own.
+//
+// Two deliberate deviations from HANDOFF-6 §16, decided with Karel:
+//   - Office→PDF conversion runs in a **Gotenberg sidecar** (GotenbergURL)
+//     instead of a headless LibreOffice binary inside this image, so the runtime
+//     image stays small. HOME_DOCS_SOFFICE_PATH therefore does not exist.
+//   - The blob mirror runs **daily**, not hourly, and HOME_DOCS_MIRROR_CRON is a
+//     Go duration (e.g. "24h", "0" disables) rather than a cron expression — no
+//     cron parser, and the value reads the way the job behaves.
+type DocsConfig struct {
+	// Primary bucket for document bytes. Empty selects the local filesystem store
+	// (LocalDir) — development and tests only; refused in production.
+	R2Bucket          string
+	R2Endpoint        string
+	R2AccessKeyID     string
+	R2SecretAccessKey string
+
+	// Backup bucket for the mirror (D45). Empty disables mirroring. The endpoint
+	// and keys default to the primary's when the backup lives in the same account.
+	BackupBucket          string
+	BackupEndpoint        string
+	BackupAccessKeyID     string
+	BackupSecretAccessKey string
+
+	// MirrorInterval is how often the mirror + reconciliation pass runs; 0 disables it.
+	MirrorInterval time.Duration
+	// OrphanGraceHours is how old an object with no live row must be before the
+	// reconciliation pass deletes it (an in-flight upload writes the object before
+	// the row, so young orphans are normal).
+	OrphanGraceHours int
+	// OrphanMaxPercent bounds how much of the bucket ONE pass may delete before it
+	// refuses and logs instead. The sweep infers "orphan" from a missing row, so an
+	// empty or half-restored database would otherwise read as "every object is
+	// orphaned" — this is the guard against that. 100 disables it.
+	OrphanMaxPercent int
+
+	// MaxUploadMB is the hard per-file cap; over it the upload is rejected 413.
+	MaxUploadMB int
+	// AllowedMIME, when non-empty, is the allowlist checked against the
+	// SERVER-SNIFFED type (never the client's claim, D48). Empty = allow all.
+	AllowedMIME []string
+
+	// PreviewEnabled gates the whole preview/thumbnail worker.
+	PreviewEnabled bool
+	// PreviewTimeout bounds one conversion/thumbnail job.
+	PreviewTimeout time.Duration
+	// PreviewWorkers is the size of the in-process worker pool.
+	PreviewWorkers int
+	// GotenbergURL is the Office→PDF converter's base URL (e.g.
+	// http://gotenberg:3000). Empty leaves Office files download-only.
+	GotenbergURL string
+	// PdftoppmPath and CwebpPath are the thumbnail helpers (poppler-utils,
+	// libwebp-tools). A missing binary degrades to "no thumbnail", never an error.
+	PdftoppmPath string
+	CwebpPath    string
+	// ThumbMaxPx is the longest edge of a generated thumbnail.
+	ThumbMaxPx int
+	// ImageMaxMegapixels caps the DECODED size of an image the worker will
+	// thumbnail. MaxUploadMB bounds the file, not the pixels — compression ratio is
+	// unlimited — and the worker decodes in the app process, so an unbounded decode
+	// is an OOM of the whole backend rather than a failed thumbnail.
+	ImageMaxMegapixels int
+
+	// LocalDir backs the filesystem BlobStore when R2Bucket is empty.
+	LocalDir string
+	// PublicBaseURL prefixes the permanent /d/{id} links; empty keeps them
+	// relative to the app origin (correct for home's same-origin deploy).
+	PublicBaseURL string
+}
+
+// UsesObjectStorage reports whether documents run against a real S3/R2 bucket
+// (as opposed to the local development filesystem store).
+func (d DocsConfig) UsesObjectStorage() bool { return d.R2Bucket != "" }
+
+// MirrorEnabled reports whether the daily blob mirror should run.
+func (d DocsConfig) MirrorEnabled() bool {
+	return d.BackupBucket != "" && d.MirrorInterval > 0
 }
 
 // IsProduction reports whether the service is running in production.
@@ -120,11 +206,56 @@ func (c *Config) Redacted() string {
 	return fmt.Sprintf(
 		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
-			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t",
+			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t %s",
 		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
 		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.AllowedOrigins, c.DevAuthBypass,
+		c.Docs.redacted(),
 	)
+}
+
+// redacted summarises the documents configuration with the storage secrets masked.
+func (d DocsConfig) redacted() string {
+	store := "fs(" + d.LocalDir + ")"
+	if d.UsesObjectStorage() {
+		store = fmt.Sprintf("r2(%s@%s keys=%s)", d.R2Bucket, d.R2Endpoint, maskPair(d.R2AccessKeyID, d.R2SecretAccessKey))
+	}
+	// The job does two jobs: mirroring to the backup bucket AND the reconciliation
+	// pass, which DELETES orphaned objects from the primary. The pass runs on the
+	// interval whether or not a backup bucket exists, so "off" here would be a lie
+	// about a destructive daily job — the interval alone decides that it runs.
+	mirror := "off"
+	switch {
+	case d.MirrorInterval <= 0:
+	case d.MirrorEnabled():
+		mirror = fmt.Sprintf("%s→%s", d.MirrorInterval, d.BackupBucket)
+	default:
+		mirror = fmt.Sprintf("%s(reconcile-only, no backup bucket)", d.MirrorInterval)
+	}
+	preview := "off"
+	if d.PreviewEnabled {
+		gotenberg := d.GotenbergURL
+		if gotenberg == "" {
+			gotenberg = "none(office=download-only)"
+		}
+		preview = fmt.Sprintf("on(workers=%d timeout=%s gotenberg=%s)", d.PreviewWorkers, d.PreviewTimeout, gotenberg)
+	}
+	allowed := "all"
+	if len(d.AllowedMIME) > 0 {
+		allowed = strings.Join(d.AllowedMIME, "|")
+	}
+	return fmt.Sprintf("docs_store=%s docs_mirror=%s docs_preview=%s docs_max_upload_mb=%d docs_allowed_mime=%s",
+		store, mirror, preview, d.MaxUploadMB, allowed)
+}
+
+func maskPair(id, secret string) string {
+	if id == "" && secret == "" {
+		return "unset"
+	}
+	if id == "" || secret == "" {
+		return "partial(***)"
+	}
+	return "set(***)"
 }
 
 // Getenv is the environment lookup used by Load; it mirrors os.LookupEnv and is
@@ -143,6 +274,18 @@ const (
 	defaultLogRetentionDays     = 0
 	defaultSessionTTLDays       = 90
 	defaultRoleRefreshMinutes   = 15
+
+	// documents (v4)
+	defaultDocsMirrorInterval   = 24 * time.Hour
+	defaultDocsOrphanGraceHours = 24
+	defaultDocsOrphanMaxPercent = 25
+	defaultDocsMaxUploadMB      = 50
+	defaultDocsPreviewTimeout   = 60
+	defaultDocsPreviewWorkers   = 2
+	defaultDocsPdftoppm         = "pdftoppm"
+	defaultDocsCwebp            = "cwebp"
+	defaultDocsThumbMaxPx       = 480
+	defaultDocsImageMaxMP       = 50
 )
 
 // defaultAllowedOrigins is the CSRF Origin allowlist when HOME_ALLOWED_ORIGINS is
@@ -225,6 +368,8 @@ func Load(getenv Getenv) (*Config, error) {
 		l.errf("HOME_ROLE_REFRESH_MINUTES must be >= 1 (got %d)", c.RoleRefreshMinutes)
 	}
 
+	c.Docs = l.docs(c)
+
 	// Security hard-stop: the dev bypass must never be active in production.
 	if c.DevAuthBypass && c.IsProduction() {
 		l.errf("HOME_DEV_AUTH_BYPASS must not be enabled when HOME_ENV=production " +
@@ -239,6 +384,106 @@ func Load(getenv Getenv) (*Config, error) {
 
 // osLookup adapts os.LookupEnv to the Getenv signature.
 func osLookup(key string) (string, bool) { return os.LookupEnv(key) }
+
+// docs loads and validates the documents module's configuration. Storage is the
+// one part with a hard production rule: real deployments MUST use object storage,
+// because the local filesystem store lives on a container's disk and is not
+// covered by any backup (D45).
+func (l *loader) docs(c *Config) DocsConfig {
+	d := DocsConfig{}
+
+	d.R2Bucket = l.strDefault("HOME_DOCS_R2_BUCKET", "")
+	d.R2Endpoint = l.strDefault("HOME_DOCS_R2_ENDPOINT", "")
+	d.R2AccessKeyID = l.strDefault("HOME_DOCS_R2_ACCESS_KEY_ID", "")
+	d.R2SecretAccessKey = l.strDefault("HOME_DOCS_R2_SECRET_ACCESS_KEY", "")
+
+	if d.R2Bucket != "" {
+		// A half-configured bucket would fail on the first upload, in production,
+		// after the user picked a file — so fail at boot instead.
+		if d.R2Endpoint == "" {
+			l.errf("HOME_DOCS_R2_ENDPOINT is required when HOME_DOCS_R2_BUCKET is set")
+		}
+		if d.R2AccessKeyID == "" || d.R2SecretAccessKey == "" {
+			l.errf("HOME_DOCS_R2_ACCESS_KEY_ID and HOME_DOCS_R2_SECRET_ACCESS_KEY are required when HOME_DOCS_R2_BUCKET is set")
+		}
+	} else {
+		if c.IsProduction() {
+			l.errf("HOME_DOCS_R2_BUCKET is required when HOME_ENV=production " +
+				"(the local filesystem document store has no backup — PRD D45)")
+		}
+		// Default the dev store next to the database so the docker harness keeps
+		// document bytes on the same persisted volume as the DB.
+		d.LocalDir = l.strDefault("HOME_DOCS_LOCAL_DIR", filepath.Join(filepath.Dir(c.DBPath), "blobs"))
+	}
+
+	d.BackupBucket = l.strDefault("HOME_DOCS_R2_BACKUP_BUCKET", "")
+	// The backup bucket usually lives in the same account, so its connection
+	// details default to the primary's; override only for a distinct account.
+	d.BackupEndpoint = l.strDefault("HOME_DOCS_R2_BACKUP_ENDPOINT", d.R2Endpoint)
+	d.BackupAccessKeyID = l.strDefault("HOME_DOCS_R2_BACKUP_ACCESS_KEY_ID", d.R2AccessKeyID)
+	d.BackupSecretAccessKey = l.strDefault("HOME_DOCS_R2_BACKUP_SECRET_ACCESS_KEY", d.R2SecretAccessKey)
+	if d.BackupBucket != "" {
+		// Those defaults are empty when there is no primary bucket to inherit from (the
+		// local dev store). Say that here rather than letting the store constructor
+		// abort the boot with "s3 needs an endpoint", which names neither variable.
+		if d.BackupEndpoint == "" {
+			l.errf("HOME_DOCS_R2_BACKUP_ENDPOINT is required when HOME_DOCS_R2_BACKUP_BUCKET is set " +
+				"(it defaults to HOME_DOCS_R2_ENDPOINT, which is unset)")
+		}
+		if d.BackupAccessKeyID == "" || d.BackupSecretAccessKey == "" {
+			l.errf("HOME_DOCS_R2_BACKUP_ACCESS_KEY_ID and HOME_DOCS_R2_BACKUP_SECRET_ACCESS_KEY are required " +
+				"when HOME_DOCS_R2_BACKUP_BUCKET is set (they default to the primary's, which are unset)")
+		}
+	}
+
+	d.MirrorInterval = l.durationDefault("HOME_DOCS_MIRROR_CRON", defaultDocsMirrorInterval)
+	if d.MirrorInterval < 0 {
+		l.errf("HOME_DOCS_MIRROR_CRON must not be negative (got %s)", d.MirrorInterval)
+	}
+	if d.MirrorInterval > 0 && d.MirrorInterval < time.Minute {
+		l.errf("HOME_DOCS_MIRROR_CRON must be at least 1m (or 0 to disable); got %s", d.MirrorInterval)
+	}
+	d.OrphanGraceHours = l.intDefault("HOME_DOCS_ORPHAN_GRACE_HOURS", defaultDocsOrphanGraceHours)
+	if d.OrphanGraceHours < 1 {
+		l.errf("HOME_DOCS_ORPHAN_GRACE_HOURS must be >= 1 (got %d) — a shorter window can delete an in-flight upload", d.OrphanGraceHours)
+	}
+	d.OrphanMaxPercent = l.intDefault("HOME_DOCS_ORPHAN_MAX_PERCENT", defaultDocsOrphanMaxPercent)
+	if d.OrphanMaxPercent < 1 || d.OrphanMaxPercent > 100 {
+		l.errf("HOME_DOCS_ORPHAN_MAX_PERCENT must be between 1 and 100 (got %d) — it is the reconciliation "+
+			"pass's blast-radius guard; 100 disables it", d.OrphanMaxPercent)
+	}
+
+	d.MaxUploadMB = l.intDefault("HOME_DOCS_MAX_UPLOAD_MB", defaultDocsMaxUploadMB)
+	if d.MaxUploadMB < 1 {
+		l.errf("HOME_DOCS_MAX_UPLOAD_MB must be >= 1 (got %d)", d.MaxUploadMB)
+	}
+	d.AllowedMIME = l.csvDefault("HOME_DOCS_ALLOWED_MIME", nil)
+
+	d.PreviewEnabled = l.boolDefault("HOME_DOCS_PREVIEW_ENABLED", true)
+	d.PreviewTimeout = time.Duration(l.intDefault("HOME_DOCS_PREVIEW_TIMEOUT_SEC", defaultDocsPreviewTimeout)) * time.Second
+	if d.PreviewTimeout < time.Second {
+		l.errf("HOME_DOCS_PREVIEW_TIMEOUT_SEC must be >= 1 (got %s)", d.PreviewTimeout)
+	}
+	d.PreviewWorkers = l.intDefault("HOME_DOCS_PREVIEW_WORKERS", defaultDocsPreviewWorkers)
+	if d.PreviewWorkers < 1 {
+		l.errf("HOME_DOCS_PREVIEW_WORKERS must be >= 1 (got %d)", d.PreviewWorkers)
+	}
+	d.GotenbergURL = strings.TrimRight(l.strDefault("HOME_DOCS_GOTENBERG_URL", ""), "/")
+	d.PdftoppmPath = l.strDefault("HOME_DOCS_PDFTOPPM_PATH", defaultDocsPdftoppm)
+	d.CwebpPath = l.strDefault("HOME_DOCS_CWEBP_PATH", defaultDocsCwebp)
+	d.ThumbMaxPx = l.intDefault("HOME_DOCS_THUMB_MAX_PX", defaultDocsThumbMaxPx)
+	if d.ThumbMaxPx < 32 {
+		l.errf("HOME_DOCS_THUMB_MAX_PX must be >= 32 (got %d)", d.ThumbMaxPx)
+	}
+	d.ImageMaxMegapixels = l.intDefault("HOME_DOCS_IMAGE_MAX_MEGAPIXELS", defaultDocsImageMaxMP)
+	if d.ImageMaxMegapixels < 1 {
+		l.errf("HOME_DOCS_IMAGE_MAX_MEGAPIXELS must be >= 1 (got %d) — it bounds an in-process decode, "+
+			"so an unbounded value is an OOM of the whole backend", d.ImageMaxMegapixels)
+	}
+
+	d.PublicBaseURL = strings.TrimRight(l.strDefault("HOME_DOCS_PUBLIC_BASE_URL", ""), "/")
+	return d
+}
 
 // loader accumulates validation errors while reading typed values.
 type loader struct {
@@ -289,6 +534,28 @@ func (l *loader) boolDefault(key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+// durationDefault parses a Go duration ("24h", "30m", "0"). A cron-looking value
+// is rejected with an explicit message: HOME_DOCS_MIRROR_CRON keeps its PRD name
+// but takes a duration, so a copy-pasted "0 * * * *" must fail loudly rather than
+// silently fall back to the default schedule.
+func (l *loader) durationDefault(key string, def time.Duration) time.Duration {
+	v, ok := l.getenv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def
+	}
+	raw := strings.TrimSpace(v)
+	if strings.ContainsAny(raw, " *?/,") {
+		l.errf("%s must be a Go duration such as \"24h\" or \"0\" to disable, not a cron expression (got %q)", key, v)
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		l.errf("%s must be a Go duration such as \"24h\" (got %q)", key, v)
+		return def
+	}
+	return d
 }
 
 // csvDefault splits a comma-separated value, trimming whitespace and dropping

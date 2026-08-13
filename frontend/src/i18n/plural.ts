@@ -27,4 +27,6 @@ export const PLURAL = {
   days: ['den', 'dny', 'dní'],
   notes: ['poznámka', 'poznámky', 'poznámek'],
   folders: ['složka', 'složky', 'složek'],
+  documents: ['dokument', 'dokumenty', 'dokumentů'],
+  files: ['soubor', 'soubory', 'souborů'],
 } satisfies Record<string, PluralForms>

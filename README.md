@@ -139,9 +139,56 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `LITESTREAM_ACCESS_KEY_ID` | R2 access key | *(secret)* |
 | `LITESTREAM_SECRET_ACCESS_KEY` | R2 secret key | *(secret)* |
 
+**Documents (v4) — the `documents` module stores file BYTES in its own R2 bucket**
+(SQLite keeps only metadata). This bucket is **separate from the Litestream DB
+replica** and, because Litestream cannot back up blobs, it has its own backup story:
+a **daily mirror** into a second bucket (in-process, see below). R2 has **no object
+versioning**, so that mirror bucket is the only second copy of the bytes — treat
+`HOME_DOCS_R2_BACKUP_BUCKET` as required for real deployments, not optional.
+
+| Var | Purpose | Value |
+| --- | --- | --- |
+| `HOME_DOCS_R2_BUCKET` | primary documents bucket. **Required when `HOME_ENV=production`** — the server refuses to start without it, because the dev filesystem fallback has no backup coverage | *(bucket name)* |
+| `HOME_DOCS_R2_ENDPOINT` | its S3 endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
+| `HOME_DOCS_R2_ACCESS_KEY_ID` / `HOME_DOCS_R2_SECRET_ACCESS_KEY` | its credentials | *(secret)* |
+| `HOME_DOCS_R2_BACKUP_BUCKET` | mirror target. Empty = mirroring off (reconciliation still runs) | *(bucket name)* |
+| `HOME_DOCS_R2_BACKUP_ENDPOINT` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | only if the backup lives in a **different** account; otherwise they default to the primary's | *(unset)* |
+| `HOME_DOCS_MIRROR_CRON` | mirror + reconciliation interval as a **Go duration** (not a cron expression); `0` disables | `24h` (daily) |
+| `HOME_DOCS_ORPHAN_GRACE_HOURS` | how old an object with no row must be before reconciliation deletes it (an upload writes the object before the row, so young orphans are normal) | `24` |
+| `HOME_DOCS_ORPHAN_MAX_PERCENT` | blast-radius guard: the most of the bucket one reconciliation pass may delete before it refuses and logs instead. Reconciliation reads "orphan" as "no row claims it", so a database that came up empty or half-restored would otherwise read as *everything is orphaned*. `100` disables the guard | `25` |
+| `HOME_DOCS_MAX_UPLOAD_MB` | per-file cap; over it the upload is refused `413` | `50` |
+| `HOME_DOCS_ALLOWED_MIME` | optional allowlist checked against the **server-sniffed** type (`image/*` wildcards allowed). Empty = allow all, still sniffed | *(unset)* |
+| `HOME_DOCS_GOTENBERG_URL` | the Office→PDF converter service. Empty = Office files stay download-only | `http://gotenberg:3000` |
+| `HOME_DOCS_PREVIEW_ENABLED` | master switch for the preview/thumbnail worker | `true` |
+| `HOME_DOCS_PREVIEW_TIMEOUT_SEC` | per-job bound; keep it **below** Gotenberg's `--api-timeout` | `60` |
+| `HOME_DOCS_PREVIEW_WORKERS` | in-process worker pool size | `2` |
+| `HOME_DOCS_PDFTOPPM_PATH` / `HOME_DOCS_CWEBP_PATH` | thumbnail helpers (shipped in the image); a missing binary just skips thumbnails | `pdftoppm` / `cwebp` |
+| `HOME_DOCS_THUMB_MAX_PX` | thumbnail longest edge | `480` |
+| `HOME_DOCS_IMAGE_MAX_MEGAPIXELS` | largest image the worker will DECODE for a thumbnail. `HOME_DOCS_MAX_UPLOAD_MB` bounds the file, not the pixels — compression ratio is unlimited, and the decode happens in the app process, so an unbounded one is an OOM of the whole backend rather than a failed thumbnail | `50` |
+| `HOME_DOCS_PUBLIC_BASE_URL` | absolute base for the permanent `/d/{id}` links. Empty = relative to the app origin | *(unset)* |
+| `HOME_DOCS_LOCAL_DIR` | **development only** filesystem store, used when no bucket is set | `/data/blobs` (image default) |
+
 > **Do not** set `HOME_DEV_AUTH_BYPASS` in production — with `HOME_ENV=production`
 > the server refuses to start if it is enabled (fake auth in prod is a security
 > hole). `/readyz` also reports `insecure_auth` whenever the bypass is active.
+
+### Documents converter (`home-gotenberg`, v4)
+
+Office→PDF previews run in a **Gotenberg** sidecar rather than a LibreOffice binary
+inside the backend image — a deliberate deviation from `handoff/v4/HANDOFF-6-documents.md`
+§16, agreed with Karel: it keeps the backend image at ~100 MB instead of ~1 GB and
+isolates the converter from the app process.
+
+| Setting             | Value                        |
+| ------------------- | ---------------------------- |
+| Image               | `gotenberg/gotenberg:8`      |
+| Command             | `gotenberg --api-timeout=90s --libreoffice-restart-after=10` |
+| Port                | `3000` — **internal only, no public domain** |
+| Persistent volume   | none (stateless)             |
+
+The backend reaches it at `HOME_DOCS_GOTENBERG_URL`. If it is down or unset, Office
+uploads succeed and become **download-only** (`preview_status="failed"`/`"none"`) —
+a preview is never allowed to fail an upload.
 
 ### Frontend app (`home-frontend`)
 
@@ -173,9 +220,17 @@ Static-only image — **no runtime env vars**.
    service signs with** — home verifies the token and reads roles from it; a
    mismatch makes every login fail closed with empty roles (no admin, no write).
    Create the household member accounts in auth (no self-signup on home).
-2. **R2** — create the bucket and an access key; set the four `LITESTREAM_*`
-   vars above. Backups land under the `home/` prefix.
-3. **Verify the Litestream image tag** in `backend/Dockerfile`
+2. **R2 (database)** — create the bucket and an access key; set the four
+   `LITESTREAM_*` vars above. Backups land under the `home/` prefix.
+3. **R2 (documents, v4)** — create **two** more buckets: a primary for document
+   bytes and a backup for the mirror. (R2 has **no object versioning** — the mirror
+   bucket is the only delete safety net, so configure it rather than skipping it.)
+   Put the credentials in `HOME_DOCS_R2_*` and the mirror target in
+   `HOME_DOCS_R2_BACKUP_BUCKET`. Neither bucket may be public — content is served
+   only through the session-gated backend.
+4. **Deploy the Gotenberg service** (above) and point `HOME_DOCS_GOTENBERG_URL` at
+   it; keep it internal.
+5. **Verify the Litestream image tag** in `backend/Dockerfile`
    (`litestream/litestream:0.3.13`) resolves and its config format matches; bump
    if needed.
 
@@ -197,5 +252,14 @@ Once deployed and some data exists:
 3. Redeploy; the prior data returns and the default board is **not** re-seeded
    (seed runs only when `boards` is empty).
 4. `/healthz` and `/readyz` are green.
+
+**Documents (v4) also restore**, but by a different route: the metadata rides
+Litestream like every other table, and the file bytes are simply still in R2. So
+after the restore, previously-uploaded documents open normally, and previews are
+**not** re-derived — `preview_key`/`thumbnail_key` already point at surviving
+objects. Check the daily mirror line in the logs
+(`documents: blob mirror + reconciliation pass`): `dangling_rows` should be 0. A
+non-zero count means a row's object is missing and wants investigating; the pass
+never deletes a row on its own.
 
 When live, update `REGISTRY.md` (in Nextcloud) status to **live**.
