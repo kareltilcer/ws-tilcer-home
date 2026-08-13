@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   CalendarClock,
+  Files,
   LayoutDashboard,
   ListTodo,
   LogOut,
@@ -24,10 +25,11 @@ interface NavItem {
   to: string
   label: string
   icon: LucideIcon
+  desc?: string
+  adminOnly?: boolean
 }
 
-// The four daily, thumb-reachable destinations — always shown on the mobile tab
-// bar (D37: regular members keep exactly four tabs).
+// The four daily, thumb-reachable destinations — always shown on the mobile tab bar.
 const PRIMARY: NavItem[] = [
   { to: routes.nastenka, label: cs.nav.nastenka, icon: LayoutDashboard },
   { to: routes.ukoly, label: cs.nav.ukoly, icon: ListTodo },
@@ -35,9 +37,13 @@ const PRIMARY: NavItem[] = [
   { to: routes.poznamky, label: cs.nav.poznamky, icon: NotebookText },
 ]
 
-// Admin-only destination. On desktop it joins the side nav; on mobile it lives
-// behind the "Více" overflow so the daily four stay thumb-reachable (D37).
-const ADMIN: NavItem = { to: routes.log, label: cs.nav.log, icon: ScrollText }
+// Everything past the four daily tabs. v4 (D49): with Dokumenty a regular member
+// has FIVE destinations, so the mobile overflow sheet is no longer admin-only — it
+// holds Dokumenty for everyone and the Log for admins. Desktop lists all six.
+const OVERFLOW: NavItem[] = [
+  { to: routes.dokumenty, label: cs.nav.dokumenty, icon: Files, desc: cs.nav.dokumentyDesc },
+  { to: routes.log, label: cs.nav.log, icon: ScrollText, desc: cs.nav.logDesc, adminOnly: true },
+]
 
 export function AppShell() {
   const { theme, toggle } = useTheme()
@@ -46,7 +52,12 @@ export function AppShell() {
   const location = useLocation()
   useLiveSync()
 
-  const desktopItems = isAdmin ? [...PRIMARY, ADMIN] : PRIMARY
+  const overflowItems = OVERFLOW.filter((item) => !item.adminOnly || isAdmin)
+  const desktopItems = [...PRIMARY, ...overflowItems]
+  // The "Více" tab lights up when the open route lives behind it.
+  const overflowActive = overflowItems.some(
+    (item) => location.pathname === item.to || location.pathname.startsWith(item.to + '/'),
+  )
 
   return (
     <div className="min-h-full md:flex md:h-screen md:overflow-hidden">
@@ -61,7 +72,7 @@ export function AppShell() {
         </div>
         <nav className="flex flex-1 flex-col gap-1 px-3">
           {desktopItems.map((item) => (
-            <SideLink key={item.to} item={item} admin={item.to === routes.log} />
+            <SideLink key={item.to} item={item} admin={item.adminOnly} />
           ))}
         </nav>
         <div className="space-y-2 p-3">
@@ -102,12 +113,14 @@ export function AppShell() {
         </main>
       </div>
 
-      {/* Mobile bottom tab bar: four primary tabs + admin "Více" overflow (D37) */}
+      {/* Mobile bottom tab bar: the four daily tabs + the "Více" overflow. Since v4
+          every member has something behind "Více" (Dokumenty), so the tab is no
+          longer admin-only (D49). */}
       <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-s1 md:hidden">
         {PRIMARY.map((item) => (
           <TabLink key={item.to} item={item} />
         ))}
-        {isAdmin && (
+        {overflowItems.length > 0 && (
           <button
             type="button"
             onClick={() => setMoreOpen(true)}
@@ -115,7 +128,7 @@ export function AppShell() {
             aria-expanded={moreOpen}
             className={cn(
               'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[11px] font-semibold',
-              location.pathname === routes.log ? 'text-accent' : 'text-muted',
+              overflowActive ? 'text-accent' : 'text-muted',
             )}
           >
             <MoreHorizontal size={20} aria-hidden />
@@ -124,8 +137,8 @@ export function AppShell() {
         )}
       </nav>
 
-      {/* Admin overflow sheet (mobile) — the least-frequent Log destination. */}
-      {isAdmin && moreOpen && (
+      {/* Overflow sheet (mobile): Dokumenty for everyone, Log for admins. */}
+      {overflowItems.length > 0 && moreOpen && (
         <div className="fixed inset-0 z-40 md:hidden" role="presentation" onClick={() => setMoreOpen(false)}>
           <div className="absolute inset-0 bg-black/45" />
           <div
@@ -136,20 +149,41 @@ export function AppShell() {
           >
             <div className="mx-auto mb-3.5 h-1 w-10 rounded-full bg-border-strong" />
             <p className="mb-2.5 font-mono text-[10px] uppercase tracking-wide text-subtle">{cs.nav.moreHeading}</p>
-            <NavLink
-              to={routes.log}
-              onClick={() => setMoreOpen(false)}
-              className="flex h-[52px] items-center gap-3 rounded-xl border border-border bg-s2 px-3.5 text-fg"
-            >
-              <span className="grid h-[34px] w-[34px] flex-none place-items-center rounded-lg bg-s3 text-muted">
-                <ScrollText size={16} aria-hidden />
-              </span>
-              <span className="flex-1">
-                <span className="block text-[14.5px] font-bold">{cs.nav.log}</span>
-                <span className="block text-[12px] text-subtle">{cs.nav.logDesc}</span>
-              </span>
-              <span className="font-mono text-[9.5px] uppercase tracking-wide text-subtle">admin</span>
-            </NavLink>
+            <div className="space-y-2">
+              {overflowItems.map((item) => {
+                const Icon = item.icon
+                const active = location.pathname === item.to || location.pathname.startsWith(item.to + '/')
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    onClick={() => setMoreOpen(false)}
+                    className={cn(
+                      'flex min-h-[52px] items-center gap-3 rounded-xl border px-3.5 text-fg',
+                      active ? 'border-accent bg-accent-soft' : 'border-border bg-s2',
+                    )}
+                  >
+                    <span className="grid h-[34px] w-[34px] flex-none place-items-center rounded-lg bg-s3 text-muted">
+                      <Icon size={16} aria-hidden />
+                    </span>
+                    <span className="flex-1">
+                      <span className="block text-[14.5px] font-bold">{item.label}</span>
+                      {item.desc && <span className="block text-[12px] text-subtle">{item.desc}</span>}
+                    </span>
+                    {item.adminOnly && (
+                      <span className="font-mono text-[9.5px] uppercase tracking-wide text-subtle" aria-hidden>
+                        admin
+                      </span>
+                    )}
+                    {active && (
+                      <span className="text-accent" aria-hidden>
+                        ✓
+                      </span>
+                    )}
+                  </NavLink>
+                )
+              })}
+            </div>
             <p className="mt-3 text-center text-[11.5px] text-subtle text-pretty">{cs.nav.moreHint}</p>
           </div>
         </div>

@@ -23,12 +23,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/config"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -159,21 +161,62 @@ func run(logger *slog.Logger) error {
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)
 	notesSvc := notes.NewService(sqldb, sink, notify)
 
+	// documents (v4) is the first module with bytes outside SQLite: it needs an object
+	// store, an async preview worker, and — because Litestream cannot back up a blob
+	// bucket — its own mirror/reconciliation job (D45).
+	docsBlob, docsBackup, err := openDocumentStores(cfg, logger)
+	if err != nil {
+		return err
+	}
+	docsSvc := documents.NewService(sqldb, sink, notify, docsBlob, documents.Options{
+		MaxUploadBytes: int64(cfg.Docs.MaxUploadMB) << 20,
+		AllowedMIME:    cfg.Docs.AllowedMIME,
+		PreviewEnabled: cfg.Docs.PreviewEnabled,
+		PublicBaseURL:  cfg.Docs.PublicBaseURL,
+	}, logger)
+
+	previewWorker := documents.NewPreviewWorker(docsSvc.Store(), docsBlob, notify, documents.PreviewConfig{
+		Enabled:        cfg.Docs.PreviewEnabled,
+		GotenbergURL:   cfg.Docs.GotenbergURL,
+		Timeout:        cfg.Docs.PreviewTimeout,
+		Workers:        cfg.Docs.PreviewWorkers,
+		PdftoppmPath:   cfg.Docs.PdftoppmPath,
+		CwebpPath:      cfg.Docs.CwebpPath,
+		ThumbMaxPx:     cfg.Docs.ThumbMaxPx,
+		MaxImagePixels: cfg.Docs.ImageMaxMegapixels * 1_000_000,
+		Logger:         logger,
+	})
+	docsSvc.SetPreviewEnqueue(previewWorker.Enqueue)
+
 	loggingMod := logging.New(sqldb)
 	todoMod := todo.NewModule(todoSvc)
 	eventsMod := events.NewModule(eventsSvc, cfg.Timezone, cfg.DashboardLookbackDays)
 	notesMod := notes.NewModule(notesSvc)
+	docsMod := documents.NewModule(docsSvc)
 
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
-	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod}))
+	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod}))
 	if err != nil {
 		return err
 	}
 	dashMod := dashboard.NewModule(catalog, sqldb)
 
-	modules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, dashMod}
+	modules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, dashMod}
 	mountAPI := func(api chi.Router) { registry.MountAll(api, modules) }
+
+	// Background workers live for the process's lifetime and stop with this context,
+	// which is cancelled on the shutdown signal below.
+	bgCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+	previewWorker.Start(bgCtx)
+	documents.NewMirrorJob(docsSvc.Store(), docsBlob, documents.MirrorConfig{
+		Interval:       cfg.Docs.MirrorInterval,
+		OrphanGrace:    time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour,
+		MaxOrphanShare: float64(cfg.Docs.OrphanMaxPercent) / 100,
+		Backup:         docsBackup,
+		Logger:         logger,
+	}).Run(bgCtx)
 
 	// 6. HTTP server.
 	handler := httpx.NewRouter(httpx.Deps{
@@ -210,8 +253,55 @@ func run(logger *slog.Logger) error {
 		return err
 	case <-stop:
 		logger.Info("shutting down")
+		// Stop the background workers first so an in-flight preview conversion is
+		// cancelled rather than killed mid-write.
+		stopBackground()
+		previewWorker.Wait()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return srv.Shutdown(ctx)
 	}
+}
+
+// openDocumentStores builds the primary (and optional backup) object store for the
+// documents module. Production always uses R2 — config refuses to start otherwise —
+// while development falls back to a local directory so the app runs with no cloud
+// credentials at all.
+func openDocumentStores(cfg *config.Config, logger *slog.Logger) (primary, backup blobstore.BlobStore, err error) {
+	d := cfg.Docs
+	if d.UsesObjectStorage() {
+		s3, err := blobstore.NewS3(blobstore.S3Config{
+			Bucket:    d.R2Bucket,
+			Endpoint:  d.R2Endpoint,
+			AccessKey: d.R2AccessKeyID,
+			SecretKey: d.R2SecretAccessKey,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		primary = s3
+		logger.Info("documents: object storage ready", "bucket", d.R2Bucket, "endpoint", d.R2Endpoint)
+	} else {
+		fs, err := blobstore.NewFS(d.LocalDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		primary = fs
+		logger.Warn("documents: using the LOCAL FILESYSTEM store — no backup coverage; development only",
+			"dir", d.LocalDir)
+	}
+
+	if d.BackupBucket != "" {
+		b, err := blobstore.NewS3(blobstore.S3Config{
+			Bucket:    d.BackupBucket,
+			Endpoint:  d.BackupEndpoint,
+			AccessKey: d.BackupAccessKeyID,
+			SecretKey: d.BackupSecretAccessKey,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		backup = b
+	}
+	return primary, backup, nil
 }

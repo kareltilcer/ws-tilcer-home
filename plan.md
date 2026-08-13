@@ -56,6 +56,37 @@
 - [x] **Phase 3** — `todo` (Úkoly board) — backend ✅ + Úkoly frontend ✅ (open: within-column drag-reorder)
 - [x] **Phase 4** — `events` (Okno do budoucnosti) — backend ✅ + Okno frontend ✅ (form + month list + series-edit warning)
 - [x] **Phase 5** — `dashboard` (Nástěnka) — backend ✅ + Nástěnka frontend ✅ + hold gesture ✅ (Vitest-verified)
+- [x] **Phase 6** *(v3)* — `notes` (Poznámky) — backend ✅ + Poznámky frontend ✅ (tree, slug paths, Markdown editor, two-scope pins, `notes.pripnute` widget)
+- [x] **Phase 7** *(v4)* — `documents` (Dokumenty) — backend ✅ + Dokumenty frontend ✅ (see the phase section below)
+
+---
+
+## Phase 7 — `documents` (Dokumenty, v4) — **backend ✅ + frontend ✅**
+
+Built from `handoff/v4/HANDOFF-6-documents.md` against the delivered design bundle
+(`design/v4/Home.dc.html`, `design/v4/DocumentView.dc.html`). The first module with
+bytes outside SQLite.
+
+- [x] **`platform/blobstore`** (new infra, like `db`/`ws`) — `BlobStore` interface (Put/Get-with-range/Stat/Delete/List/Copy, streaming only); **S3/R2** implementation (aws-sdk-go-v2, path-style, region `auto`) and a **filesystem** implementation used by dev and every test, so `go test ./...` needs no network or Docker. One shared contract test table runs against both (S3 only when `HOME_TEST_S3_ENDPOINT` is set).
+- [x] **Config + platform additions** — the `HOME_DOCS_*` block with fail-fast validation (a half-configured bucket, or *any* filesystem store in production, aborts boot); `httpx` gains 413/415/416/502 constructors; `audit.ModuleDocuments`.
+- [x] **Migrations `07001_documents.sql`** — `document_folders`, `documents` (VACUUM-safe `seq` rowid + `id` TEXT UNIQUE), `document_pins`, `documents_fts` + triggers; `COALESCE` sibling-slug indexes, pin partial-unique indexes, a partial index for the pending-preview scan. Nothing seeded. (Runs after `notes`; the handoff's "before `dashboard`" is moot — `dashboard` is prefix 05 and owns an unrelated table.)
+- [x] **Store + service** — folders/documents CRUD, cross-table slug uniqueness in-tx, cycle guard **before** any write, move rewriting **one** row, soft/hard delete (hard purges R2 objects after commit), tree (3 bounded queries), keyset-paged list, FTS search, two-scope pinning, resolve. Every mutation audits in-tx **except personal pins** (D47).
+- [x] **Upload pipeline (FR-DOC1 ordering)** — stream through the cap into a temp file while hashing → **sniff** the MIME (extension refinement for OOXML/ODF, which sniff as ZIP) → allowlist → **`Put` to storage** → *then* row + `document.create` in one tx → enqueue preview after commit. Failure modes: 413 over-cap, 415 disallowed, 502 storage outage — **each with nothing written**.
+- [x] **Content endpoints** — `raw` (inline only for PDF/image/plain-text/Markdown, attachment for everything else incl. **HTML and SVG**, `nosniff`, `CSP: sandbox`, `ETag`=checksum, `immutable` cache, `Range`→206, `If-None-Match`→304, out-of-range→416), `download` (always attachment, RFC 5987 Czech filename), `preview` (native/derived-PDF, 409 pending-or-failed, 204 download-only), `thumbnail`.
+- [x] **Preview worker** — in-process pool, boot re-enqueue of `pending` (crash safety), idempotent, per-job temp dir; **Office→PDF via a Gotenberg sidecar** (not an in-image LibreOffice — see the deviations below), `pdftoppm`+`cwebp` thumbnails, `/ws` `document.preview_ready|preview_failed`. Every failure path degrades to download-only and never loses an upload.
+- [x] **`documents.pripnute` widget provider** — household ∪ personal, de-duplicated with household precedence, one bounded query. The live dashboard host picked it up with **no host edit**.
+- [x] **Blob backup (D45)** — daily in-process mirror (copy-if-absent into the backup bucket) + reconciliation that deletes aged **orphaned objects** and only ever *logs* **dangling rows**; counts on one structured log line.
+- [x] **Frontend** — `/dokumenty/*` slug-path navigation + the permanent `/d/{id}` route; desktop tree + pane, mobile drill-down; **list default with a grid toggle**; multi-file upload queue with per-file progress, client-side size pre-check, and drag-and-drop; standalone `DocumentView` (sandboxed-iframe PDF, `<img>`, Markdown/text) reused **verbatim** by the Nástěnka overlay; two-scope pin menu; move/rename/delete dialogs with the soft-vs-hard distinction; `reader` view-only; **D49 nav** — the mobile "Více" sheet is now shown to *everyone* (Dokumenty for all, Log for admins), desktop lists all six.
+- [x] **Tests** — 41 Go tests in `internal/modules/documents` (upload ordering incl. an injected storage outage, immutability, permanent-URL stability across rename+move, isolation headers, preview worker against a fake Gotenberg, slug/resolver/cycle guard, folder cascade + hard purge, pinning matrix, widget de-dup, FTS metadata-only, audit attribution, mirror/reconciliation) plus a **statement-counting driver** proving the tree (3 statements) and the widget (2) do not scale with the data.
+
+**Deviations from `HANDOFF-6` §13/§16, agreed with Karel and documented in `README.md`:**
+1. Office→PDF runs in a **Gotenberg sidecar**, so `HOME_DOCS_GOTENBERG_URL` replaces `HOME_DOCS_SOFFICE_PATH` and the backend image stays ~100 MB (poppler-utils + libwebp-tools only).
+2. The blob mirror runs **daily**, and `HOME_DOCS_MIRROR_CRON` is a **Go duration** (`24h`), not a cron expression — a cron-looking value is rejected at boot.
+3. `/preview` serves PDFs with `CSP: sandbox allow-scripts` (no `allow-same-origin`) because a bare `sandbox` blocks the browser's PDF viewer; the frame stays origin-opaque, and the viewer offers an "open in a new tab" fallback.
+
+**Verified by a real boot** (dev bypass, filesystem store): folder + PDF/Markdown/HTML uploads, inline-vs-attachment headers, ETag→304, `Range`→206, preview CSP, slug resolve, FTS matching metadata but **not** file contents, household pin, `documents.pripnute` through `/api/dashboard/widgets/…`, documents events in `/api/logs` + the entity timeline, and a hard delete removing the stored bytes.
+
+**Remaining (config, not code):** create the two documents R2 buckets + enable versioning on the primary, set `HOME_DOCS_R2_*`, deploy the Gotenberg service, and browser-verify the sandboxed PDF frame at 375/1440 in both themes.
 
 ---
 

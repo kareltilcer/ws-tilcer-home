@@ -1,4 +1,4 @@
-import { apiFetch } from './client'
+import { apiFetch, apiUpload } from './client'
 import type {
   AuditEventDetail,
   AuditEventDetailPage,
@@ -12,6 +12,12 @@ import type {
   Column,
   ColumnKind,
   Dashboard,
+  DocFolder,
+  DocFolderDetail,
+  DocResolveResult,
+  DocumentDetail,
+  DocumentPage,
+  DocumentsTree,
   EventItem,
   EventLink,
   EventSeriesPage,
@@ -178,6 +184,72 @@ export const deleteFolder = (id: string, opts: { cascade?: boolean; hard?: boole
   apiFetch<void>(`/api/notes/folders/${encodeURIComponent(id)}${qs(opts)}`, { method: 'DELETE' })
 export const moveFolder = (id: string, body: { parent_id?: string | null; position: string }) =>
   apiFetch<Folder>(`/api/notes/folders/${encodeURIComponent(id)}/move`, { method: 'POST', body })
+
+// ---- Documents (Dokumenty, v4) ----
+//
+// Two things to know when calling these:
+//   1. There is no "replace the file" call, by design — the bytes are immutable, so
+//      a changed file is a NEW document (uploadDocument again).
+//   2. The permanent link to a document is the id-based `urls` block on the detail
+//      response, NOT the slug path. Copy `urls.permalink` ("/d/{id}"), which
+//      survives renames and moves; the slug path does not.
+export const getDocumentsTree = (includeArchived = false) =>
+  apiFetch<DocumentsTree>(`/api/documents/tree${qs({ include_archived: includeArchived })}`)
+export const resolveDocumentPath = (path: string) =>
+  apiFetch<DocResolveResult>(`/api/documents/resolve${qs({ path })}`)
+export const searchDocuments = (q: string) => apiFetch<DocumentPage>(`/api/documents${qs({ q })}`)
+export const listDocuments = (params: { folder_id?: string; include_archived?: boolean; limit?: number; cursor?: string } = {}) =>
+  apiFetch<DocumentPage>(`/api/documents${qs(params)}`)
+export const getDocument = (id: string) => apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`)
+
+/** uploadDocument streams one file to the documents bucket.
+ *
+ *  Field order is significant: the backend reads the multipart parts in order and
+ *  applies the text fields it has seen by the time the file part starts (it never
+ *  buffers a 50 MB body). So the metadata MUST be appended before the file. */
+export const uploadDocument = (
+  file: File,
+  meta: { folder_id?: string | null; title?: string; description?: string } = {},
+  onProgress?: (fraction: number) => void,
+) => {
+  const form = new FormData()
+  if (meta.folder_id) form.append('folder_id', meta.folder_id)
+  if (meta.title) form.append('title', meta.title)
+  if (meta.description) form.append('description', meta.description)
+  form.append('file', file, file.name) // last, on purpose — see above
+  return apiUpload<DocumentDetail>('/api/documents', form, { onProgress })
+}
+
+// PATCH is metadata only: title (re-derives the slug), description, archived.
+export const updateDocument = (
+  id: string,
+  body: Partial<{ title: string; description: string | null; archived: boolean }>,
+  via?: string,
+) => apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}${qs({ via })}`, { method: 'PATCH', body })
+// hard=true purges the row AND the stored file; it is admin-only server-side.
+export const deleteDocument = (id: string, hard = false) =>
+  apiFetch<void>(`/api/documents/${encodeURIComponent(id)}${qs({ hard })}`, { method: 'DELETE' })
+export const moveDocument = (id: string, body: { folder_id?: string | null; position: string }, via?: string) =>
+  apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/move${qs({ via })}`, { method: 'POST', body })
+export const pinDocument = (id: string, scope: PinScope, via?: string) =>
+  apiFetch<PinState>(`/api/documents/${encodeURIComponent(id)}/pin${qs({ via })}`, { method: 'POST', body: { scope } })
+export const unpinDocument = (id: string, scope: PinScope, via?: string) =>
+  apiFetch<PinState>(`/api/documents/${encodeURIComponent(id)}/pin${qs({ scope, via })}`, { method: 'DELETE' })
+
+export const createDocumentFolder = (body: { name: string; parent_id?: string | null }) =>
+  apiFetch<DocFolderDetail>('/api/documents/folders', { method: 'POST', body })
+export const updateDocumentFolder = (id: string, body: Partial<{ name: string; archived: boolean }>) =>
+  apiFetch<DocFolderDetail>(`/api/documents/folders/${encodeURIComponent(id)}`, { method: 'PATCH', body })
+export const deleteDocumentFolder = (id: string, opts: { cascade?: boolean; hard?: boolean } = {}) =>
+  apiFetch<void>(`/api/documents/folders/${encodeURIComponent(id)}${qs(opts)}`, { method: 'DELETE' })
+export const moveDocumentFolder = (id: string, body: { parent_id?: string | null; position: string }) =>
+  apiFetch<DocFolder>(`/api/documents/folders/${encodeURIComponent(id)}/move`, { method: 'POST', body })
+
+/** documentContentUrl builds a content URL for an <img>/<iframe>/anchor target.
+ *  These are permanent and household-only: they carry the session cookie and are
+ *  never presigned storage links. */
+export const documentContentUrl = (id: string, kind: 'raw' | 'download' | 'preview' | 'thumbnail') =>
+  `/api/documents/${encodeURIComponent(id)}/${kind}`
 
 // ---- Logs (admin) ----
 export interface LogFilters {

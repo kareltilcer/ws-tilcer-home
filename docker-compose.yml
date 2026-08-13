@@ -40,10 +40,45 @@ services:
       HOME_AUTH_JWT_ISSUER: ${HOME_AUTH_JWT_ISSUER:-}
       LITESTREAM_ENABLED: ${LITESTREAM_ENABLED:-false}
       HOME_DB_PATH: ${HOME_DB_PATH:-/data/home.db}
+      # ---- documents (v4) ----
+      # The harness stores document bytes on the same volume as the database
+      # (HOME_DOCS_LOCAL_DIR, baked into the image). A real deploy MUST set
+      # HOME_DOCS_R2_BUCKET + endpoint + keys instead: config refuses to start in
+      # production without them, because the local store has no backup coverage.
+      HOME_DOCS_R2_BUCKET: ${HOME_DOCS_R2_BUCKET:-}
+      HOME_DOCS_R2_ENDPOINT: ${HOME_DOCS_R2_ENDPOINT:-}
+      HOME_DOCS_R2_ACCESS_KEY_ID: ${HOME_DOCS_R2_ACCESS_KEY_ID:-}
+      HOME_DOCS_R2_SECRET_ACCESS_KEY: ${HOME_DOCS_R2_SECRET_ACCESS_KEY:-}
+      # Mirror target for the daily blob backup (D45) — Litestream cannot cover a
+      # blob bucket. Empty disables mirroring; the reconciliation pass still runs.
+      HOME_DOCS_R2_BACKUP_BUCKET: ${HOME_DOCS_R2_BACKUP_BUCKET:-}
+      # A Go duration, not a cron expression. Default 24h (daily).
+      HOME_DOCS_MIRROR_CRON: ${HOME_DOCS_MIRROR_CRON:-24h}
+      HOME_DOCS_MAX_UPLOAD_MB: ${HOME_DOCS_MAX_UPLOAD_MB:-50}
+      # Office→PDF previews run in the gotenberg sidecar below. Unset it and Office
+      # files simply stay download-only — nothing else breaks.
+      HOME_DOCS_GOTENBERG_URL: ${HOME_DOCS_GOTENBERG_URL:-http://gotenberg:3000}
+      HOME_DOCS_PREVIEW_ENABLED: ${HOME_DOCS_PREVIEW_ENABLED:-true}
     volumes:
       - home-data:/data
     ports:
       - "7999:7999"
+    depends_on:
+      - gotenberg
+    restart: unless-stopped
+
+  # Headless LibreOffice as a service: the documents preview worker POSTs an Office
+  # file to /forms/libreoffice/convert and gets a PDF back. Internal only — it is
+  # never routed publicly, and it holds no state.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: tilcer-home-gotenberg
+    # --api-timeout must exceed HOME_DOCS_PREVIEW_TIMEOUT_SEC (default 60s) so the
+    # app's own timeout is the one that fires.
+    command:
+      - gotenberg
+      - --api-timeout=90s
+      - --libreoffice-restart-after=10
     restart: unless-stopped
 
   frontend:
@@ -66,5 +101,25 @@ services:
       - backend
     restart: unless-stopped
 
+  # MinIO stands in for R2 so the real S3 code path can be exercised locally
+  # (the blobstore contract test runs against it via HOME_TEST_S3_ENDPOINT, and the
+  # backend can be pointed at it with HOME_DOCS_R2_*). Off by default:
+  #   docker compose --profile s3 up
+  minio:
+    image: minio/minio:latest
+    container_name: tilcer-home-minio
+    profiles: ["s3"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
 volumes:
   home-data:
+  minio-data:

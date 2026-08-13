@@ -11,6 +11,8 @@ import { NastenkaPage } from '@/routes/nastenka/NastenkaPage'
 import { UkolyPage } from '@/routes/ukoly/UkolyPage'
 import { OknoPage } from '@/routes/okno/OknoPage'
 import { PoznamkyPage } from '@/routes/poznamky/PoznamkyPage'
+import { DokumentyPage } from '@/routes/dokumenty/DokumentyPage'
+import { DocumentPermalinkPage } from '@/routes/dokumenty/DocumentPermalinkPage'
 import { LogPage } from '@/routes/log/LogPage'
 
 // RequireAdmin guards the Log route at the route level (not just by hiding the
@@ -33,6 +35,10 @@ export default function App() {
                 <Route path={routes.okno} element={<OknoPage />} />
                 {/* Slug-path routes: /poznamky and /poznamky/<folder>/…/<slug> */}
                 <Route path={`${routes.poznamky}/*`} element={<PoznamkyPage />} />
+                {/* Dokumenty: the same slug-path navigation, plus /d/{id} — the
+                    PERMANENT id-based link, which survives renames and moves (D42). */}
+                <Route path={`${routes.dokumenty}/*`} element={<DokumentyPage />} />
+                <Route path="/d/:id" element={<DocumentPermalinkPage />} />
                 <Route
                   path={routes.log}
                   element={

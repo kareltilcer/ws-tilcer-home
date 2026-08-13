@@ -13,6 +13,7 @@ import { Spinner } from '@/components/ui/ui'
 import { CardDetail } from '@/components/common/CardDetail'
 import { EventDetail } from '@/components/common/EventDetail'
 import { NoteOverlay } from '@/routes/poznamky/NoteOverlay'
+import { DocumentOverlay } from '@/routes/dokumenty/DocumentOverlay'
 import { widgetRegistry } from '@/platform/widgets/registry'
 
 const catalogKey = ['dashboard', 'catalog'] as const
@@ -30,6 +31,7 @@ export function NastenkaPage() {
   const [card, setCard] = useState<{ cardId: string; boardId: string } | null>(null)
   const [reminder, setReminder] = useState<{ eventId: string; occurrenceOn: string } | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [documentId, setDocumentId] = useState<string | null>(null)
 
   const saveLayout = useMutation({
     mutationFn: api.saveDashboardLayout,
@@ -134,6 +136,7 @@ export function NastenkaPage() {
                     onOpenCard={(cardId, boardId) => setCard({ cardId, boardId })}
                     onOpenReminder={(eventId, occurrenceOn) => setReminder({ eventId, occurrenceOn })}
                     onOpenNote={(noteId) => setNote(noteId)}
+                    onOpenDocument={(id) => setDocumentId(id)}
                     onCompleteTask={(t) => completeTask.mutate(t)}
                     onCompleteReminder={(r) => completeReminder.mutate(r)}
                   />
@@ -169,6 +172,9 @@ export function NastenkaPage() {
         />
       )}
       {note && <NoteOverlay noteId={note} readOnly={!canWrite} onClose={() => setNote(null)} />}
+      {documentId && (
+        <DocumentOverlay documentId={documentId} readOnly={!canWrite} onClose={() => setDocumentId(null)} />
+      )}
     </div>
   )
 }

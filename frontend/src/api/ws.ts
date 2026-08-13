@@ -114,10 +114,19 @@ const notesModule: LiveModule = {
   toast: { id: 'live-notes', message: cs.live.notesUpdated },
 }
 
+const documentsModule: LiveModule = {
+  route: routes.dokumenty,
+  keys: [['documents']],
+  toast: { id: 'live-documents', message: cs.live.documentsUpdated },
+}
+
 // classify maps a change type to the module it belongs to, or null for types no
 // screen tracks (which then invalidate only the dashboard and never toast).
 function classify(type: string): LiveModule | null {
   if (type.startsWith('event')) return eventsModule
+  // Checked before the note/folder prefixes: "document_folder.changed" belongs to
+  // documents, not to Poznámky's folders.
+  if (type.startsWith('document')) return documentsModule
   if (type.startsWith('note') || type.startsWith('folder')) return notesModule
   if (
     type.startsWith('card') ||

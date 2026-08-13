@@ -1,15 +1,18 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.4.0
+  version: 0.5.0
   description: >-
-    API for the `home` household-management service (v3). Companion to PRD.md.
-    Five modules: `logging` (a spine; read/browse endpoints only — writes are
+    API for the `home` household-management service (v4). Companion to PRD.md.
+    Six modules: `logging` (a spine; read/browse endpoints only — writes are
     in-process, not HTTP), `todo` (Trello-style board), `events` (Okno do
     budoucnosti — all-day, optionally recurring events with reminders), `notes`
     (Poznámky — Markdown notes in a folder tree, slug-path URLs, a pinned-notes
-    widget; new in v3), and `dashboard` (Nástěnka — a per-user WIDGET HOST).
-    Identifiers are English; the UI is Czech.
+    widget; new in v3), `documents` (Dokumenty — file storage in a folder tree:
+    upload/preview/download, blobs in a dedicated Cloudflare R2 bucket with metadata
+    in SQLite, a PERMANENT id-based household-only content URL, immutable upload-once
+    bytes, a pinned-documents widget; new in v4), and `dashboard` (Nástěnka — a
+    per-user WIDGET HOST). Identifiers are English; the UI is Czech.
 
     AUTH IS MODE B (v2): home hosts its own login and owns its own SESSION. The
     browser carries NO bearer token — every /api endpoint is authorized by the
@@ -47,6 +50,8 @@ tags:
     description: Okno do budoucnosti — all-day, optionally recurring future events
   - name: notes
     description: Poznámky — Markdown notes in a folder tree (slug-path URLs, pinning); new in v3
+  - name: documents
+    description: Dokumenty — file storage in a folder tree (R2 blobs, permanent id-based household-only URLs, preview/download, pinning); new in v4
   - name: dashboard
     description: Nástěnka — per-user widget host (layout + module-provided widget data)
   - name: logs
@@ -877,8 +882,9 @@ paths:
       tags: [notes]
       summary: List/search notes (FTS5 when q is present)
       description: >-
-        Without `q`, lists notes (newest-updated first, paged). With `q`, runs an
-        FTS5 free-text search over note title + body. Reads only.
+        Without `q`, lists the folder's notes (newest-updated first) as one full
+        slice. With `q`, runs an FTS5 free-text search over note title + body,
+        capped at 100 hits. Neither is cursor-paged. Reads only.
       parameters:
         - name: q
           in: query
@@ -1196,6 +1202,501 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  # ---------------- Documents (Dokumenty) ----------------
+  /api/documents:
+    get:
+      tags: [documents]
+      summary: List/search documents (FTS5 when q is present)
+      description: >-
+        Without `q`, lists documents (newest-updated first, paged). With `q`, runs an
+        FTS5 free-text search over title + original filename + description (NOT file
+        contents — PRD D46). Reads only.
+      parameters:
+        - name: q
+          in: query
+          description: Free-text search over title + original_filename + description (FTS5).
+          schema: { type: string }
+        - name: folder_id
+          in: query
+          description: Restrict to a folder (omit for all; use `root` for unfiled).
+          schema: { type: string }
+        - name: include_archived
+          in: query
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    post:
+      tags: [documents]
+      summary: Upload a document (multipart)
+      description: >-
+        Streams the file to the documents R2 bucket, sniffs the MIME server-side,
+        checksums (SHA-256), and records the metadata row + audit in one transaction
+        (only after the object is durable). Bytes are IMMUTABLE — there is no replace/
+        overwrite path (PRD D41); a changed file is a NEW document. Preview generation
+        is async (the document returns with preview_status="pending"). Requires the
+        CSRF header. editor/admin.
+
+
+        Parts are read in order, so the metadata fields must precede the `file` part;
+        a field arriving after it is ignored. Each text field is capped at 8 KiB and
+        at most 16 parts are read before the `file` part (422 beyond either).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/DocumentUpload" }
+            encoding:
+              file: { contentType: application/octet-stream }
+      responses:
+        "201":
+          description: Created (preview pending)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413":
+          description: File exceeds HOME_DOCS_MAX_UPLOAD_MB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: Disallowed/blocked content type (when an allowlist is configured)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "502":
+          description: R2 unreachable (nothing committed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/documents/tree:
+    get:
+      tags: [documents]
+      summary: Folder tree with lightweight document nodes (navigation read model)
+      description: >-
+        The whole folder tree with each folder's child folders and documents as
+        lightweight nodes for the sidebar/grid. One bounded query set (no N+1).
+        Its own tree, isolated from Poznámky (PRD D40).
+      parameters:
+        - name: include_archived
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentsTree" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/documents/resolve:
+    get:
+      tags: [documents]
+      summary: Resolve a slug path to a document or folder id
+      description: >-
+        Maps a human-readable slug path (e.g. `smlouvy/najem-2026`) to the item it
+        addresses. Renamed/moved items are NOT redirected — a stale path returns 404
+        (PRD D32). The slug path is NOT the permanent URL; the permanent content URL is
+        id-based (/api/documents/{id}/raw, PRD D42). Session-required (household-only, D33).
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Slug path without the `/dokumenty/` prefix, e.g. `smlouvy/najem-2026`.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocResolveResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/documents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [documents]
+      summary: Get a document (metadata, breadcrumb, preview info, permanent URLs, pin state)
+      description: >-
+        A soft-deleted (archived) document is 404 here, as it is on every other read
+        path and on the content endpoints below — the SPA renders that 404 as "this
+        document is gone". Restoring it (PATCH `archived=false`) brings it all back.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [documents]
+      summary: Update a document's METADATA only (title, description, archived)
+      description: >-
+        Never changes the file bytes (immutable, PRD D41). Renaming re-derives the slug
+        (the slug-path URL changes; the id-based permanent URL does not). Requires CSRF.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [documents]
+      summary: Delete a document (soft by default)
+      description: >-
+        Soft-delete (archive) by default; `hard=true` purges the row AND its R2 objects
+        (original + preview + thumbnail) and is admin-gated (PRD D50). The UI confirms first.
+      parameters:
+        - name: hard
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/documents/{id}/move:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [documents]
+      summary: Move a document to a folder and/or position
+      description: >-
+        Reparenting may re-derive the slug and changes the slug-path URL (the id-based
+        permanent URL is unaffected, PRD D42). Never touches R2 (id-based keys).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentMoveRequest" }
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/documents/{id}/pin:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [documents]
+      summary: Pin a document (scope household | personal)
+      description: >-
+        `household` ("pro všechny") is a shared, audited mutation requiring
+        editor/admin — one per document. `personal` ("jen pro mě") is a per-user view
+        preference any member (incl. reader) may set and is NOT audited — one per
+        document per user (PRD D47). Idempotent. Requires the CSRF header.
+      parameters:
+        - $ref: "#/components/parameters/Via"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PinRequest" }
+      responses:
+        "200":
+          description: The caller's pin state for the document after the (idempotent) pin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PinState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Non-editor setting a household pin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [documents]
+      summary: Unpin a document in a scope
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema: { type: string, enum: [household, personal] }
+        - $ref: "#/components/parameters/Via"
+      responses:
+        "200":
+          description: The caller's pin state for the document after the (idempotent) unpin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PinState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/documents/{id}/raw:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [documents]
+      summary: Stream the original bytes (the permanent, household-only content URL)
+      description: >-
+        Streams the original from R2 through the backend (R2 stays private). Inline
+        Content-Disposition for safe types, else attachment. Sets ETag=checksum and
+        `Cache-Control: private, immutable, max-age=31536000` (bytes never change, D41),
+        `X-Content-Type-Options: nosniff`, and a sandboxed CSP (D48). Supports HTTP Range.
+        Stable for the document's life (PRD D42). Session-required. A soft-deleted
+        (archived) document is 404 on all four content endpoints: the objects survive
+        (the delete is reversible) but a link shared before the delete stops serving it.
+      parameters:
+        - name: Range
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: The file
+          headers:
+            ETag: { schema: { type: string }, description: The document's SHA-256 checksum. }
+            Cache-Control: { schema: { type: string } }
+            Accept-Ranges: { schema: { type: string }, description: "bytes" }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "206": { description: Partial content (Range request) }
+        "304": { description: Not modified (ETag match) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    head:
+      tags: [documents]
+      summary: Headers only (size, type, ETag) without transferring the file
+      description: Identical headers and status codes to GET, with no response body.
+      responses:
+        "200": { description: Headers only }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/documents/{id}/download:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [documents]
+      summary: Download the original bytes (always attachment)
+      description: 'Same bytes as /raw but always `Content-Disposition: attachment`.'
+      responses:
+        "200":
+          description: The file (attachment)
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    head:
+      tags: [documents]
+      summary: Headers only (size, type, ETag) without transferring the file
+      description: Identical headers and status codes to GET, with no response body.
+      responses:
+        "200": { description: Headers only }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/documents/{id}/preview:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [documents]
+      summary: Stream the best previewable representation
+      description: >-
+        The original for natively-previewable types (preview_kind="native": PDF, image,
+        text), else the derived preview PDF (preview_kind="pdf"). 409 while the preview is
+        pending or if it failed; 204 if the type is download-only (preview_kind="none").
+      responses:
+        "200":
+          description: The previewable bytes (image, text, or application/pdf)
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "204": { description: No preview (download-only type) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Preview not ready (pending) or failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    head:
+      tags: [documents]
+      summary: Headers only (size, type, ETag) without transferring the preview
+      description: Identical headers and status codes to GET, with no response body.
+      responses:
+        "200": { description: Headers only }
+        "204": { description: No preview (download-only type) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Preview not ready (pending) or failed }
+  /api/documents/{id}/thumbnail:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [documents]
+      summary: Stream a small thumbnail image
+      description: A scaled thumbnail (image/webp) for the grid/list/widget, when generated.
+      responses:
+        "200":
+          description: The thumbnail
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No thumbnail generated }
+    head:
+      tags: [documents]
+      summary: Headers only (size, type, ETag) without transferring the thumbnail
+      description: Identical headers and status codes to GET, with no response body.
+      responses:
+        "200": { description: Headers only }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: No thumbnail generated }
+  /api/documents/folders:
+    post:
+      tags: [documents]
+      summary: Create a document folder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocFolderCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFolder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/documents/folders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [documents]
+      summary: Get a document folder (breadcrumb path + children)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFolderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [documents]
+      summary: Update a document folder (rename → new slug, archive)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocFolderUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFolder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [documents]
+      summary: Delete a document folder (soft by default)
+      description: >-
+        A folder holding LIVE children requires `cascade=true` (else 409 with the
+        child count) — including when `hard=true`, which is the irreversible path.
+        `hard=true` is admin-gated and purges every descendant document's R2 objects
+        (PRD D50). A hard delete of a LIVE folder is additionally REFUSED (409)
+        whenever the subtree holds already-archived rows at any depth: those never
+        appear in the tree the caller confirmed against, so `cascade=true` cannot be
+        consent for purging them and their files. Delete such rows individually first.
+        An ARCHIVED folder is exempt from that guard — purging a soft-deleted folder
+        is precisely what a hard delete on one means, and the soft delete archived its
+        whole subtree on the way, so the guard would otherwise refuse forever. There
+        `cascade=true` is instead required against the archived subtree itself (409
+        with its counts), since the live counts are zero by then.
+      parameters:
+        - name: cascade
+          in: query
+          description: Delete even if it holds live subfolders/documents (each child logged).
+          schema: { type: boolean, default: false }
+        - name: hard
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            Folder holds live children and cascade is not set (`error: conflict`,
+            returns the child count), or a hard delete of an archived folder came
+            without cascade (`error: conflict`, returns its archived subtree's counts),
+            or a hard delete of a live folder would purge archived rows in the subtree
+            (`error: archived_descendants`, returns how many). The last one has its own
+            code because cascade cannot resolve it: those rows must be deleted
+            individually first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/documents/folders/{id}/move:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [documents]
+      summary: Move a document folder to a new parent and/or position
+      description: >-
+        Reparenting changes the folder's (and its descendants') slug-path URLs. Moving a
+        folder into itself or a descendant is rejected (422, cycle guard).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocFolderMoveRequest" }
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFolder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Target parent is the folder itself or one of its descendants
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ---------------- Dashboard host (Nástěnka) ----------------
   /api/dashboard:
     get:
@@ -1410,7 +1911,7 @@ components:
       description: >-
         Cross-module attribution recorded into the audit event's `meta` (e.g.
         `via=dashboard` when the mutation originates from a Nástěnka overlay
-        edit rather than the Poznámky page). Free-form; omitted when absent.
+        edit rather than the Poznámky/Dokumenty page). Free-form; omitted when absent.
       schema: { type: string }
 
   responses:
@@ -1922,7 +2423,7 @@ components:
         slug_path: { type: string }
     PinState:
       type: object
-      description: The caller's view of a note's pin state.
+      description: The caller's view of a note's / document's pin state.
       required: [household, personal]
       properties:
         household: { type: boolean, description: "Pinned pro všechny (household)." }
@@ -1932,6 +2433,194 @@ components:
       required: [scope]
       properties:
         scope: { type: string, enum: [household, personal] }
+
+    # ----- Documents (Dokumenty) -----
+    DocFolder:
+      type: object
+      required: [id, name, slug, position, created_at]
+      description: A folder in the documents tree (own tree, isolated from Poznámky — PRD D40).
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, "null"], description: NULL = root. }
+        name: { type: string }
+        slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
+        position: { type: string, description: Lexorank order key among siblings. }
+        archived: { type: boolean, default: false }
+        created_by: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DocFolderCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+        parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
+    DocFolderUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        archived: { type: boolean }
+    DocFolderMoveRequest:
+      type: object
+      required: [position]
+      properties:
+        parent_id: { type: [string, "null"], description: New parent (null = root). Must not be the folder itself or a descendant. }
+        position: { type: string, description: New order key among the target siblings. }
+    DocFolderDetail:
+      allOf:
+        - $ref: "#/components/schemas/DocFolder"
+        - type: object
+          properties:
+            path:
+              type: array
+              description: Breadcrumb from root to this folder (inclusive).
+              items: { $ref: "#/components/schemas/PathSegment" }
+            slug_path: { type: string, description: "Full slug path, e.g. smlouvy/najem." }
+            subfolders:
+              type: array
+              items: { $ref: "#/components/schemas/DocFolder" }
+            documents:
+              type: array
+              items: { $ref: "#/components/schemas/DocumentSummary" }
+
+    DocumentUrls:
+      type: object
+      description: >-
+        Permanent, household-only, id-based content URLs (PRD D42). Stable for the
+        document's life; unaffected by rename/move. All require the session cookie.
+      required: [permalink, raw, download, preview, thumbnail]
+      properties:
+        permalink: { type: string, description: "SPA short route, e.g. /d/{id}." }
+        raw: { type: string, description: "/api/documents/{id}/raw" }
+        download: { type: string, description: "/api/documents/{id}/download" }
+        preview: { type: string, description: "/api/documents/{id}/preview" }
+        thumbnail: { type: string, description: "/api/documents/{id}/thumbnail" }
+    Document:
+      type: object
+      required: [id, title, slug, original_filename, content_type, byte_size, checksum, preview_kind, preview_status, position, created_at, urls]
+      properties:
+        id: { type: string }
+        folder_id: { type: [string, "null"], description: NULL = root (unfiled). }
+        title: { type: string, description: Display title (editable); defaults to the filename sans extension. }
+        slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
+        description: { type: [string, "null"], description: Optional free text, indexed for search. }
+        original_filename: { type: string }
+        content_type: { type: string, description: Server-sniffed MIME (not the client's Content-Type — PRD D48). }
+        byte_size: { type: integer }
+        checksum: { type: string, description: SHA-256 hex of the immutable bytes; also the /raw ETag. }
+        preview_kind:
+          type: string
+          enum: [native, pdf, none]
+          description: >-
+            native = the original previews directly (PDF/image/text); pdf = a derived
+            preview PDF exists (Office→PDF); none = download-only.
+        preview_status:
+          type: string
+          enum: [pending, ready, failed, none]
+          description: Async preview state (PRD D44). `none` for types that need no derived preview once native.
+        position: { type: string }
+        archived: { type: boolean, default: false }
+        created_by: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        urls: { $ref: "#/components/schemas/DocumentUrls" }
+    DocumentSummary:
+      type: object
+      required: [id, title, slug, content_type, byte_size, preview_kind, preview_status, position]
+      description: Lightweight document node for the tree/list/grid (no description).
+      properties:
+        id: { type: string }
+        folder_id: { type: [string, "null"] }
+        title: { type: string }
+        slug: { type: string }
+        content_type: { type: string }
+        byte_size: { type: integer }
+        preview_kind: { type: string, enum: [native, pdf, none] }
+        preview_status: { type: string, enum: [pending, ready, failed, none] }
+        position: { type: string }
+        archived: { type: boolean, default: false }
+        updated_at: { type: string, format: date-time }
+        thumbnail_url: { type: [string, "null"], description: "/api/documents/{id}/thumbnail when available." }
+        pinned: { $ref: "#/components/schemas/PinState" }
+    DocumentDetail:
+      allOf:
+        - $ref: "#/components/schemas/Document"
+        - type: object
+          properties:
+            path:
+              type: array
+              description: Breadcrumb of the containing folders (empty for a root document).
+              items: { $ref: "#/components/schemas/PathSegment" }
+            slug_path: { type: string, description: "Full slug path, e.g. smlouvy/najem-2026." }
+            pinned: { $ref: "#/components/schemas/PinState" }
+    DocumentUpload:
+      type: object
+      required: [file]
+      description: multipart/form-data upload (PRD FR-DOC1).
+      properties:
+        file: { type: string, format: binary }
+        folder_id: { type: string, description: Target folder; omit for a root document. }
+        title: { type: string, description: Defaults to the filename sans extension. }
+        description: { type: string }
+    DocumentUpdate:
+      type: object
+      description: Metadata only — never the file bytes (immutable, PRD D41).
+      properties:
+        title: { type: string, minLength: 1 }
+        description: { type: [string, "null"] }
+        archived: { type: boolean }
+    DocumentMoveRequest:
+      type: object
+      required: [position]
+      properties:
+        folder_id: { type: [string, "null"], description: Target folder (null = root). }
+        position: { type: string, description: New order key within the target. }
+    DocumentPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentSummary" }
+        next_cursor: { type: [string, "null"] }
+    DocumentsTree:
+      type: object
+      required: [roots]
+      description: The document folder tree plus root-level (unfiled) documents.
+      properties:
+        roots:
+          type: array
+          description: Top-level folders (parent_id null), each recursive.
+          items: { $ref: "#/components/schemas/DocFolderNode" }
+        root_documents:
+          type: array
+          description: Documents with no folder (folder_id null).
+          items: { $ref: "#/components/schemas/DocumentSummary" }
+        max_upload_mb:
+          type: integer
+          description: >-
+            The operator-configured per-file upload cap (HOME_DOCS_MAX_UPLOAD_MB), so the
+            client can refuse an over-cap file before transferring it instead of
+            hardcoding a limit that drifts from the server's.
+          example: 50
+    DocFolderNode:
+      type: object
+      required: [folder, subfolders, documents]
+      properties:
+        folder: { $ref: "#/components/schemas/DocFolder" }
+        subfolders:
+          type: array
+          items: { $ref: "#/components/schemas/DocFolderNode" }
+        documents:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentSummary" }
+    DocResolveResult:
+      type: object
+      required: [type, id]
+      properties:
+        type: { type: string, enum: [folder, document] }
+        id: { type: string }
+        slug_path: { type: string }
 
     # ----- Auth (Mode B) -----
     LoginRequest:
@@ -1990,7 +2679,7 @@ components:
       properties:
         key: { type: string, examples: ["events.pripominky"] }
         title: { type: string, description: Czech display title. }
-        module: { type: string, enum: [todo, events, notes, logging] }
+        module: { type: string, enum: [todo, events, notes, documents, logging] }
         description: { type: [string, "null"] }
         default_size: { type: string, enum: [narrow, wide] }
         admin_only: { type: boolean, default: false }
@@ -2004,12 +2693,13 @@ components:
           description: >-
             Shape depends on `key`: todo.pravedelam -> PravedelamWidget,
             events.pripominky -> PripominkyWidget, events.tento-mesic -> TentoMesicWidget,
-            notes.pripnute -> PripnutePoznamkyWidget.
+            notes.pripnute -> PripnutePoznamkyWidget, documents.pripnute -> PripnuteDokumentyWidget.
           oneOf:
             - $ref: "#/components/schemas/PravedelamWidget"
             - $ref: "#/components/schemas/PripominkyWidget"
             - $ref: "#/components/schemas/TentoMesicWidget"
             - $ref: "#/components/schemas/PripnutePoznamkyWidget"
+            - $ref: "#/components/schemas/PripnuteDokumentyWidget"
     PravedelamWidget:
       type: object
       required: [tasks]
@@ -2056,6 +2746,34 @@ components:
           enum: [household, personal, both]
           description: How this note is pinned for the caller.
         excerpt: { type: [string, "null"], description: Short plain-text preview of the body. }
+        updated_at: { type: string, format: date-time }
+        position: { type: string, description: Pin order key within its block. }
+    PripnuteDokumentyWidget:
+      type: object
+      required: [documents]
+      description: >-
+        Provided by the documents module (FR-DOC11): household pins ∪ the caller's
+        personal pins, de-duplicated (household precedence), household block then personal.
+      properties:
+        documents:
+          type: array
+          items: { $ref: "#/components/schemas/PinnedDocument" }
+    PinnedDocument:
+      type: object
+      required: [document_id, title, slug_path, scope, content_type, preview_kind, preview_status]
+      properties:
+        document_id: { type: string }
+        title: { type: string }
+        slug_path: { type: string, description: "Full slug path (navigation); the permanent link is /d/{document_id}." }
+        scope:
+          type: string
+          enum: [household, personal, both]
+          description: How this document is pinned for the caller.
+        content_type: { type: string }
+        byte_size: { type: integer }
+        preview_kind: { type: string, enum: [native, pdf, none] }
+        preview_status: { type: string, enum: [pending, ready, failed, none] }
+        thumbnail_url: { type: [string, "null"] }
         updated_at: { type: string, format: date-time }
         position: { type: string, description: Pin order key within its block. }
     DashboardReminder:

@@ -40,8 +40,39 @@ func ErrForbidden(detail string) *APIError {
 }
 func ErrNotFound(detail string) *APIError { return &APIError{http.StatusNotFound, "not_found", detail} }
 func ErrConflict(detail string) *APIError { return &APIError{http.StatusConflict, "conflict", detail} }
+
+// ErrConflictCode is a 409 carrying its own code, for an endpoint that can refuse for
+// more than one reason and whose remedies differ. A client cannot act on a detail
+// string, so without a distinct code it has to guess which refusal it hit — and tell
+// the user to do the wrong thing about it.
+func ErrConflictCode(code, detail string) *APIError {
+	return &APIError{http.StatusConflict, code, detail}
+}
 func ErrUnprocessable(detail string) *APIError {
 	return &APIError{http.StatusUnprocessableEntity, "unprocessable", detail}
+}
+
+// ErrTooLarge is an upload over the configured size cap (documents, FR-DOC1).
+func ErrTooLarge(detail string) *APIError {
+	return &APIError{http.StatusRequestEntityTooLarge, "too_large", detail}
+}
+
+// ErrUnsupportedMedia is a content type outside the configured allowlist. The
+// type is always the SERVER-SNIFFED one, never the client's claim (D48).
+func ErrUnsupportedMedia(detail string) *APIError {
+	return &APIError{http.StatusUnsupportedMediaType, "unsupported_media_type", detail}
+}
+
+// ErrRangeNotSatisfiable rejects a Range header that falls outside the object.
+func ErrRangeNotSatisfiable(detail string) *APIError {
+	return &APIError{http.StatusRequestedRangeNotSatisfiable, "range_not_satisfiable", detail}
+}
+
+// ErrBadGateway reports that an upstream this service depends on (object
+// storage, the preview converter) failed. Used so a storage outage never leaves
+// a half-committed document (FR-DOC1 step 3).
+func ErrBadGateway(detail string) *APIError {
+	return &APIError{http.StatusBadGateway, "bad_gateway", detail}
 }
 func ErrInternal(detail string) *APIError {
 	return &APIError{http.StatusInternalServerError, "internal", detail}

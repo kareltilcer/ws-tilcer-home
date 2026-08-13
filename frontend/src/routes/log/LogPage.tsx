@@ -15,7 +15,9 @@ import { Button, Input, Spinner } from '@/components/ui/ui'
 import { ScreenHeader } from '@/components/common/states'
 import { ResponsiveModal } from '@/components/ui/modal'
 
-const MODULES = ['', 'logging', 'todo', 'events', 'dashboard']
+// Every module that writes audit rows — a missing entry means those events cannot
+// be filtered to at all. Keep in step with the backend module registry.
+const MODULES = ['', 'logging', 'todo', 'events', 'notes', 'documents', 'dashboard']
 const LEVELS = ['', 'info', 'warn', 'error']
 
 const selectCls =
