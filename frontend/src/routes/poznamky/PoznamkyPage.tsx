@@ -412,7 +412,7 @@ export function PoznamkyPage() {
   }
 
   return (
-    <div className={cn(desktop ? 'mx-auto flex h-full max-w-6xl flex-col' : 'flex min-h-[70vh] flex-col')}>
+    <div className={cn(desktop ? '-mx-8 -my-8 flex h-[calc(100vh-0px)] flex-col' : 'flex min-h-[70vh] flex-col')}>
       {desktop ? <DesktopView {...shared} /> : <MobileView {...shared} />}
       {dialogs}
     </div>
@@ -452,7 +452,7 @@ function DesktopView(p: ViewProps) {
 
   return (
     <>
-      <div className="flex flex-none flex-wrap items-center gap-3 border-b border-border pb-4">
+      <div className="flex flex-none flex-wrap items-center gap-3 border-b border-border px-5 py-4">
         <div>
           <h1 className="text-lg font-extrabold tracking-tight">{cs.notes.title}</h1>
           <p className="text-[12.5px] text-muted">{cs.notes.subtitle}</p>
