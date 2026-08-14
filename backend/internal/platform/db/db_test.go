@@ -4,12 +4,50 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"sort"
 	"testing"
+	"testing/fstest"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
+
+func gooseSQL(table string) *fstest.MapFile {
+	return &fstest.MapFile{Data: []byte(
+		"-- +goose Up\nCREATE TABLE " + table + " (id INTEGER PRIMARY KEY);\n" +
+			"-- +goose Down\nDROP TABLE " + table + ";\n")}
+}
+
+// TestMigrate_AppliesOutOfOrderMigration reproduces the production incident where
+// a folder-icon migration in the notes block (06002) shipped after the documents
+// block (07xxx) had already advanced the DB past it. The merged sequence numbers
+// migrations per-module block, so a new migration in an earlier block is legitimately
+// lower than the current DB version; Migrate must apply it rather than fail with
+// "missing migrations before current version" (see Migrate's WithAllowMissing).
+func TestMigrate_AppliesOutOfOrderMigration(t *testing.T) {
+	sqldb, err := appdb.Open(filepath.Join(t.TempDir(), "ooo.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = sqldb.Close() })
+
+	// First deploy: only the higher-block migration exists → DB advances to 07999.
+	high := fstest.MapFS{"07999_high.sql": gooseSQL("ooo_high")}
+	if err := appdb.Migrate(sqldb, high); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+
+	// Second deploy adds a lower-numbered migration (06999) after 07999 is applied —
+	// exactly the notes-06002-after-documents-07002 shape that broke production.
+	both := fstest.MapFS{"06999_low.sql": gooseSQL("ooo_low"), "07999_high.sql": high["07999_high.sql"]}
+	if err := appdb.Migrate(sqldb, both); err != nil {
+		t.Fatalf("out-of-order migrate failed (the production bug): %v", err)
+	}
+	if set := tableSet(t, sqldb); !set["ooo_low"] || !set["ooo_high"] {
+		t.Fatalf("expected both ooo_low and ooo_high tables, got %v", set)
+	}
+}
 
 func tableSet(t *testing.T, sqldb *sql.DB) map[string]bool {
 	t.Helper()
