@@ -69,18 +69,20 @@ func deref(p *string) string {
 
 // ---- Folders ----
 
-const folderCols = `id, parent_id, name, slug, position, archived, created_by, created_at, updated_at`
+// icon is appended last so the existing scan positions are untouched.
+const folderCols = `id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon`
 
 func scanFolder(r interface{ Scan(...any) error }) (DocFolder, error) {
 	var f DocFolder
-	var parent, createdBy sql.NullString
+	var parent, createdBy, icon sql.NullString
 	var archived int
-	if err := r.Scan(&f.ID, &parent, &f.Name, &f.Slug, &f.Position, &archived, &createdBy, &f.CreatedAt, &f.UpdatedAt); err != nil {
+	if err := r.Scan(&f.ID, &parent, &f.Name, &f.Slug, &f.Position, &archived, &createdBy, &f.CreatedAt, &f.UpdatedAt, &icon); err != nil {
 		return DocFolder{}, err
 	}
 	f.ParentID = ptr(parent)
 	f.CreatedBy = ptr(createdBy)
 	f.Archived = archived != 0
+	f.Icon = icon.String
 	return f, nil
 }
 
@@ -96,13 +98,13 @@ func (s *Store) GetFolder(ctx context.Context, q DBTX, id string) (*DocFolder, e
 	return &f, nil
 }
 
-func (s *Store) InsertFolder(ctx context.Context, tx DBTX, parentID *string, name, slug, position, createdBy string) (*DocFolder, error) {
+func (s *Store) InsertFolder(ctx context.Context, tx DBTX, parentID *string, name, slug, position, createdBy, icon string) (*DocFolder, error) {
 	id := idgen.New()
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO document_folders (id, parent_id, name, slug, position, archived, created_by, created_at, updated_at)
-		 VALUES (?,?,?,?,?,0,?,?,?)`,
-		id, nullable(deref(parentID)), name, slug, position, nullable(createdBy), now, now); err != nil {
+		`INSERT INTO document_folders (id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon)
+		 VALUES (?,?,?,?,?,0,?,?,?,?)`,
+		id, nullable(deref(parentID)), name, slug, position, nullable(createdBy), now, now, nullable(icon)); err != nil {
 		return nil, err
 	}
 	return s.GetFolder(ctx, tx, id)
@@ -112,6 +114,15 @@ func (s *Store) InsertFolder(ctx context.Context, tx DBTX, parentID *string, nam
 func (s *Store) RenameFolder(ctx context.Context, tx DBTX, id, name, slug string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE document_folders SET name = ?, slug = ?, updated_at = ? WHERE id = ?`,
 		name, slug, nowUTC(), id)
+	return err
+}
+
+// SetFolderIcon updates only the icon (independent of a rename; icon can change on
+// its own). Empty string stores NULL, which reads back as "" and lets the client
+// fall back to the 📁 default.
+func (s *Store) SetFolderIcon(ctx context.Context, tx DBTX, id, icon string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE document_folders SET icon = ?, updated_at = ? WHERE id = ?`,
+		nullable(icon), nowUTC(), id)
 	return err
 }
 

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.5.0
+  version: 0.5.1
   description: >-
     API for the `home` household-management service (v4). Companion to PRD.md.
     Six modules: `logging` (a spine; read/browse endpoints only — writes are
@@ -2279,6 +2279,7 @@ components:
         parent_id: { type: [string, "null"], description: NULL = root. }
         name: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling folders+notes." }
+        icon: { type: string, description: "Optional emoji icon; empty string = client renders the 📁 default." }
         position: { type: string, description: Lexorank order key among siblings. }
         archived: { type: boolean, default: false }
         created_by: { type: [string, "null"] }
@@ -2290,11 +2291,13 @@ components:
       properties:
         name: { type: string, minLength: 1 }
         parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
+        icon: { type: string, description: "Optional emoji icon (server trims + length-bounds). Omit/empty for none." }
     FolderUpdate:
       type: object
       properties:
         name: { type: string, minLength: 1 }
         archived: { type: boolean }
+        icon: { type: string, description: "Set the emoji icon (empty string clears it). Omit to leave unchanged." }
     FolderMoveRequest:
       type: object
       required: [position]
@@ -2444,6 +2447,7 @@ components:
         parent_id: { type: [string, "null"], description: NULL = root. }
         name: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
+        icon: { type: string, description: "Optional emoji icon; empty string = client renders the 📁 default." }
         position: { type: string, description: Lexorank order key among siblings. }
         archived: { type: boolean, default: false }
         created_by: { type: [string, "null"] }
@@ -2455,11 +2459,13 @@ components:
       properties:
         name: { type: string, minLength: 1 }
         parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
+        icon: { type: string, description: "Optional emoji icon (server trims + length-bounds). Omit/empty for none." }
     DocFolderUpdate:
       type: object
       properties:
         name: { type: string, minLength: 1 }
         archived: { type: boolean }
+        icon: { type: string, description: "Set the emoji icon (empty string clears it). Omit to leave unchanged." }
     DocFolderMoveRequest:
       type: object
       required: [position]

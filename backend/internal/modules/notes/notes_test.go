@@ -297,6 +297,45 @@ func TestArchiveNonEmptyFolderViaPatchRejected(t *testing.T) {
 	}
 }
 
+// ---- Folder icon (v4.1) ----
+
+func TestFolderIcon(t *testing.T) {
+	x := newH(t)
+	ctx := editorCtx()
+
+	// Created with an icon → round-trips.
+	withIcon := x.folder(x.svc.CreateFolder(ctx, notes.FolderCreate{Name: "Domácnost", Icon: "🏠"}))
+	if withIcon.Icon != "🏠" {
+		t.Fatalf("create icon: got %q want 🏠", withIcon.Icon)
+	}
+	// Created without an icon → empty (client renders the 📁 default).
+	noIcon := x.folder(x.svc.CreateFolder(ctx, notes.FolderCreate{Name: "Ostatní"}))
+	if noIcon.Icon != "" {
+		t.Fatalf("no icon: got %q want empty", noIcon.Icon)
+	}
+
+	// Icon-only PATCH updates it and persists (verify by re-reading the detail).
+	newIcon := "🔧"
+	x.folder(x.svc.UpdateFolder(ctx, withIcon.ID, notes.FolderUpdate{Icon: &newIcon}))
+	got := x.folder(x.svc.GetFolderDetail(ctx, withIcon.ID))
+	if got.Icon != "🔧" {
+		t.Fatalf("patched icon not persisted: got %q want 🔧", got.Icon)
+	}
+
+	// Empty-string PATCH clears it.
+	empty := ""
+	x.folder(x.svc.UpdateFolder(ctx, withIcon.ID, notes.FolderUpdate{Icon: &empty}))
+	if cleared := x.folder(x.svc.GetFolderDetail(ctx, withIcon.ID)); cleared.Icon != "" {
+		t.Fatalf("clearing icon: got %q want empty", cleared.Icon)
+	}
+
+	// A surrounding-whitespace icon is trimmed by the service.
+	trimmed := x.folder(x.svc.CreateFolder(ctx, notes.FolderCreate{Name: "Trim", Icon: "  🚗  "}))
+	if trimmed.Icon != "🚗" {
+		t.Fatalf("icon not trimmed: got %q want 🚗", trimmed.Icon)
+	}
+}
+
 // ---- FTS stays consistent under FK-cascade hard delete ----
 
 func TestHardFolderDeleteClearsFTS(t *testing.T) {

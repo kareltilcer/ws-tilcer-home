@@ -14,6 +14,7 @@ import { useAuth } from '@/app/auth'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { Spinner } from '@/components/ui/ui'
+import { DEFAULT_FOLDER_ICON } from '@/components/common/FolderIconPicker'
 import { routes } from '@/app/routes'
 import { tail } from '@/lib/lexorank'
 import { NoteView } from './NoteView'
@@ -54,7 +55,7 @@ function indexTree(tree: NotesTree): TreeIndex {
       folderNamePathById.set(f.id, namePath)
       childFolders.set(f.id, node.subfolders)
       childNotes.set(f.id, node.notes)
-      flatFolders.push({ id: f.id, name: f.name, depth })
+      flatFolders.push({ id: f.id, name: f.name, depth, icon: f.icon || DEFAULT_FOLDER_ICON })
       for (const nt of node.notes) {
         noteById.set(nt.id, nt)
         slugPathById.set(nt.id, path ? `${path}/${nt.slug}` : nt.slug)
@@ -242,10 +243,10 @@ export function PoznamkyPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idx, sel.noteId, sel.folderId, tree.isFetching])
 
-  const createMut = useMutation<NoteDetail | FolderDetail, Error, string>({
-    mutationFn: (name: string) =>
+  const createMut = useMutation<NoteDetail | FolderDetail, Error, { name: string; icon: string }>({
+    mutationFn: ({ name, icon }) =>
       create?.kind === 'folder'
-        ? api.createFolder({ name, parent_id: createParentId() })
+        ? api.createFolder({ name, parent_id: createParentId(), icon })
         : api.createNote({ title: name, folder_id: createParentId() }),
     onSuccess: (res) => {
       refresh()
@@ -271,10 +272,10 @@ export function PoznamkyPage() {
     onError: (e) => toast.error(e instanceof ApiError && e.code === 'unprocessable' ? 'Sem složku přesunout nelze.' : cs.notes.saveError),
   })
 
-  const renameMut = useMutation<FolderDetail, Error, string>({
-    mutationFn: (name: string) => {
+  const renameMut = useMutation<FolderDetail, Error, { name: string; icon: string }>({
+    mutationFn: ({ name, icon }) => {
       if (!rename) throw new Error('no rename')
-      return api.updateFolder(rename.id, { name })
+      return api.updateFolder(rename.id, { name, icon })
     },
     onSuccess: () => {
       refresh()
@@ -344,15 +345,16 @@ export function PoznamkyPage() {
             return p ? idx.folderById.get(p)?.name ?? cs.notes.root : cs.notes.rootLocation
           })()}
           pending={createMut.isPending}
-          onSubmit={(name) => createMut.mutate(name)}
+          onSubmit={(name, icon) => createMut.mutate({ name, icon })}
           onClose={() => setCreate(null)}
         />
       )}
       {rename && (
         <RenameDialog
           currentName={rename.name}
+          currentIcon={idx.folderById.get(rename.id)?.icon ?? ''}
           pending={renameMut.isPending}
-          onSubmit={(name) => renameMut.mutate(name)}
+          onSubmit={(name, icon) => renameMut.mutate({ name, icon })}
           onClose={() => setRename(null)}
         />
       )}
@@ -540,6 +542,7 @@ function TreeNodes({
                 {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               </button>
               <button type="button" onClick={() => go('folder', f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                <span className="flex-none text-[13px] leading-none">{f.icon || DEFAULT_FOLDER_ICON}</span>
                 <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-fg">{f.name}</span>
                 <span className="flex-none font-mono text-[10px] text-subtle">{node.subfolders.length + node.notes.length}</span>
               </button>
@@ -593,7 +596,8 @@ function FolderPane(p: ViewProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-none items-center gap-2 border-b border-border px-5 py-3.5">
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {folder && <span className="flex-none text-lg leading-none">{folder.icon || DEFAULT_FOLDER_ICON}</span>}
           <div className="truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : cs.notes.root}</div>
         </div>
         {folder && p.canWrite && (
@@ -702,8 +706,8 @@ function folderLabelOf(idx: TreeIndex, nt: NoteSummary): string {
 function BrowseFolderRow({ node, onOpen }: { node: FolderNode; onOpen: () => void }) {
   return (
     <button type="button" onClick={onOpen} className="flex w-full items-center gap-3 rounded-xl border border-border bg-s1 px-3 py-3 text-left hover:border-border-strong">
-      <span className="grid h-6 w-6 flex-none place-items-center rounded-md bg-s3 text-muted">
-        <ChevronRight size={14} />
+      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-s3 text-[15px] leading-none">
+        {node.folder.icon || DEFAULT_FOLDER_ICON}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-bold">{node.folder.name}</span>
@@ -767,7 +771,10 @@ function MobileView(p: ViewProps) {
               ‹
             </button>
           )}
-          <div className="min-w-0 flex-1 truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : cs.notes.title}</div>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {folder && <span className="flex-none text-lg leading-none">{folder.icon || DEFAULT_FOLDER_ICON}</span>}
+            <span className="truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : cs.notes.title}</span>
+          </div>
           {p.canWrite && (
             <>
               <button type="button" onClick={p.onCreateFolder} aria-label={cs.notes.newFolder} className="grid h-10 w-10 flex-none place-items-center rounded-lg border border-border bg-s2 text-muted">

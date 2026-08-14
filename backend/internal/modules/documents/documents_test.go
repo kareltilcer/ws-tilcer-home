@@ -362,6 +362,36 @@ func TestSlugs_CrossTableSiblingUniqueness(t *testing.T) {
 	}
 }
 
+func TestFolderIcon(t *testing.T) {
+	x := newH(t)
+	ctx := editorCtx()
+
+	// Created with an icon → round-trips.
+	withIcon := x.folder(x.svc.CreateFolder(ctx, documents.DocFolderCreate{Name: "Smlouvy", Icon: "🧾"}))
+	if withIcon.Icon != "🧾" {
+		t.Fatalf("create icon: got %q want 🧾", withIcon.Icon)
+	}
+	// Created without an icon → empty (client renders the 📁 default).
+	noIcon := x.folder(x.svc.CreateFolder(ctx, documents.DocFolderCreate{Name: "Ostatní"}))
+	if noIcon.Icon != "" {
+		t.Fatalf("no icon: got %q want empty", noIcon.Icon)
+	}
+
+	// Icon-only PATCH updates it and persists (verify by re-reading the detail).
+	newIcon := "🚗"
+	x.folder(x.svc.UpdateFolder(ctx, withIcon.ID, documents.DocFolderUpdate{Icon: &newIcon}))
+	if got := x.folder(x.svc.GetFolderDetail(ctx, withIcon.ID)); got.Icon != "🚗" {
+		t.Fatalf("patched icon not persisted: got %q want 🚗", got.Icon)
+	}
+
+	// Empty-string PATCH clears it.
+	empty := ""
+	x.folder(x.svc.UpdateFolder(ctx, withIcon.ID, documents.DocFolderUpdate{Icon: &empty}))
+	if cleared := x.folder(x.svc.GetFolderDetail(ctx, withIcon.ID)); cleared.Icon != "" {
+		t.Fatalf("clearing icon: got %q want empty", cleared.Icon)
+	}
+}
+
 func TestResolve_404sAfterRenameWithNoRedirect(t *testing.T) {
 	x := newH(t)
 	ctx := editorCtx()

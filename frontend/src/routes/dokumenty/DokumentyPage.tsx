@@ -33,6 +33,7 @@ import { useAuth } from '@/app/auth'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { Button, Input, Spinner } from '@/components/ui/ui'
+import { DEFAULT_FOLDER_ICON } from '@/components/common/FolderIconPicker'
 import { routes } from '@/app/routes'
 import { tail } from '@/lib/lexorank'
 import { DocumentView } from './DocumentView'
@@ -94,7 +95,7 @@ function indexTree(tree: DocumentsTree): DocIndex {
       ancestorsById.set(f.id, ancestors)
       childFolders.set(f.id, node.subfolders)
       childDocuments.set(f.id, node.documents)
-      flatFolders.push({ id: f.id, name: f.name, depth })
+      flatFolders.push({ id: f.id, name: f.name, depth, icon: f.icon || DEFAULT_FOLDER_ICON })
       for (const d of node.documents) {
         documentById.set(d.id, d)
         slugPathById.set(d.id, path ? `${path}/${d.slug}` : d.slug)
@@ -293,7 +294,8 @@ export function DokumentyPage() {
   }, [idx, sel.documentId, sel.folderId, tree.isFetching])
 
   const createFolderMut = useMutation({
-    mutationFn: (name: string) => api.createDocumentFolder({ name, parent_id: currentFolderId() }),
+    mutationFn: ({ name, icon }: { name: string; icon: string }) =>
+      api.createDocumentFolder({ name, parent_id: currentFolderId(), icon }),
     onSuccess: () => {
       refresh()
       setCreateFolder(false)
@@ -302,9 +304,9 @@ export function DokumentyPage() {
   })
 
   const renameFolderMut = useMutation({
-    mutationFn: (name: string) => {
+    mutationFn: ({ name, icon }: { name: string; icon: string }) => {
       if (!renameFolder) throw new Error('no rename')
-      return api.updateDocumentFolder(renameFolder.id, { name })
+      return api.updateDocumentFolder(renameFolder.id, { name, icon })
     },
     onSuccess: () => {
       refresh()
@@ -498,15 +500,16 @@ export function DokumentyPage() {
         <CreateFolderDialog
           location={currentFolderId() ? (idx.folderNamePathById.get(currentFolderId()!) ?? '') : cs.documents.rootLocation}
           pending={createFolderMut.isPending}
-          onSubmit={(name) => createFolderMut.mutate(name)}
+          onSubmit={(name, icon) => createFolderMut.mutate({ name, icon })}
           onClose={() => setCreateFolder(false)}
         />
       )}
       {renameFolder && (
         <RenameFolderDialog
           currentName={renameFolder.name}
+          currentIcon={idx.folderById.get(renameFolder.id)?.icon ?? ''}
           pending={renameFolderMut.isPending}
-          onSubmit={(name) => renameFolderMut.mutate(name)}
+          onSubmit={(name, icon) => renameFolderMut.mutate({ name, icon })}
           onClose={() => setRenameFolder(null)}
         />
       )}
@@ -672,6 +675,7 @@ function TreeNodes({
               <span className="w-3.5 flex-none text-center text-[11px] text-subtle" aria-hidden>
                 {node.subfolders.length + node.documents.length > 0 ? (open ? '▾' : '▸') : '·'}
               </span>
+              <span className="flex-none text-[13px] leading-none" aria-hidden>{f.icon || DEFAULT_FOLDER_ICON}</span>
               <span className="min-w-0 flex-1 truncate font-semibold">{f.name}</span>
             </button>
             {open && (
@@ -763,7 +767,10 @@ function FolderPane({ p, node }: { p: ViewProps; node: DocFolderNode | null }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-none items-center gap-2 border-b border-border px-5 py-3.5">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-lg font-extrabold tracking-tight">{node ? node.folder.name : cs.documents.title}</h2>
+          <h2 className="flex items-center gap-2 truncate text-lg font-extrabold tracking-tight">
+            {node && <span className="flex-none leading-none" aria-hidden>{node.folder.icon || DEFAULT_FOLDER_ICON}</span>}
+            <span className="truncate">{node ? node.folder.name : cs.documents.title}</span>
+          </h2>
           {node && <p className="font-mono text-[11px] text-subtle">{folderCountLabel(node)}</p>}
         </div>
         {node && p.canWrite && (
@@ -847,7 +854,10 @@ function MobileView(p: ViewProps) {
 
   return (
     <div className="px-4 py-5">
-      <h1 className="text-xl font-extrabold tracking-tight">{node ? node.folder.name : cs.documents.title}</h1>
+      <h1 className="flex items-center gap-2 text-xl font-extrabold tracking-tight">
+        {node && <span className="flex-none leading-none" aria-hidden>{node.folder.icon || DEFAULT_FOLDER_ICON}</span>}
+        <span className="min-w-0 truncate">{node ? node.folder.name : cs.documents.title}</span>
+      </h1>
       <p className="mt-0.5 text-[13px] text-muted">{node ? folderCountLabel(node) : cs.documents.subtitle}</p>
 
       <div className="mt-3 flex items-center gap-2">
@@ -949,8 +959,8 @@ function FolderRow({ node, onOpen }: { node: DocFolderNode; onOpen: () => void }
       onClick={onOpen}
       className="flex min-h-11 w-full items-center gap-3 rounded-xl border border-border bg-s1 px-3 py-3 text-left hover:border-border-strong"
     >
-      <span className="grid h-[30px] w-[30px] flex-none place-items-center rounded-lg bg-s3 text-muted" aria-hidden>
-        ▸
+      <span className="grid h-[30px] w-[30px] flex-none place-items-center rounded-lg bg-s3 text-[16px] leading-none" aria-hidden>
+        {node.folder.icon || DEFAULT_FOLDER_ICON}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-bold text-fg">{node.folder.name}</span>

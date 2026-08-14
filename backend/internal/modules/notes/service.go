@@ -10,6 +10,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/foldericon"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
@@ -380,11 +381,15 @@ func (s *Service) CreateFolder(ctx context.Context, in FolderCreate) (*FolderDet
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx))
+		icon := foldericon.Normalize(in.Icon)
+		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx), icon)
 		if err != nil {
 			return err
 		}
 		changes := []audit.Change{{Field: "name", New: ap(name)}, {Field: "slug", New: ap(sl)}}
+		if icon != "" {
+			changes = append(changes, audit.Change{Field: "icon", New: ap(icon)})
+		}
 		return s.record(ctx, tx, "folder.create", "folder", out.ID,
 			fmt.Sprintf("Vytvořena složka „%s“", name), changes, nil)
 	})
@@ -422,6 +427,13 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 		}
 		archiving := in.Archived != nil && *in.Archived && !before.Archived
 		unarchiving := in.Archived != nil && !*in.Archived && before.Archived
+		// An archived (soft-deleted) folder is out of the tree and unreachable by slug;
+		// restoring it is the only valid mutation. Reject name/icon edits so a stale
+		// client cannot silently write — and audit — edits to a phantom (the documents
+		// module draws the same line in UpdateFolder).
+		if before.Archived && !unarchiving && (in.Name != nil || in.Icon != nil) {
+			return httpx.ErrNotFound("folder not found")
+		}
 		if archiving {
 			// Archiving must cascade to descendants, else live children are stranded
 			// under an archived ancestor (unreachable in the tree and by slug path).
@@ -461,6 +473,11 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 				return err
 			}
 		}
+		if in.Icon != nil {
+			if err := s.store.SetFolderIcon(ctx, tx, id, foldericon.Normalize(*in.Icon)); err != nil {
+				return err
+			}
+		}
 		if in.Archived != nil {
 			if err := s.store.SetFolderArchived(ctx, tx, id, *in.Archived); err != nil {
 				return err
@@ -473,6 +490,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 		var changes []audit.Change
 		diff(&changes, "name", ap(before.Name), ap(out.Name))
 		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		diff(&changes, "icon", ap(before.Icon), ap(out.Icon))
 		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
 		// A no-op PATCH (nothing actually changed) leaves no audit trail and doesn't
 		// broadcast a change that other clients would needlessly refetch on.

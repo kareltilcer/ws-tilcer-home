@@ -279,6 +279,8 @@ export interface Folder {
   parent_id: string | null
   name: string
   slug: string
+  /** Optional emoji icon; empty string means "render the 📁 default". */
+  icon: string
   position: string
   archived: boolean
   created_by: string | null
@@ -384,6 +386,8 @@ export interface DocFolder {
   parent_id: string | null
   name: string
   slug: string
+  /** Optional emoji icon; empty string means "render the 📁 default". */
+  icon: string
   position: string
   archived: boolean
   created_by: string | null
