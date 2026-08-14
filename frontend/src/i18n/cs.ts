@@ -46,6 +46,9 @@ export const cs = {
     accessDenied: 'Přístup odepřen',
     accessDeniedDetail: 'Tato sekce je jen pro administrátory.',
     empty: 'Nic tu zatím není',
+    folderIcon: 'Ikona složky',
+    optional: 'nepovinné',
+    customIcon: 'Vlastní ikona',
   },
   live: {
     // Shown when a websocket push made elsewhere (another device or tab) changes

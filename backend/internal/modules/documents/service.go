@@ -12,6 +12,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/foldericon"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
@@ -434,11 +435,15 @@ func (s *Service) CreateFolder(ctx context.Context, in DocFolderCreate) (*DocFol
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx))
+		icon := foldericon.Normalize(in.Icon)
+		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx), icon)
 		if err != nil {
 			return err
 		}
 		changes := []audit.Change{{Field: "name", New: ap(name)}, {Field: "slug", New: ap(sl)}}
+		if icon != "" {
+			changes = append(changes, audit.Change{Field: "icon", New: ap(icon)})
+		}
 		return s.record(ctx, tx, "document_folder.create", "document_folder", out.ID,
 			fmt.Sprintf("Vytvořena složka dokumentů „%s“", name), changes, nil)
 	})
@@ -483,7 +488,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in DocFolderUpdat
 		// restoring it is the only valid mutation. Reject renames so a stale client
 		// cannot silently write — and audit — edits to a phantom (UpdateDocument draws
 		// the same line for documents).
-		if before.Archived && !unarchiving && in.Name != nil {
+		if before.Archived && !unarchiving && (in.Name != nil || in.Icon != nil) {
 			return httpx.ErrNotFound("folder not found")
 		}
 		if archiving {
@@ -521,6 +526,11 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in DocFolderUpdat
 				return err
 			}
 		}
+		if in.Icon != nil {
+			if err := s.store.SetFolderIcon(ctx, tx, id, foldericon.Normalize(*in.Icon)); err != nil {
+				return err
+			}
+		}
 		if in.Archived != nil {
 			if err := s.store.SetFolderArchived(ctx, tx, id, *in.Archived); err != nil {
 				return err
@@ -533,6 +543,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in DocFolderUpdat
 		var changes []audit.Change
 		diff(&changes, "name", ap(before.Name), ap(out.Name))
 		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		diff(&changes, "icon", ap(before.Icon), ap(out.Icon))
 		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
 		if len(changes) == 0 {
 			return nil

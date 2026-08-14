@@ -176,9 +176,9 @@ export const pinNote = (id: string, scope: PinScope, via?: string) =>
 export const unpinNote = (id: string, scope: PinScope, via?: string) =>
   apiFetch<PinState>(`/api/notes/${encodeURIComponent(id)}/pin${qs({ scope, via })}`, { method: 'DELETE' })
 
-export const createFolder = (body: { name: string; parent_id?: string | null }) =>
+export const createFolder = (body: { name: string; parent_id?: string | null; icon?: string }) =>
   apiFetch<FolderDetail>('/api/notes/folders', { method: 'POST', body })
-export const updateFolder = (id: string, body: Partial<{ name: string; archived: boolean }>) =>
+export const updateFolder = (id: string, body: Partial<{ name: string; archived: boolean; icon: string }>) =>
   apiFetch<FolderDetail>(`/api/notes/folders/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 export const deleteFolder = (id: string, opts: { cascade?: boolean; hard?: boolean } = {}) =>
   apiFetch<void>(`/api/notes/folders/${encodeURIComponent(id)}${qs(opts)}`, { method: 'DELETE' })
@@ -236,9 +236,9 @@ export const pinDocument = (id: string, scope: PinScope, via?: string) =>
 export const unpinDocument = (id: string, scope: PinScope, via?: string) =>
   apiFetch<PinState>(`/api/documents/${encodeURIComponent(id)}/pin${qs({ scope, via })}`, { method: 'DELETE' })
 
-export const createDocumentFolder = (body: { name: string; parent_id?: string | null }) =>
+export const createDocumentFolder = (body: { name: string; parent_id?: string | null; icon?: string }) =>
   apiFetch<DocFolderDetail>('/api/documents/folders', { method: 'POST', body })
-export const updateDocumentFolder = (id: string, body: Partial<{ name: string; archived: boolean }>) =>
+export const updateDocumentFolder = (id: string, body: Partial<{ name: string; archived: boolean; icon: string }>) =>
   apiFetch<DocFolderDetail>(`/api/documents/folders/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 export const deleteDocumentFolder = (id: string, opts: { cascade?: boolean; hard?: boolean } = {}) =>
   apiFetch<void>(`/api/documents/folders/${encodeURIComponent(id)}${qs(opts)}`, { method: 'DELETE' })

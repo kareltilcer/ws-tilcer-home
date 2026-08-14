@@ -14,6 +14,7 @@ type Folder struct {
 	ParentID  *string `json:"parent_id"`
 	Name      string  `json:"name"`
 	Slug      string  `json:"slug"`
+	Icon      string  `json:"icon"` // optional emoji; "" = client shows the 📁 default
 	Position  string  `json:"position"`
 	Archived  bool    `json:"archived"`
 	CreatedBy *string `json:"created_by"`
@@ -127,11 +128,13 @@ type NoteMoveRequest struct {
 type FolderCreate struct {
 	Name     string  `json:"name"`
 	ParentID *string `json:"parent_id"`
+	Icon     string  `json:"icon"`
 }
 
 type FolderUpdate struct {
 	Name     *string `json:"name"`
 	Archived *bool   `json:"archived"`
+	Icon     *string `json:"icon"` // nil = leave unchanged
 }
 
 type FolderMoveRequest struct {

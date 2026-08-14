@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Input } from '@/components/ui/ui'
+import { DEFAULT_FOLDER_ICON, FolderIconPicker, iconToStore } from '@/components/common/FolderIconPicker'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { cn } from '@/lib/utils'
 
-export type MoveTarget = { id: string | null; name: string; depth: number }
+export type MoveTarget = { id: string | null; name: string; depth: number; icon?: string }
 
 // CreateDialog — new note or folder in the current location.
 export function CreateDialog({
@@ -19,16 +20,17 @@ export function CreateDialog({
   kind: 'note' | 'folder'
   location: string
   pending: boolean
-  onSubmit: (name: string) => void
+  onSubmit: (name: string, icon: string) => void
   onClose: () => void
 }) {
   const [name, setName] = useState('')
+  const [icon, setIcon] = useState(DEFAULT_FOLDER_ICON)
   // Guard on `pending`: the footer Button disables itself while loading, but the
   // Input's Enter handler bypasses that, so a held/double-tapped Enter would fire
   // onSubmit twice and create duplicate notes/folders.
   const submit = () => {
     if (pending) return
-    if (name.trim()) onSubmit(name.trim())
+    if (name.trim()) onSubmit(name.trim(), iconToStore(icon))
   }
   return (
     <ResponsiveModal
@@ -56,6 +58,11 @@ export function CreateDialog({
         onKeyDown={(e) => e.key === 'Enter' && submit()}
         placeholder={kind === 'folder' ? cs.notes.folderNamePlaceholder : cs.notes.noteNamePlaceholder}
       />
+      {kind === 'folder' && (
+        <div className="mt-3">
+          <FolderIconPicker value={icon} onChange={setIcon} />
+        </div>
+      )}
     </ResponsiveModal>
   )
 }
@@ -65,22 +72,26 @@ export function CreateDialog({
 // instead of the native window.prompt the rename path used to reach for.
 export function RenameDialog({
   currentName,
+  currentIcon,
   pending,
   onSubmit,
   onClose,
 }: {
   currentName: string
+  currentIcon: string
   pending: boolean
-  onSubmit: (name: string) => void
+  onSubmit: (name: string, icon: string) => void
   onClose: () => void
 }) {
   const [name, setName] = useState(currentName)
+  const [icon, setIcon] = useState(currentIcon || DEFAULT_FOLDER_ICON)
   const submit = () => {
     if (pending) return
     const trimmed = name.trim()
     if (!trimmed) return
-    if (trimmed === currentName) return onClose() // unchanged → nothing to save
-    onSubmit(trimmed)
+    // Unchanged (both name AND icon) → nothing to save.
+    if (trimmed === currentName && icon === (currentIcon || DEFAULT_FOLDER_ICON)) return onClose()
+    onSubmit(trimmed, iconToStore(icon))
   }
   return (
     <ResponsiveModal
@@ -105,6 +116,9 @@ export function RenameDialog({
         onKeyDown={(e) => e.key === 'Enter' && submit()}
         placeholder={cs.notes.folderNamePlaceholder}
       />
+      <div className="mt-3">
+        <FolderIconPicker value={icon} onChange={setIcon} />
+      </div>
     </ResponsiveModal>
   )
 }
@@ -138,7 +152,7 @@ export function MoveDialog({
             className="flex w-full items-center gap-2 rounded-md px-2.5 py-2.5 text-left text-sm text-fg hover:bg-accent-soft disabled:opacity-50"
             style={{ paddingLeft: 10 + t.depth * 14 }}
           >
-            <span className="text-subtle">▸</span>
+            <span className="flex-none leading-none">{t.icon ? t.icon : <span className="text-subtle">▸</span>}</span>
             <span className="min-w-0 flex-1 truncate font-semibold">{t.name}</span>
           </button>
         ))}

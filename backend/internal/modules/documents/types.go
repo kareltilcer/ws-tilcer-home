@@ -26,6 +26,7 @@ type DocFolder struct {
 	ParentID  *string `json:"parent_id"`
 	Name      string  `json:"name"`
 	Slug      string  `json:"slug"`
+	Icon      string  `json:"icon"` // optional emoji; "" = client shows the 📁 default
 	Position  string  `json:"position"`
 	Archived  bool    `json:"archived"`
 	CreatedBy *string `json:"created_by"`
@@ -168,11 +169,13 @@ type DocumentMoveRequest struct {
 type DocFolderCreate struct {
 	Name     string  `json:"name"`
 	ParentID *string `json:"parent_id"`
+	Icon     string  `json:"icon"`
 }
 
 type DocFolderUpdate struct {
 	Name     *string `json:"name"`
 	Archived *bool   `json:"archived"`
+	Icon     *string `json:"icon"` // nil = leave unchanged
 }
 
 type DocFolderMoveRequest struct {
