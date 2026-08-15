@@ -35,3 +35,11 @@
   outline: none;
   min-height: 240px;
 }
+
+/* Crepe draws table cell borders at 20% of --crepe-color-outline, which sits
+   almost on top of the surface color in both themes. Use the full --border
+   token (the app's standard divider line) so the grid is legible. */
+.note-crepe .milkdown .milkdown-table-block th,
+.note-crepe .milkdown .milkdown-table-block td {
+  border: 1px solid var(--border);
+}
