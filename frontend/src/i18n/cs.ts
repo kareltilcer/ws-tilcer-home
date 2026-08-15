@@ -49,6 +49,9 @@ export const cs = {
     folderIcon: 'Ikona složky',
     optional: 'nepovinné',
     customIcon: 'Vlastní ikona',
+    browseEmoji: 'Procházet všechny emoji',
+    emojiSearchPlaceholder: 'Hledat emoji…',
+    emojiNoResults: 'Žádné emoji nenalezeno',
   },
   live: {
     // Shown when a websocket push made elsewhere (another device or tab) changes
