@@ -109,7 +109,7 @@ export function DocumentView({
   const d = doc.data
   const meta = kindMeta(d.content_type)
   const mode = viewerMode(d.content_type, d.preview_kind, d.preview_status)
-  const folderLabel = d.path.length > 0 ? d.path.map((p) => p.name).join(' / ') : cs.documents.root
+  const folderLabel = d.path?.length ? d.path.map((p) => p.name).join(' / ') : cs.documents.root
 
   const copyLink = async () => {
     // The PERMANENT link (D42) — id-based, so it survives renames and moves. Absolute

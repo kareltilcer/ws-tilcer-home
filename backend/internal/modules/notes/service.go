@@ -4,11 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/foldericon"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -25,17 +30,57 @@ type Notifier func(ctx context.Context, typ string, payload any)
 // exception to the "every mutation is audited" rule is a personal pin — a per-user
 // view preference (D35) — which is written directly, without audit or broadcast.
 type Service struct {
-	db     *sql.DB
-	store  *Store
-	sink   audit.Sink
-	notify Notifier
+	db      *sql.DB
+	store   *Store
+	sink    audit.Sink
+	notify  Notifier
+	blob    blobstore.BlobStore // object storage for inline images; nil disables image upload
+	imgOpts ImageOptions
+	logger  *slog.Logger
+
+	// unrefSince, guarded by unrefMu, is when edit-time GC first saw each image
+	// unreferenced — the undo window's clock (see unreferencedDue). Deliberately
+	// in-memory and best-effort: forgetting it on restart only costs an image one
+	// window, and the reconciliation pass reclaims whatever edit-time GC skips.
+	unrefMu    sync.Mutex
+	unrefSince map[string]time.Time
 }
 
-func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
+// ImageOptions configures inline-image uploads (note-images/{id}).
+type ImageOptions struct {
+	// MaxUploadBytes is the hard per-image cap; over it the upload is rejected 413.
+	MaxUploadBytes int64
+	// TempDir buffers the streamed upload so size+checksum are known before the
+	// single Put (S3 wants a known length). "" = the OS default temp directory.
+	TempDir string
+	// GCGrace spares an image from edit-time garbage collection until it is at least
+	// this old. An upload's POST and the body PATCH that embeds its reference are
+	// separate requests, so a body save that races ahead of the reference insertion
+	// would otherwise see the just-uploaded image as "owned but unreferenced" and
+	// delete it out from under the editor. It doubles as the UNDO window: an image
+	// whose reference an edit removed is reclaimed only once it has stayed
+	// unreferenced this long (see unreferencedDue). Zero = GC immediately (used in
+	// tests); the reconciliation pass is the long-term backstop either way.
+	GCGrace time.Duration
+}
+
+// defaultImageMaxBytes caps a pasted image when config leaves MaxUploadBytes unset.
+const defaultImageMaxBytes = 10 << 20 // 10 MiB
+
+func NewService(db *sql.DB, sink audit.Sink, notify Notifier, blob blobstore.BlobStore, imgOpts ImageOptions, logger *slog.Logger) *Service {
 	if notify == nil {
 		notify = func(context.Context, string, any) {}
 	}
-	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if imgOpts.MaxUploadBytes <= 0 {
+		imgOpts.MaxUploadBytes = defaultImageMaxBytes
+	}
+	return &Service{
+		db: db, store: NewStore(db), sink: sink, notify: notify, blob: blob,
+		imgOpts: imgOpts, logger: logger, unrefSince: map[string]time.Time{},
+	}
 }
 
 // Store exposes the read store (used by the widget provider).
@@ -123,6 +168,9 @@ func (s *Service) CreateNote(ctx context.Context, in NoteCreate) (*NoteDetail, e
 	if title == "" {
 		return nil, httpx.ErrUnprocessable("title is required")
 	}
+	if hasInlineImageData(in.BodyMD) {
+		return nil, errInlineImageData
+	}
 	var out *Note
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if err := s.assertFolder(ctx, tx, in.FolderID); err != nil {
@@ -169,8 +217,13 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 	if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
 		return nil, httpx.ErrUnprocessable("title cannot be empty")
 	}
+	if in.BodyMD != nil && hasInlineImageData(*in.BodyMD) {
+		return nil, errInlineImageData
+	}
 	var out *Note
 	var changed bool
+	var bodyChanged bool
+	var oldBody string // captured for image GC: refs present before this edit but not after
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		before, err := s.store.GetNote(ctx, tx, id)
 		if err != nil {
@@ -206,6 +259,8 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 		}
 		if in.BodyMD != nil && *in.BodyMD != deref(before.BodyMD) {
 			patch.Body = in.BodyMD
+			bodyChanged = true
+			oldBody = deref(before.BodyMD)
 		}
 		titleChanged := false
 		if in.Title != nil {
@@ -257,6 +312,11 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 	}
 	if changed {
 		s.notify(ctx, "note.changed", map[string]string{"id": id})
+	}
+	// GC after the commit: an edit that removed an `![](/api/notes/images/{id})`
+	// reference orphans that image. Best-effort — never blocks or fails the save.
+	if bodyChanged {
+		s.gcNoteImages(ctx, id, oldBody, deref(out.BodyMD))
 	}
 	return s.noteDetail(ctx, s.db, out)
 }
@@ -322,6 +382,7 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 
 func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 	var changed bool
+	var imagesToPurge []string // keys to drop from storage after a hard delete commits
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		before, err := s.store.GetNote(ctx, tx, id)
 		if err != nil {
@@ -331,9 +392,59 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 			return httpx.ErrNotFound("note not found")
 		}
 		if hard {
+			// Capture the owned image ids BEFORE the delete: notes' ON DELETE CASCADE
+			// removes the note_images rows, so afterwards there is nothing left to derive
+			// the objects from. The objects themselves are purged after the commit.
+			imageIDs, err := s.store.NoteImageIDsForNote(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			// An owned image may be embedded in ANOTHER note (content copied between
+			// notes). Hand those off to a referencing note so the shared object survives
+			// the cascade; only the images no surviving note references get purged. One
+			// query resolves every referencing note (not an instr scan per image).
+			otherRefs, err := s.otherNotesImageRefs(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			var purge []string
+			owned := make(map[string]bool, len(imageIDs))
+			for _, imgID := range imageIDs {
+				owned[imgID] = true
+				if target, ok := otherRefs[imgID]; ok {
+					if err := s.store.ReassignNoteImage(ctx, tx, imgID, target); err != nil {
+						return err
+					}
+					continue
+				}
+				purge = append(purge, imgID)
+			}
+			// This note may also have been the LAST to reference an image OWNED BY ANOTHER
+			// note (content copied in, then that owner dropped its own reference). Such a row
+			// survives the cascade — its owner isn't the note being deleted — so nothing but
+			// the daily sweep would ever reclaim it. Drop the row+object here too, mirroring
+			// gcNoteImages' dropped-cross-note-reference case, but only when no surviving note
+			// still references it.
+			var foreignStale []string
+			for imgID := range referencedImageIDs(deref(before.BodyMD)) {
+				if owned[imgID] {
+					continue // owned by this note — handled above
+				}
+				if _, ok := otherRefs[imgID]; ok {
+					continue // still referenced by another surviving note
+				}
+				foreignStale = append(foreignStale, imgID)
+			}
+			if len(foreignStale) > 0 {
+				if err := s.store.DeleteNoteImages(ctx, tx, foreignStale); err != nil {
+					return err
+				}
+				purge = append(purge, foreignStale...)
+			}
 			if err := s.store.DeleteNote(ctx, tx, id); err != nil {
 				return err
 			}
+			imagesToPurge = purge
 			changed = true
 			return s.record(ctx, tx, "note.delete", "note", id,
 				fmt.Sprintf("Smazána poznámka „%s“", before.Title), nil, metaHard(true))
@@ -358,6 +469,9 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 	if changed {
 		s.notify(ctx, "note.changed", map[string]string{"id": id})
 	}
+	// The rows are gone (cascade); drop their objects. Best-effort — a failure just
+	// leaves orphans for the reconciliation pass.
+	s.purgeImageObjects(ctx, imagesToPurge)
 	return nil
 }
 
@@ -1083,10 +1197,11 @@ func (s *Service) folderDetail(ctx context.Context, q DBTX, f *Folder) (*FolderD
 	}, nil
 }
 
-// ancestors returns the folder chain root→…→folderID (inclusive). Empty for a
-// root item (folderID nil).
+// ancestors returns the folder chain root→…→folderID (inclusive). Empty (but never
+// nil, so it marshals as `[]` not `null` — a root note's path is an empty array, and
+// clients read path.length) for a root item (folderID nil).
 func (s *Service) ancestors(ctx context.Context, q DBTX, folderID *string) ([]PathSegment, error) {
-	var chain []PathSegment
+	chain := []PathSegment{}
 	cur := folderID
 	for depth := 0; cur != nil && depth < 1000; depth++ {
 		f, err := s.store.GetFolder(ctx, q, *cur)
@@ -1187,4 +1302,299 @@ func ftsQuery(q string) string {
 		terms = append(terms, `"`+f+`"*`)
 	}
 	return strings.Join(terms, " ")
+}
+
+// ---- Inline-image helpers ----
+
+// errInlineImageData rejects a body_md carrying a base64 data: image (see
+// hasInlineImageData). Shared so Create and Update return the identical 422.
+var errInlineImageData = httpx.ErrUnprocessable(
+	"inline base64 images are not allowed; paste uploads the image and embeds a reference URL")
+
+// noteImageRefRE matches the content URLs embedded in body_md as
+// `![](/api/notes/images/{id})`. The id is a UUIDv7 (canonical 8-4-4-4-12 hex).
+var noteImageRefRE = regexp.MustCompile(
+	`/api/notes/images/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
+
+// referencedImageIDs is the set of image ids body_md still points at.
+func referencedImageIDs(body string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range noteImageRefRE.FindAllStringSubmatch(body, -1) {
+		out[m[1]] = true
+	}
+	return out
+}
+
+// inlineImageDataURIRE matches a data:image URI in IMAGE-REFERENCE position — a
+// markdown image `![](data:image…)` (group 1) or a raw-HTML image source
+// `<img src="data:image…">` (group 2) — capturing the URI so its length can be
+// measured (see hasInlineImageData). Each payload class stops only at its STRUCTURAL
+// terminator (`)` for the markdown form, the closing quote for the HTML form) and
+// deliberately allows whitespace, so a line-wrapped or multi-line base64 image can't
+// slip under the cap by being measured only up to its first newline (the bug a naive
+// `[^)"'\s]*` had). The markdown form additionally spans BALANCED inner parens (`(…)`),
+// which CommonMark permits in an unwrapped destination, so a data URI whose payload
+// carries them — SVG path data, say — is measured WHOLE instead of being truncated at
+// the first inner `)` and under-counted below the cap. Anchoring on image position —
+// not a bare `data:` token — mirrors the editor's "image nodes only" upload rule and
+// spares a short snippet in prose.
+//
+// The terminator is REQUIRED, not merely where the capture stops. Without it an
+// unterminated `![](data:image/…` (a hand-written snippet someone never closed) captured
+// everything to the next `)` anywhere below — so once the trailing prose passed the cap,
+// EVERY save of that note 422'd on text that is not an image at all, with no way out but
+// deleting the line. An unterminated URI renders as literal text rather than an image, so
+// requiring the terminator gives up no protection: the harm this guards is a real inlined
+// image, and a body big enough to hurt is already refused by httpx's 1 MiB cap. It also
+// restores parity with the editor's imageRefDataURIRE, which matches the same shapes.
+var inlineImageDataURIRE = regexp.MustCompile(
+	`!\[[^\]]*\]\((data:image/(?:[^()]|\([^()]*\))+)\)|<img[^>]+src=["'](data:image/[^"']+)["']`)
+
+// maxInlineImageDataLen is the longest a data:image URI may be before body_md is
+// rejected. The harm this guards against is a MULTI-MEGABYTE inlined image blowing
+// the API body cap and freezing the editor (the bug this feature fixes); a real
+// pasted raster is tens of KB of base64 and up. Below the threshold sits the harmless
+// case a blunt substring match used to reject too: a short data:image snippet a user
+// legitimately quotes or documents (e.g. a 1×1 placeholder), which stays well under
+// the body cap and does not freeze anything.
+const maxInlineImageDataLen = 4096
+
+// hasInlineImageData reports whether body_md carries a real image inlined as a
+// data:image URI. The editor uploads images to object storage and embeds only a small
+// reference URL, so a large data: image means a broken or outdated client. Rejecting
+// keys on the URI's LENGTH, not its mere presence, so a short illustrative snippet is
+// not mistaken for a megabyte of inlined bytes.
+func hasInlineImageData(body string) bool {
+	// One alternative matches per hit, so exactly one of the two capture groups is
+	// non-empty; check both lengths against the cap.
+	for _, m := range inlineImageDataURIRE.FindAllStringSubmatch(body, -1) {
+		if len(m[1]) > maxInlineImageDataLen || len(m[2]) > maxInlineImageDataLen {
+			return true
+		}
+	}
+	return false
+}
+
+// gcNoteImages reclaims images this committed edit stopped keeping alive — called
+// after a body_md change with the body before and after. Liveness is by REFERENCE,
+// not ownership: an image is deleted only when NO note still embeds it, so an image
+// copied into a second note survives its owner dropping (or hard-deleting) it. Two
+// sources of candidates:
+//   - images this note OWNS that its new body no longer references (also covers an
+//     upload that was never embedded), and
+//   - references this edit DROPPED that point at an image OWNED BY ANOTHER note
+//     (content copied between notes, then removed here) — without this, the last
+//     note to drop such a reference would leak it, since owner-scoped GC never looks
+//     at it again.
+//
+// Either way a reference this edit just removed is NOT reclaimed on the spot — see
+// unreferencedDue for the undo window that keeps a Ctrl+Z from resurrecting a 404.
+//
+// Best-effort and never fatal: rows go first so a failed bucket delete degrades to a
+// harmless orphan (swept by reconciliation) rather than a dangling row. No audit
+// event — the note.update body_md diff is the trail.
+func (s *Service) gcNoteImages(ctx context.Context, noteID, oldBody, newBody string) {
+	if s.blob == nil {
+		return
+	}
+	// Resolve the candidate set AND delete the rows inside one write transaction. The DB
+	// runs with _txlock=immediate over a single connection, so the "is this still
+	// referenced by another note?" scan and the row delete are atomic against any
+	// concurrent note save: a reference copied into another note either commits before
+	// this transaction (and the scan spares the image) or after it (a reference to an
+	// already-deleted image — inherent, not a race this GC can lose). Running the scan
+	// and the delete as two separate statements on s.db left a window where such a copy
+	// slipped between them and a still-live image was deleted out from under it.
+	var stale []string
+	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		// referencedNow comes from the note's CURRENT committed body, not the newBody this
+		// edit produced. gcNoteImages runs AFTER the update transaction commits, so a
+		// concurrent save may have (re-)referenced an image in the gap; reading it back
+		// inside this single-connection immediate-lock transaction makes the check
+		// authoritative. Trusting the stale newBody could reclaim an image the live body
+		// still points at — a permanent 404, since the bucket has no versioning. oldBody
+		// stays the pre-edit set: it is what the undo window and the dropped-cross-note-
+		// reference scan below are defined against.
+		current, err := s.store.GetNote(ctx, tx, noteID)
+		if err != nil {
+			return err
+		}
+		currentBody := newBody // note vanished (a racing hard delete); its rows cascade away anyway
+		if current != nil {
+			currentBody = deref(current.BodyMD)
+		}
+		referencedNow := referencedImageIDs(currentBody)
+		owned, err := s.store.NoteImagesForNote(ctx, tx, noteID)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		cutoff := now.Add(-s.imgOpts.GCGrace)
+		referencedBefore := referencedImageIDs(oldBody)
+
+		considered := map[string]bool{}
+		var provisional []string
+
+		// 1. Images this note owns but no longer references. The grace window spares a
+		// just-uploaded image whose embedding reference this save hasn't caught up to yet.
+		for _, im := range owned {
+			if referencedNow[im.ID] {
+				continue
+			}
+			considered[im.ID] = true
+			if s.imgOpts.GCGrace > 0 {
+				if t, perr := time.Parse(tsFormat, im.CreatedAt); perr == nil && t.After(cutoff) {
+					continue
+				}
+			}
+			provisional = append(provisional, im.ID)
+		}
+
+		// 2. References this edit dropped that point at another note's image. The
+		// created-at grace above does not apply — a dropped reference was in the old
+		// body, so the image was already embedded, not a fresh in-flight upload — but
+		// the undo window below does.
+		for id := range referencedBefore {
+			if referencedNow[id] || considered[id] {
+				continue
+			}
+			provisional = append(provisional, id)
+		}
+
+		// "Is it still referenced by SOME OTHER note?" needs an instr scan over every
+		// note body — the one expensive query in this transaction. Run it ONLY when this
+		// edit actually produced candidates; the overwhelmingly common save touches no
+		// image at all, and it must not pay for a full-table scan. When the scan does run
+		// it is still inside this single-connection immediate-lock transaction, so it stays
+		// atomic against a concurrent note (re-)referencing an image (see the tx comment).
+		var candidates []string
+		if len(provisional) > 0 {
+			otherRefs, err := s.otherNotesImageRefs(ctx, tx, noteID)
+			if err != nil {
+				return err
+			}
+			for _, id := range provisional {
+				if _, ok := otherRefs[id]; ok {
+					continue // still embedded elsewhere — liveness is by reference, not ownership
+				}
+				candidates = append(candidates, id)
+			}
+		}
+
+		// Hold back anything this edit only just unreferenced: undo puts the reference
+		// straight back, and the purge is permanent. This runs even with no candidates —
+		// a re-reference (undo) yields none but is exactly the save whose undo-window
+		// clock must be cleared (see unreferencedDue).
+		candidates = s.unreferencedDue(candidates, referencedBefore, referencedNow, now)
+		if len(candidates) == 0 {
+			return nil
+		}
+		if err := s.store.DeleteNoteImages(ctx, tx, candidates); err != nil {
+			return err
+		}
+		stale = candidates
+		return nil
+	})
+	// On any error, spare everything (abort GC): a transient DB failure must never
+	// delete a maybe-live object. The committed row delete is what authorizes the purge,
+	// so a failed bucket delete afterwards degrades to a harmless orphan (swept by
+	// reconciliation) rather than a dangling row.
+	if err != nil {
+		s.logger.Warn("notes: image GC transaction failed; skipping", "note_id", noteID, "err", err)
+		return
+	}
+	s.purgeImageObjects(ctx, stale)
+}
+
+// unrefPruneAt is how many undo-window clocks may accumulate before the stale ones
+// (images whose note was never saved again, so no later GC pass consumed the entry)
+// are swept. Small: a handful of dropped images per editing session is the norm.
+const unrefPruneAt = 256
+
+// unrefForget is how old a clock must be to be pruned — comfortably past any GCGrace,
+// and by then the reconciliation pass owns the image anyway.
+const unrefForget = 24 * time.Hour
+
+// unreferencedDue narrows edit-time GC candidates to those that have been unreferenced
+// for at least GCGrace. A candidate the PREVIOUS body still referenced is one this edit
+// just dropped — exactly what an undo puts back — so the drop only STARTS the clock
+// instead of deleting: purging it here would leave the restored `![](…)` pointing at a
+// permanent 404 (the row goes, the object goes, and the bucket has no versioning). Such
+// an image is reclaimed by a later save once the window has passed, or by the
+// reconciliation pass if the note is never saved again. A candidate NO body referenced
+// (an upload whose embedding save never landed) has nothing to undo back to and is
+// returned straight away — the created-at grace in gcNoteImages is what covers it while
+// its embed is still in flight.
+//
+// The clocks are in-memory and best-effort: a restart forgets them, and the next save
+// then treats the image as long-unreferenced. That degrades to the previous behavior
+// (immediate reclaim) rather than to a leak.
+func (s *Service) unreferencedDue(candidates []string, referencedBefore, referencedNow map[string]bool, now time.Time) []string {
+	s.unrefMu.Lock()
+	defer s.unrefMu.Unlock()
+
+	// An image that came back (undo, or a re-paste of the same reference) gets a fresh
+	// window if it is dropped again. This runs even with nothing to reclaim — the save
+	// that restores a reference has no candidates at all, and it is precisely the one
+	// whose clock must be cleared.
+	for id := range referencedNow {
+		delete(s.unrefSince, id)
+	}
+	if len(s.unrefSince) > unrefPruneAt {
+		for id, t := range s.unrefSince {
+			if now.Sub(t) > unrefForget {
+				delete(s.unrefSince, id)
+			}
+		}
+	}
+
+	due := make([]string, 0, len(candidates))
+	for _, id := range candidates {
+		if referencedBefore[id] {
+			if _, running := s.unrefSince[id]; !running {
+				s.unrefSince[id] = now // this edit dropped it — start the clock
+			}
+		}
+		if since, running := s.unrefSince[id]; running && now.Sub(since) < s.imgOpts.GCGrace {
+			continue // still inside the undo window
+		}
+		delete(s.unrefSince, id)
+		due = append(due, id)
+	}
+	return due
+}
+
+// otherNotesImageRefs maps each image id referenced by SOME note other than excludeID
+// to one such note's id (the reassignment target for a hard delete). Built from a
+// single query (see Store.NotesReferencingAnyImage) so GC and hard delete don't run an
+// instr full-table scan per image.
+func (s *Service) otherNotesImageRefs(ctx context.Context, q DBTX, excludeID string) (map[string]string, error) {
+	rows, err := s.store.NotesReferencingAnyImage(ctx, q, excludeID)
+	if err != nil {
+		return nil, err
+	}
+	refs := map[string]string{}
+	for _, r := range rows {
+		for id := range referencedImageIDs(r.Body) {
+			if _, ok := refs[id]; !ok {
+				refs[id] = r.ID
+			}
+		}
+	}
+	return refs, nil
+}
+
+// purgeImageObjects best-effort deletes the given image objects from storage. A
+// failure leaves them as orphans the reconciliation pass reclaims.
+func (s *Service) purgeImageObjects(ctx context.Context, ids []string) {
+	if s.blob == nil || len(ids) == 0 {
+		return
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = NoteImageKey(id)
+	}
+	if err := s.blob.Delete(ctx, keys...); err != nil {
+		s.logger.Warn("notes: deleting image objects failed; left for reconciliation", "count", len(keys), "err", err)
+	}
 }

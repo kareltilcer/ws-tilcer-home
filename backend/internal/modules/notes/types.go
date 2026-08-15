@@ -169,3 +169,30 @@ const (
 	scopePersonal  = "personal"
 	scopeBoth      = "both"
 )
+
+// ---- Inline images (note-images/{id}) ----
+
+// Storage/URL layout is id-based, mirroring documents (D42): the id and the bytes
+// never change, so the content URL is stable for the image's life. The bytes live
+// in object storage under this prefix; body_md holds only the small reference URL.
+const (
+	noteImageKeyPrefix = "note-images/"
+	noteImageAPIBase   = "/api/notes/images/"
+)
+
+// NoteImageKey is the object-storage key for an image id (one object per image;
+// no previews or thumbnails, unlike documents).
+func NoteImageKey(id string) string { return noteImageKeyPrefix + id }
+
+// noteImageURL is the household-only content URL embedded in body_md as
+// `![](<url>)`. Served THROUGH the backend so it stays session-gated (D33/D42).
+func noteImageURL(id string) string { return noteImageAPIBase + id }
+
+// NoteImageUploadResult is the POST /api/notes/{id}/images response: enough for the
+// editor to insert `![](url)` and show what it stored.
+type NoteImageUploadResult struct {
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	ContentType string `json:"content_type"`
+	ByteSize    int64  `json:"byte_size"`
+}

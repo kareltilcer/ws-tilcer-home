@@ -1219,10 +1219,11 @@ func (s *Service) folderDetail(ctx context.Context, q DBTX, f *DocFolder) (*DocF
 	}, nil
 }
 
-// ancestors returns the folder chain root→…→folderID (inclusive). Empty for a root
-// item (folderID nil).
+// ancestors returns the folder chain root→…→folderID (inclusive). Empty (but never
+// nil, so it marshals as `[]` not `null` — a root document's path is an empty array,
+// and clients read path.length) for a root item (folderID nil).
 func (s *Service) ancestors(ctx context.Context, q DBTX, folderID *string) ([]PathSegment, error) {
-	var chain []PathSegment
+	chain := []PathSegment{}
 	cur := folderID
 	for depth := 0; cur != nil && depth < 1000; depth++ {
 		f, err := s.store.GetFolder(ctx, q, *cur)

@@ -4,28 +4,39 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
-// h bundles a migrated db + service + t so the must-helpers can consume the
-// (value, error) return of a service call directly (Go spreads a two-value return
-// only when it is the whole argument list).
+// h bundles a migrated db + a filesystem object store + service + t so the
+// must-helpers can consume the (value, error) return of a service call directly (Go
+// spreads a two-value return only when it is the whole argument list).
 type h struct {
-	t   *testing.T
-	svc *notes.Service
-	db  *sql.DB
+	t    *testing.T
+	svc  *notes.Service
+	db   *sql.DB
+	blob blobstore.BlobStore
 }
 
 func newH(t *testing.T) *h {
 	t.Helper()
 	db := testsupport.NewDB(t)
-	return &h{t: t, svc: notes.NewService(db, audit.NewSink(), nil), db: db}
+	blob, err := blobstore.NewFS(t.TempDir())
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+	svc := notes.NewService(db, audit.NewSink(), nil, blob,
+		notes.ImageOptions{MaxUploadBytes: 1 << 20}, // 1 MB keeps the over-cap test cheap
+		slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	return &h{t: t, svc: svc, db: db, blob: blob}
 }
 
 func (x *h) note(n *notes.NoteDetail, err error) *notes.NoteDetail {
@@ -55,6 +66,24 @@ func status(t *testing.T, err error) int {
 	}
 	t.Fatalf("expected *httpx.APIError, got %v", err)
 	return 0
+}
+
+// A root note (no folder) must return path as an empty array, not null: the client
+// reads path.length, and a null would crash the note view. Regression guard for the
+// nil-vs-empty-slice marshalling (nil → JSON null, empty slice → []).
+func TestRootNotePathIsEmptyNotNil(t *testing.T) {
+	x := newH(t)
+	ctx := editorCtx()
+	n := x.note(x.svc.CreateNote(ctx, notes.NoteCreate{Title: "Bez složky"}))
+	if n.Path == nil {
+		t.Fatal("CreateNote: root note path is nil (marshals as null, crashes the client); want empty slice")
+	}
+	if len(n.Path) != 0 {
+		t.Fatalf("root note path: got %d segments, want 0", len(n.Path))
+	}
+	if d := x.note(x.svc.GetNoteDetail(ctx, n.ID)); d.Path == nil {
+		t.Fatal("GetNoteDetail: root note path is nil; want empty slice")
+	}
 }
 
 // ---- Slugs & the addressing invariant (D32) ----
@@ -160,7 +189,7 @@ func TestFolderMoveCycleGuard(t *testing.T) {
 func TestNoOpMoveDoesNotBumpOrBroadcast(t *testing.T) {
 	db := testsupport.NewDB(t)
 	var broadcasts int
-	svc := notes.NewService(db, audit.NewSink(), func(context.Context, string, any) { broadcasts++ })
+	svc := notes.NewService(db, audit.NewSink(), func(context.Context, string, any) { broadcasts++ }, nil, notes.ImageOptions{}, nil)
 	ctx := editorCtx()
 
 	n, err := svc.CreateNote(ctx, notes.NoteCreate{Title: "Seznam", BodyMD: "mléko"})
@@ -530,7 +559,7 @@ func TestUpdateProducesFieldDiffs(t *testing.T) {
 func TestNoOpBodyPatchDoesNotBumpOrBroadcast(t *testing.T) {
 	db := testsupport.NewDB(t)
 	var broadcasts int
-	svc := notes.NewService(db, audit.NewSink(), func(context.Context, string, any) { broadcasts++ })
+	svc := notes.NewService(db, audit.NewSink(), func(context.Context, string, any) { broadcasts++ }, nil, notes.ImageOptions{}, nil)
 	ctx := editorCtx()
 
 	n, err := svc.CreateNote(ctx, notes.NoteCreate{Title: "Seznam", BodyMD: "mléko, chléb"})

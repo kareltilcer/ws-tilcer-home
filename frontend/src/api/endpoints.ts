@@ -28,6 +28,7 @@ import type {
   LayoutItem,
   LayoutItemInput,
   NoteDetail,
+  NoteImageUploadResult,
   NotePage,
   NotesTree,
   OccurrenceMonths,
@@ -184,6 +185,28 @@ export const deleteFolder = (id: string, opts: { cascade?: boolean; hard?: boole
   apiFetch<void>(`/api/notes/folders/${encodeURIComponent(id)}${qs(opts)}`, { method: 'DELETE' })
 export const moveFolder = (id: string, body: { parent_id?: string | null; position: string }) =>
   apiFetch<Folder>(`/api/notes/folders/${encodeURIComponent(id)}/move`, { method: 'POST', body })
+
+// noteImageUploadTimeoutMs bounds a single image upload. Without it, a request that
+// never settles (a stalled connection) would leave the editor's image node stuck on
+// its data:/blob: src forever — which suppresses every later autosave emission and
+// silently freezes the note for the whole session. A hard deadline makes a hung upload
+// reject instead, so the caller can drop the node and surface an error. Generous
+// headroom for the 10 MB cap on a slow link (real pasted images are far smaller).
+const noteImageUploadTimeoutMs = 120_000
+
+/** uploadNoteImage streams one pasted/dropped image to object storage and returns
+ *  the reference URL the editor embeds as `![](url)`. Keeps body_md small — the
+ *  bytes never travel inline. Aborts after noteImageUploadTimeoutMs so a stuck
+ *  upload can never wedge the editor's autosave. */
+export const uploadNoteImage = (noteId: string, file: File | Blob, filename = 'image') => {
+  const form = new FormData()
+  form.append('file', file, filename)
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), noteImageUploadTimeoutMs)
+  return apiUpload<NoteImageUploadResult>(`/api/notes/${encodeURIComponent(noteId)}/images`, form, {
+    signal: abort.signal,
+  }).finally(() => clearTimeout(timer))
+}
 
 // ---- Documents (Dokumenty, v4) ----
 //

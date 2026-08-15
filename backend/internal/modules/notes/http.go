@@ -26,6 +26,11 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/notes/tree", h.tree)
 	r.Get("/notes/resolve", h.resolve)
 
+	// Inline-image content: a static /notes/images/{imageId} GET (registered before
+	// /notes/{id} so it is never parsed as a note id). Session-gated read, open to any
+	// member; the upload is note-scoped and write-gated below.
+	r.Get("/notes/images/{imageId}", h.getImage)
+
 	// Folders (static /notes/folders prefix, before /notes/{id}).
 	r.With(httpx.RequireWrite).Post("/notes/folders", h.createFolder)
 	r.Get("/notes/folders/{id}", h.getFolder)
@@ -38,6 +43,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.With(httpx.RequireWrite).Patch("/notes/{id}", h.updateNote)
 	r.With(httpx.RequireWrite).Delete("/notes/{id}", h.deleteNote) // hard=true additionally requires admin (in handler)
 	r.With(httpx.RequireWrite).Post("/notes/{id}/move", h.moveNote)
+	r.With(httpx.RequireWrite).Post("/notes/{id}/images", h.uploadImage) // paste/drop image upload
 
 	// Pin/unpin: ungated at the router — the service allows a personal pin for any
 	// member and requires editor/admin only for a household pin.
