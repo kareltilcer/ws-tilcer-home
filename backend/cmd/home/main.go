@@ -159,7 +159,6 @@ func run(logger *slog.Logger) error {
 
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)
-	notesSvc := notes.NewService(sqldb, sink, notify)
 
 	// documents (v4) is the first module with bytes outside SQLite: it needs an object
 	// store, an async preview worker, and — because Litestream cannot back up a blob
@@ -173,6 +172,14 @@ func run(logger *slog.Logger) error {
 		AllowedMIME:    cfg.Docs.AllowedMIME,
 		PreviewEnabled: cfg.Docs.PreviewEnabled,
 		PublicBaseURL:  cfg.Docs.PublicBaseURL,
+	}, logger)
+
+	// notes (v4.1) gained inline images: the bytes reuse the documents object store
+	// under a distinct note-images/ prefix (each module's reconciliation is prefix-
+	// scoped, so the two never touch each other's objects) and share its backup mirror.
+	notesSvc := notes.NewService(sqldb, sink, notify, docsBlob, notes.ImageOptions{
+		MaxUploadBytes: int64(cfg.NotesImageMaxUploadMB) << 20,
+		GCGrace:        2 * time.Minute, // spare an in-flight upload from a racing body save
 	}, logger)
 
 	previewWorker := documents.NewPreviewWorker(docsSvc.Store(), docsBlob, notify, documents.PreviewConfig{
@@ -211,6 +218,15 @@ func run(logger *slog.Logger) error {
 	defer stopBackground()
 	previewWorker.Start(bgCtx)
 	documents.NewMirrorJob(docsSvc.Store(), docsBlob, documents.MirrorConfig{
+		Interval:       cfg.Docs.MirrorInterval,
+		OrphanGrace:    time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour,
+		MaxOrphanShare: float64(cfg.Docs.OrphanMaxPercent) / 100,
+		Backup:         docsBackup,
+		Logger:         logger,
+	}).Run(bgCtx)
+	// Note images share the documents bucket + backup, mirrored/reconciled on the same
+	// cadence but scoped to the note-images/ prefix and the note_images table.
+	notes.NewImageMirrorJob(notesSvc.Store(), docsBlob, notes.ImageMirrorConfig{
 		Interval:       cfg.Docs.MirrorInterval,
 		OrphanGrace:    time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour,
 		MaxOrphanShare: float64(cfg.Docs.OrphanMaxPercent) / 100,

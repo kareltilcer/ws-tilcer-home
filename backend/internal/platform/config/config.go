@@ -86,6 +86,11 @@ type Config struct {
 	// LogRetentionDays is the audit prune threshold; 0 = keep forever (default 0).
 	LogRetentionDays int
 
+	// NotesImageMaxUploadMB is the hard per-image cap for pasted/dropped note images;
+	// over it the upload is rejected 413 (default 10). The image BYTES reuse the
+	// documents R2 bucket (a distinct note-images/ prefix) and its backup mirror.
+	NotesImageMaxUploadMB int
+
 	// DevAuthBypass, when true (and only outside production), skips real JWT
 	// introspection and injects a fake actor so the app runs offline. It is a
 	// development-only convenience and a security hole if ever enabled in prod.
@@ -286,6 +291,9 @@ const (
 	defaultDocsCwebp            = "cwebp"
 	defaultDocsThumbMaxPx       = 480
 	defaultDocsImageMaxMP       = 50
+
+	// notes (v4.1) inline images
+	defaultNotesImageMaxUploadMB = 10
 )
 
 // defaultAllowedOrigins is the CSRF Origin allowlist when HOME_ALLOWED_ORIGINS is
@@ -347,6 +355,7 @@ func Load(getenv Getenv) (*Config, error) {
 	c.RRuleMaxOccurrences = l.intDefault("HOME_RRULE_MAX_OCCURRENCES", defaultRRuleMaxOccurrences)
 	c.RRuleMaxWindowMonths = l.intDefault("HOME_RRULE_MAX_WINDOW_MONTHS", defaultRRuleMaxWindowMonths)
 	c.LogRetentionDays = l.intDefault("HOME_LOG_RETENTION_DAYS", defaultLogRetentionDays)
+	c.NotesImageMaxUploadMB = l.intDefault("HOME_NOTES_IMAGE_MAX_UPLOAD_MB", defaultNotesImageMaxUploadMB)
 
 	// Range sanity — these bound server work, so a nonsensical value is a bug.
 	if c.DashboardLookbackDays < 0 {
@@ -360,6 +369,9 @@ func Load(getenv Getenv) (*Config, error) {
 	}
 	if c.LogRetentionDays < 0 {
 		l.errf("HOME_LOG_RETENTION_DAYS must be >= 0 (got %d)", c.LogRetentionDays)
+	}
+	if c.NotesImageMaxUploadMB < 1 {
+		l.errf("HOME_NOTES_IMAGE_MAX_UPLOAD_MB must be >= 1 (got %d)", c.NotesImageMaxUploadMB)
 	}
 	if c.SessionTTLDays < 1 {
 		l.errf("HOME_SESSION_TTL_DAYS must be >= 1 (got %d)", c.SessionTTLDays)

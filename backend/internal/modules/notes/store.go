@@ -753,3 +753,229 @@ func toArgs(ids []string) []any {
 	}
 	return args
 }
+
+// ---- Note images (inline image blobs, note-images/{id}) ----
+
+// noteImage is a stored image's metadata row: the id → object map the content
+// endpoint, the garbage collector, and the reconciliation pass read.
+type noteImage struct {
+	ID          string
+	NoteID      string
+	ContentType string
+	ByteSize    int64
+	Checksum    string
+	CreatedBy   *string
+	CreatedAt   string
+}
+
+// ImageObjectRef is one object the note_images table claims — the mirror pass
+// compares these against what the bucket actually holds.
+type ImageObjectRef struct {
+	ImageID string
+	Key     string
+}
+
+const noteImageCols = `id, note_id, content_type, byte_size, checksum, created_by, created_at`
+
+func scanNoteImage(r interface{ Scan(...any) error }) (noteImage, error) {
+	var im noteImage
+	var createdBy sql.NullString
+	if err := r.Scan(&im.ID, &im.NoteID, &im.ContentType, &im.ByteSize, &im.Checksum, &createdBy, &im.CreatedAt); err != nil {
+		return noteImage{}, err
+	}
+	im.CreatedBy = ptr(createdBy)
+	return im, nil
+}
+
+func (s *Store) InsertNoteImage(ctx context.Context, q DBTX, id, noteID, contentType string, byteSize int64, checksum, createdBy string) error {
+	_, err := q.ExecContext(ctx,
+		`INSERT INTO note_images (id, note_id, content_type, byte_size, checksum, created_by, created_at)
+		 VALUES (?,?,?,?,?,?,?)`,
+		id, noteID, contentType, byteSize, checksum, nullable(createdBy), nowUTC())
+	return err
+}
+
+func (s *Store) GetNoteImage(ctx context.Context, q DBTX, id string) (*noteImage, error) {
+	row := q.QueryRowContext(ctx, `SELECT `+noteImageCols+` FROM note_images WHERE id = ?`, id)
+	im, err := scanNoteImage(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &im, nil
+}
+
+// NoteImageIDsForNote returns the ids of every image owned by a note (its upload
+// scope) — GC diffs this against the ids still referenced in the note's body_md.
+func (s *Store) NoteImageIDsForNote(ctx context.Context, q DBTX, noteID string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id FROM note_images WHERE note_id = ?`, noteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// NoteImagesForNote returns the full image rows owned by a note — GC needs each
+// row's created_at to spare freshly-uploaded images from a racing body save (see
+// Service.gcNoteImages).
+func (s *Store) NoteImagesForNote(ctx context.Context, q DBTX, noteID string) ([]noteImage, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+noteImageCols+` FROM note_images WHERE note_id = ?`, noteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []noteImage
+	for rows.Next() {
+		im, err := scanNoteImage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, im)
+	}
+	return out, rows.Err()
+}
+
+// DeleteNoteImages removes the given image rows. Object deletion is a separate,
+// best-effort step (the reconciliation pass sweeps any object whose row is gone),
+// so a row delete here never has to succeed atomically with a bucket delete.
+func (s *Store) DeleteNoteImages(ctx context.Context, q DBTX, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := q.ExecContext(ctx, `DELETE FROM note_images WHERE id IN (`+placeholders(len(ids))+`)`, toArgs(ids)...)
+	return err
+}
+
+// NoteBodyRef is a note id + its body_md, for the batched cross-note reference
+// check (see Service.otherNotesImageRefs).
+type NoteBodyRef struct {
+	ID   string
+	Body string
+}
+
+// NotesReferencingAnyImage returns the id + body_md of every note (other than
+// excludeID) whose body embeds at least one image content URL. Callers extract the
+// referenced image ids in Go, so one scan of the fixed `/api/notes/images/` prefix
+// replaces the former per-image instr query (an O(images × notes) full-table scan on
+// every save and hard delete). instr sidesteps LIKE-wildcard escaping — the prefix is
+// fixed text (no % or _).
+func (s *Store) NotesReferencingAnyImage(ctx context.Context, q DBTX, excludeID string) ([]NoteBodyRef, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT id, body_md FROM notes WHERE id <> ? AND body_md IS NOT NULL AND instr(body_md, ?) > 0`,
+		excludeID, noteImageAPIBase)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NoteBodyRef
+	for rows.Next() {
+		var r NoteBodyRef
+		if err := rows.Scan(&r.ID, &r.Body); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UnreferencedImageIDs returns the ids of note_images rows older than cutoff that NO
+// note's body_md references — reclaimable leaks (an upload whose embedding body-save
+// never landed, or a stray duplicate). cutoff is a tsFormat timestamp; the grace it
+// encodes spares a fresh upload still mid-embed.
+//
+// Two flat scans intersected in Go, not a correlated `NOT EXISTS ... instr(body_md, ?
+// || ni.id)` — that re-read every note body once per candidate image (O(images ×
+// notes)), the same shape NotesReferencingAnyImage was introduced to replace. The two
+// queries run strictly one after the other: the pool is capped at a single connection
+// (D-SQLITE), so holding one rows cursor open across another query would deadlock.
+func (s *Store) UnreferencedImageIDs(ctx context.Context, cutoff string) ([]string, error) {
+	aged, err := s.imageIDsOlderThan(ctx, cutoff)
+	if err != nil || len(aged) == 0 {
+		return nil, err
+	}
+	// excludeID "" excludes nothing — every note's body counts here, including the
+	// image's own owner.
+	bodies, err := s.NotesReferencingAnyImage(ctx, s.db, "")
+	if err != nil {
+		return nil, err
+	}
+	referenced := map[string]bool{}
+	for _, b := range bodies {
+		for id := range referencedImageIDs(b.Body) {
+			referenced[id] = true
+		}
+	}
+	var out []string
+	for _, id := range aged {
+		if !referenced[id] {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// imageIDsOlderThan lists the image rows past the sweep's grace window. Split out so
+// its cursor is drained and closed before the caller opens the next query.
+func (s *Store) imageIDsOlderThan(ctx context.Context, cutoff string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM note_images WHERE created_at < ?`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// CountNotes returns the number of note rows (archived included). The unreferenced-
+// image sweep uses it as a safety interlock: an empty table would make every image
+// look unreferenced, which reads as an unrestored database rather than a real leak.
+func (s *Store) CountNotes(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes`).Scan(&n)
+	return n, err
+}
+
+// ReassignNoteImage hands an image to a new owning note. Used when its owner is
+// hard-deleted while another note still references it: re-parenting the row spares
+// it from the owner's ON DELETE CASCADE so the shared object survives.
+func (s *Store) ReassignNoteImage(ctx context.Context, q DBTX, imageID, newNoteID string) error {
+	_, err := q.ExecContext(ctx, `UPDATE note_images SET note_id = ? WHERE id = ?`, newNoteID, imageID)
+	return err
+}
+
+// ExpectedImageObjects returns every object the note_images rows claim, for the
+// mirror/reconciliation pass (one key per image).
+func (s *Store) ExpectedImageObjects(ctx context.Context) ([]ImageObjectRef, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM note_images`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ImageObjectRef
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, ImageObjectRef{ImageID: id, Key: NoteImageKey(id)})
+	}
+	return out, rows.Err()
+}

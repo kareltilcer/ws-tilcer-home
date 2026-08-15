@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.5.1
+  version: 0.5.2
   description: >-
     API for the `home` household-management service (v4). Companion to PRD.md.
     Six modules: `logging` (a spine; read/browse endpoints only — writes are
@@ -1090,6 +1090,77 @@ paths:
               schema: { $ref: "#/components/schemas/PinState" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/notes/{id}/images:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [notes]
+      summary: Upload a pasted/dropped inline image (multipart)
+      description: >-
+        Streams the image to object storage under the `note-images/` prefix (the
+        documents R2 bucket, distinct prefix), sniffs the MIME server-side, checksums
+        (SHA-256), and records the note_images row — only after the object is durable.
+        Returns the reference the editor embeds as `![](url)`; the bytes never live
+        inline in body_md (PRD D30 keeps body_md as the one canonical text). The owning
+        note must exist and be live. Requires the CSRF header. editor/admin.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/NoteImageUpload" }
+            encoding:
+              file: { contentType: application/octet-stream }
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NoteImageUploadResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413":
+          description: Image exceeds HOME_NOTES_IMAGE_MAX_UPLOAD_MB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: Not an allowed image type (png/jpeg/gif/webp, server-sniffed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "502":
+          description: Object storage unreachable (nothing committed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/notes/images/{imageId}:
+    parameters:
+      - name: imageId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [notes]
+      summary: Stream an inline image (household-only content URL)
+      description: >-
+        Streams the image from object storage through the backend (storage stays
+        private). Sets ETag=checksum and `Cache-Control: private, immutable,
+        max-age=31536000` (bytes never change), `X-Content-Type-Options: nosniff`, a
+        sandboxed CSP, and `Content-Disposition: inline` (D48). Session-required.
+      responses:
+        "200":
+          description: The image
+          headers:
+            ETag: { schema: { type: string }, description: The image's SHA-256 checksum. }
+            Cache-Control: { schema: { type: string } }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "304": { description: Not modified (ETag match) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/notes/folders:
     post:
@@ -2385,6 +2456,23 @@ components:
       properties:
         folder_id: { type: [string, "null"], description: Target folder (null = root). }
         position: { type: string, description: New order key within the target. }
+    NoteImageUpload:
+      type: object
+      required: [file]
+      description: multipart/form-data body for a pasted/dropped inline image (single `file` part).
+      properties:
+        file: { type: string, format: binary }
+    NoteImageUploadResult:
+      type: object
+      required: [id, url, content_type, byte_size]
+      description: >-
+        The stored image. The editor embeds `url` in body_md as `![](url)`; the bytes
+        never live inline. Content is served household-only through the backend.
+      properties:
+        id: { type: string, description: Image id (UUIDv7). }
+        url: { type: string, description: "Content URL, /api/notes/images/{id}." }
+        content_type: { type: string, description: Server-sniffed image type (never the client's claim). }
+        byte_size: { type: integer, format: int64 }
     NotePage:
       type: object
       required: [items]

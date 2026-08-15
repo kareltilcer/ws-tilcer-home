@@ -357,6 +357,15 @@ export interface ResolveResult {
   slug_path: string
 }
 
+// POST /api/notes/{id}/images: a pasted/dropped image streamed to object storage.
+// The editor embeds `url` as `![](url)`; the bytes never live inline in body_md.
+export interface NoteImageUploadResult {
+  id: string
+  url: string
+  content_type: string
+  byte_size: number
+}
+
 // notes.pripnute widget payload.
 export interface PinnedNote {
   note_id: string

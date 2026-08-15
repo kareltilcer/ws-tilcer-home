@@ -42,8 +42,6 @@ const (
 	contentThumbnail
 )
 
-const immutableCache = "private, immutable, max-age=31536000"
-
 // pdfSandbox is the relaxed CSP used for PDF responses that the SPA renders in a
 // sandboxed <iframe>. Chrome's built-in PDF viewer is script-driven, so a bare
 // `sandbox` directive blocks it and the user sees an empty frame. `allow-scripts`
@@ -104,7 +102,7 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 
 	// A matching validator means the browser already has these exact bytes — and
 	// since they can never change, that answer is always correct.
-	if ifNoneMatch(r, etag) {
+	if httpx.IfNoneMatch(r, etag) {
 		setImmutableCache(w, etag)
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -191,7 +189,7 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 // these were set would be cached as if it were the content.
 func setImmutableCache(w http.ResponseWriter, etag string) {
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", immutableCache)
+	w.Header().Set("Cache-Control", httpx.ImmutableContentCache)
 }
 
 // writeObjectError maps a storage failure onto a response. A missing object behind
@@ -272,25 +270,6 @@ func dispositionFor(mode contentMode, contentType, filename string) string {
 	}
 }
 
-// ifNoneMatch reports whether the request's If-None-Match matches etag. Handles the
-// "*" wildcard, comma-separated lists, and weak validators.
-func ifNoneMatch(r *http.Request, etag string) bool {
-	header := r.Header.Get("If-None-Match")
-	if header == "" {
-		return false
-	}
-	if strings.TrimSpace(header) == "*" {
-		return true
-	}
-	for _, candidate := range strings.Split(header, ",") {
-		candidate = strings.TrimSpace(candidate)
-		candidate = strings.TrimPrefix(candidate, "W/")
-		if candidate == etag {
-			return true
-		}
-	}
-	return false
-}
 
 // parseRange parses a single-range `bytes=` header. Multi-range requests are not
 // supported (they need a multipart/byteranges response and no real client needs one

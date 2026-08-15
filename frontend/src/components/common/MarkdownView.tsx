@@ -9,7 +9,7 @@ export function MarkdownView({ children }: { children: string }) {
     return <p className="text-sm text-subtle italic">Bez poznámek.</p>
   }
   return (
-    <div className="space-y-2 text-sm leading-relaxed text-fg [&_a]:text-accent [&_a]:underline [&_code]:font-mono [&_code]:text-[13px] [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold">
+    <div className="space-y-2 text-sm leading-relaxed text-fg [&_a]:text-accent [&_a]:underline [&_code]:font-mono [&_code]:text-[13px] [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded-lg [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
         {children}
       </ReactMarkdown>

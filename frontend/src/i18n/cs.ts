@@ -104,7 +104,13 @@ export const cs = {
     saving: 'Ukládám…',
     saved: 'Uloženo',
     saveError: 'Nepodařilo se uložit',
+    saveRejected: 'Server tuto verzi poznámky odmítl. Koncept zůstal zachovaný — uprav ji a zkus to znovu.',
     draftRecovered: 'Obnovili jsme neuložený koncept této poznámky.',
+    imageUploadError: 'Obrázek se nepodařilo nahrát',
+    imageMigrated: 'Obrázek vložený přímo v textu jsme nahráli do úložiště.',
+    imageUploadBlocked:
+      'Obrázek vložený přímo v textu této poznámky se nepodařilo nahrát do úložiště, takže poznámku nejde uložit, dokud v ní zůstane. Otevři režim Markdown a obrázek z textu odeber.',
+    imageNotEmbeddable: 'Vložený obrázek nejde nahrát ani uložit přímo v textu. Poznámka půjde uložit až bez něj.',
     goneTitle: 'Poznámka už není dostupná',
     goneBody: 'Někdo ji mezitím smazal. Zavři toto okno.',
     bodyPlaceholder: 'Piš v Markdownu…',
