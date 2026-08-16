@@ -17,11 +17,17 @@ type Module struct {
 	svc     *Service
 	handler *Handler
 	widget  registry.WidgetProvider
+	metrics *metricProvider
 }
 
 // NewModule builds the todo module over svc.
 func NewModule(svc *Service) *Module {
-	return &Module{svc: svc, handler: NewHandler(svc), widget: newPravedelamProvider(svc.Store())}
+	return &Module{
+		svc:     svc,
+		handler: NewHandler(svc),
+		widget:  newPravedelamProvider(svc.Store()),
+		metrics: &metricProvider{store: svc.Store()},
+	}
 }
 
 func (m *Module) Name() string { return "todo" }

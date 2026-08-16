@@ -5,17 +5,31 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
-// sqliteSink is the v1 in-process writer to the home DB's audit tables.
-type sqliteSink struct{}
+// Writer is the in-process writer to the home DB's audit tables.
+type Writer struct {
+	// nudge, when set, is called after an event is written so the outbox tailer
+	// can wake early instead of waiting for its next poll (v5, HANDOFF-7 §4).
+	nudge atomic.Pointer[func()]
+}
 
 // NewSink returns the in-process SQLite audit sink.
-func NewSink() Sink { return &sqliteSink{} }
+func NewSink() *Writer { return &Writer{} }
+
+// SetNudge attaches the outbox tailer's wake signal. Called once at composition.
+//
+// The nudge is a LATENCY optimisation only, never a correctness path: Record
+// runs inside the caller's write transaction, so the signal necessarily arrives
+// a moment before the commit it refers to, and the tailer's poll is what
+// guarantees the event is eventually seen. Whatever fn does, it must not block —
+// it would be blocking someone's database transaction.
+func (w *Writer) SetNudge(fn func()) { w.nudge.Store(&fn) }
 
 // Record inserts one audit_events row (and one audit_changes row per change)
 // using tx. Actor and request metadata are taken from ctx, never from e.
@@ -24,7 +38,7 @@ func NewSink() Sink { return &sqliteSink{} }
 // rather than duplicated here: a bad value fails the insert, which fails the
 // whole transaction — exactly the atomicity guarantee we want, and a
 // programming-error path that surfaces loudly instead of logging garbage.
-func (s *sqliteSink) Record(ctx context.Context, tx *sql.Tx, e Event) (string, error) {
+func (w *Writer) Record(ctx context.Context, tx *sql.Tx, e Event) (string, error) {
 	if e.Module == "" || e.Action == "" || e.Summary == "" {
 		return "", fmt.Errorf("audit: module, action and summary are required (got module=%q action=%q)", e.Module, e.Action)
 	}
@@ -79,6 +93,9 @@ func (s *sqliteSink) Record(ctx context.Context, tx *sql.Tx, e Event) (string, e
 		}
 	}
 
+	if fn := w.nudge.Load(); fn != nil {
+		(*fn)()
+	}
 	return id, nil
 }
 

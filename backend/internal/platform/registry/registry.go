@@ -205,3 +205,34 @@ func CollectWidgets(modules []Module) []WidgetProvider {
 	}
 	return out
 }
+
+// ---- Audit action catalog ----
+
+// Action is one audit action key a module can emit, qualified by its module.
+// Modules declare bare verbs ("card.move"); the module column qualifies them
+// ("todo" + "card.move"), which is how the log browser and the admin trigger
+// composer present them.
+type Action struct {
+	Key    string `json:"key"`    // bare verb, matched against audit_events.action
+	Module string `json:"module"` // owning module
+	Label  string `json:"label"`  // human Czech phrase, filled by the caller
+}
+
+// Qualified is the display form, "module.key".
+func (a Action) Qualified() string { return a.Module + "." + a.Key }
+
+// CollectActions returns every audit action the modules declare, in module
+// order. This is the vocabulary a v5 trigger rule binds to (FR-ADM2/ADM4) — the
+// first consumer of AuditActions(), which until now only documented itself.
+//
+// Actions emitted by platform/ (login, logout, push.*) belong to no module and
+// are merged in by the caller from audit.PlatformActions.
+func CollectActions(modules []Module) []Action {
+	var out []Action
+	for _, m := range modules {
+		for _, key := range m.AuditActions() {
+			out = append(out, Action{Key: key, Module: m.Name()})
+		}
+	}
+	return out
+}

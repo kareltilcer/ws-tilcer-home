@@ -5,6 +5,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,6 +104,59 @@ type Config struct {
 	// Docs is the documents module's configuration (v4): object storage for the
 	// file bytes, the preview pipeline, and the blob backup mirror.
 	Docs DocsConfig
+
+	// Notif is the v5 notification configuration: the shared Web Push channel
+	// (VAPID) and the wall-clock scheduler that fires summary notifications.
+	Notif NotifConfig
+}
+
+// NotifConfig configures the v5 push channel, the trigger notifier, and the
+// summary scheduler (PRD §V5-9, HANDOFF-7 §14).
+//
+// The VAPID keypair is a SECRET and identifies this server to every browser push
+// service. It is generated ONCE (cmd/vapidgen) and never rotated casually:
+// rotating it invalidates every existing subscription, silently — every device
+// would have to re-subscribe. Only the PUBLIC half is ever served (FR-P3).
+type NotifConfig struct {
+	// VAPIDPublicKey / VAPIDPrivateKey are base64url (raw, unpadded): an
+	// uncompressed P-256 point (65 bytes) and its scalar (32 bytes). Both empty
+	// disables push entirely; exactly one set is a misconfiguration.
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
+	// VAPIDSubject identifies the sender to the push service — a "mailto:" or
+	// "https://" URL. Required once the keypair is set.
+	VAPIDSubject string
+
+	// CoalesceDefault is the per-rule default window for collapsing a burst of one
+	// trigger rule's matches into a single push (D57). 0 = fire every event.
+	CoalesceDefault time.Duration
+	// DeliveryRetentionDays prunes notification_deliveries beyond this age;
+	// 0 = keep forever (D64). Deliveries are operational, not audit.
+	DeliveryRetentionDays int
+	// MaxFailDays prunes a subscription that has been failing continuously for
+	// this long (a device that was wiped without unsubscribing).
+	MaxFailDays int
+
+	// PushEndpointHosts are EXTRA push-service hosts a subscription endpoint may
+	// name, on top of the built-in vendor list (push.DefaultPushServiceHosts).
+	// The endpoint decides where this server sends, so it is allowlisted rather
+	// than taken on trust; this is the escape hatch for a browser the built-in
+	// list has not caught up with. Matched exactly or as a subdomain.
+	PushEndpointHosts []string
+
+	// SchedTick is the scheduler's granularity; slots are minute-resolution, so
+	// anything above a minute would start missing them.
+	SchedTick time.Duration
+	// CatchupGrace fires a slot missed while the process was down, if the backend
+	// is back within this window; older misses are skipped rather than backfilled
+	// as a storm (D58a).
+	CatchupGrace time.Duration
+}
+
+// PushEnabled reports whether a usable VAPID keypair is configured. When false
+// the push channel is inert: subscriptions are refused and nothing is sent.
+func (n NotifConfig) PushEnabled() bool {
+	return n.VAPIDPublicKey != "" && n.VAPIDPrivateKey != ""
 }
 
 // DocsConfig configures the documents module (PRD §9, HANDOFF-6 §16). The file
@@ -211,12 +265,33 @@ func (c *Config) Redacted() string {
 	return fmt.Sprintf(
 		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
-			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t %s",
+			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t %s %s",
 		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
 		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.AllowedOrigins, c.DevAuthBypass,
-		c.Docs.redacted(),
+		c.Docs.redacted(), c.Notif.redacted(),
 	)
+}
+
+// redacted summarises the notification configuration. The VAPID keys are secrets;
+// only whether they are present is ever logged.
+func (n NotifConfig) redacted() string {
+	push := "off(no VAPID keypair)"
+	if n.PushEnabled() {
+		push = fmt.Sprintf("on(subject=%s)", n.VAPIDSubject)
+	}
+	retention := "forever"
+	if n.DeliveryRetentionDays > 0 {
+		retention = fmt.Sprintf("%dd", n.DeliveryRetentionDays)
+	}
+	hosts := "builtin"
+	if len(n.PushEndpointHosts) > 0 {
+		// Listed in full: an endpoint refused as an "unknown push service" is
+		// diagnosed straight from the boot line.
+		hosts = fmt.Sprintf("builtin+%v", n.PushEndpointHosts)
+	}
+	return fmt.Sprintf("push=%s notif_coalesce=%s notif_retention=%s notif_max_faildays=%d push_hosts=%s sched_tick=%s sched_catchup=%s",
+		push, n.CoalesceDefault, retention, n.MaxFailDays, hosts, n.SchedTick, n.CatchupGrace)
 }
 
 // redacted summarises the documents configuration with the storage secrets masked.
@@ -294,6 +369,18 @@ const (
 
 	// notes (v4.1) inline images
 	defaultNotesImageMaxUploadMB = 10
+
+	// notifications + scheduler (v5)
+	defaultNotifCoalesce         = 60 * time.Second
+	defaultNotifRetentionDays    = 30
+	defaultNotifMaxFailDays      = 14
+	defaultSchedTick             = 60 * time.Second
+	defaultSchedCatchupGraceMins = 120
+
+	// Byte lengths of a decoded VAPID keypair: an uncompressed P-256 point
+	// (0x04 ‖ X ‖ Y) and its 256-bit private scalar.
+	vapidPublicKeyBytes  = 65
+	vapidPrivateKeyBytes = 32
 )
 
 // defaultAllowedOrigins is the CSRF Origin allowlist when HOME_ALLOWED_ORIGINS is
@@ -381,6 +468,7 @@ func Load(getenv Getenv) (*Config, error) {
 	}
 
 	c.Docs = l.docs(c)
+	c.Notif = l.notif()
 
 	// Security hard-stop: the dev bypass must never be active in production.
 	if c.DevAuthBypass && c.IsProduction() {
@@ -495,6 +583,94 @@ func (l *loader) docs(c *Config) DocsConfig {
 
 	d.PublicBaseURL = strings.TrimRight(l.strDefault("HOME_DOCS_PUBLIC_BASE_URL", ""), "/")
 	return d
+}
+
+// notif loads and validates the v5 notification configuration.
+//
+// Push is OPTIONAL: with no VAPID keypair the channel is inert and the rest of
+// the app runs untouched (development, and any deploy that does not want push).
+// But a HALF-configured keypair, or a malformed one, is always an error — it
+// would fail at the first send, in production, long after boot, with a message
+// about elliptic curves rather than about an environment variable.
+func (l *loader) notif() NotifConfig {
+	n := NotifConfig{}
+
+	n.VAPIDPublicKey = strings.TrimSpace(l.strDefault("HOME_VAPID_PUBLIC_KEY", ""))
+	n.VAPIDPrivateKey = strings.TrimSpace(l.strDefault("HOME_VAPID_PRIVATE_KEY", ""))
+	n.VAPIDSubject = strings.TrimSpace(l.strDefault("HOME_VAPID_SUBJECT", ""))
+
+	switch {
+	case n.VAPIDPublicKey == "" && n.VAPIDPrivateKey == "":
+		// Push disabled. main.go logs this once, loudly, at boot.
+	case n.VAPIDPublicKey == "" || n.VAPIDPrivateKey == "":
+		l.errf("HOME_VAPID_PUBLIC_KEY and HOME_VAPID_PRIVATE_KEY must be set together " +
+			"(set neither to disable push, both to enable it)")
+	default:
+		l.vapidKey("HOME_VAPID_PUBLIC_KEY", n.VAPIDPublicKey, vapidPublicKeyBytes)
+		l.vapidKey("HOME_VAPID_PRIVATE_KEY", n.VAPIDPrivateKey, vapidPrivateKeyBytes)
+		if n.VAPIDSubject == "" {
+			l.errf("HOME_VAPID_SUBJECT is required when a VAPID keypair is set " +
+				`(a "mailto:you@example.com" or "https://home.tilcer.cz" contact for the push service)`)
+		} else if !strings.HasPrefix(n.VAPIDSubject, "mailto:") && !strings.HasPrefix(n.VAPIDSubject, "https://") {
+			l.errf("HOME_VAPID_SUBJECT must start with \"mailto:\" or \"https://\" (got %q)", n.VAPIDSubject)
+		}
+	}
+
+	n.CoalesceDefault = time.Duration(l.intDefault("HOME_NOTIF_COALESCE_DEFAULT", int(defaultNotifCoalesce/time.Second))) * time.Second
+	if n.CoalesceDefault < 0 {
+		l.errf("HOME_NOTIF_COALESCE_DEFAULT must be >= 0 seconds (0 = send every event); got %s", n.CoalesceDefault)
+	}
+	n.DeliveryRetentionDays = l.intDefault("HOME_NOTIF_DELIVERY_RETENTION_DAYS", defaultNotifRetentionDays)
+	if n.DeliveryRetentionDays < 0 {
+		l.errf("HOME_NOTIF_DELIVERY_RETENTION_DAYS must be >= 0 (0 = keep forever); got %d", n.DeliveryRetentionDays)
+	}
+	n.MaxFailDays = l.intDefault("HOME_NOTIF_MAX_FAILDAYS", defaultNotifMaxFailDays)
+	if n.MaxFailDays < 1 {
+		l.errf("HOME_NOTIF_MAX_FAILDAYS must be >= 1 (got %d)", n.MaxFailDays)
+	}
+	// Hosts only, never URLs: the check runs against a parsed endpoint's hostname,
+	// so a pasted "https://…/" would silently match nothing.
+	n.PushEndpointHosts = l.csvDefault("HOME_PUSH_ENDPOINT_HOSTS", nil)
+	for _, h := range n.PushEndpointHosts {
+		if strings.ContainsAny(h, "/:") {
+			l.errf("HOME_PUSH_ENDPOINT_HOSTS takes bare hostnames, not URLs (got %q)", h)
+		}
+	}
+
+	n.SchedTick = time.Duration(l.intDefault("HOME_SCHED_TICK_SECONDS", int(defaultSchedTick/time.Second))) * time.Second
+	if n.SchedTick < time.Second || n.SchedTick > time.Minute {
+		// Slots are wall-clock minutes: a tick longer than a minute steps over them.
+		l.errf("HOME_SCHED_TICK_SECONDS must be between 1 and 60 (got %s) — a longer tick skips whole minute slots", n.SchedTick)
+	}
+	n.CatchupGrace = time.Duration(l.intDefault("HOME_SCHED_CATCHUP_GRACE", defaultSchedCatchupGraceMins)) * time.Minute
+	if n.CatchupGrace < 0 {
+		l.errf("HOME_SCHED_CATCHUP_GRACE must be >= 0 minutes (0 = never catch up); got %s", n.CatchupGrace)
+	}
+
+	return n
+}
+
+// vapidKey checks that a configured VAPID key is raw base64url of the expected
+// byte length. base64.RawURLEncoding is strict about padding, so a key pasted
+// with "=" padding (some generators emit it) is trimmed rather than rejected.
+func (l *loader) vapidKey(key, value string, wantBytes int) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(value, "="))
+	if err != nil {
+		l.errf("%s must be base64url-encoded (got %q): %v", key, redactKey(value), err)
+		return
+	}
+	if len(raw) != wantBytes {
+		l.errf("%s must decode to %d bytes, got %d — is the public/private pair swapped?", key, wantBytes, len(raw))
+	}
+}
+
+// redactKey shows just enough of a key to identify a paste error without putting
+// the secret in a log line.
+func redactKey(v string) string {
+	if len(v) <= 6 {
+		return "***"
+	}
+	return v[:6] + "…"
 }
 
 // loader accumulates validation errors while reading typed values.

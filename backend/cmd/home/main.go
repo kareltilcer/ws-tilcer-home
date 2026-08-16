@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
@@ -34,8 +35,11 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/config"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/scheduler"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
 
@@ -124,6 +128,33 @@ func run(logger *slog.Logger) error {
 	sessionMW := auth.NewSessionAuth(authConf)
 	csrfMW := auth.NewCSRF(cfg.AllowedOrigins, cfg.DevAuthBypass)
 
+	// 3b. The shared Web Push channel (v5, D52). One service worker on one origin
+	// ⇒ one subscription per device ⇒ one channel every module sends through. It
+	// is platform infrastructure, not the admin module: a member's consent and
+	// mutes must outlive whatever module wants to notify them (D53).
+	//
+	// With no VAPID keypair the channel is inert — subscribing is refused with a
+	// clear reason and nothing is ever sent — so the whole app still runs.
+	pushStore := push.NewStore(sqldb)
+	pushSvc := push.NewService(pushStore, push.Config{
+		VAPIDPublicKey:  cfg.Notif.VAPIDPublicKey,
+		VAPIDPrivateKey: cfg.Notif.VAPIDPrivateKey,
+		VAPIDSubject:    cfg.Notif.VAPIDSubject,
+		MaxFailDays:     cfg.Notif.MaxFailDays,
+		// A subscription's endpoint decides where this server POSTs, so it is
+		// allowlisted to the known push services rather than taken on trust from
+		// whoever is signed in; HOME_PUSH_ENDPOINT_HOSTS extends the built-in list.
+		AllowedEndpointHosts: push.EndpointHosts(cfg.Notif.PushEndpointHosts),
+		Logger:               logger,
+	})
+	if pushSvc.Enabled() {
+		logger.Info("push: channel ready", "subject", cfg.Notif.VAPIDSubject)
+	} else {
+		logger.Warn("push: DISABLED — no VAPID keypair configured; notifications will not be sent " +
+			"(set HOME_VAPID_PUBLIC_KEY / HOME_VAPID_PRIVATE_KEY / HOME_VAPID_SUBJECT; generate with `go run ./cmd/vapidgen`)")
+	}
+	pushHandler := push.NewHandler(pushSvc, sqldb, sink)
+
 	// 4. Websocket hub — session-authenticated on connect (the browser sends the
 	// session cookie on a same-origin upgrade; no bearer token). Feature modules
 	// publish change events so open boards and dashboards stay live.
@@ -209,14 +240,81 @@ func run(logger *slog.Logger) error {
 	}
 	dashMod := dashboard.NewModule(catalog, sqldb)
 
-	modules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, dashMod}
-	mountAPI := func(api chi.Router) { registry.MountAll(api, modules) }
+	// 5b. v5: the metrics catalog — the THIRD registered catalog, beside widgets
+	// and audit actions. Modules publish counts; the admin module's summaries
+	// reference them by key and never touch a feature table (D59/D28).
+	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, dashMod}
+	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod)
+	if err != nil {
+		return err
+	}
+	// The action catalog the trigger composer picks from: every module's declared
+	// verbs plus the platform-emitted ones (login, push.*), which belong to no
+	// module and would otherwise be unbindable.
+	actions := registry.CollectActions(featureModules)
+	for _, key := range audit.PlatformActions {
+		actions = append(actions, registry.Action{Key: key, Module: audit.ModulePlatform})
+	}
+
+	adminSvc := admin.NewService(sqldb, sink, admin.Options{
+		Sender:          pushSvc,
+		PushStore:       pushStore,
+		Metrics:         metricRegistry,
+		Actions:         actions,
+		Location:        cfg.Timezone,
+		DefaultCoalesce: cfg.Notif.CoalesceDefault,
+		Logger:          logger,
+	})
+	adminMod := admin.NewModule(adminSvc)
+	// The delivery log's table belongs to the admin module, so platform/push
+	// records through it rather than writing another module's table directly.
+	pushSvc.SetRecorder(adminSvc.Store())
+
+	modules := append(featureModules, adminMod)
+	mountAPI := func(api chi.Router) {
+		// /api/push/** is platform, not a module: every member (reader included)
+		// manages their own device here, whether or not any module sends anything.
+		pushHandler.Mount(api)
+		registry.MountAll(api, modules)
+	}
 
 	// Background workers live for the process's lifetime and stop with this context,
 	// which is cancelled on the shutdown signal below.
 	bgCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	previewWorker.Start(bgCtx)
+
+	// 5c. v5 background workers: the audit outbox tailer (trigger notifications)
+	// and the wall-clock scheduler (summaries). These two are the ONLY non-registry
+	// wiring v5 adds — everything else registers itself.
+	//
+	// The tailer turns audit_events into a transactional outbox: it reads only
+	// COMMITTED rows, which is how a trigger fires after the change it describes
+	// without any module's write path knowing the notifier exists (D56).
+	notifier := audit.NewNotifier(sqldb, audit.NewSQLCursor(sqldb), audit.NotifierConfig{Logger: logger})
+	notifier.Register(adminSvc.Listener())
+	// Record nudges the tailer so a trigger fires in about a second rather than
+	// waiting for the next poll. It runs inside the writer's transaction, so the
+	// nudge is non-blocking by construction.
+	sink.SetNudge(notifier.Nudge)
+	notifier.Start(bgCtx)
+
+	scheduler.New(adminSvc.Store(), adminSvc.FireSchedule, scheduler.Config{
+		Location:     cfg.Timezone,
+		Tick:         cfg.Notif.SchedTick,
+		CatchupGrace: cfg.Notif.CatchupGrace,
+		Logger:       logger,
+	}).Start(bgCtx)
+
+	// Deliveries are operational, not audit (D64): prune them on boot, the same
+	// way the audit retention pass runs, so a long-lived household does not
+	// accumulate a delivery row per device per notification forever.
+	if pruned, err := adminSvc.PruneDeliveries(context.Background(), cfg.Notif.DeliveryRetentionDays); err != nil {
+		logger.Warn("admin: prune deliveries", "err", err)
+	} else if pruned > 0 {
+		logger.Info("admin: pruned delivery log", "retention_days", cfg.Notif.DeliveryRetentionDays, "pruned", pruned)
+	}
+
 	documents.NewMirrorJob(docsSvc.Store(), docsBlob, documents.MirrorConfig{
 		Interval:       cfg.Docs.MirrorInterval,
 		OrphanGrace:    time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour,
@@ -273,9 +371,38 @@ func run(logger *slog.Logger) error {
 		// cancelled rather than killed mid-write.
 		stopBackground()
 		previewWorker.Wait()
+		// JOIN the outbox tailer before the flush below, don't just cancel it.
+		// stopBackground only asks it to stop: it can still be part way through a
+		// batch, and every event left in that batch is handed to the admin
+		// listener first — which may start another send. FlushPending waits on
+		// the sends already in flight, so a dispatch racing that wait would
+		// either be abandoned mid-send (the notification is lost: its event's
+		// cursor has already advanced) or trip the WaitGroup's own misuse check.
+		// The join is bounded — with the context cancelled every query in the
+		// tailer fails at once.
+		notifier.Wait()
+		// Then send whatever is still sitting in a coalescing window. The outbox
+		// cursor has already moved past those events, so they will never be
+		// redelivered — a window killed by a deploy loses its notification rather
+		// than delaying it.
+		//
+		// CONCURRENTLY with draining HTTP, not before it: the two are independent,
+		// and running them in sequence would put the worst case at 15s — past the
+		// 10s Docker allows between SIGTERM and SIGKILL, which would cut both
+		// short. Overlapped, the whole shutdown still fits in the grace period.
+		flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelFlush()
+		flushed := make(chan struct{})
+		go func() {
+			defer close(flushed)
+			adminSvc.FlushPending(flushCtx)
+		}()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return srv.Shutdown(ctx)
+		err := srv.Shutdown(ctx)
+		<-flushed
+		return err
 	}
 }
 

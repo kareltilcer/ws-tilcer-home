@@ -12,6 +12,7 @@ package bootstrap
 import (
 	"io/fs"
 
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
@@ -25,10 +26,16 @@ import (
 // MigrationSources returns every migration contributor. Goose applies migrations
 // globally by their numeric filename prefix, so the effective order is
 // logging(01) → platform(02) → todo(03) → events(04) → dashboard(05) → notes(06)
-// → documents(07), regardless of the slice order below (PRD §5 D25). The logging
-// (audit) tables must exist before any feature table because every module writes
-// through the audit spine; its 01xxx prefix guarantees that. The slice is listed in
-// prefix order purely so it reads the way the migrations actually run.
+// → documents(07) → admin(08), regardless of the slice order below (PRD §5 D25).
+// The logging (audit) tables must exist before any feature table because every
+// module writes through the audit spine; its 01xxx prefix guarantees that. The
+// slice is listed in prefix order purely so it reads the way the migrations
+// actually run.
+//
+// v5 adds two contributors' worth of tables: the per-user push tables and the
+// outbox cursor go in the PLATFORM block (any module may send, so a member's
+// consent cannot depend on the admin module), while the rule/schedule/delivery
+// tables are the admin module's own and run last.
 func MigrationSources() []registry.MigrationSource {
 	return []registry.MigrationSource{
 		{Name: "logging", FS: logging.MigrationsFS},
@@ -38,6 +45,7 @@ func MigrationSources() []registry.MigrationSource {
 		{Name: "dashboard", FS: dashboard.MigrationsFS},
 		{Name: "notes", FS: notes.MigrationsFS},
 		{Name: "documents", FS: documents.MigrationsFS},
+		{Name: "admin", FS: admin.MigrationsFS},
 	}
 }
 

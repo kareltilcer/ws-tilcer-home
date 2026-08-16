@@ -58,6 +58,341 @@
 - [x] **Phase 5** — `dashboard` (Nástěnka) — backend ✅ + Nástěnka frontend ✅ + hold gesture ✅ (Vitest-verified)
 - [x] **Phase 6** *(v3)* — `notes` (Poznámky) — backend ✅ + Poznámky frontend ✅ (tree, slug paths, Markdown editor, two-scope pins, `notes.pripnute` widget)
 - [x] **Phase 7** *(v4)* — `documents` (Dokumenty) — backend ✅ + Dokumenty frontend ✅ (see the phase section below)
+- [~] **Phase 8** *(v5)* — `admin` (Administrace) + `platform/push` + `platform/scheduler` + `platform/pwa` — **backend ✅ + frontend ✅**; remaining: Playwright/axe pass and the live deploy (VAPID secrets, real icons)
+
+---
+
+## Phase 8 — v5: Administrace (`admin`) + Web Push + PWA — **backend ✅ + frontend ✅**
+
+> **Build status (2026-08-16).** All eleven steps below are implemented. `go
+> build/vet/test ./...` is green (incl. `internal/arch` — `admin` imports only
+> `platform/*`), `tsc -b` + `vite build` + Vitest (24) are green, and a real boot
+> proved the whole trigger chain end to end: a card created over HTTP → audit
+> event committed → outbox tailer → rule matched → audience resolved → send
+> attempted → delivery row recorded.
+>
+> **Implementation notes worth carrying forward (deviations, all small):**
+> 1. **`push.Recorder` instead of platform writing an admin table.** HANDOFF-7 §2
+>    has `Send` insert `notification_deliveries` directly, but that table is the
+>    admin module's (§1) — platform writing it would invert the ownership rule the
+>    whole architecture rests on. `platform/push` takes a narrow `Recorder`
+>    interface which the admin store implements; the row-per-attempt behaviour is
+>    identical, and a household running without the module just keeps no log.
+> 2. **`metrics.Collect` over an optional interface, not package-level `Register`.**
+>    §7 sketches globals; a `*Registry` built at composition from modules
+>    implementing `metrics.Source` keeps the same "modules declare what they
+>    provide" shape without global mutable state that leaks between tests.
+> 3. **`audit.NewSink()` now returns `*audit.Writer`** (was the `Sink` interface)
+>    so the composition root can attach the tailer's nudge. Every existing call
+>    site still compiles — the concrete type satisfies `audit.Sink`.
+> 4. **`push` tests are an external `push_test` package.** `testsupport` builds the
+>    full migration set through `bootstrap`, which now imports `admin`, which
+>    imports `push` — an in-package test would be an import cycle. `export_test.go`
+>    carries the two seams the external tests need.
+> 5. **Catalog carries `members`.** The audience picker needs display names and
+>    openapi 0.6.0's `NotificationCatalog` has no field for them; serving them on
+>    the catalog keeps the composer to one round trip. Additive to the spec.
+> 6. **Icons are generated placeholders** (`frontend/scripts/gen-icons.mjs`) until
+>    design delivers the real set (§14) — an installed PWA with a missing icon
+>    looks broken in a way a plain mark does not.
+>
+> **Remaining:** the Playwright/axe pass at 375/1440 in both themes, and the live
+> deploy (generate + set the VAPID secrets, swap in the real icons).
+
+**Sources.** `handoff/v5/HANDOFF-7-admin.md` — **the build brief; it wins on every "how"** —
+over `handoff/v5/PRD.md` §V5-1…V5-11 (D51–D74; FR-P1–P5, FR-S1, FR-ADM1–6), `handoff/v5/openapi.yaml`
+(**already merged to 0.6.0**), `handoff/v5/HANDOFF-design.md` §v5, and `design/v5/Home.dc.html` (the
+delivered visual source of truth — Administrace, Nastavení → Oznámení, offline, install). The three
+`*-v5-admin.*` addenda were folded into those files on 2026-08-16 and deleted; their content merged
+verbatim. *(Doc gaps, harmless: `HANDOFF.md`'s build-order index and `CHANGELOG.md` have no v5 row yet.)*
+
+**Shape.** v5 is additive, exactly like v3/v4: one new **admin-only feature module** (`admin`) plus
+three **platform** strands (`push`, `scheduler`, `pwa`) and small **metric providers** inside the four
+existing feature modules. No change to auth, the dashboard-host contract, `events` (D68), or any
+existing table.
+
+```
+backend/internal/
+  platform/push/        envelope + webpush-go send, subscriptions, prefs, Send()  ← new infra (like ws/blobstore)
+  platform/scheduler/   minute ticker, Prague/DST slot evaluation, catch-up      ← new infra
+  platform/metrics/     Register/Catalog/Resolve — 3rd registered catalog (D59)  ← new infra
+  platform/audit/       + notifier.go: audit_events keyset tailer → Listeners (the outbox, D56)
+  modules/admin/        rules, schedules, deliveries, templates, audience, catalog  ← the 7th module
+  modules/{todo,events,notes,documents}/  + metrics.go (9 descriptors, D69)
+frontend/src/
+  platform/push/        subscribe/permission hooks, prefs
+  platform/pwa/         SW registration, offline context, install prompt, persisted Query cache
+  sw.ts                 ONE service worker: push + notificationclick + precache (D63)
+  modules/admin/        4 tabs + composer + audience picker + schedule builder + deliveries (§13)
+  platform/settings/    Nastavení → Oznámení panel (every role), theme, install (§13)
+```
+
+### Open questions the build brief closed
+
+`HANDOFF-7-admin.md` answers everything the earlier draft of this plan had to decide for itself, and
+overrules one call: **use `github.com/SherClockHolmes/webpush-go`** (§2) rather than hand-rolling RFC
+8291 on the standard library. Also settled by the brief, no longer this plan's judgement: the SW must
+**not** runtime-cache `/api` and offline reads come from a **user-id-namespaced persisted TanStack
+Query cache** (§12); `vite-plugin-pwa` in **`injectManifest` + `registerType:'autoUpdate'`** (§12);
+coalescing is an **in-memory per-rule debounce** with a Czech "(a N dalších)" count suffix (§5);
+day-of-month is **1–31 with the last-day clamp**, not the design file's 28 cap (§6/§13, D74).
+
+**Audience resolution needs no new table** (§10): `all` = every user with ≥1 row in
+`push_subscriptions`; `roles` = members holding a listed role **from home's session role cache**, never
+client input; `users` = the given ids. The one wrinkle the brief leaves open is *labels* — the
+"Vybraným lidem" picker and Doručení's recipient column need display names, so both read
+`sessions.display_name` (latest row per user) through one small helper in `platform/push`. **No
+`known_users` table** — the earlier draft of this plan proposed one; the brief makes it unnecessary.
+
+### Decisions still left to this plan
+
+- **P-1 — migration numbering.** Existing blocks: `01` logging · `02` platform · `03` todo · `04`
+  events · `05` dashboard · `06` notes · `07` documents. v5 adds `02002_push.sql` +
+  `02003_audit_cursor.sql` (platform block, per §1) and a new `08001_admin_notifications.sql` block
+  for `admin`. Goose applies by numeric prefix, so `admin` is last (as §1/§18 require) while the
+  platform tables land at 02 — harmless (no cross-table deps) and it keeps the per-module block
+  convention the repo relies on.
+- **P-2 — `todo.done_today` needs no schema change.** §7 leaves the source to the module ("add a
+  `done_at` timestamp… or derive from the audit rows"). The `todo` module has **already stamped
+  `done_at` on the move-to-done transition since Phase 3** — so the metric is a single indexed count
+  over `done_at` within `asOf`'s Prague day. No migration, no audit-table scan.
+- **P-3 — the tailer's `Sink.Record` nudge must be un-droppable-safe.** §4 wants `Record` to nudge a
+  signal channel for low latency. `Record` runs **inside every module's write transaction**, so the
+  nudge is a **non-blocking send on a buffered channel with a `default:` drop** — a full channel or an
+  absent notifier can never slow, fail, or block a caller's tx. The ~1 s poll is the correctness path;
+  the nudge is only latency.
+- **P-4 — frontend folder convention.** §13 puts the page in `src/modules/admin/` and the settings
+  panel in `platform/settings`, but the built app keeps pages in `src/routes/*` and uses
+  `src/modules/*` for **widgets only** (relocating the legacy screens is still an open Phase 1 item).
+  Follow the brief for new code — `src/modules/admin/` + `src/platform/settings/` — and leave the
+  existing five pages where they are rather than mixing a half-migration into this phase.
+
+### 8.1 Spec merge + config + scaffolding
+- [ ] `handoff/v5/openapi.yaml` is **already merged to 0.6.0** — validate it and copy to
+      `backend/openapi.yaml` (the repo's single spec source). No merge work left.
+- [ ] `platform/config`: `HOME_VAPID_PUBLIC_KEY` / `_PRIVATE_KEY` / `_SUBJECT` (secrets, redacted in
+      `Redacted()`), `HOME_NOTIF_COALESCE_DEFAULT` (60 s), `HOME_NOTIF_DELIVERY_RETENTION_DAYS` (30,
+      0 = forever), `HOME_NOTIF_MAX_FAILDAYS` (14), `HOME_SCHED_TICK_SECONDS` (60),
+      `HOME_SCHED_CATCHUP_GRACE` (120 min). **Fail-fast rule:** a malformed VAPID key aborts boot; a
+      *missing* pair disables push with one loud `warn` (the rest of the app must still run in dev).
+- [ ] `cmd/vapidgen` (tiny, wrapping `webpush.GenerateVAPIDKeys()`): emit the keypair for Coolify —
+      **generated once, never per deploy** (rotating invalidates every existing subscription, §14).
+      Documented in `README.md`. (`npx web-push generate-vapid-keys` is the equivalent one-off.)
+- [ ] `audit.ModuleAdmin = "admin"`; `platform` audit actions extended (`platform.push.subscribe|unsubscribe|prefs`).
+
+### 8.2 `platform/push` — the one shared channel (§2–§3; FR-P1–P5, D52/D53)
+
+> **§11 build order: ship this end-to-end first.** A hand-fired `Send` must reach a real subscribed
+> browser before any rule, schedule, or composer work starts — everything downstream is worthless
+> until the channel provably delivers.
+
+- [ ] `02002_push.sql`: `push_subscriptions` (UNIQUE endpoint, idx user_id, `failing_since`),
+      `notification_preferences` (user PK, master + 3 categories default 1; **absent row ⇒ all-on**,
+      lazy-created on first PATCH).
+- [ ] Add `github.com/SherClockHolmes/webpush-go` (pure Go, CGO stays off — §2). `Envelope`
+      {Module, Type, Title, Body, URL, Tag, Category, Data} + `Push` interface {`Send`, `VAPIDPublicKey`}.
+- [ ] `Send` — resolve each recipient's subscriptions **filtered by `notification_preferences`**
+      (master off ⇒ skip user; envelope `Category` off ⇒ skip), encrypt+POST with the VAPID header,
+      `TTL` ~1 day, `Urgency: normal`, **bounded worker pool (~8)**, one `notification_deliveries` row
+      per endpoint attempt. **Never called on a request thread** — broadcast, tailer and ticker all
+      run it off the request path. Truncate bodies defensively (~4 KB encrypted cap).
+- [ ] Dead-endpoint pruning: `404`/`410` ⇒ **delete** the subscription (`expired`); `429`/`5xx`/network
+      ⇒ `failed` + set/keep `failing_since`, pruned on the next attempt past `HOME_NOTIF_MAX_FAILDAYS`.
+- [ ] Audience helper (§10): `all` = users with ≥1 subscription; `roles` = from the session role
+      cache; `users` = given ids; display names from the latest `sessions` row per user.
+- [ ] Routes (any member incl. `reader`, CSRF on writes): `GET /api/push/vapid-key`, `POST|DELETE
+      /api/push/subscriptions` (upsert on endpoint, clears `failing_since`; delete idempotent 204),
+      `GET|PATCH /api/push/preferences`. Per-user isolation — filtered by **session** user id, never a
+      client-supplied one. All three audited (`platform.push.subscribe|unsubscribe|prefs`, §11).
+- [ ] Tests: upsert-not-duplicate; mute matrix (master off, each category off); 410 prunes; failing-since
+      prune; cross-user access refused; `reader` may subscribe; envelope shape.
+
+### 8.3 The audit outbox tailer (§4, D56) — `platform/audit`
+- [ ] `02003_audit_cursor.sql`: `audit_notify_cursor(id CHECK(id=1), last_event_id, updated_at)`.
+      **Seed `last_event_id` to the current `MAX(audit_events.id)`** on the first boot after this
+      migration — otherwise v5 replays the entire pre-existing history as a notification storm on a
+      DB that already holds months of events. *(The single highest-consequence detail in §1/§4.)*
+- [ ] `audit.Listener` + `RegisterListener(l)` + `StartNotifier(ctx, db, cursorStore)`: keyset scan
+      `WHERE id > cursor ORDER BY id LIMIT n` (UUIDv7 — the log browser already relies on this),
+      oldest-first, **at-least-once**, cursor advanced after each batch. `audit_changes` loaded
+      **only** when a listener's template references `{{change.*}}` (match on cheap fields first).
+      Listeners must dedupe on event id. Started/stopped with the background context in `main.go`.
+- [ ] Wake on a ~1 s ticker **and** on a best-effort signal channel nudged by `Sink.Record` — per
+      **P-3** the nudge is a non-blocking buffered send with a `default:` drop, because `Record` runs
+      inside every module's write transaction. The poll is correctness; the nudge is only latency.
+- [ ] `admin` registers its listener from its `New()` via the platform hook — so it **never imports
+      `logging`** and `internal/arch` stays green (an explicit test, §16).
+- [ ] Tests: an event committed by any module reaches the listener **after commit**; cursor survives a
+      restart (no re-delivery, no gap); a simulated crash mid-batch re-processes and the listener's
+      dedupe yields at most one push; **cursor seeded to max-id ⇒ no history replay**; a listener
+      panic doesn't kill the tailer.
+
+### 8.4 `platform/metrics` — provider registry + the 9 launch metrics (§7; D59/D60/D69)
+- [ ] New `platform/metrics` package shaped like the widget catalog: `Descriptor{Key,Label,Unit,Scope}`,
+      `Provider{Descriptors(), Value(ctx, userID, key, asOf)}`, `Register` / `Catalog` / `Resolve`.
+      Each module `Register`s from its own `New()` — **no cross-module import**; `admin` and the
+      scheduler resolve values only through the registry (D28 upheld). Duplicate keys rejected.
+- [ ] `todo` (household): `pravedelam_count`, **`done_today` via the existing `done_at` column**
+      (see **P-2** — no migration), `open_total`. `events` (household, **shared completion, D68 — no
+      events change**): `pripominky_today`, `pripominky_today_open`, `overdue_open`, `due_within_7d`,
+      reusing the `events.pripominky` widget's bounded RRULE expansion. `notes`/`documents`
+      (**per recipient**): `pinned_count` = household ∪ the caller's personal pins, de-duped.
+- [ ] Also add `registry.CollectActions(modules)` — `AuditActions()` currently has **no consumer**;
+      §9's catalog is its first one, and it must be merged with the `platform.*` actions (which come
+      from no module) and carry a **sample summary** per key for the composer.
+- [ ] Tests: all 9 resolve through the registry; `todo.*`/`events.*` identical for two users while
+      both `pinned_count`s differ; "today" respects Prague; a resolver error degrades, never panics;
+      arch test proves no cross-module import was needed.
+
+### 8.5 `platform/scheduler` (§6; FR-S1, D58/D58a/D74)
+- [ ] Minute ticker (single instance ⇒ no locking); `time.LoadLocation("Europe/Prague")` **once**,
+      `now` recomputed per tick so DST is automatic — never UTC day math. Due = day matches
+      `days_spec` **and** `HH:MM` falls in this tick's minute **and** `last_fired_local_date != today`.
+- [ ] **Persist `last_fired_at`/`last_fired_local_date` BEFORE resolving audience and sending** (§6)
+      — a mid-send crash then never re-fires the slot; a failed send is recorded in deliveries, and a
+      summary is explicitly best-effort rather than at-risk of double-sending.
+- [ ] Metric tokens resolve **per recipient** (one render per user, D60); a resolver error degrades
+      that token to a placeholder + `warn` and never aborts the send. Missed slot fires once within
+      `HOME_SCHED_CATCHUP_GRACE`, else skipped with an `info` log (no backfill storm).
+- [ ] **Day-of-month 1–31 with short-month clamping** — effective day = `min(N, daysInMonth(now))`,
+      reusing the same integer clamp step as `platform/recur` (D19), so 31 fires on 28/29 Feb, 30 Apr… (D74).
+- [ ] Tests (the clamping/DST matrix is the priority, exactly as Phase 4's was): 08:00 + 20:00 daily;
+      weekdays/weekends/selected days; DOM 29/30/31 across Feb (leap + non-leap), Apr, Dec; spring-forward
+      and autumn-back boundaries; never-double-fire across restarts; catch-up at 119 vs 121 minutes.
+
+### 8.6 `admin` module (§5, §8–§11; FR-ADM1–6, D62)
+- [ ] `08001_admin_notifications.sql`: `notification_rules` (**CHECK exactly one of
+      `action_key`/`action_prefix`**), `notification_schedules`, `notification_deliveries` (+ its four
+      indexes), per §1. Nothing seeded. `registry.Module` with routes + migrations + `AuditActions()`
+      and **no `Widgets()`** — admin contributes none.
+- [ ] **Template engine** (§8) — a whitelisted token *substitutor*, not a language: `{{event.*}}`,
+      `{{change.<field>.old|new}}`, `{{metric.<key>}}`, `{{now}}`, `{{date}}`, **palette per context**
+      (broadcast = time only). **Validated at write time** — an out-of-palette token or an unknown
+      `metric.<key>` ⇒ `422` on the field; at render time a missing value becomes a safe `—`, never a
+      raw `{{…}}` and never an error. Plain text out (no HTML). Expose `render(template, sample)` so
+      the composer's live preview runs **the same engine**.
+- [ ] **Trigger listener** (§5) — matches `action_key` **or** `action_prefix` **on dotted segment
+      boundaries** (`event.` matches `event.update`, not `eventual.x`) AND every set filter; the
+      enabled-rule set is **cached in memory and invalidated on rule CRUD** (no DB read per event).
+      Empty `body_template` ⇒ the audit event's Czech `summary` (D55). Envelope `Module = ev.Module`
+      so a click lands in the originating module, `Type="trigger"`, `Category="triggers"`.
+- [ ] **Coalescing** (§5, D57) — per-`rule_id` in-memory debounce over `coalesce_window_seconds`
+      (rule) or `HOME_NOTIF_COALESCE_DEFAULT`; `0` ⇒ send immediately. First match starts the timer and
+      remembers the render + count; later matches bump the count and refresh the render to the latest
+      event; on expiry **one** `Send`, with a Czech "(a N dalších)" suffix when count > 1. In-memory
+      only — a restart drops pending buffers (accepted; at-least-once, best-effort).
+- [ ] **Audience resolution** via the §8.2 helper: `all` (default, actor included — D66) / `roles` /
+      `users`; `exclude_actor` per rule (default false).
+- [ ] **Routes**, all behind `httpx.RequireAdmin` + CSRF, mounted like `/api/logs/**`:
+      `POST …/broadcast` (render time-tokens → resolve audience → `Send` **off-thread** → 202
+      `{recipients, subscriptions}`; `422` on empty title/body or empty resolved audience), rules CRUD
+      + `/test`, schedules CRUD + `/test` (**render the current draft, send only to the calling
+      admin's** subscriptions, bypassing audience *and* mutes, `kind="test"`), `GET …/catalog`
+      (action keys grouped by module **with sample summaries** + metrics + token palette per context),
+      `GET …/deliveries` (UUIDv7 keyset, filters kind/status/rule/user/from/to) + a retention prune
+      past `HOME_NOTIF_DELIVERY_RETENTION_DAYS`.
+- [ ] `AuditActions()` = `admin.broadcast.send`, `admin.rule.create|update|delete`,
+      `admin.schedule.create|update|delete`, `admin.notification.test`; every config mutation audits
+      **in-tx**; deliveries are **operational, not audit** (D64) and prune on boot + daily.
+- [ ] Tests: rule match/no-match matrix; coalescing collapses a burst into one; `exclude_actor`;
+      unknown action/metric ⇒ 422; audience matrix incl. empty ⇒ 422; test-send reaches only the
+      caller and bypasses mutes; non-admin ⇒ 403 on all nine routes; delivery keyset paging + prune.
+
+### 8.7 Composition (`bootstrap` + `cmd/home/main.go`)
+- [ ] `bootstrap.MigrationSources()` += `admin`; `main.go` builds push sender → tailer → scheduler →
+      `admin.NewModule(...)` (which `RegisterListener`s and registers its metric use from `New()`),
+      appends `adminMod` to `modules`, and **starts the tailer + ticker on `bgCtx`** — per §18 the
+      *only* non-registry host wiring v5 adds — stopping them before `srv.Shutdown` (existing pattern).
+- [ ] Boot log line per strand (push enabled/disabled, tailer cursor, scheduler tick, N schedules).
+
+### 8.8 Frontend — platform (push + Nastavení)
+- [ ] `api/endpoints.ts` + `api/types.ts` + `qk` keys: `['push','vapid'|'prefs']`,
+      `['admin','rules'|'schedules'|'catalog'|'deliveries',…]`.
+- [ ] `platform/push`: permission state machine (`unsupported | default | granted | denied`),
+      `PushManager.subscribe(applicationServerKey)`, POST/DELETE subscription, prefs mutations.
+- [ ] **New route `/nastaveni` in `src/platform/settings/` (every role incl. `reader`)** — Oznámení
+      panel per the design: **priming step** (the OS prompt fires only on intent), granted / dismissed
+      / **blocked recovery callout** / **unsupported** states, master + 3 category toggles, "Poslat
+      zkušební oznámení", the unmistakable **"toto zařízení"** framing; plus the theme toggle, the
+      **install** affordance and the offline explanation (§13 puts all three on this one screen).
+      *(Note for iOS: Web Push requires the app to be installed to the home screen — surfaced in the
+      unsupported copy.)*
+- [ ] Nav: `Nastavení` joins the "Více" sheet for everyone, `Administrace` for admins only; desktop
+      side-nav lists both; route-level `RequireAdmin` on `/administrace` (deep-link ⇒ Přístup odepřen,
+      as the design shows).
+
+### 8.9 Frontend — Administrace (4 tabs)
+- [ ] `src/modules/admin/` (per §13 / **P-4**): shell + tabs **Rozeslat · Pravidla · Souhrny ·
+      Doručení** (mobile segmented / desktop tabs).
+- [ ] **The composer, built once and specialised three ways** (the payoff screen): Nadpis + Text,
+      **"Vložit údaj"** catalog-driven token palette (time / event / metric by context — tokens are
+      *picked*, never typed), and **Živý náhled** rendering tokens resolved to sample values.
+- [ ] **Rozeslat**: audience + Poslat test + Odeslat; plural-correct result ("dorazí 4 lidem na 7
+      zařízení"); empty-audience guard; nobody-subscribed warning.
+- [ ] **Pravidla**: list + editor; **human Czech action picker** (`Když někdo dokončí připomínku`,
+      raw key as quiet secondary text) — this Czech phrase map is real work and lives in `i18n/cs.ts`;
+      filters; default-body-as-summary placeholder; Sloučit opakování; Upozornit i původce akce
+      (default on); enable switch; empty state.
+- [ ] **Souhrny**: list + editor; schedule builder (time + day pattern chips, **DOM 1–31 with the
+      clamp hint**, not the design file's 28 cap); metric tokens grouped by module with a
+      per-recipient note; the 08:00/20:00 examples trivial to build.
+- [ ] **Doručení**: reuse the Log browser's filter bar + dense table; kind + status chips; keyset
+      paging; copy that says plainly this is a best-effort delivery record, **not** the audit log.
+
+### 8.10 PWA + app-wide offline (D67/D71/D72/D73)
+- [ ] `vite-plugin-pwa` (`injectManifest`, `registerType:'autoUpdate'`) + hand-written `src/sw.ts`:
+      Workbox `precacheAndRoute` over the injected build manifest **+ navigation fallback to
+      `index.html`** so a cold offline load renders the shell; `push` → `showNotification` (envelope →
+      title/body/icon/badge/tag/data), `notificationclick` → focus an existing client on `url` else
+      `clients.openWindow(url)`, `pushsubscriptionchange` → re-register against `/api/push/subscriptions`;
+      **silent activation** (`skipWaiting`+`clients.claim`, **no "nová verze" toast** — D72).
+- [ ] `manifest.webmanifest`: name/short_name "Home", `display: standalone`, `start_url`/`scope` `/`,
+      `theme_color`/`background_color` = the **dark** token values. **Icons are owed by design**
+      (§14: maskable + standard 192/512, Android **mono badge**) — until they land, ship generated
+      placeholders from `public/favicon.svg` and keep the ask open.
+- [ ] Persisted Query cache (`@tanstack/react-query-persist-client` + IndexedDB persister),
+      **namespaced by user id, purged on logout / user change** (§12); the SW caches only public shell
+      assets and **never** runtime-caches `/api`. Document bytes are never cached (D73); login/CSRF
+      online-only. Mutations are additionally guarded client-side so an offline write fails closed.
+- [ ] Offline treatment, app-wide and consistent: one **calm neutral** indicator bar (never
+      error-red), every write control **disabled, not hidden**, with "Změny nelze uložit offline";
+      online-required inline states for login, document preview/download, upload, and push subscribe.
+      **No queue, no sync status, no conflict UI.**
+- [ ] **Serving fix (easy to miss):** `frontend/nginx.conf` currently caches every `*.js`
+      `immutable` for a year — that would freeze the service worker. Add explicit
+      `location = /sw.js` and `= /manifest.webmanifest` (and `registerSW.js`) with
+      `Cache-Control: no-cache`, in **both** `nginx.conf` and `nginx.harness.conf`.
+
+### 8.11 Verification, a11y, ops
+- [ ] `go build/vet/test ./...` green incl. `internal/arch` (admin imports no feature module).
+- [ ] Go, from §16 (beyond each step's own): `action_prefix` matches on **segment boundaries**; a burst
+      of N events in one window yields **one** push with the count suffix while `coalesce=0` sends each;
+      `exclude_actor` on/off; unknown action/metric key at save ⇒ `422`; admin routes `403` for
+      editor/reader; `/api/push/**` works for `reader`; deliveries are recorded per attempt, prune on
+      retention, and are **absent from the audit log**.
+- [ ] Vitest: composer token insert + live preview resolution (same `render()` as the server);
+      permission state machine; offline disabled-writes helper; Czech plurals for
+      příjemce/zařízení/oznámení/pravidlo.
+- [ ] Playwright + axe on `/administrace` (4 tabs) and `/nastaveni`, **375 px + 1440 px × both
+      themes**; offline run via `context.setOffline(true)` proving reads render and writes are
+      disabled; keyboard path through composer / audience / schedule builder; targets ≥44 px.
+- [ ] Real boot check: subscribe a browser → broadcast arrives → click opens the right route; a rule
+      fires off a real `card.move`; a schedule fires at a near-future minute; deliveries show all
+      three statuses.
+- [ ] **Karel / ops (not code, §14):** generate the VAPID keypair **once** and set the three Coolify
+      secrets (never rotate casually — it invalidates every subscription); deliver the **notification
+      icon assets still owed from design** (maskable 192/512 + Android mono badge); add the eight v5
+      vars to `docker-compose.yml` + the `README.md` env matrix; confirm the new tables restore on a
+      fresh Litestream build; update `REGISTRY.md`. *(Also worth a line in `HANDOFF.md`'s index and
+      `CHANGELOG.md`, neither of which has a v5 row.)*
+
+**Risks / watch-list.** ① **The cursor seed** (§8.3) — deploying against a DB with months of audit
+history and an unseeded cursor means every past event fires as a notification. It is one `MAX(id)`
+statement and the loudest possible failure; test it before anything touches production. ② The
+permission prompt is one-shot per origin: get the priming step right or a device is unrecoverable from
+inside the app. ③ The SW is shared by push and PWA — a broken SW breaks *both*, so keep its two halves
+separately testable and ship the shell precache last. ④ `Sink.Record`'s nudge channel (**P-3**) sits
+inside every module's write transaction — non-blocking or nothing.
 
 ---
 
