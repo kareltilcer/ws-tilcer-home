@@ -1,0 +1,741 @@
+openapi: 3.1.0
+# =============================================================================
+# Home API — v5 ADDENDUM (Admin module + Web Push)
+# -----------------------------------------------------------------------------
+# This is a self-contained, VALID OpenAPI 3.1 document describing ONLY the v5
+# delta, so it parses and its $refs resolve on its own. To fold into the live
+# openapi.yaml: bump info.version to 0.6.0, extend info.description, MERGE the
+# `paths` below, ADD the new tags, and ADD the new `components/schemas`.
+# The securitySchemes / parameters / responses / Error schema repeated here are
+# IDENTICAL to the ones already in openapi.yaml (0.5.0) — they are included only
+# so this addendum validates standalone; do NOT duplicate them on merge.
+# =============================================================================
+info:
+  title: Home API
+  version: 0.6.0
+  description: >-
+    v5 delta on the `home` service. Adds the admin-only `admin` module and a
+    single shared Web Push channel (VAPID). One service worker ⇒ one push
+    subscription per device; every module sends through the same channel; payload
+    envelopes carry a module/type tag the SW routes clicks on. New surface: per-user
+    push subscription + mute preferences (any member), and admin-only notification
+    configuration — broadcast now, action-key trigger rules, wall-clock summary
+    schedules, a reference catalog, and an operational delivery log. AUTH IS MODE B:
+    every route is authorized by the home SESSION COOKIE; state-changing routes also
+    require the CSRF header. Admin routes require the `admin` role (same gate as
+    /api/logs/**). Schedules are evaluated in Europe/Prague. Web Push encryption and
+    the browser push endpoint are not modeled here (they are browser↔push-service).
+servers:
+  - url: https://home.tilcer.cz
+    description: Production (Coolify)
+
+tags:
+  - name: push
+    description: Per-user Web Push subscription + notification preferences (any member; new in v5)
+  - name: admin-notifications
+    description: Admin-only notification config — broadcast, trigger rules, summary schedules, catalog, deliveries (new in v5)
+
+paths:
+  # ---------------- Per-user push (any authenticated member) ----------------
+  /api/push/vapid-key:
+    get:
+      tags: [push]
+      summary: Fetch the VAPID public key (for PushManager.subscribe)
+      description: >-
+        Returns the server's VAPID PUBLIC key as base64url, needed by the browser as
+        `applicationServerKey`. Session-gated; never returns the private key.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VapidKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/push/subscriptions:
+    post:
+      tags: [push]
+      summary: Register (or refresh) this device's push subscription
+      description: >-
+        Upsert on `endpoint` — a re-subscribe with the same endpoint updates the keys
+        and last_seen, it does not duplicate. Bound to the caller's user. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushSubscriptionRequest" }
+      responses:
+        "200":
+          description: Subscription updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushSubscription" }
+        "201":
+          description: Subscription created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushSubscription" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [push]
+      summary: Remove this device's push subscription (unsubscribe)
+      description: Idempotent — 204 even if the endpoint is already gone. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string, format: uri }
+      responses:
+        "204": { description: Unsubscribed (or already absent) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/push/preferences:
+    get:
+      tags: [push]
+      summary: Read this user's notification preferences
+      description: First read defaults every field to true.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushPreferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [push]
+      summary: Update this user's notification preferences (master + per-category mutes)
+      description: Partial update; honoured by the send path at delivery time. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushPreferencesUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushPreferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  # ---------------- Admin notifications (admin role only) ----------------
+  /api/admin/notifications/broadcast:
+    post:
+      tags: [admin-notifications]
+      summary: Send a custom notification now (admin)
+      description: >-
+        Requires the `admin` role. Resolves the audience and sends immediately over the
+        shared push channel; records a delivery batch and audits `admin.broadcast.send`.
+        CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BroadcastRequest" }
+      responses:
+        "202":
+          description: Accepted; fan-out queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/admin/notifications/rules:
+    get:
+      tags: [admin-notifications]
+      summary: List trigger rules (admin)
+      parameters:
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paged trigger rules
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRulePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin-notifications]
+      summary: Create a trigger rule (admin)
+      description: >-
+        `action_key` (or `action_prefix`) must exist in the action catalog. If
+        title/body templates are omitted, the notification body defaults to the audit
+        event's Czech summary. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationRuleCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/admin/notifications/rules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-notifications]
+      summary: Get a trigger rule (admin)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [admin-notifications]
+      summary: Update a trigger rule (admin)
+      description: Partial update. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationRuleUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [admin-notifications]
+      summary: Delete a trigger rule (admin)
+      description: CSRF required.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/rules/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-notifications]
+      summary: Send a test of this rule to the calling admin only (admin)
+      description: >-
+        Renders the rule with a sample/most-recent matching event and sends only to the
+        caller's own subscriptions, bypassing audience and mute. CSRF required.
+      responses:
+        "202":
+          description: Test queued to the caller's devices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/schedules:
+    get:
+      tags: [admin-notifications]
+      summary: List summary schedules (admin)
+      parameters:
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paged schedules
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedulePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin-notifications]
+      summary: Create a summary schedule (admin)
+      description: >-
+        Body templates may reference `{{metric.<key>}}` tokens; every referenced key
+        must exist in the metrics catalog. Time is wall-clock in Europe/Prague. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationScheduleCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/admin/notifications/schedules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-notifications]
+      summary: Get a schedule (admin)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [admin-notifications]
+      summary: Update a schedule (admin)
+      description: Partial update. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationScheduleUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [admin-notifications]
+      summary: Delete a schedule (admin)
+      description: CSRF required.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/schedules/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-notifications]
+      summary: Send a test of this schedule to the calling admin only (admin)
+      description: >-
+        Resolves metrics for the caller and sends only to the caller's own subscriptions,
+        bypassing audience and mute. CSRF required.
+      responses:
+        "202":
+          description: Test queued to the caller's devices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/catalog:
+    get:
+      tags: [admin-notifications]
+      summary: Reference catalog for composing rules/schedules (admin)
+      description: >-
+        Returns, from the live registry, the audit action keys (for trigger rules), the
+        published metric descriptors (for summary schedules), and the token palette per
+        context. The composer UI uses this to offer dropdowns rather than free-typed keys.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationCatalog" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/notifications/deliveries:
+    get:
+      tags: [admin-notifications]
+      summary: Browse the operational delivery log (admin)
+      description: >-
+        Per-send records (sent/failed/expired) for debugging. Operational data, pruned by
+        retention — NOT the audit spine. Newest-first, UUIDv7 keyset.
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [broadcast, trigger, schedule, test] } }
+        - { name: status, in: query, schema: { type: string, enum: [sent, failed, expired] } }
+        - { name: rule_id, in: query, schema: { type: string } }
+        - { name: user, in: query, description: Recipient user id, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paged deliveries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDeliveryPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+components:
+  # ----- NEW in v5: schemas to ADD to openapi.yaml -----
+  schemas:
+    VapidKey:
+      type: object
+      required: [key]
+      properties:
+        key: { type: string, description: VAPID public key, base64url }
+
+    PushSubscriptionRequest:
+      type: object
+      required: [endpoint, keys]
+      properties:
+        endpoint: { type: string, format: uri }
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh: { type: string, description: base64url }
+            auth: { type: string, description: base64url }
+        user_agent: { type: [string, "null"] }
+
+    PushSubscription:
+      type: object
+      required: [id, endpoint, created_at, last_seen_at]
+      properties:
+        id: { type: string }
+        endpoint: { type: string, format: uri }
+        user_agent: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+
+    PushPreferences:
+      type: object
+      required: [enabled, categories]
+      properties:
+        enabled: { type: boolean, description: Master switch }
+        categories:
+          type: object
+          required: [broadcast, triggers, summaries]
+          properties:
+            broadcast: { type: boolean }
+            triggers: { type: boolean }
+            summaries: { type: boolean }
+        updated_at: { type: [string, "null"], format: date-time }
+
+    PushPreferencesUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        enabled: { type: boolean }
+        categories:
+          type: object
+          properties:
+            broadcast: { type: boolean }
+            triggers: { type: boolean }
+            summaries: { type: boolean }
+
+    Audience:
+      type: object
+      description: Who receives a notification. `roles`/`users` are used only for the matching scope.
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [all, roles, users] }
+        roles:
+          type: array
+          items: { type: string, enum: [admin, editor, reader] }
+        users:
+          type: array
+          items: { type: string }
+
+    BroadcastRequest:
+      type: object
+      required: [title, body, audience]
+      properties:
+        title: { type: string, minLength: 1 }
+        body: { type: string, minLength: 1 }
+        url: { type: [string, "null"], description: In-app path a click opens (default "/") }
+        audience: { $ref: "#/components/schemas/Audience" }
+
+    SendResult:
+      type: object
+      required: [recipients, subscriptions]
+      properties:
+        recipients: { type: integer, description: Distinct users targeted after mute filtering }
+        subscriptions: { type: integer, description: Device endpoints the payload was queued to }
+
+    ScheduleSpec:
+      type: object
+      required: [time_local, days]
+      properties:
+        time_local: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Wall-clock HH:MM in Europe/Prague }
+        days:
+          type: object
+          description: Exactly one recurrence form.
+          properties:
+            preset: { type: string, enum: [daily, weekdays, weekends] }
+            weekdays:
+              type: array
+              items: { type: string, enum: [mon, tue, wed, thu, fri, sat, sun] }
+            day_of_month: { type: integer, minimum: 1, maximum: 31 }
+
+    NotificationRule:
+      type: object
+      required: [id, name, enabled, audience, exclude_actor, coalesce_window_seconds, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        action_key: { type: [string, "null"], description: Exact audit action key (mutually exclusive with action_prefix) }
+        action_prefix: { type: [string, "null"], description: Match all action keys under this dotted prefix, e.g. "event." }
+        filter_module: { type: [string, "null"], enum: [todo, events, notes, documents, dashboard, logging, admin, null] }
+        filter_entity_type: { type: [string, "null"] }
+        filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: [string, "null"] }
+        body_template: { type: [string, "null"], description: Omit ⇒ defaults to the audit event's Czech summary }
+        coalesce_window_seconds: { type: integer, minimum: 0 }
+        exclude_actor: { type: boolean }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    NotificationRuleCreate:
+      type: object
+      required: [name, audience]
+      description: Exactly one of action_key / action_prefix must be set.
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean, default: true }
+        action_key: { type: [string, "null"] }
+        action_prefix: { type: [string, "null"] }
+        filter_module: { type: [string, "null"] }
+        filter_entity_type: { type: [string, "null"] }
+        filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: [string, "null"] }
+        body_template: { type: [string, "null"] }
+        coalesce_window_seconds: { type: [integer, "null"], minimum: 0, description: "Per-rule; omit ⇒ server default 60s; 0 = fire every event" }
+        exclude_actor: { type: boolean, default: false, description: "Default false — notify everyone incl. the actor" }
+
+    NotificationRuleUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean }
+        action_key: { type: [string, "null"] }
+        action_prefix: { type: [string, "null"] }
+        filter_module: { type: [string, "null"] }
+        filter_entity_type: { type: [string, "null"] }
+        filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: [string, "null"] }
+        body_template: { type: [string, "null"] }
+        coalesce_window_seconds: { type: [integer, "null"], minimum: 0 }
+        exclude_actor: { type: boolean }
+
+    NotificationRulePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationRule" }
+        next_cursor: { type: [string, "null"] }
+
+    NotificationSchedule:
+      type: object
+      required: [id, name, enabled, schedule, audience, title_template, body_template, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        schedule: { $ref: "#/components/schemas/ScheduleSpec" }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: string }
+        body_template: { type: string, description: "May contain {{metric.<key>}}, {{now}}, {{date}} tokens" }
+        last_fired_at: { type: [string, "null"], format: date-time }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    NotificationScheduleCreate:
+      type: object
+      required: [name, schedule, audience, title_template, body_template]
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean, default: true }
+        schedule: { $ref: "#/components/schemas/ScheduleSpec" }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: string, minLength: 1 }
+        body_template: { type: string, minLength: 1 }
+
+    NotificationScheduleUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean }
+        schedule: { $ref: "#/components/schemas/ScheduleSpec" }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: string, minLength: 1 }
+        body_template: { type: string, minLength: 1 }
+
+    NotificationSchedulePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationSchedule" }
+        next_cursor: { type: [string, "null"] }
+
+    ActionDescriptor:
+      type: object
+      required: [key, module]
+      properties:
+        key: { type: string, description: e.g. "card.move", "reminder.complete" }
+        module: { type: string }
+        label: { type: [string, "null"], description: Human label / sample Czech summary }
+
+    MetricDescriptor:
+      type: object
+      required: [key, label]
+      properties:
+        key: { type: string, description: e.g. "todo.pravedelam_count" }
+        label: { type: string, description: Czech label for the composer }
+        unit: { type: [string, "null"], description: e.g. "úkolů", "připomínek" }
+        scope: { type: string, enum: [household, personal], description: Whether the value personalizes per recipient }
+
+    NotificationCatalog:
+      type: object
+      required: [actions, metrics, tokens]
+      properties:
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/ActionDescriptor" }
+        metrics:
+          type: array
+          items: { $ref: "#/components/schemas/MetricDescriptor" }
+        tokens:
+          type: object
+          description: Insertable token palette per context.
+          properties:
+            event:
+              type: array
+              items: { type: string }
+            change:
+              type: array
+              items: { type: string }
+            metric:
+              type: array
+              items: { type: string }
+            time:
+              type: array
+              items: { type: string }
+
+    NotificationDelivery:
+      type: object
+      required: [id, ts, kind, user_id, status, category]
+      properties:
+        id: { type: string }
+        ts: { type: string, format: date-time }
+        kind: { type: string, enum: [broadcast, trigger, schedule, test] }
+        category: { type: string, enum: [broadcast, triggers, summaries] }
+        rule_id: { type: [string, "null"] }
+        user_id: { type: string }
+        subscription_id: { type: [string, "null"] }
+        status: { type: string, enum: [sent, failed, expired] }
+        error: { type: [string, "null"] }
+
+    NotificationDeliveryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationDelivery" }
+        next_cursor: { type: [string, "null"] }
+
+    # ----- Repeated from openapi.yaml 0.5.0 (do NOT duplicate on merge) -----
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { type: string }
+
+  # ----- Repeated from openapi.yaml 0.5.0 (do NOT duplicate on merge) -----
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Home's own session (Mode B). The browser carries no bearer token.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Double-submit CSRF token; required on all cookie-authenticated state-changing routes.
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: UUIDv7 keyset cursor from the previous page.
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: No/invalid session
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated but lacks the required role (non-admin on admin routes)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unprocessable:
+      description: Validation failed (bad token, unknown action/metric key, empty audience)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+# Default auth for every route above: the home session cookie; state-changing
+# routes also require the CSRF header (declared per the description text, matching
+# the 0.5.0 convention). Admin routes are additionally gated to the `admin` role
+# server-side.
+security:
+  - sessionCookie: []
