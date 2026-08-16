@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 )
 
 // The template engine (PRD §V5-10 D61, HANDOFF-7 §8).
@@ -63,12 +65,13 @@ type TokenPalette struct {
 	Event  []string `json:"event,omitempty"`
 	Change []string `json:"change,omitempty"`
 	Metric []string `json:"metric,omitempty"`
+	List   []string `json:"list,omitempty"`
 }
 
-// MetricKeyLister is the part of the metrics registry the engine needs. Keeping
-// it an interface means the template code depends on the catalog's shape, not on
-// the registry's implementation.
-type MetricKeyLister interface {
+// KeyLister is the part of a catalog registry the engine needs: "may a template
+// name this key?". Keeping it an interface means the template code depends on
+// the catalogs' shape, not on either registry's implementation.
+type KeyLister interface {
 	Has(key string) bool
 }
 
@@ -79,7 +82,7 @@ type MetricKeyLister interface {
 // field set differs per entity type and per event, so demanding a known field
 // here would refuse legitimate rules. An unknown field simply renders as the
 // placeholder at fire time.
-func ValidateTemplate(tmpl, context string, metrics MetricKeyLister) error {
+func ValidateTemplate(tmpl, context string, metrics, lists KeyLister) error {
 	// Refuse anything brace-shaped that rendering would NOT substitute, before
 	// checking the tokens themselves. The composer's change chips are inserted as
 	// `{{change.<pole>.old}}` for the admin to name the field in; left as-is they
@@ -94,14 +97,14 @@ func ValidateTemplate(tmpl, context string, metrics MetricKeyLister) error {
 		return fmt.Errorf("neznámý údaj: %s", brace)
 	}
 	for _, token := range ExtractTokens(tmpl) {
-		if err := validateToken(token, context, metrics); err != nil {
+		if err := validateToken(token, context, metrics, lists); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateToken(token, context string, metrics MetricKeyLister) error {
+func validateToken(token, context string, metrics, lists KeyLister) error {
 	for _, t := range timeTokens {
 		if token == t {
 			return nil
@@ -141,6 +144,16 @@ func validateToken(token, context string, metrics MetricKeyLister) error {
 		}
 		return nil
 
+	case strings.HasPrefix(token, "list."):
+		if context != ContextSummary {
+			return fmt.Errorf("seznam {{%s}} lze použít jen v souhrnu", token)
+		}
+		key := strings.TrimPrefix(token, "list.")
+		if lists == nil || !lists.Has(key) {
+			return fmt.Errorf("neznámý seznam: {{%s}}", token)
+		}
+		return nil
+
 	default:
 		return fmt.Errorf("neznámý údaj: {{%s}}", token)
 	}
@@ -168,6 +181,19 @@ func MetricKeysIn(tmpl string) []string {
 	return out
 }
 
+// ListKeysIn returns the list keys a template references — the scheduler uses
+// this to resolve exactly the lists a summary names, and to decide whether it
+// personalizes.
+func ListKeysIn(tmpl string) []string {
+	var out []string
+	for _, token := range ExtractTokens(tmpl) {
+		if strings.HasPrefix(token, "list.") {
+			out = append(out, strings.TrimPrefix(token, "list."))
+		}
+	}
+	return out
+}
+
 // UsesChangeTokens reports whether a template needs the audit field diffs. The
 // outbox tailer asks this before paying for a second query per event.
 func UsesChangeTokens(tmpl string) bool {
@@ -188,22 +214,194 @@ type RenderContext struct {
 	// Metrics are pre-resolved by key (without the "metric." prefix) so rendering
 	// stays synchronous and cannot fail.
 	Metrics map[string]int
+	// Lists are pre-resolved the same way, keyed without the "list." prefix.
+	Lists map[string]ListValue
+}
+
+// clone copies the maps a later resolve pass writes into. A personalized send
+// seeds every recipient from ONE shared household context, so the copy is what
+// keeps Karel's pinned notes out of Eva's summary.
+func (rc RenderContext) clone() RenderContext {
+	out := rc
+	out.Metrics = make(map[string]int, len(rc.Metrics))
+	for k, v := range rc.Metrics {
+		out.Metrics[k] = v
+	}
+	out.Lists = make(map[string]ListValue, len(rc.Lists))
+	for k, v := range rc.Lists {
+		out.Lists[k] = v
+	}
+	return out
+}
+
+// ListValue is one resolved list, as the renderer receives it: the module's
+// items plus the module's word for "there are none". Formatting is done here
+// rather than by the provider — see the package comment on platform/lists.
+type ListValue struct {
+	Items []string
+	Empty string
+}
+
+// How a list is written into a notification body.
+//
+// One item per line with a bullet, because these tokens are read on a lock
+// screen: "• Vynést koš⏎• Zalít kytky" is scannable where a comma-joined run of
+// five titles is a wall. The caps exist because the whole payload is clamped to
+// push.MaxBodyRunes before it is encrypted — an unbounded list would silently
+// eat the sentence the admin wrote around it.
+const (
+	// maxListLines is how many items are named before the tail counts the rest.
+	maxListLines = 5
+	// maxListItemRunes clips one over-long title; whole notes can be pinned and
+	// their titles are not written with a lock screen in mind.
+	maxListItemRunes = 48
+	listBullet       = "• "
+	// minListLineRunes is the shortest a line may be clipped to. Below it a
+	// bullet and an ellipsis is most of what survives, and a line the sender
+	// cuts reads better than "• Vy…".
+	minListLineRunes = 12
+	// maxListsRunes is what ALL the lists in one template may occupy TOGETHER.
+	//
+	// Per-list caps alone do not keep the promise above: five 48-rune items plus
+	// the tail is already ~266 of the sender's 300, so a second list token — the
+	// composer offers every published list side by side — pushes the body past
+	// the clamp. And that clamp cuts from the END, so what it takes is precisely
+	// the "…a další N" tail, the one line that admits something was hidden.
+	// Budgeting the lists against one shared allowance instead leaves ~90 runes
+	// for the admin's own sentences whatever they insert, and makes a summary
+	// drop a named item rather than its own honesty. Derived from the sender's
+	// own clamp so tuning one cannot silently break the other.
+	maxListsRunes = push.MaxBodyRunes - 90
+)
+
+// formatList renders a resolved list into notification text, within budget runes
+// — this token's share of maxListsRunes.
+func formatList(v ListValue, budget int) string {
+	if len(v.Items) == 0 {
+		// A module that published no empty text gets the placeholder — never an
+		// empty string, which would leave "Dnes tě čeká:" hanging.
+		if strings.TrimSpace(v.Empty) == "" {
+			return Placeholder
+		}
+		return v.Empty
+	}
+
+	lines := make([]string, 0, len(v.Items))
+	for _, item := range v.Items {
+		// A title may carry newlines; left alone they would forge extra bullets.
+		lines = append(lines, listBullet+truncate(strings.Join(strings.Fields(item), " "), maxListItemRunes))
+	}
+
+	// A tail of exactly one would read "…a další 1", which is bad Czech and
+	// hides less than it costs — one line more is both shorter and better.
+	shown, rest := lines, 0
+	drop := func(n int) { shown, rest = lines[:len(lines)-n], n }
+	if len(lines) > maxListLines+1 {
+		drop(len(lines) - maxListLines)
+	}
+	// Then give up whole lines until the block fits its budget, so the tail is
+	// counted here rather than amputated by the sender's clamp.
+	for len(shown) > 1 && listRunes(shown, rest) > budget {
+		drop(rest + 1)
+	}
+	if rest == 1 {
+		if len(shown) > 1 {
+			drop(2)
+		} else {
+			// Budgeting has already taken the block down to one line, so there is no
+			// further line to give up. Name the second item rather than ship the tail
+			// of one; the clip below is what pays for it.
+			drop(0)
+		}
+	}
+
+	// Dropping lines cannot always win: a list with items shows at least one, and
+	// the rule above can force a second. n lists each keeping a full-width line
+	// over budget is exactly how the shared allowance got overrun — and the
+	// sender's clamp cuts from the END, taking the tail rather than the item. So
+	// the last resort is to clip the lines still standing, here, where the tail
+	// is safe. When even a legible clip cannot fit, give up another line and try
+	// again rather than ship an over-budget block: the block MUST fit, because
+	// past the budget the sender's clamp takes over and amputates the tails —
+	// down to a lone clipped line (and, at the very smallest budgets, the tail
+	// of one the line cap otherwise avoids: bad Czech beats losing the tail).
+	for listRunes(shown, rest) > budget {
+		room := budget - (len(shown) - 1) // the newlines between the lines
+		if rest > 0 {
+			room -= 1 + utf8.RuneCountInString(tailLine(rest))
+		}
+		if per := room / len(shown); per > minListLineRunes || len(shown) == 1 {
+			clipped := make([]string, len(shown))
+			for i, l := range shown {
+				clipped[i] = truncate(l, max(per-1, 1)) // −1 for the ellipsis truncate adds back
+			}
+			shown = clipped
+			break
+		}
+		drop(rest + 1)
+	}
+
+	out := strings.Join(shown, "\n")
+	if rest > 0 {
+		out += "\n" + tailLine(rest)
+	}
+	return out
+}
+
+// tailLine is the "…a další N" line — the one that admits something was hidden,
+// and so the one the budget above exists to keep.
+func tailLine(rest int) string {
+	return fmt.Sprintf("%s…a další %d", listBullet, rest)
+}
+
+// listRunes is what a block of already-formatted lines costs once its separators
+// and its "…a další N" tail are counted — what the sender's clamp will measure.
+func listRunes(shown []string, rest int) int {
+	n := len(shown) - 1 // the newlines between the lines
+	for _, l := range shown {
+		n += utf8.RuneCountInString(l)
+	}
+	if rest > 0 {
+		n += 1 + utf8.RuneCountInString(tailLine(rest))
+	}
+	return n
 }
 
 // Render substitutes every token. It CANNOT fail: an unknown or unresolvable
 // token becomes the placeholder, because a notification with one em dash in it
 // is infinitely better than a notification that was never sent.
 func Render(tmpl string, rc RenderContext) string {
+	// Every list in this template shares one allowance, so inserting a second
+	// one shortens both rather than overrunning the sender (see maxListsRunes).
+	// Only lists that will actually render items claim a SHARE: an unresolved
+	// token renders as the one-rune placeholder and an empty list as its short
+	// empty text, and neither should cost a healthy list half its space. But
+	// neither is free either, so what they will cost comes OFF the allowance
+	// first — seven quiet lists beside one full one is exactly how the sender's
+	// end-clamp got to take the "…a další N" tail this budget exists to keep.
+	budget := maxListsRunes
+	n := 0
+	for _, key := range ListKeysIn(tmpl) {
+		v := rc.Lists[key] // absent ⇒ the zero value, which formats as the placeholder
+		if len(v.Items) > 0 {
+			n++ // per occurrence: the same token twice renders — and costs — twice
+			continue
+		}
+		budget -= utf8.RuneCountInString(formatList(v, 0))
+	}
+	if n > 1 {
+		budget /= n
+	}
 	return tokenPattern.ReplaceAllStringFunc(tmpl, func(match string) string {
 		sub := tokenPattern.FindStringSubmatch(match)
 		if len(sub) < 2 {
 			return Placeholder
 		}
-		return resolveToken(sub[1], rc)
+		return resolveToken(sub[1], rc, budget)
 	})
 }
 
-func resolveToken(token string, rc RenderContext) string {
+func resolveToken(token string, rc RenderContext, listBudget int) string {
 	switch token {
 	case "now":
 		return rc.Now.Format("15:04")
@@ -265,6 +463,20 @@ func resolveToken(token string, rc RenderContext) string {
 			return Placeholder
 		}
 		return strconv.Itoa(v)
+
+	case strings.HasPrefix(token, "list."):
+		key := strings.TrimPrefix(token, "list.")
+		if rc.Lists == nil {
+			return Placeholder
+		}
+		v, ok := rc.Lists[key]
+		if !ok {
+			// Unresolved (the module's read failed) is NOT the same as empty: the
+			// placeholder says "we could not tell you", the module's empty text says
+			// "there is nothing", and a summary must not confuse the two.
+			return Placeholder
+		}
+		return formatList(v, listBudget)
 	}
 
 	return Placeholder
@@ -277,9 +489,10 @@ func orPlaceholder(s string) string {
 	return s
 }
 
-// PaletteFor returns the insertable tokens for a context. metricKeys come from
-// the live registry so the composer can only ever offer what a module publishes.
-func PaletteFor(context string, metricKeys []string) TokenPalette {
+// PaletteFor returns the insertable tokens for a context. metricKeys and
+// listKeys come from the live registries so the composer can only ever offer
+// what a module publishes.
+func PaletteFor(context string, metricKeys, listKeys []string) TokenPalette {
 	p := TokenPalette{Time: append([]string(nil), timeTokens...)}
 	switch context {
 	case ContextTrigger:
@@ -291,6 +504,10 @@ func PaletteFor(context string, metricKeys []string) TokenPalette {
 		p.Metric = make([]string, 0, len(metricKeys))
 		for _, k := range metricKeys {
 			p.Metric = append(p.Metric, "metric."+k)
+		}
+		p.List = make([]string, 0, len(listKeys))
+		for _, k := range listKeys {
+			p.List = append(p.List, "list."+k)
 		}
 	}
 	return p

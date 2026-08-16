@@ -2,6 +2,7 @@ package todo
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"time"
 )
@@ -43,6 +44,64 @@ func (s *Store) CountDoneBetween(ctx context.Context, from, to time.Time) (int, 
 		   AND c.done_at >= ? AND c.done_at < ?`,
 		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)).Scan(&n)
 	return n, err
+}
+
+// TitlesInKind returns the titles of the same cards CountCardsInKind counts, in
+// board → column → card order (the order the board itself reads in), for the
+// list catalog. The count and the list must select identically, so the WHERE
+// clause here is the count's clause — only the projection differs.
+func (s *Store) TitlesInKind(ctx context.Context, kinds []string) ([]string, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(kinds))
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.title
+		  FROM cards c
+		  JOIN columns col ON col.id = c.column_id AND col.kind IN (`+placeholders(len(kinds))+`)
+		  JOIN boards b ON b.id = col.board_id AND b.archived = 0
+		 WHERE c.archived = 0
+		 ORDER BY b.position, col.priority, col.position, c.position, c.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTitles(rows)
+}
+
+// TitlesDoneBetween returns the titles of the cards CountDoneBetween counts,
+// newest first — an evening summary reads best ending with what was just done.
+func (s *Store) TitlesDoneBetween(ctx context.Context, from, to time.Time) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.title
+		  FROM cards c
+		  JOIN columns col ON col.id = c.column_id
+		  JOIN boards b ON b.id = col.board_id AND b.archived = 0
+		 WHERE c.archived = 0
+		   AND c.done_at IS NOT NULL
+		   AND c.done_at >= ? AND c.done_at < ?
+		 ORDER BY c.done_at DESC, c.id`,
+		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTitles(rows)
+}
+
+func scanTitles(rows *sql.Rows) ([]string, error) {
+	var out []string
+	for rows.Next() {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			return nil, err
+		}
+		out = append(out, title)
+	}
+	return out, rows.Err()
 }
 
 // NowCard is a card sitting in a kind='now' column, with its board/column

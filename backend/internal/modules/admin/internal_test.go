@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	_ "modernc.org/sqlite"
 )
 
@@ -123,5 +124,143 @@ func TestTruncateNeverSplitsARune(t *testing.T) {
 	}
 	if got := truncate("push service returned 503", 500); got != "push service returned 503" {
 		t.Errorf("an ASCII error under the limit was altered: %q", got)
+	}
+}
+
+// formatList is the one place a module's items become notification text, so its
+// edges are worth pinning down: they are what a household actually reads.
+func TestFormatList(t *testing.T) {
+	items := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = string(rune('A' + i))
+		}
+		return out
+	}
+
+	t.Run("one bulleted line per item", func(t *testing.T) {
+		got := formatList(ListValue{Items: []string{"Vynést koš", "Zalít kytky"}}, maxListsRunes)
+		if want := "• Vynést koš\n• Zalít kytky"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	// A tail of exactly one would read "…a další 1" — bad Czech, and it hides
+	// less than the line it costs.
+	t.Run("a sixth item is named rather than counted", func(t *testing.T) {
+		got := formatList(ListValue{Items: items(6)}, maxListsRunes)
+		if strings.Contains(got, "další") {
+			t.Errorf("got %q, want all six named", got)
+		}
+		if lines := strings.Count(got, "\n") + 1; lines != 6 {
+			t.Errorf("got %d lines, want 6", lines)
+		}
+	})
+
+	t.Run("a seventh starts counting the rest", func(t *testing.T) {
+		got := formatList(ListValue{Items: items(7)}, maxListsRunes)
+		if want := "• A\n• B\n• C\n• D\n• E\n• …a další 2"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	// A note title can be pasted prose. Left alone, its newlines would forge
+	// bullets the module never published.
+	t.Run("an item's own whitespace cannot forge a line", func(t *testing.T) {
+		got := formatList(ListValue{Items: []string{"Nákup\nna víkend"}}, maxListsRunes)
+		if want := "• Nákup na víkend"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("an over-long item is clipped on a rune boundary", func(t *testing.T) {
+		got := formatList(ListValue{Items: []string{strings.Repeat("ř", 80)}}, maxListsRunes)
+		if !utf8.ValidString(got) {
+			t.Fatalf("clipping produced invalid UTF-8: %q", got)
+		}
+		if want := listBullet + strings.Repeat("ř", maxListItemRunes) + "…"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty says the module's words, or the placeholder if it published none", func(t *testing.T) {
+		if got := formatList(ListValue{Empty: "žádné připomínky"}, maxListsRunes); got != "žádné připomínky" {
+			t.Errorf("got %q, want the module's empty text", got)
+		}
+		if got := formatList(ListValue{}, maxListsRunes); got != Placeholder {
+			t.Errorf("got %q, want the placeholder — never an empty string", got)
+		}
+	})
+}
+
+// The composer offers every published list token side by side, so a body with
+// two of them is an ordinary thing to write. platform/push clamps a body to
+// MaxBodyRunes and clamps it from the END — so unbudgeted lists do not merely
+// overflow, they cost exactly the "…a další N" tails that admit something was
+// hidden.
+func TestTwoListsShareOneAllowanceAndKeepTheirTails(t *testing.T) {
+	const senderBodyRunes = push.MaxBodyRunes
+
+	long := make([]string, 9)
+	for i := range long {
+		long[i] = strings.Repeat("ú", maxListItemRunes) + string(rune('A'+i))
+	}
+	body := Render(
+		"Dnes máš rozděláno:\n{{list.todo.pravedelam_count}}\nA po termínu:\n{{list.events.overdue_open}}",
+		RenderContext{Lists: map[string]ListValue{
+			"todo.pravedelam_count": {Items: long},
+			"events.overdue_open":   {Items: long},
+		}},
+	)
+
+	if n := utf8.RuneCountInString(body); n > senderBodyRunes {
+		t.Errorf("body is %d runes, past the sender's clamp — it would be cut mid-item:\n%s", n, body)
+	}
+	if got := strings.Count(body, "…a další "); got != 2 {
+		t.Errorf("kept %d of the 2 tails; the household must be told what is hidden:\n%s", got, body)
+	}
+	if strings.Contains(body, "…a další 1") {
+		t.Errorf("budgeting produced the tail of one the line cap exists to avoid:\n%s", body)
+	}
+}
+
+// The pathological end of the same promise: an admin who inserts EVERY list chip
+// the composer offers. At that many tokens the per-list share dips below a
+// legible line, and the formatter's last resort must still produce a block that
+// fits — an over-budget block hands the sender's end-clamp exactly the "…a
+// další N" tails it exists to protect.
+func TestManyListsStillFitTheSenderClamp(t *testing.T) {
+	long := []string{strings.Repeat("ú", maxListItemRunes) + "A", strings.Repeat("ú", maxListItemRunes) + "B"}
+
+	const nLists = 8
+	var tokens []string
+	rc := RenderContext{Lists: map[string]ListValue{}}
+	for i := 0; i < nLists; i++ {
+		key := "mod.list" + string(rune('0'+i))
+		tokens = append(tokens, "{{list."+key+"}}")
+		rc.Lists[key] = ListValue{Items: long}
+	}
+	body := Render(strings.Join(tokens, "\n"), rc)
+
+	if n := utf8.RuneCountInString(body); n > push.MaxBodyRunes {
+		t.Errorf("body is %d runes, past the sender's clamp — it would be cut mid-item:\n%s", n, body)
+	}
+	if got := strings.Count(body, "…a další "); got != nLists {
+		t.Errorf("kept %d of the %d tails; the household must be told what is hidden:\n%s", got, nLists, body)
+	}
+}
+
+// Budgeting must not shorten the case it was added to protect: household titles
+// are short, so a lone list of real ones still names its five and counts the
+// rest. Only genuinely long titles — a pinned note, say — trade a line away.
+func TestBudgetingLeavesAnOrdinaryListAlone(t *testing.T) {
+	body := Render("Dnes: {{list.events.pripominky_today}}",
+		RenderContext{Lists: map[string]ListValue{"events.pripominky_today": {Items: []string{
+			"Vynést koš", "Zalít kytky", "Umýt nádobí", "Vyluxovat", "Zaplatit nájem",
+			"Objednat pneuservis", "Kontrola kotle",
+		}}}})
+
+	if want := "Dnes: • Vynést koš\n• Zalít kytky\n• Umýt nádobí\n• Vyluxovat\n• Zaplatit nájem\n• …a další 2"; body != want {
+		t.Errorf("body = %q, want %q", body, want)
 	}
 }

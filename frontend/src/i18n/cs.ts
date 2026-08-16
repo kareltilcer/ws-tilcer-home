@@ -352,6 +352,10 @@ export const cs = {
     tokensEvent: 'Údaje o akci',
     tokensChange: 'Změněná hodnota',
     tokensMetric: 'Čísla z modulů',
+    tokensList: 'Seznamy z modulů',
+    // A list and the metric it names share a label, so the chip says which it is
+    // — the group heading is not announced with the button.
+    tokensListSuffix: '(seznam)',
 
     // audience
     audience: 'Komu',
@@ -403,7 +407,8 @@ export const cs = {
     dayOfMonthLabel: 'Den v měsíci',
     // D74: 29–31 clamp to the month's last day rather than skipping short months.
     dayOfMonthClampHint: 'V kratších měsících se posune na poslední den měsíce.',
-    perRecipientNote: 'Čísla označená „osobní“ se počítají pro každého příjemce zvlášť.',
+    perRecipientNote:
+      'Údaje označené „osobní“ se počítají pro každého příjemce zvlášť. Seznam se do oznámení vypíše po řádcích a delší se zkrátí.',
 
     // deliveries
     deliveriesHeading: 'Doručení',

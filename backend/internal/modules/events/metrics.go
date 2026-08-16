@@ -7,7 +7,6 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/recur"
 )
 
 // Metric keys published by this module (PRD §V5-4, D69).
@@ -82,56 +81,17 @@ func (p *metricProvider) Value(ctx context.Context, _ string, key string, asOf t
 	}
 }
 
-// countOccurrences expands every (optionally reminder-enabled) event across
-// [from, to] and counts the occurrences, optionally skipping ones already
-// completed. Completions are loaded in one batched query, so the cost is one
-// event scan plus one completion scan regardless of how many events there are.
-//
-// perEvent counts each EVENT at most once instead of counting its occurrences —
-// the unit the Připomínky widget presents. It matters only for multi-day windows.
+// countOccurrences counts what scanOccurrences selects. The two summary
+// surfaces — a metric's number and a list's items — MUST answer the same
+// question the same way, so the selection lives in one place and this is only
+// the counting half of it (see scanOccurrences in lists.go).
 func (p *metricProvider) countOccurrences(ctx context.Context, from, to dates.Date, reminderOnly, openOnly, perEvent bool) (int, error) {
-	evs, err := p.store.ListForWindow(ctx, false)
+	occs, err := scanOccurrences(ctx, p.store, occurrenceQuery{
+		from: from, to: to, maxOcc: p.maxOcc,
+		reminderOnly: reminderOnly, openOnly: openOnly, perEvent: perEvent,
+	})
 	if err != nil {
 		return 0, err
 	}
-
-	var (
-		selected []Event
-		ids      []string
-	)
-	for _, e := range evs {
-		if reminderOnly && (!e.ReminderEnabled || e.ReminderLead == nil) {
-			continue
-		}
-		selected = append(selected, e)
-		ids = append(ids, e.ID)
-	}
-	if len(selected) == 0 {
-		return 0, nil
-	}
-
-	completions := map[string]map[string]bool{}
-	if openOnly {
-		if completions, err = p.store.CompletionsFor(ctx, ids); err != nil {
-			return 0, err
-		}
-	}
-
-	count := 0
-	for _, e := range selected {
-		rule, anchor, err := parseSeries(&e)
-		if err != nil {
-			continue // an unparseable stored rule skips the event, never fails the summary
-		}
-		for _, occ := range recur.Expand(anchor, rule, from, to, p.maxOcc) {
-			if openOnly && completions[e.ID][occ.String()] {
-				continue
-			}
-			count++
-			if perEvent {
-				break // this event is counted; its other occurrences are the same reminder
-			}
-		}
-	}
-	return count, nil
+	return len(occs), nil
 }

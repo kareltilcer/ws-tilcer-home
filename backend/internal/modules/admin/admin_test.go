@@ -14,6 +14,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
@@ -124,6 +125,38 @@ func (s *stubMetrics) Value(_ context.Context, userID, key string, _ time.Time) 
 	return s.values[key], nil
 }
 
+// stubLists publishes a fixed list catalog beside the metric one, so the "which
+// ones?" half of a summary can be exercised without wiring real feature modules.
+type stubLists struct {
+	items   map[string][]string
+	perUser map[string]map[string][]string
+	fail    map[string]bool
+	// reads counts resolves per key: a household list read once per recipient is
+	// correct output for wasteful work, so only a counter can catch it.
+	reads map[string]int
+}
+
+func (s *stubLists) Descriptors() []lists.Descriptor {
+	return []lists.Descriptor{
+		{Key: "events.pripominky_today", Label: "Připomínky na dnešek", Empty: "žádné připomínky", Scope: lists.ScopeHousehold},
+		{Key: "todo.pravedelam_count", Label: "Úkoly v Právě dělám", Empty: "nic rozdělaného", Scope: lists.ScopeHousehold},
+		{Key: "notes.pinned_count", Label: "Připnuté poznámky", Empty: "nic připnutého", Scope: lists.ScopePersonal},
+	}
+}
+
+func (s *stubLists) Items(_ context.Context, userID, key string, _ time.Time) ([]string, error) {
+	s.reads[key]++
+	if s.fail[key] {
+		return nil, context.DeadlineExceeded
+	}
+	if byUser, ok := s.perUser[userID]; ok {
+		if v, ok := byUser[key]; ok {
+			return v, nil
+		}
+	}
+	return s.items[key], nil
+}
+
 type fixture struct {
 	t         *testing.T
 	db        *sql.DB
@@ -131,6 +164,7 @@ type fixture struct {
 	sender    *fakeSender
 	pushStore *push.Store
 	metrics   *stubMetrics
+	lists     *stubLists
 	now       time.Time
 }
 
@@ -140,10 +174,18 @@ func newFixture(t *testing.T) *fixture {
 	sender := &fakeSender{}
 	pushStore := push.NewStore(db)
 	stub := &stubMetrics{values: map[string]int{}, perUser: map[string]map[string]int{}, fail: map[string]bool{}}
+	stubL := &stubLists{
+		items: map[string][]string{}, perUser: map[string]map[string][]string{},
+		fail: map[string]bool{}, reads: map[string]int{},
+	}
 
 	reg := metrics.NewRegistry()
 	if err := reg.Register(stub); err != nil {
 		t.Fatalf("register metrics: %v", err)
+	}
+	listReg := lists.NewRegistry()
+	if err := listReg.Register(stubL); err != nil {
+		t.Fatalf("register lists: %v", err)
 	}
 
 	loc, err := time.LoadLocation("Europe/Prague")
@@ -151,13 +193,14 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("load tz: %v", err)
 	}
 	f := &fixture{
-		t: t, db: db, sender: sender, pushStore: pushStore, metrics: stub,
+		t: t, db: db, sender: sender, pushStore: pushStore, metrics: stub, lists: stubL,
 		now: time.Date(2026, time.September, 15, 8, 0, 0, 0, loc),
 	}
 	f.svc = admin.NewService(db, audit.NewSink(), admin.Options{
 		Sender:    sender,
 		PushStore: pushStore,
 		Metrics:   reg,
+		Lists:     listReg,
 		Actions: []registry.Action{
 			{Key: "card.move", Module: "todo"},
 			{Key: "card.create", Module: "todo"},
@@ -673,6 +716,12 @@ func TestScheduleValidation(t *testing.T) {
 		{"bad time", func(c *admin.ScheduleCreate) { c.Schedule.TimeLocal = "8:00" }, "HH:MM"},
 		{"day 32", func(c *admin.ScheduleCreate) { c.Schedule.Days = schedDayOfMonth(32) }, "1–31"},
 		{"unknown metric", func(c *admin.ScheduleCreate) { c.BodyTemplate = "{{metric.todo.nonexistent}}" }, "neznámé číslo"},
+		{"unknown list", func(c *admin.ScheduleCreate) { c.BodyTemplate = "{{list.todo.nonexistent}}" }, "neznámý seznam"},
+		{
+			"a list in the title",
+			func(c *admin.ScheduleCreate) { c.TitleTemplate = "Dnes: {{list.events.pripominky_today}}" },
+			"ne do nadpisu",
+		},
 		{"event token in a summary", func(c *admin.ScheduleCreate) { c.BodyTemplate = "{{event.summary}}" }, "jen v pravidle"},
 		{"empty body", func(c *admin.ScheduleCreate) { c.BodyTemplate = "  " }, "text souhrnu"},
 	}
@@ -872,6 +921,165 @@ func TestScheduleDegradesAFailingMetricToAPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(body, admin.Placeholder) {
 		t.Errorf("body = %q, want the failing metric as a placeholder", body)
+	}
+}
+
+// ---- summaries: module lists ----
+
+// The point of a list token: a summary that says WHICH reminders are due today,
+// not only how many.
+func TestScheduleNamesTodaysReminders(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.metrics.values["events.pripominky_today"] = 2
+	f.lists.items["events.pripominky_today"] = []string{"Vynést koš", "Zalít kytky"}
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Ranní přehled",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "08:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Dnes máš {{metric.events.pripominky_today}} připomínky",
+		BodyTemplate:  "{{list.events.pripominky_today}}",
+	})
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+
+	sent := f.sender.all()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d, want 1 — a household list renders once for everyone", len(sent))
+	}
+	if want := "• Vynést koš\n• Zalít kytky"; sent[0].env.Body != want {
+		t.Errorf("body = %q, want %q", sent[0].env.Body, want)
+	}
+	if sent[0].env.Title != "Dnes máš 2 připomínky" {
+		t.Errorf("title = %q, want the metric beside the list", sent[0].env.Title)
+	}
+}
+
+// An empty list is good news, not a failure — it must read as the module's own
+// words rather than as the placeholder a broken resolver produces.
+func TestEmptyListRendersTheModulesWordsAndAFailingOneThePlaceholder(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.lists.items["events.pripominky_today"] = nil
+	f.lists.fail["todo.pravedelam_count"] = true
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Ranní",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "08:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Ráno",
+		BodyTemplate:  "Dnes: {{list.events.pripominky_today}} · Rozdělané: {{list.todo.pravedelam_count}}",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+
+	sent := f.sender.all()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d, want the summary to go out anyway", len(sent))
+	}
+	want := "Dnes: žádné připomínky · Rozdělané: " + admin.Placeholder
+	if sent[0].env.Body != want {
+		t.Errorf("body = %q, want %q", sent[0].env.Body, want)
+	}
+}
+
+// A long list is capped so it cannot eat the sentence the admin wrote around it.
+func TestLongListIsCappedWithACount(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.lists.items["events.pripominky_today"] = []string{"A", "B", "C", "D", "E", "F", "G"}
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Ranní",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "08:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Ráno", BodyTemplate: "{{list.events.pripominky_today}}",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+
+	body := f.sender.all()[0].env.Body
+	if want := "• A\n• B\n• C\n• D\n• E\n• …a další 2"; body != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
+// A personal LIST personalizes a summary exactly as a personal metric does.
+func TestScheduleWithPersonalListRendersPerRecipient(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.member("u-eva", "Eva", []string{"editor"}, true)
+	f.lists.perUser["u-karel"] = map[string][]string{"notes.pinned_count": {"Wi-Fi heslo"}}
+	f.lists.perUser["u-eva"] = map[string][]string{"notes.pinned_count": {"Recept na bábovku"}}
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Připnuté",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Večer", BodyTemplate: "{{list.notes.pinned_count}}",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+
+	sent := f.sender.all()
+	if len(sent) != 2 {
+		t.Fatalf("sent %d envelopes, want one per recipient (the list personalizes)", len(sent))
+	}
+	bodies := map[string]string{}
+	for _, s := range sent {
+		bodies[s.recipients[0]] = s.env.Body
+	}
+	if bodies["u-karel"] != "• Wi-Fi heslo" || bodies["u-eva"] != "• Recept na bábovku" {
+		t.Errorf("per-recipient bodies = %v, want each member's own pins", bodies)
+	}
+}
+
+// One personal token must not make the HOUSEHOLD reads personal too. They are
+// identical for everybody, and a list read is an event scan plus an expansion —
+// paying for it once per recipient is invisible in the output, so it is pinned
+// here instead.
+func TestAPersonalizedSummaryReadsItsHouseholdListsOnce(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.member("u-eva", "Eva", []string{"editor"}, true)
+	f.member("u-jana", "Jana", []string{"editor"}, true)
+	f.lists.items["events.pripominky_today"] = []string{"Vynést koš"}
+	f.lists.perUser["u-karel"] = map[string][]string{"notes.pinned_count": {"Wi-Fi heslo"}}
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Ranní",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "08:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Ráno",
+		BodyTemplate:  "Dnes: {{list.events.pripominky_today}} · Připnuté: {{list.notes.pinned_count}}",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+
+	if n := len(f.sender.all()); n != 3 {
+		t.Fatalf("sent %d, want one per recipient — the pinned notes personalize", n)
+	}
+	if got := f.lists.reads["events.pripominky_today"]; got != 1 {
+		t.Errorf("household list read %d times, want 1 for all 3 recipients", got)
+	}
+	if got := f.lists.reads["notes.pinned_count"]; got != 3 {
+		t.Errorf("personal list read %d times, want once per recipient", got)
 	}
 }
 
@@ -1154,16 +1362,29 @@ func TestCatalogOffersHumanChoices(t *testing.T) {
 	if len(cat.Metrics) != 4 {
 		t.Errorf("metrics = %d, want the 4 published by the stub", len(cat.Metrics))
 	}
+	if len(cat.Lists) != 3 {
+		t.Errorf("lists = %d, want the 3 published by the stub", len(cat.Lists))
+	}
+	// The composer shows the empty text, so an admin picking a list knows what the
+	// notification will say on a quiet day.
+	for _, l := range cat.Lists {
+		if l.Key == "events.pripominky_today" && l.Empty != "žádné připomínky" {
+			t.Errorf("list %q empty = %q, want the module's own words", l.Key, l.Empty)
+		}
+	}
 	if len(cat.Members) != 1 || cat.Members[0].DisplayName != "Karel" {
 		t.Errorf("members = %+v, want the audience picker's one member", cat.Members)
 	}
 
 	// Each context offers only its own palette.
-	if len(cat.Tokens["broadcast"].Metric) != 0 {
-		t.Error("a broadcast must not offer metric tokens")
+	if len(cat.Tokens["broadcast"].Metric) != 0 || len(cat.Tokens["broadcast"].List) != 0 {
+		t.Error("a broadcast must not offer metric or list tokens")
 	}
 	if len(cat.Tokens["summary"].Metric) != 4 {
 		t.Errorf("summary palette = %+v, want one token per metric", cat.Tokens["summary"].Metric)
+	}
+	if len(cat.Tokens["summary"].List) != 3 {
+		t.Errorf("summary list palette = %+v, want one token per list", cat.Tokens["summary"].List)
 	}
 	if len(cat.Tokens["trigger"].Event) == 0 {
 		t.Error("a trigger rule must offer event tokens")

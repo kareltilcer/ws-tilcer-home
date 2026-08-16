@@ -12,6 +12,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
@@ -29,6 +30,7 @@ type Service struct {
 	sender    push.Sender
 	pushStore *push.Store
 	metrics   *Registry
+	lists     *ListRegistry
 	actions   []registry.Action
 	location  *time.Location
 	logger    *slog.Logger
@@ -41,6 +43,11 @@ type Service struct {
 // Registry is the metric registry the composer and scheduler read through.
 type Registry = metrics.Registry
 
+// ListRegistry is its counterpart for module lists ("which ones?" beside "how
+// many?"). Both are read-only catalogs assembled at composition; the admin
+// module reaches feature data through them and never imports a feature module.
+type ListRegistry = lists.Registry
+
 // maxCoalesceWindowSeconds caps a trigger rule's coalescing window at a day.
 // Anything larger is either a typo or a duration the shutdown flush would cut
 // short anyway, and past ~9.2e9 the seconds→Duration multiply overflows.
@@ -51,6 +58,7 @@ type Options struct {
 	Sender          push.Sender
 	PushStore       *push.Store
 	Metrics         *Registry
+	Lists           *ListRegistry
 	Actions         []registry.Action
 	Location        *time.Location
 	DefaultCoalesce time.Duration
@@ -73,7 +81,7 @@ func NewService(db *sql.DB, sink audit.Sink, opts Options) *Service {
 	s := &Service{
 		db: db, store: NewStore(db), sink: sink,
 		sender: opts.Sender, pushStore: opts.PushStore,
-		metrics: opts.Metrics, actions: opts.Actions,
+		metrics: opts.Metrics, lists: opts.Lists, actions: opts.Actions,
 		location: opts.Location, logger: opts.Logger, now: now,
 		defaultCoalesce: opts.DefaultCoalesce,
 	}
@@ -309,12 +317,12 @@ func (s *Service) validateRule(r Rule) error {
 		return httpx.ErrUnprocessable("okno pro sloučení může být nejvýše 24 hodin")
 	}
 	if r.TitleTemplate != nil {
-		if err := ValidateTemplate(*r.TitleTemplate, ContextTrigger, s.metrics); err != nil {
+		if err := ValidateTemplate(*r.TitleTemplate, ContextTrigger, s.metrics, s.lists); err != nil {
 			return httpx.ErrUnprocessable(err.Error())
 		}
 	}
 	if r.BodyTemplate != nil {
-		if err := ValidateTemplate(*r.BodyTemplate, ContextTrigger, s.metrics); err != nil {
+		if err := ValidateTemplate(*r.BodyTemplate, ContextTrigger, s.metrics, s.lists); err != nil {
 			return httpx.ErrUnprocessable(err.Error())
 		}
 	}
@@ -512,10 +520,17 @@ func (s *Service) validateSchedule(sc Schedule) error {
 	if strings.TrimSpace(sc.BodyTemplate) == "" {
 		return httpx.ErrUnprocessable("text souhrnu je povinný")
 	}
-	if err := ValidateTemplate(sc.TitleTemplate, ContextSummary, s.metrics); err != nil {
+	if err := ValidateTemplate(sc.TitleTemplate, ContextSummary, s.metrics, s.lists); err != nil {
 		return httpx.ErrUnprocessable(err.Error())
 	}
-	if err := ValidateTemplate(sc.BodyTemplate, ContextSummary, s.metrics); err != nil {
+	// A list renders as one bulleted line per item. In a body that is the point;
+	// in a title it is a headline with newlines in it, clipped at 80 runes by the
+	// sender — so the composer's easiest mistake (inserting while the title had
+	// focus) is refused here rather than discovered on a phone at 08:00.
+	if len(ListKeysIn(sc.TitleTemplate)) > 0 {
+		return httpx.ErrUnprocessable("seznam patří do textu oznámení, ne do nadpisu")
+	}
+	if err := ValidateTemplate(sc.BodyTemplate, ContextSummary, s.metrics, s.lists); err != nil {
 		return httpx.ErrUnprocessable(err.Error())
 	}
 	return nil
@@ -533,10 +548,10 @@ func (s *Service) Broadcast(ctx context.Context, in BroadcastRequest) (SendResul
 	if !in.Audience.Valid() {
 		return SendResult{}, httpx.ErrUnprocessable("vyberte, komu se má oznámení poslat")
 	}
-	if err := ValidateTemplate(title, ContextBroadcast, s.metrics); err != nil {
+	if err := ValidateTemplate(title, ContextBroadcast, s.metrics, s.lists); err != nil {
 		return SendResult{}, httpx.ErrUnprocessable(err.Error())
 	}
-	if err := ValidateTemplate(body, ContextBroadcast, s.metrics); err != nil {
+	if err := ValidateTemplate(body, ContextBroadcast, s.metrics, s.lists); err != nil {
 		return SendResult{}, httpx.ErrUnprocessable(err.Error())
 	}
 	url, err := validateInAppURL(in.URL)
@@ -650,10 +665,10 @@ func (s *Service) FireSchedule(ctx context.Context, due scheduler.Due) {
 	}
 	recipients = push.SortedUserIDs(recipients)
 
-	keys := append(MetricKeysIn(sc.TitleTemplate), MetricKeysIn(sc.BodyTemplate)...)
-	// A summary whose numbers are all household-shared renders ONCE for everyone;
-	// only a personal metric (pinned counts) forces a render per recipient (D60).
-	if !s.metrics.HasPersonal(keys) {
+	// A summary whose numbers AND lists are all household-shared renders ONCE for
+	// everyone; a single personal token (pinned notes, counted or named) forces a
+	// render per recipient (D60).
+	if !s.personalizes(*sc) {
 		rc := s.summaryContext(ctx, *sc, "")
 		s.sender.Send(ctx, recipients, push.Envelope{
 			Module: "admin", Type: "summary",
@@ -663,8 +678,15 @@ func (s *Service) FireSchedule(ctx context.Context, due scheduler.Due) {
 		return
 	}
 
+	// Only the PERSONAL tokens differ between recipients, so the household half
+	// is resolved ONCE and seeded into every render. Re-resolving it per
+	// recipient would repeat each household read N times, and a list read is an
+	// event scan plus an expansion — not the single COUNT this loop was shaped
+	// around when metrics were the only summary token.
+	shared := s.summaryContextScoped(ctx, *sc, "", householdScope)
 	for _, userID := range recipients {
-		rc := s.summaryContext(ctx, *sc, userID)
+		rc := shared.clone()
+		s.resolveInto(ctx, &rc, *sc, userID, personalScope)
 		s.sender.Send(ctx, []string{userID}, push.Envelope{
 			Module: "admin", Type: "summary",
 			Title: Render(sc.TitleTemplate, rc), Body: Render(sc.BodyTemplate, rc),
@@ -673,27 +695,100 @@ func (s *Service) FireSchedule(ctx context.Context, due scheduler.Due) {
 	}
 }
 
-// summaryContext resolves every metric token a schedule references, for one
-// recipient. A resolver that fails degrades THAT TOKEN to a placeholder and logs
-// a warning; it never aborts the summary, because one broken count must not cost
-// the household the other four.
-func (s *Service) summaryContext(ctx context.Context, sc Schedule, userID string) RenderContext {
-	asOf := s.now().In(s.location)
-	rc := RenderContext{Now: asOf, Metrics: map[string]int{}}
+// personalizes reports whether a schedule must be rendered once per recipient,
+// asking BOTH catalogs — a summary that names only personal lists personalizes
+// exactly as much as one that counts them.
+func (s *Service) personalizes(sc Schedule) bool {
+	metricKeys := append(MetricKeysIn(sc.TitleTemplate), MetricKeysIn(sc.BodyTemplate)...)
+	if s.metrics.HasPersonal(metricKeys) {
+		return true
+	}
+	listKeys := append(ListKeysIn(sc.TitleTemplate), ListKeysIn(sc.BodyTemplate)...)
+	return s.lists.HasPersonal(listKeys)
+}
 
-	keys := append(MetricKeysIn(sc.TitleTemplate), MetricKeysIn(sc.BodyTemplate)...)
-	for _, key := range keys {
-		if _, done := rc.Metrics[key]; done {
+// summaryContext resolves every metric and list token a schedule references, for
+// one recipient. A resolver that fails degrades THAT TOKEN to a placeholder and
+// logs a warning; it never aborts the summary, because one broken count must not
+// cost the household the other four.
+func (s *Service) summaryContext(ctx context.Context, sc Schedule, userID string) RenderContext {
+	return s.summaryContextScoped(ctx, sc, userID, anyScope)
+}
+
+// scopeFilter picks which half of a summary's tokens a resolve pass computes, so
+// a personalized send can pay for the household half once and the personal half
+// per recipient.
+type scopeFilter func(scope string) bool
+
+func anyScope(string) bool             { return true }
+func householdScope(scope string) bool { return scope != lists.ScopePersonal }
+func personalScope(scope string) bool  { return scope == lists.ScopePersonal }
+
+func (s *Service) summaryContextScoped(ctx context.Context, sc Schedule, userID string, want scopeFilter) RenderContext {
+	rc := RenderContext{Now: s.now().In(s.location), Metrics: map[string]int{}, Lists: map[string]ListValue{}}
+	s.resolveInto(ctx, &rc, sc, userID, want)
+	return rc
+}
+
+// resolveInto fills in the tokens of the wanted scope, leaving the rest for a
+// later pass. A key no module publishes counts as household, so its failure is
+// warned about once rather than once per recipient. A key mentioned in both
+// title and body is attempted once — even when the attempt fails, so a broken
+// resolver costs one read and one warning per pass, not one per mention.
+//
+// Lists resolve FIRST: a list key shared with a metric key names the same
+// selection (the platform/lists contract on Descriptor.Key), so the metric loop
+// reuses len(items) instead of paying for the same read — for events a full
+// event scan plus a recurrence expansion — twice.
+func (s *Service) resolveInto(ctx context.Context, rc *RenderContext, sc Schedule, userID string, want scopeFilter) {
+	tried := map[string]bool{}
+	for _, key := range append(ListKeysIn(sc.TitleTemplate), ListKeysIn(sc.BodyTemplate)...) {
+		if _, done := rc.Lists[key]; done || tried[key] {
 			continue
 		}
-		v, err := s.metrics.Resolve(ctx, userID, key, asOf)
+		tried[key] = true
+		// The empty text is the module's, not the sender's: only events knows that
+		// an empty reminder list means "žádné připomínky".
+		d, known := s.lists.Descriptor(key)
+		scope := lists.ScopeHousehold
+		if known {
+			scope = d.Scope
+		}
+		if !want(scope) {
+			continue
+		}
+		items, err := s.lists.Resolve(ctx, userID, key, rc.Now)
+		if err != nil {
+			s.logger.Warn("admin: list resolve failed", "err", err, "list", key, "schedule", sc.ID)
+			continue // ⇒ the placeholder, which reads differently from "there are none"
+		}
+		rc.Lists[key] = ListValue{Items: items, Empty: d.Empty}
+	}
+
+	tried = map[string]bool{}
+	for _, key := range append(MetricKeysIn(sc.TitleTemplate), MetricKeysIn(sc.BodyTemplate)...) {
+		if _, done := rc.Metrics[key]; done || tried[key] {
+			continue
+		}
+		tried[key] = true
+		scope := metrics.ScopeHousehold
+		if d, ok := s.metrics.Descriptor(key); ok {
+			scope = d.Scope
+		}
+		if !want(scope) {
+			continue
+		}
+		if v, ok := rc.Lists[key]; ok {
+			rc.Metrics[key] = len(v.Items) // the same-keyed list already selected these
+			continue
+		}
+		v, err := s.metrics.Resolve(ctx, userID, key, rc.Now)
 		if err != nil {
 			s.logger.Warn("admin: metric resolve failed", "err", err, "metric", key, "schedule", sc.ID)
 			continue // leaves the token unresolved ⇒ rendered as the placeholder
 		}
 		rc.Metrics[key] = v
 	}
-	return rc
 }
 
 // ---- catalog + deliveries ----
@@ -721,6 +816,15 @@ func (s *Service) BuildCatalog(ctx context.Context) (Catalog, error) {
 		metKeys = append(metKeys, d.Key)
 	}
 
+	var (
+		lsts     []ListDescriptor
+		listKeys []string
+	)
+	for _, d := range s.lists.Catalog() {
+		lsts = append(lsts, ListDescriptor{Key: d.Key, Label: d.Label, Empty: d.Empty, Scope: d.Scope})
+		listKeys = append(listKeys, d.Key)
+	}
+
 	members, err := s.pushStore.Members(ctx)
 	if err != nil {
 		return Catalog{}, err
@@ -729,13 +833,17 @@ func (s *Service) BuildCatalog(ctx context.Context) (Catalog, error) {
 		members = []push.Member{}
 	}
 
+	if lsts == nil {
+		lsts = []ListDescriptor{}
+	}
 	return Catalog{
 		Actions: actions,
 		Metrics: mets,
+		Lists:   lsts,
 		Tokens: map[string]TokenPalette{
-			ContextBroadcast: PaletteFor(ContextBroadcast, nil),
-			ContextTrigger:   PaletteFor(ContextTrigger, nil),
-			ContextSummary:   PaletteFor(ContextSummary, metKeys),
+			ContextBroadcast: PaletteFor(ContextBroadcast, nil, nil),
+			ContextTrigger:   PaletteFor(ContextTrigger, nil, nil),
+			ContextSummary:   PaletteFor(ContextSummary, metKeys, listKeys),
 		},
 		Members: members,
 	}, nil

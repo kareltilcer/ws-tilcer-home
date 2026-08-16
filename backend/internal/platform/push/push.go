@@ -140,10 +140,15 @@ const (
 	// the connection and then never answers must not be able to hold a goroutine
 	// (or the scheduler's ticker) forever — see NewService.
 	defaultHTTPTimeout = 15 * time.Second
-	// Web Push caps an encrypted record at 4 KB; keep bodies well inside it.
-	maxBodyRunes  = 300
 	maxTitleRunes = 80
 )
+
+// MaxBodyRunes is where a body is clamped before encryption (Web Push caps an
+// encrypted record at 4 KB; keep bodies well inside it). Exported because the
+// admin renderer budgets its list tokens against THIS number — the clamp cuts
+// from the end, so an unbudgeted body loses exactly its "…a další N" tails —
+// and deriving from one constant is what keeps the two in step.
+const MaxBodyRunes = 300
 
 // DefaultPushServiceHosts is the allowlist a subscription endpoint's host must
 // match — exactly, or as a subdomain (Mozilla and WNS shard across per-region
@@ -367,7 +372,7 @@ func (e Envelope) normalized() Envelope {
 		e.Kind = kindForCategory(e.Category)
 	}
 	e.Title = truncateRunes(e.Title, maxTitleRunes)
-	e.Body = truncateRunes(e.Body, maxBodyRunes)
+	e.Body = truncateRunes(e.Body, MaxBodyRunes)
 	return e
 }
 
