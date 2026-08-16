@@ -195,8 +195,18 @@ rest of the app is untouched.
 | `HOME_NOTIF_COALESCE_DEFAULT` | default per-rule window collapsing a burst of one rule's matches into one push; `0` = send every event | `60` (seconds) |
 | `HOME_NOTIF_DELIVERY_RETENTION_DAYS` | prune the delivery log past this age; `0` = keep forever. Deliveries are **operational, not audit** | `30` |
 | `HOME_NOTIF_MAX_FAILDAYS` | prune a subscription that has been failing continuously this long (a device wiped without unsubscribing) | `14` |
+| `HOME_PUSH_ENDPOINT_HOSTS` | **extra** push-service hostnames a subscription endpoint may name, on top of the built-in list (Google, Mozilla, Apple, WNS). A subscription's endpoint is what decides where this server POSTs, and every push route is open to every role, so it is allowlisted rather than taken on trust. Bare hostnames, comma-separated — **never URLs**. Matched exactly or as a subdomain | *(unset)* |
 | `HOME_SCHED_TICK_SECONDS` | scheduler granularity. Bounded to 1–60: slots are wall-clock **minutes**, so a longer tick steps over them | `60` |
 | `HOME_SCHED_CATCHUP_GRACE` | fire a slot missed while the process was down, if it is back within this many minutes; older misses are skipped rather than delivered as stale news | `120` |
+
+A device subscribes with an endpoint URL its browser mints, and that URL is where
+this server POSTs for every notification it sends to that device — so it is
+checked against a list of known push services rather than trusted. The built-in
+list covers Google (Chrome/Edge/Opera/Brave), Mozilla, Apple and legacy WNS,
+which is every browser that can subscribe today. If a household device is ever
+refused with *"neznámá push služba: …"*, the hostname in that message goes in
+`HOME_PUSH_ENDPOINT_HOSTS` — the boot line reports the effective list as
+`push_hosts=builtin` or `builtin+[…]`.
 
 Schedules are evaluated in `HOME_TIMEZONE` and are DST-correct: an 08:00 summary
 stays at 08:00 local across both boundaries. A day-of-month of 29–31 **clamps to
