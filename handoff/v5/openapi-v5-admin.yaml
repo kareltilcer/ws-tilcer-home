@@ -493,7 +493,7 @@ components:
             weekdays:
               type: array
               items: { type: string, enum: [mon, tue, wed, thu, fri, sat, sun] }
-            day_of_month: { type: integer, minimum: 1, maximum: 31 }
+            day_of_month: { type: integer, minimum: 1, maximum: 31, description: "1-31; a value the month lacks (29-31) clamps to that month's last day, matching the events short-month clamp (PRD D19/D74). Not capped at 28." }
 
     NotificationRule:
       type: object

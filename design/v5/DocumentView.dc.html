@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="display:flex;flex-direction:column;min-height:0;height:100%">
+  <!-- header: path, type, pins, copy-link, actions -->
+  <div style="flex:none;padding:16px 20px 12px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:170px">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--subtle);margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ dv.folderLabel }}</div>
+        <div style="display:flex;align-items:flex-start;gap:11px">
+          <span style="flex:none;width:38px;height:38px;border-radius:9px;display:grid;place-items:center;font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.02em;{{ dv.iconStyle }}">{{ dv.kindIcon }}</span>
+          <div style="min-width:0">
+            <div style="font-weight:800;font-size:19px;letter-spacing:-.02em;line-height:1.25;word-break:break-word;text-wrap:pretty">{{ dv.title }}</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:3px">{{ dv.metaLabel }}</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:10px">
+          <sc-if value="{{ dv.household }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:99px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent);font-size:11.5px;font-weight:700"><span style="width:9px;height:9px;border-radius:99px;background:var(--accent)"></span>Připnuto pro všechny</span></sc-if>
+          <sc-if value="{{ dv.personal }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:99px;background:var(--s3);color:var(--muted);font-size:11.5px;font-weight:700"><span style="width:9px;height:9px;border-radius:99px;border:1.5px solid var(--muted)"></span>Jen pro mě</span></sc-if>
+        </div>
+      </div>
+      <div style="flex:none;display:flex;align-items:center;gap:7px;position:relative;flex-wrap:wrap;justify-content:flex-end">
+        <button onClick="{{ dv.onDownload }}" title="{{ dv.dlTitle }}" style="{{ dv.dlStyle }}"><span style="font-size:13px">⤓</span> Stáhnout</button>
+        <sc-if value="{{ dv.canWrite }}" hint-placeholder-val="{{ true }}"><button onClick="{{ dv.onRename }}" title="Přejmenovat / popis" aria-label="Přejmenovat" style="width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--muted);cursor:pointer;font-size:13px">✎</button></sc-if>
+        <button onClick="{{ dv.onCopyLink }}" title="Zkopírovat trvalý odkaz — otevře se jen přihlášeným členům domácnosti" aria-label="Kopírovat odkaz" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer"><span style="color:var(--accent)">⚯</span> Odkaz</button>
+        <button onClick="{{ dv.onTogglePinMenu }}" aria-haspopup="true" aria-expanded="{{ dv.pinMenuOpen }}" style="{{ dv.pinBtnStyle }}"><span style="font-size:13px">⚑</span> {{ dv.pinBtnLabel }}</button>
+        <sc-if value="{{ dv.pinMenuOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ dv.closePinMenu }}" style="position:fixed;inset:0;z-index:24"></div>
+          <div style="position:absolute;top:40px;right:0;z-index:25;width:236px;background:var(--s1);border:1px solid var(--border-strong);border-radius:12px;box-shadow:0 18px 46px oklch(0 0 0/.5);padding:6px">
+            <sc-if value="{{ dv.canWrite }}" hint-placeholder-val="{{ true }}"><button onClick="{{ dv.onPinHouse }}" style="width:100%;display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:8px;border:none;background:transparent;color:var(--text);font-family:var(--font);font-size:13px;cursor:pointer;text-align:left" style-hover="background:var(--s3)"><span style="flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border-strong);display:grid;place-items:center;font-size:11px;color:var(--accent-fg);{{ dv.houseBoxStyle }}">{{ dv.houseCheck }}</span><span style="flex:1"><span style="display:block;font-weight:600">Připnout pro všechny</span><span style="display:block;font-size:11px;color:var(--subtle)">Sdílené — vidí celá domácnost</span></span></button></sc-if>
+            <button onClick="{{ dv.onPinPersonal }}" style="width:100%;display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:8px;border:none;background:transparent;color:var(--text);font-family:var(--font);font-size:13px;cursor:pointer;text-align:left" style-hover="background:var(--s3)"><span style="flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border-strong);display:grid;place-items:center;font-size:11px;color:var(--accent-fg);{{ dv.personalBoxStyle }}">{{ dv.personalCheck }}</span><span style="flex:1"><span style="display:block;font-weight:600">Připnout jen pro mě</span><span style="display:block;font-size:11px;color:var(--subtle)">Osobní — jen tvoje zařízení</span></span></button>
+            <div style="border-top:1px solid var(--border);margin:5px 4px 4px;padding-top:7px;font-size:10.5px;color:var(--subtle);line-height:1.45;padding-left:6px;padding-right:6px">Odkaz <strong style="color:var(--muted)">/d/{{ dv.shortId }}</strong> je trvalý — nemění se při přejmenování ani přesunu.</div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+    <sc-if value="{{ dv.hasDesc }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:11px;font-size:13px;color:var(--muted);line-height:1.55;text-wrap:pretty">{{ dv.description }}</div>
+    </sc-if>
+  </div>
+
+  <!-- toolbar: type chip + move/delete -->
+  <sc-if value="{{ dv.canWrite }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:none;padding:11px 20px 9px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px;border-radius:99px;background:var(--s2);border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px">◈ neměnný — nová verze = nový dokument</span>
+      <div style="flex:1;min-width:8px"></div>
+      <button onClick="{{ dv.onMove }}" title="Přesunout do…" style="height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer">⇄ Přesunout</button>
+      <button onClick="{{ dv.onDelete }}" title="Smazat dokument" aria-label="Smazat" style="width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--danger);cursor:pointer;font-size:13px">✕</button>
+    </div>
+  </sc-if>
+  <sc-if value="{{ dv.isReader }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;padding:11px 20px 9px;display:flex;align-items:center;gap:10px">
+      <span style="display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px;border-radius:99px;background:var(--s3);border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600">◔ Jen pro čtení</span>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--subtle)">náhled a stažení k dispozici</span>
+    </div>
+  </sc-if>
+
+  <!-- preview region -->
+  <div class="om-scroll" style="flex:1;overflow:auto;min-height:0;background:var(--bg);padding:18px 20px 22px">
+    <!-- offline: dokumenty jsou online-only (v5, D73) -->
+    <sc-if value="{{ dv.offline }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;place-items:center;min-height:280px">
+        <div style="text-align:center;max-width:380px;border:1px solid var(--border);border-radius:16px;background:var(--s1);padding:28px 26px">
+          <div style="width:52px;height:52px;border-radius:13px;display:grid;place-items:center;margin:0 auto 14px;background:var(--s3);color:var(--muted);font-family:var(--mono);font-size:20px">⌁</div>
+          <div style="font-weight:700;font-size:15px;margin-bottom:6px">Náhled vyžaduje připojení</div>
+          <div style="color:var(--muted);font-size:13px;text-wrap:pretty">Název, popis i umístění dokumentu máme z posledního načtení. Samotný soubor se offline neukládá — náhled i stažení proto půjdou až online.</div>
+        </div>
+      </div>
+    </sc-if>
+    <!-- PDF / Office→PDF -->
+    <sc-if value="{{ dv.isPdf }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
+        <div style="display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--subtle)"><span style="width:22px;height:22px;border-radius:6px;background:var(--s3);display:grid;place-items:center">▤</span>{{ dv.viewerLabel }}</div>
+        <sc-for list="{{ dv.pages }}" as="pg" hint-placeholder-count="2">
+          <div style="width:100%;max-width:560px;aspect-ratio:1/1.414;border-radius:6px;background:oklch(0.965 0.004 264);box-shadow:0 6px 22px oklch(0 0 0/.45);border:1px solid var(--border-strong);padding:9% 11%;display:flex;flex-direction:column;gap:11px;overflow:hidden">
+            <div style="height:15px;width:56%;border-radius:3px;background:oklch(0.30 0.02 264)"></div>
+            <div style="height:9px;width:88%;border-radius:3px;background:oklch(0.78 0.01 264)"></div>
+            <div style="height:9px;width:94%;border-radius:3px;background:oklch(0.78 0.01 264)"></div>
+            <div style="height:9px;width:80%;border-radius:3px;background:oklch(0.78 0.01 264)"></div>
+            <div style="height:9px;width:90%;border-radius:3px;background:oklch(0.82 0.008 264)"></div>
+            <div style="height:9px;width:62%;border-radius:3px;background:oklch(0.82 0.008 264)"></div>
+            <div style="margin-top:6px;height:11px;width:40%;border-radius:3px;background:oklch(0.42 0.02 264)"></div>
+            <div style="height:9px;width:92%;border-radius:3px;background:oklch(0.82 0.008 264)"></div>
+            <div style="height:9px;width:86%;border-radius:3px;background:oklch(0.82 0.008 264)"></div>
+            <div style="margin-top:auto;font-family:var(--mono);font-size:10px;color:oklch(0.55 0.01 264);text-align:center">strana {{ pg.n }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+    <!-- image -->
+    <sc-if value="{{ dv.isImage }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+        <div style="width:100%;max-width:560px;aspect-ratio:4/3;border-radius:10px;border:1px solid var(--border-strong);overflow:hidden;background-color:var(--s2);background-image:repeating-linear-gradient(135deg,transparent 0 14px,color-mix(in oklch,var(--muted) 12%,transparent) 14px 15px);display:grid;place-items:center">
+          <div style="text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:9px 13px">{{ dv.previewFileLabel }}</div>
+        </div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--subtle)">◒ Sevřením lze přiblížit</div>
+      </div>
+    </sc-if>
+    <!-- text / markdown -->
+    <sc-if value="{{ dv.isText }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:640px;margin:0 auto;background:var(--s1);border:1px solid var(--border);border-radius:11px;padding:18px 20px;font-size:14.5px;line-height:1.7;color:var(--text)">{{ dv.rendered }}</div>
+    </sc-if>
+    <!-- pending -->
+    <sc-if value="{{ dv.isPending }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;place-items:center;min-height:280px">
+        <div style="text-align:center;max-width:360px">
+          <div style="width:46px;height:46px;border-radius:99px;border:3px solid var(--s3);border-top-color:var(--accent);margin:0 auto 16px;animation:om-spin 0.9s linear infinite"></div>
+          <div style="font-weight:700;font-size:15px;margin-bottom:6px">Náhled se připravuje…</div>
+          <div style="color:var(--muted);font-size:13px;text-wrap:pretty">Dokument z Office převádíme na PDF. Objeví se automaticky, jakmile bude hotový. Mezitím lze soubor stáhnout.</div>
+          <button onClick="{{ dv.onDownload }}" style="margin-top:16px;height:38px;padding:0 16px;border-radius:9px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-family:var(--font);font-weight:600;font-size:13px;cursor:pointer">⤓ Stáhnout originál</button>
+        </div>
+      </div>
+    </sc-if>
+    <!-- failed / download-only -->
+    <sc-if value="{{ dv.isTypeCard }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;place-items:center;min-height:280px">
+        <div style="text-align:center;max-width:380px;border:1px solid var(--border);border-radius:16px;background:var(--s1);padding:30px 26px">
+          <div style="width:60px;height:60px;border-radius:13px;display:grid;place-items:center;margin:0 auto 16px;font-family:var(--mono);font-size:14px;font-weight:700;{{ dv.iconStyle }}">{{ dv.kindIcon }}</div>
+          <div style="font-weight:700;font-size:15px;margin-bottom:4px;word-break:break-word">{{ dv.title }}</div>
+          <div style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:12px">{{ dv.metaLabel }}</div>
+          <div style="color:var(--muted);font-size:13px;text-wrap:pretty;margin-bottom:18px">{{ dv.typeCardMsg }}</div>
+          <button onClick="{{ dv.onDownload }}" style="height:40px;padding:0 18px;border-radius:10px;border:none;background:var(--accent);color:var(--accent-fg);font-family:var(--font);font-weight:700;font-size:13px;cursor:pointer">⤓ Stáhnout</button>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:760,&quot;height&quot;:600},&quot;dv&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;any&quot;}}"></script>
+</body>
+</html>

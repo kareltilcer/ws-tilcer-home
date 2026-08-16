@@ -1,6 +1,6 @@
 # PRD — Home · v5 addendum (Admin module + push notifications + PWA)
 
-> Status: **Draft v5** — adds the **Admin** (`admin`) module, two platform capabilities (`platform/push`, `platform/scheduler`), and a **PWA** strand (`platform/pwa`, installable + reads-only offline) on top of v4. Self-hosted login (Mode B), widget dashboard, modular architecture unchanged. **All open questions resolved 2026-08-16** (§V5-10) — no open items remain. Decisions **D51–D73** (D68 reverted). · Owner: Karel · Last updated: 2026-08-16
+> Status: **Draft v5** — adds the **Admin** (`admin`) module, two platform capabilities (`platform/push`, `platform/scheduler`), and a **PWA** strand (`platform/pwa`, installable + reads-only offline) on top of v4. Self-hosted login (Mode B), widget dashboard, modular architecture unchanged. **All open questions resolved 2026-08-16** (§V5-10) — no open items remain. Decisions **D51–D74** (D68 reverted; D74 added 2026-08-16). · Owner: Karel · Last updated: 2026-08-16
 > Companion spec: `openapi.yaml` (OpenAPI 3.1, **v0.5.0 → v0.6.0**; companion `openapi-v5-admin.yaml`) · Build: `HANDOFF-7-admin.md` + design addendum follow approval.
 > This file is an **addendum** — it states only the v5 delta. Everything not mentioned here is unchanged from v4. Section numbers are prefixed `V5-` so they fold into `PRD.md` without renumbering v4.
 
@@ -147,7 +147,7 @@ Authorization stays **server-side from home's session**; admin writes additional
 
 #### FR-ADM3: Schedule rules (CRUD)
 - **Inputs:** `name`, `enabled`, `schedule` = `{ time_local: "HH:MM", days: <daily | weekdays | weekends | [mon..sun] | day_of_month:N> }`, `audience` (default **all**), `title_template`, `body_template` (tokens `{{metric.<key>}}` from the catalog + `{{now}}`/`{{date}}`), `category` = `summaries`. Timezone fixed `Europe/Prague`.
-- **Behaviour:** evaluated by FR-S1; metric tokens resolve **per recipient**. CRUD audited. `422` on an unknown metric key.
+- **Behaviour:** evaluated by FR-S1; metric tokens resolve **per recipient**. CRUD audited. `422` on an unknown metric key. **Day-of-month is 1–31** (the composer accepts the full range, **not** a 28 cap): a schedule on **29/30/31 clamps to the month's last day** in short months, matching the events short-month clamp (D19). So "31st of each month" fires on 28/29 Feb, 30 Apr, etc. (§V5-10 D74).
 - **The two worked examples are expressible as-is:**
   - **08:00 daily:** `"Právě dělám: {{metric.todo.pravedelam_count}} úkolů · Připomínky na dnešek: {{metric.events.pripominky_today}}"`, audience all, days daily.
   - **20:00 daily:** `"Nesplněné připomínky na dnešek: {{metric.events.pripominky_today_open}} · Hotovo dnes: {{metric.todo.done_today}} · Zbývá v Právě dělám: {{metric.todo.pravedelam_count}}"`.
@@ -277,6 +277,7 @@ TanStack Query keys: `['push','prefs'|'vapid']`, `['admin','rules'|'schedules'|'
 - **D71** — **Offline is reads-only:** precache app shell + read-through cache API GETs + persisted TanStack Query; write controls disable offline; **no offline mutation queue / background sync / conflict handling** in v5. Login/CSRF online-only.
 - **D72** — **Silent auto-update:** a new build's SW activates on the next load, no prompt (no write queue ⇒ no version-skew risk).
 - **D73** — **Document bytes are online-only:** originals + preview PDFs are never cached offline; document metadata/list still renders offline.
+- **D74** *(added 2026-08-16, from the v5 design review)* — **Schedule day-of-month is 1–31, clamping 29–31 to the month's last day** in short months (consistent with events' short-month clamp, D19). The composer accepts 1–31, **not** a 28 cap; a rule set to a day the month lacks fires on that month's last day. *(The v5 design file currently caps the day-of-month input at 28 — to be reconciled to 1–31 + a "posune se na poslední den měsíce" hint.)*
 
 **Resolution map (2026-08-16):** OQ-1 → all/actor-included (D66) · OQ-2 → per-category mutes (D53a) · OQ-3 → installable PWA (D67) · OQ-4 → 60 s coalesce (D57) · OQ-5 → 120 min catch-up (D58a) · OQ-6 → 30-day retention (D64) · **OQ-7 → reverted; events keep shared completion (D68)** · OQ-8 → broad metric set (D69) · OQ-9 → gate on admin, no new tier (D62) · OQ-10 → no lock-screen restriction (D70) · PWA-OQ-A → reads-only offline (D71) · PWA-OQ-B → silent auto-update (D72) · PWA-OQ-C → documents online-only (D73) · EVENTS-OQ → void (OQ-7 reverted).
 
