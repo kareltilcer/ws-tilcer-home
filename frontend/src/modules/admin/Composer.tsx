@@ -14,7 +14,7 @@ import { Plus } from 'lucide-react'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { Button, Input, Textarea } from '@/components/ui/ui'
-import type { MetricDescriptor, NotificationCatalog, TokenPalette } from '@/api/types'
+import type { ListDescriptor, MetricDescriptor, NotificationCatalog, TokenPalette } from '@/api/types'
 
 export type ComposerContext = 'broadcast' | 'trigger' | 'summary'
 
@@ -48,6 +48,11 @@ export function Composer({
   // Which field a token insert lands in — whichever the admin touched last, so
   // "Vložit údaj" does the obvious thing instead of always targeting the body.
   const [lastFocused, setLastFocused] = useState<'title' | 'body'>('body')
+  // An untouched textarea reports selectionStart 0, which is indistinguishable
+  // from a caret parked at the start — so a redirected list chip would splice
+  // itself in FRONT of a body loaded for editing. This says whether that caret
+  // means anything yet.
+  const bodyTouched = useRef(false)
 
   const palette = catalog?.tokens?.[context]
   const sample = useMemo(() => sampleValues(catalog), [catalog])
@@ -64,7 +69,11 @@ export function Composer({
     const select = (at: number): [number, number] =>
       open >= 0 && close > open ? [at + open, at + close + 1] : [at + wrapped.length, at + wrapped.length]
 
-    if (lastFocused === 'title') {
+    // A list resolves to one bulleted line per item, which the server refuses in
+    // a title (a headline with newlines in it). Rather than let the admin insert
+    // one there and meet a 422 on save, a list chip always lands in the body.
+    const redirected = lastFocused === 'title' && token.startsWith('list.')
+    if (lastFocused === 'title' && !redirected) {
       const el = titleRef.current
       const at = el?.selectionStart ?? title.length
       onTitleChange(title.slice(0, at) + wrapped + title.slice(at))
@@ -75,11 +84,18 @@ export function Composer({
       return
     }
     const el = bodyRef.current
-    const at = el?.selectionStart ?? body.length
+    const at = bodyTouched.current ? (el?.selectionStart ?? body.length) : body.length
     onBodyChange(body.slice(0, at) + wrapped + body.slice(at))
     queueMicrotask(() => {
       el?.focus()
       el?.setSelectionRange(...select(at))
+      // Focusing the body fires its onFocus, which would leave lastFocused on
+      // 'body' and quietly send the NEXT chip there too. The redirect is about
+      // this one token, not about where the admin was writing, so put the
+      // target back. If they then TYPE in the body instead of returning to the
+      // title, the body's onChange retakes the target — typing fires no focus
+      // event, and a chip must land where the admin is actually writing.
+      if (redirected) setLastFocused('title')
     })
   }
 
@@ -92,7 +108,10 @@ export function Composer({
           value={title}
           disabled={disabled}
           onFocus={() => setLastFocused('title')}
-          onChange={(e) => onTitleChange(e.target.value)}
+          onChange={(e) => {
+            setLastFocused('title')
+            onTitleChange(e.target.value)
+          }}
         />
       </label>
 
@@ -104,8 +123,15 @@ export function Composer({
           rows={3}
           disabled={disabled}
           placeholder={bodyPlaceholder}
-          onFocus={() => setLastFocused('body')}
-          onChange={(e) => onBodyChange(e.target.value)}
+          onFocus={() => {
+            bodyTouched.current = true
+            setLastFocused('body')
+          }}
+          onChange={(e) => {
+            bodyTouched.current = true
+            setLastFocused('body')
+            onBodyChange(e.target.value)
+          }}
         />
       </label>
 
@@ -135,8 +161,20 @@ function TokenPicker({
     for (const m of catalog?.metrics ?? []) map.set(m.key, m)
     return map
   }, [catalog])
+  const listLabels = useMemo(() => {
+    const map = new Map<string, ListDescriptor>()
+    for (const l of catalog?.lists ?? []) map.set(l.key, l)
+    return map
+  }, [catalog])
 
-  const groups: { label: string; tokens: string[]; describe?: (t: string) => string }[] = []
+  const groups: {
+    label: string
+    tokens: string[]
+    describe?: (t: string) => string
+    /** hint becomes the chip's tooltip — used where a token has a second thing
+     *  worth knowing that would make the chip itself unreadable. */
+    hint?: (t: string) => string | undefined
+  }[] = []
   if (palette.time?.length) groups.push({ label: cs.admin.tokensTime, tokens: palette.time })
   if (palette.event?.length) groups.push({ label: cs.admin.tokensEvent, tokens: palette.event })
   if (palette.change?.length) groups.push({ label: cs.admin.tokensChange, tokens: palette.change })
@@ -148,6 +186,29 @@ function TokenPicker({
         const m = metricLabels.get(t.replace(/^metric\./, ''))
         if (!m) return t
         return m.scope === 'personal' ? `${m.label} · osobní` : m.label
+      },
+    })
+  }
+  // Lists sit BELOW the numbers. A list publishes the SAME Czech label as the
+  // metric it names ("Připomínky na dnešek" is both a count and a list), so the
+  // group header alone cannot tell the two chips apart — it is a plain heading,
+  // not an accessible name, and a screen reader would announce two identical
+  // buttons. The chips carry the distinction themselves.
+  if (palette.list?.length) {
+    groups.push({
+      label: cs.admin.tokensList,
+      tokens: palette.list,
+      describe: (t) => {
+        const l = listLabels.get(t.replace(/^list\./, ''))
+        if (!l) return t
+        const label = `${l.label} ${cs.admin.tokensListSuffix}`
+        return l.scope === 'personal' ? `${label} · osobní` : label
+      },
+      // What the notification will say on a day when the list is empty — the
+      // case the sample preview cannot show, and the one an admin worries about.
+      hint: (t) => {
+        const l = listLabels.get(t.replace(/^list\./, ''))
+        return l?.empty ? `Když nic nebude: „${l.empty}“` : undefined
       },
     })
   }
@@ -169,6 +230,7 @@ function TokenPicker({
                   <button
                     key={t}
                     type="button"
+                    title={g.hint?.(t)}
                     onClick={() => onInsert(t)}
                     className="inline-flex min-h-[32px] items-center rounded-lg border border-border-strong bg-s1 px-2.5 text-[12.5px] font-semibold hover:border-accent hover:text-accent"
                   >
@@ -196,7 +258,10 @@ function PreviewCard({ title, body }: { title: string; body: string }) {
         </div>
         <div className="min-w-0">
           <div className="truncate text-[13px] font-bold">{title || 'Home'}</div>
-          <div className={cn('mt-0.5 text-[12.5px] text-muted', !body && 'italic')}>
+          {/* whitespace-pre-line because a list token resolves to one bulleted
+              line per item — a preview that folded them into a run would show a
+              different notification from the one that gets sent. */}
+          <div className={cn('mt-0.5 whitespace-pre-line text-[12.5px] text-muted', !body && 'italic')}>
             {body || 'Text oznámení…'}
           </div>
         </div>
@@ -237,13 +302,34 @@ function sampleValues(catalog?: NotificationCatalog): Record<string, string> {
     'event.entity_id': '01a0…',
     'event.actor_label': 'Karel',
   }
+  // A list's sample is FORMATTED here exactly as the server formats it (bullet
+  // per line), because the shape is the thing the admin is deciding about: a
+  // two-line block reads very differently mid-sentence than a number does.
+  // Lists go FIRST because a metric sharing a list's key counts exactly what
+  // that list names — the server resolves it as len(items) — so its sample has
+  // to be that block's length. A preview saying "3 připomínky" over two bullets
+  // would teach the admin to distrust a guarantee the sender actually keeps.
+  const listLengths = new Map<string, number>()
+  ;(catalog?.lists ?? []).forEach((l, i) => {
+    const items = listSamples[i % listSamples.length]
+    listLengths.set(l.key, items.length)
+    values[`list.${l.key}`] = items.map((item) => `• ${item}`).join('\n')
+  })
   // Sample metric values are stable per key so the preview does not flicker.
   const samples = [3, 5, 2, 7, 4, 1, 6]
   ;(catalog?.metrics ?? []).forEach((m, i) => {
-    values[`metric.${m.key}`] = String(samples[i % samples.length])
+    values[`metric.${m.key}`] = String(listLengths.get(m.key) ?? samples[i % samples.length])
   })
   return values
 }
+
+/** Plausible household lines, so the preview shows a real sentence rather than
+ *  "Položka 1". Rotated per descriptor so two lists in one summary differ. */
+const listSamples = [
+  ['Vynést koš', 'Zalít kytky'],
+  ['Zaplatit nájem', 'Objednat pneuservis'],
+  ['Umýt nádobí', 'Vyluxovat'],
+]
 
 /** humanToken renders a raw token for the picker chip. */
 function humanToken(token: string): string {

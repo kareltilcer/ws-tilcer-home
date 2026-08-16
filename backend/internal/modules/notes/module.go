@@ -20,6 +20,7 @@ type Module struct {
 	handler *Handler
 	widgets []registry.WidgetProvider
 	metrics *metricProvider
+	lists   *listProvider
 }
 
 // NewModule builds the notes module over svc.
@@ -28,6 +29,7 @@ func NewModule(svc *Service) *Module {
 		handler: NewHandler(svc),
 		widgets: []registry.WidgetProvider{newPripnuteProvider(svc.store)},
 		metrics: &metricProvider{store: svc.store},
+		lists:   &listProvider{store: svc.store},
 	}
 }
 

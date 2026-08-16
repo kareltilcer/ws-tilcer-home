@@ -12,17 +12,20 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
+
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/catalog"
 )
 
-// Scopes describe whether a metric's value personalizes.
+// Scopes describe whether a metric's value personalizes. Aliased from the
+// shared catalog core so the metric and list catalogs cannot drift apart — the
+// admin scheduler filters both through one scope predicate.
 const (
 	// ScopeHousehold: the same number for everyone (a shared board count).
-	ScopeHousehold = "household"
+	ScopeHousehold = catalog.ScopeHousehold
 	// ScopePersonal: computed per recipient (my pinned notes ≠ yours). This is
 	// what makes summaries resolve once PER RECIPIENT rather than once per send.
-	ScopePersonal = "personal"
+	ScopePersonal = catalog.ScopePersonal
 )
 
 // Descriptor is one publishable metric, as the admin composer sees it.
@@ -51,15 +54,19 @@ type Source interface {
 	MetricProvider() Provider
 }
 
-// Registry is the assembled catalog. Built once at composition; read-only after.
+// Registry is the assembled catalog. Built once at composition; read-only
+// after. A thin typed facade over the shared catalog core (platform/catalog),
+// which owns registration, lookup, and scope handling for every catalog.
 type Registry struct {
-	descriptors []Descriptor
-	byKey       map[string]Provider
+	core *catalog.Registry[Descriptor, Provider]
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{byKey: map[string]Provider{}}
+	return &Registry{core: catalog.New[Descriptor, Provider]("metrics", "metric",
+		func(d Descriptor) string { return d.Key },
+		func(d Descriptor) string { return d.Scope },
+	)}
 }
 
 // Register adds a provider's metrics. A duplicate key is a programming error
@@ -69,20 +76,7 @@ func (r *Registry) Register(p Provider) error {
 	if p == nil {
 		return nil
 	}
-	for _, d := range p.Descriptors() {
-		if d.Key == "" {
-			return fmt.Errorf("metrics: provider published a descriptor with no key")
-		}
-		if _, dup := r.byKey[d.Key]; dup {
-			return fmt.Errorf("metrics: duplicate metric key %q", d.Key)
-		}
-		if d.Scope != ScopeHousehold && d.Scope != ScopePersonal {
-			return fmt.Errorf("metrics: metric %q has invalid scope %q", d.Key, d.Scope)
-		}
-		r.byKey[d.Key] = p
-		r.descriptors = append(r.descriptors, d)
-	}
-	return nil
+	return r.core.Register(p, p.Descriptors())
 }
 
 // Collect builds a registry from anything that implements Source — in practice
@@ -104,43 +98,45 @@ func Collect(modules ...any) (*Registry, error) {
 // Catalog returns every published descriptor, ordered by key so the composer's
 // dropdown is stable across restarts.
 func (r *Registry) Catalog() []Descriptor {
-	out := append([]Descriptor(nil), r.descriptors...)
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return out
+	if r == nil {
+		return nil
+	}
+	return r.core.Catalog()
 }
 
 // Descriptor looks up one metric.
 func (r *Registry) Descriptor(key string) (Descriptor, bool) {
-	for _, d := range r.descriptors {
-		if d.Key == key {
-			return d, true
-		}
+	if r == nil {
+		return Descriptor{}, false
 	}
-	return Descriptor{}, false
+	return r.core.Descriptor(key)
 }
 
 // Has reports whether key is publishable — used to reject an unknown
 // {{metric.…}} token at SAVE time rather than at fire time (§8).
 func (r *Registry) Has(key string) bool {
-	_, ok := r.byKey[key]
-	return ok
+	if r == nil {
+		return false
+	}
+	return r.core.Has(key)
 }
 
 // HasPersonal reports whether any of the given keys personalizes. A summary
 // whose tokens are all household-scoped can be rendered ONCE for the whole
 // audience instead of once per recipient.
 func (r *Registry) HasPersonal(keys []string) bool {
-	for _, k := range keys {
-		if d, ok := r.Descriptor(k); ok && d.Scope == ScopePersonal {
-			return true
-		}
+	if r == nil {
+		return false
 	}
-	return false
+	return r.core.HasPersonal(keys)
 }
 
 // Resolve computes one metric for one recipient.
 func (r *Registry) Resolve(ctx context.Context, userID, key string, asOf time.Time) (int, error) {
-	p, ok := r.byKey[key]
+	if r == nil {
+		return 0, fmt.Errorf("metrics: no metric catalog is registered")
+	}
+	p, ok := r.core.Provider(key)
 	if !ok {
 		return 0, fmt.Errorf("metrics: unknown metric %q", key)
 	}

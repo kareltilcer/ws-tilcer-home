@@ -646,11 +646,21 @@ export interface MetricDescriptor {
   scope: 'household' | 'personal'
 }
 
+/** One module list a summary can name — the "which ones?" to a metric's "how
+ *  many?". `empty` is what the notification says on a quiet day. */
+export interface ListDescriptor {
+  key: string
+  label: string
+  empty: string
+  scope: 'household' | 'personal'
+}
+
 export interface TokenPalette {
   time: string[]
   event?: string[]
   change?: string[]
   metric?: string[]
+  list?: string[]
 }
 
 export interface HouseholdMember {
@@ -665,6 +675,7 @@ export interface HouseholdMember {
 export interface NotificationCatalog {
   actions: ActionDescriptor[]
   metrics: MetricDescriptor[]
+  lists: ListDescriptor[]
   tokens: Record<string, TokenPalette>
   members: HouseholdMember[]
 }

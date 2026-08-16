@@ -35,6 +35,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/config"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
@@ -248,6 +249,14 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The list catalog beside it: the same modules also publish WHICH items are
+	// behind those counts, so a summary can name today's reminders instead of
+	// only counting them. Collected the same way, read through the same kind of
+	// registry, so admin still imports no feature module.
+	listRegistry, err := lists.Collect(todoMod, eventsMod, notesMod, docsMod)
+	if err != nil {
+		return err
+	}
 	// The action catalog the trigger composer picks from: every module's declared
 	// verbs plus the platform-emitted ones (login, push.*), which belong to no
 	// module and would otherwise be unbindable.
@@ -260,6 +269,7 @@ func run(logger *slog.Logger) error {
 		Sender:          pushSvc,
 		PushStore:       pushStore,
 		Metrics:         metricRegistry,
+		Lists:           listRegistry,
 		Actions:         actions,
 		Location:        cfg.Timezone,
 		DefaultCoalesce: cfg.Notif.CoalesceDefault,

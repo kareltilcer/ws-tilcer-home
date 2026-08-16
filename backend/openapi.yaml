@@ -3427,9 +3427,24 @@ components:
         unit: { type: [string, "null"], description: "e.g. \"úkolů\", \"připomínek\"" }
         scope: { type: string, enum: [household, personal], description: Whether the value personalizes per recipient }
 
+    ListDescriptor:
+      type: object
+      description: >-
+        One module list a summary can name — the "which ones?" beside a metric's
+        "how many?". Rendered into the notification as one bulleted line per item,
+        capped by the sender.
+      required: [key, label]
+      properties:
+        key: { type: string, description: e.g. "events.pripominky_today" }
+        label: { type: string, description: Czech label for the composer }
+        empty:
+          type: string
+          description: What the notification says when the list is empty, e.g. "žádné připomínky"
+        scope: { type: string, enum: [household, personal], description: Whether the items personalize per recipient }
+
     NotificationCatalog:
       type: object
-      required: [actions, metrics, tokens, members]
+      required: [actions, metrics, lists, tokens, members]
       properties:
         actions:
           type: array
@@ -3437,6 +3452,9 @@ components:
         metrics:
           type: array
           items: { $ref: "#/components/schemas/MetricDescriptor" }
+        lists:
+          type: array
+          items: { $ref: "#/components/schemas/ListDescriptor" }
         members:
           type: array
           description: >-
@@ -3455,6 +3473,9 @@ components:
               type: array
               items: { type: string }
             metric:
+              type: array
+              items: { type: string }
+            list:
               type: array
               items: { type: string }
             time:

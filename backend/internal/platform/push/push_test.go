@@ -442,7 +442,7 @@ func TestEnvelopePayloadShape(t *testing.T) {
 // record at ~4 KB and a rejected payload is a silent non-delivery.
 func TestEnvelopeTruncatesLongBody(t *testing.T) {
 	e := NormalizeForTest(Envelope{Title: "T", Body: strings.Repeat("á", 5000), Category: CategoryBroadcast})
-	if runes := []rune(e.Body); len(runes) > MaxBodyRunesForTest {
+	if runes := []rune(e.Body); len(runes) > MaxBodyRunes {
 		t.Errorf("body not truncated: %d runes", len(runes))
 	}
 	if !strings.HasSuffix(e.Body, "…") {

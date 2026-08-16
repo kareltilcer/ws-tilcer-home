@@ -260,6 +260,7 @@ type DeliveryPage struct {
 type Catalog struct {
 	Actions []ActionDescriptor      `json:"actions"`
 	Metrics []MetricDescriptor      `json:"metrics"`
+	Lists   []ListDescriptor        `json:"lists"`
 	Tokens  map[string]TokenPalette `json:"tokens"`
 	// Members is an addition beyond openapi 0.6.0's NotificationCatalog: the
 	// audience picker's "Vybraným lidem" needs names, and home has no user
@@ -280,4 +281,14 @@ type MetricDescriptor struct {
 	Label string  `json:"label"`
 	Unit  *string `json:"unit"`
 	Scope string  `json:"scope"`
+}
+
+// ListDescriptor is one module list a summary can name — the "which ones?" to a
+// metric's "how many?". Empty is what the notification says when the list turns
+// out to be empty, so the composer's preview can show that case honestly.
+type ListDescriptor struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Empty string `json:"empty"`
+	Scope string `json:"scope"`
 }

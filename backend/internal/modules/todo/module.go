@@ -18,6 +18,7 @@ type Module struct {
 	handler *Handler
 	widget  registry.WidgetProvider
 	metrics *metricProvider
+	lists   *listProvider
 }
 
 // NewModule builds the todo module over svc.
@@ -27,6 +28,7 @@ func NewModule(svc *Service) *Module {
 		handler: NewHandler(svc),
 		widget:  newPravedelamProvider(svc.Store()),
 		metrics: &metricProvider{store: svc.Store()},
+		lists:   &listProvider{store: svc.Store()},
 	}
 }
 

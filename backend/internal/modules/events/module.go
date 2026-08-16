@@ -20,6 +20,7 @@ type Module struct {
 	handler *Handler
 	widgets []registry.WidgetProvider
 	metrics *metricProvider
+	lists   *listProvider
 }
 
 // NewModule builds the events module over svc. loc + lookbackDays configure the
@@ -33,6 +34,11 @@ func NewModule(svc *Service, loc *time.Location, lookbackDays int) *Module {
 			newTentoMesicProvider(svc.store, loc, svc.maxOccurrences),
 		},
 		metrics: &metricProvider{
+			store:        svc.store,
+			lookbackDays: lookbackDays,
+			maxOcc:       svc.maxOccurrences,
+		},
+		lists: &listProvider{
 			store:        svc.store,
 			lookbackDays: lookbackDays,
 			maxOcc:       svc.maxOccurrences,
