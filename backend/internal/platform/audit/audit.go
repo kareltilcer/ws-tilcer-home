@@ -22,7 +22,23 @@ const (
 	ModuleNotes     = "notes"
 	ModuleDocuments = "documents"
 	ModuleDashboard = "dashboard"
+	ModuleAdmin     = "admin"
 )
+
+// PlatformActions are the action verbs emitted by platform/ packages. They are
+// bare verbs qualified by the module column, exactly like a module's
+// AuditActions() (logging declares "prune", displayed as "logging.prune").
+//
+// They belong to no module, so the action catalog (FR-ADM4) merges this list in
+// explicitly — without it, a trigger rule could not fire on a login.
+var PlatformActions = []string{
+	"login",
+	"logout",
+	"push.subscribe",
+	"push.unsubscribe",
+	"push.prefs",
+	"push.test",
+}
 
 // Levels.
 const (

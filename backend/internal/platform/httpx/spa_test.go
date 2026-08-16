@@ -102,3 +102,47 @@ func TestSPA_NoStaticDirGivesJSON404(t *testing.T) {
 		t.Errorf("Content-Type = %q, want JSON", ct)
 	}
 }
+
+// v5 (D72): the service worker and manifest are NOT content-hashed, so caching
+// them the way /assets/* is cached would pin an old build forever — the app
+// would never pick up a new service worker and silent auto-update would silently
+// do nothing. They must come back explicitly uncacheable.
+func TestSPA_ServiceWorkerAndManifestAreNotCached(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("INDEX"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sw.js", "manifest.webmanifest", "registerSW.js"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("CONTENT"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := httpx.NewRouter(httpx.Deps{
+		Logger:    slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		DB:        fakePinger{},
+		Site:      "home",
+		StaticDir: dir,
+	})
+
+	for _, name := range []string{"/sw.js", "/manifest.webmanifest", "/registerSW.js"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, name, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s = %d, want 200", name, rr.Code)
+		}
+		cc := rr.Header().Get("Cache-Control")
+		if !strings.Contains(cc, "no-cache") && !strings.Contains(cc, "no-store") {
+			t.Errorf("%s Cache-Control = %q, want it uncacheable", name, cc)
+		}
+		if strings.Contains(cc, "immutable") {
+			t.Errorf("%s was served immutable — a new build could never take over", name)
+		}
+	}
+
+	// The SW must be allowed to control the whole origin, not just /.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/sw.js", nil))
+	if got := rr.Header().Get("Service-Worker-Allowed"); got != "/" {
+		t.Errorf("Service-Worker-Allowed = %q, want /", got)
+	}
+}

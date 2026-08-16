@@ -3,6 +3,7 @@ module github.com/kareltilcer/ws-tilcer-home/backend
 go 1.26.5
 
 require (
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/aws/aws-sdk-go-v2 v1.43.5
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.35
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.1
@@ -32,6 +33,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	modernc.org/libc v1.74.1 // indirect

@@ -28,10 +28,20 @@ func SPAHandler(dir string) http.HandlerFunc {
 		full := filepath.Join(dir, filepath.FromSlash(clean))
 
 		if info, err := os.Stat(full); err == nil && !info.IsDir() {
-			// Vite emits content-hashed bundles under /assets/, so they are safe
-			// to cache forever; a new deploy changes the hash (and index.html).
-			if strings.HasPrefix(clean, "/assets/") {
+			switch {
+			case strings.HasPrefix(clean, "/assets/"):
+				// Vite emits content-hashed bundles under /assets/, so they are
+				// safe to cache forever; a new deploy changes the hash (and
+				// index.html).
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			case isServiceWorkerAsset(clean):
+				// The service worker and manifest are NOT hashed and must stay
+				// fresh: a cached sw.js means a new build never takes over, and
+				// v5's silent auto-update (D72) would silently do nothing.
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				if clean == "/sw.js" {
+					w.Header().Set("Service-Worker-Allowed", "/")
+				}
 			}
 			fileServer.ServeHTTP(w, r)
 			return
@@ -42,4 +52,14 @@ func SPAHandler(dir string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, indexPath)
 	}
+}
+
+// isServiceWorkerAsset reports whether a path is one of the PWA files that must
+// never be cached long-term (v5, D72).
+func isServiceWorkerAsset(clean string) bool {
+	switch clean {
+	case "/sw.js", "/manifest.webmanifest", "/registerSW.js":
+		return true
+	}
+	return false
 }

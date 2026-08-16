@@ -6,11 +6,14 @@ import {
   LayoutDashboard,
   ListTodo,
   LogOut,
+  Megaphone,
   MoreHorizontal,
   Moon,
   NotebookText,
   ScrollText,
+  Settings,
   Sun,
+  WifiOff,
   type LucideIcon,
 } from 'lucide-react'
 import { Toaster } from 'sonner'
@@ -20,6 +23,8 @@ import { useTheme } from '@/theme/theme'
 import { useAuth } from '@/app/auth'
 import { routes } from '@/app/routes'
 import { useLiveSync } from '@/api/ws'
+import { useOnline } from '@/platform/pwa/offline'
+import { usePushKeepalive } from '@/platform/push/usePush'
 
 interface NavItem {
   to: string
@@ -40,9 +45,15 @@ const PRIMARY: NavItem[] = [
 // Everything past the four daily tabs. v4 (D49): with Dokumenty a regular member
 // has FIVE destinations, so the mobile overflow sheet is no longer admin-only — it
 // holds Dokumenty for everyone and the Log for admins. Desktop lists all six.
+//
+// v5 extends the same overflow: Administrace joins Log for admins only, and
+// Nastavení joins it for EVERYONE — it holds the per-device notification panel,
+// which is the one notification surface a reader also gets.
 const OVERFLOW: NavItem[] = [
   { to: routes.dokumenty, label: cs.nav.dokumenty, icon: Files, desc: cs.nav.dokumentyDesc },
   { to: routes.log, label: cs.nav.log, icon: ScrollText, desc: cs.nav.logDesc, adminOnly: true },
+  { to: routes.administrace, label: cs.admin.title, icon: Megaphone, desc: cs.admin.navDesc, adminOnly: true },
+  { to: routes.nastaveni, label: cs.settings.title, icon: Settings, desc: cs.settings.subtitle },
 ]
 
 export function AppShell() {
@@ -51,6 +62,10 @@ export function AppShell() {
   const [moreOpen, setMoreOpen] = useState(false)
   const location = useLocation()
   useLiveSync()
+  // Reconnects a device whose push endpoint the browser rotated. It lives here,
+  // not in the settings panel, because the failure it repairs is silent — nobody
+  // opens Nastavení to fix a problem they cannot see.
+  usePushKeepalive()
 
   const overflowItems = OVERFLOW.filter((item) => !item.adminOnly || isAdmin)
   const desktopItems = [...PRIMARY, ...overflowItems]
@@ -93,6 +108,7 @@ export function AppShell() {
 
       {/* Content */}
       <div className="flex min-w-0 flex-1 flex-col">
+        <OfflineBanner />
         <header className="flex items-center justify-between border-b border-border px-4 py-3 md:hidden">
           <span className="text-base font-extrabold tracking-tight">{cs.app.name}</span>
           <div className="flex items-center gap-2">
@@ -188,6 +204,26 @@ export function AppShell() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** OfflineBanner is the ONE app-wide offline indicator (D71).
+ *
+ *  Deliberately NEUTRAL, not error-red: being offline is a state, not a failure,
+ *  and the app remains fully readable. The second sentence names the two things
+ *  that genuinely cannot work rather than leaving the user to discover them. */
+function OfflineBanner() {
+  const online = useOnline()
+  if (online) return null
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-border-strong bg-muted/15 px-4 py-1.5 text-[12.5px]"
+    >
+      <WifiOff size={14} className="text-muted" aria-hidden />
+      <span className="font-semibold">{cs.offline.banner}</span>
+      <span className="text-muted">{cs.offline.bannerSub}</span>
     </div>
   )
 }

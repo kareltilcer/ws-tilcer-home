@@ -975,6 +975,20 @@ func (s *Store) PinnedRowsFor(ctx context.Context, userID string) ([]pinRow, err
 	return out, rows.Err()
 }
 
+// CountPinnedFor counts the documents pinned visible to one member — household
+// pins ∪ their personal pins, de-duplicated (household precedence means a
+// doubly-pinned document still shows, and counts, once).
+func (s *Store) CountPinnedFor(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT p.document_id)
+		   FROM document_pins p JOIN documents d ON d.id = p.document_id
+		  WHERE d.archived = 0
+		    AND (p.scope = 'household' OR (p.scope = 'personal' AND p.user_id = ?))`,
+		userID).Scan(&n)
+	return n, err
+}
+
 // ---- small SQL helpers ----
 
 func placeholders(n int) string {

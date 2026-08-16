@@ -59,6 +59,32 @@ services:
       # files simply stay download-only — nothing else breaks.
       HOME_DOCS_GOTENBERG_URL: ${HOME_DOCS_GOTENBERG_URL:-http://gotenberg:3000}
       HOME_DOCS_PREVIEW_ENABLED: ${HOME_DOCS_PREVIEW_ENABLED:-true}
+
+      # --- v5: Web Push + the summary scheduler --------------------------------
+      # The VAPID keypair identifies this server to every browser push service.
+      # Generate ONCE (`go run ./cmd/vapidgen`) and keep it: rotating it silently
+      # invalidates every existing subscription, and each device has to opt in
+      # again. Left empty, push is simply disabled — the rest of the app runs
+      # untouched and the settings panel says so.
+      HOME_VAPID_PUBLIC_KEY: ${HOME_VAPID_PUBLIC_KEY:-}
+      HOME_VAPID_PRIVATE_KEY: ${HOME_VAPID_PRIVATE_KEY:-}
+      HOME_VAPID_SUBJECT: ${HOME_VAPID_SUBJECT:-}
+      # Collapse a burst of one trigger rule's matches into a single push.
+      HOME_NOTIF_COALESCE_DEFAULT: ${HOME_NOTIF_COALESCE_DEFAULT:-60}
+      # Delivery log retention; 0 = keep forever. Operational, not audit.
+      HOME_NOTIF_DELIVERY_RETENTION_DAYS: ${HOME_NOTIF_DELIVERY_RETENTION_DAYS:-30}
+      # Prune a subscription that has been failing continuously this long.
+      HOME_NOTIF_MAX_FAILDAYS: ${HOME_NOTIF_MAX_FAILDAYS:-14}
+      # EXTRA push-service hostnames a subscription endpoint may name, on top of
+      # the built-in vendor list (Google, Mozilla, Apple, WNS). The endpoint
+      # decides where this server POSTs, so it is allowlisted rather than taken
+      # on trust; this is the escape hatch for a browser the built-in list has
+      # not caught up with. Bare hostnames, comma-separated — never URLs.
+      HOME_PUSH_ENDPOINT_HOSTS: ${HOME_PUSH_ENDPOINT_HOSTS:-}
+      # Scheduler granularity (1–60s; slots are wall-clock minutes) and how late a
+      # slot missed during a restart may still fire.
+      HOME_SCHED_TICK_SECONDS: ${HOME_SCHED_TICK_SECONDS:-60}
+      HOME_SCHED_CATCHUP_GRACE: ${HOME_SCHED_CATCHUP_GRACE:-120}
     volumes:
       - home-data:/data
     ports:

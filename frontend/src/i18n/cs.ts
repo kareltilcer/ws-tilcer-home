@@ -278,4 +278,167 @@ export const cs = {
     widgetEmpty: 'Žádné připnuté dokumenty.',
     overlayTitle: 'Dokument · z Nástěnky',
   },
+
+  // ---- v5: Nastavení → Oznámení (every role, incl. reader) ----
+  settings: {
+    title: 'Nastavení',
+    subtitle: 'Oznámení na tomto zařízení · vzhled · aplikace',
+    notifications: 'Oznámení',
+    thisDevice: 'toto zařízení',
+    thisDeviceHint: 'Telefon i notebook si nastavuješ zvlášť.',
+    // Priming: the browser prompt is one-shot, so it fires only on intent.
+    primingBody:
+      'Oznámení chodí na to zařízení, kde si je zapneš — třeba když se blíží připomínka nebo přijde ranní přehled.',
+    enable: 'Zapnout oznámení na tomto zařízení',
+    enabled: 'Oznámení jsou na tomto zařízení zapnutá',
+    disable: 'Vypnout na tomto zařízení',
+    dismissed: 'Dialog jsi zavřel(a) bez rozhodnutí — zkusit můžeš znovu.',
+    blockedTitle: 'Oznámení jsou blokovaná v prohlížeči',
+    blockedBody:
+      'Povolení jsme se už jednou zeptali a bylo zamítnuté — z aplikace se znovu zeptat nemůžeme. Otevři v prohlížeči nastavení pro home.tilcer.cz a povol Oznámení; pak se sem vrať.',
+    unsupportedTitle: 'Tento prohlížeč oznámení nepodporuje',
+    unsupportedBody:
+      'Web Push tady není k dispozici. Na iPhonu a iPadu funguje až po přidání aplikace na plochu.',
+    // The browser has the Push API but never gave us a service worker — typically
+    // an anonymous window. Said BEFORE the permission prompt is spent, so the
+    // member still has their one chance left in a normal window.
+    swUnavailable:
+      'Prohlížeč nespustil aplikaci na pozadí, bez které oznámení chodit nemohou. V anonymním okně to nefunguje — zkus to v běžném okně.',
+    serverDisabledTitle: 'Oznámení nejsou na serveru nastavená',
+    serverDisabledBody: 'Správce zatím nenastavil klíče pro odesílání oznámení.',
+    offlineHint: 'Zapnutí oznámení vyžaduje připojení.',
+    masterLabel: 'Oznámení',
+    masterHint: 'Hlavní vypínač pro toto zařízení',
+    catBroadcast: 'Rozeslaná oznámení',
+    catBroadcastHint: 'Zprávy, které rozešle správce.',
+    catTriggers: 'Upozornění na akce',
+    catTriggersHint: 'Když se v domácnosti něco změní.',
+    catSummaries: 'Souhrny',
+    catSummariesHint: 'Pravidelné přehledy, třeba ranní.',
+    selfTest: 'Poslat zkušební oznámení',
+    selfTestSent: 'Zkušební oznámení odesláno na toto zařízení.',
+    selfTestFailed: 'Zkušební oznámení se nepodařilo doručit. Zkuste oznámení vypnout a znovu zapnout.',
+    appearance: 'Vzhled',
+    theme: 'Motiv',
+    app: 'Aplikace',
+    install: 'Nainstalovat aplikaci',
+    installHint:
+      'Na telefonu „Přidat na plochu“. Aplikace se otevírá v tmavém provedení bez adresního řádku.',
+    offlineNote:
+      'Bez připojení si Home otevřeš a přečteš poslední načtená data. Ukládat změny, otevírat náhledy dokumentů ani se přihlašovat offline nelze.',
+  },
+
+  // ---- v5: Administrace (admin only) ----
+  admin: {
+    title: 'Administrace',
+    subtitle: 'Oznámení pro domácnost — co se posílá a komu',
+    navDesc: 'Oznámení — rozeslat, pravidla, souhrny',
+    tabSend: 'Rozeslat',
+    tabRules: 'Pravidla',
+    tabSummaries: 'Souhrny',
+    tabDeliveries: 'Doručení',
+
+    // composer
+    composerTitle: 'Nadpis',
+    composerBody: 'Text',
+    insertToken: 'Vložit údaj',
+    preview: 'Živý náhled',
+    previewHint: 'Takhle oznámení uvidí příjemci — údaje jsou vyplněné ukázkovými hodnotami.',
+    send: 'Odeslat',
+    sendTest: 'Poslat test',
+    sending: 'Odesílám…',
+    testSent: 'Zkušební oznámení odesláno na tvoje zařízení.',
+    tokensTime: 'Čas a datum',
+    tokensEvent: 'Údaje o akci',
+    tokensChange: 'Změněná hodnota',
+    tokensMetric: 'Čísla z modulů',
+
+    // audience
+    audience: 'Komu',
+    audienceAll: 'Všem',
+    audienceRoles: 'Podle role',
+    audienceUsers: 'Vybraným lidem',
+    audienceEchoAll: 'Odejde všem',
+    audienceEmpty: 'Vyber aspoň jednoho příjemce.',
+    nobodySubscribed: 'Zatím nemá oznámení zapnuté nikdo — zprávu můžeš napsat, ale nikam nedorazí.',
+
+    // broadcast
+    sendHeading: 'Rozeslat oznámení',
+    sendHint: 'Jednorázová zpráva pro domácnost. Neukládá se jako pravidlo.',
+    sentTitle: 'Odesláno',
+
+    // rules
+    rulesHeading: 'Pravidla',
+    rulesHint: 'Když se v domácnosti něco stane, přijde oznámení.',
+    rulesEmpty: 'Zatím žádná pravidla',
+    rulesEmptyHint: 'Vytvoř první pravidlo — třeba upozornění, když někdo dokončí připomínku.',
+    newRule: 'Nové pravidlo',
+    ruleName: 'Název pravidla',
+    ruleTrigger: 'Kdy se má poslat',
+    ruleTriggerPlaceholder: 'Vyber akci…',
+    ruleTriggerRequired: 'Vyber akci, na kterou má pravidlo reagovat.',
+    ruleFilters: 'Zúžit (nepovinné)',
+    ruleBodyPlaceholder: 'Necháš-li prázdné, pošle se popis akce z logu.',
+    coalesce: 'Sloučit opakování',
+    coalesceHint: 'Stejné akce v krátkém sledu spojí do jednoho oznámení.',
+    coalesceOff: 'Neslučovat — poslat každou akci zvlášť',
+    notifyActor: 'Upozornit i původce akce',
+    notifyActorHint: 'Vypni, když nechceš, aby oznámení chodilo tomu, kdo změnu udělal.',
+    enabledLabel: 'Zapnuto',
+
+    // schedules
+    summariesHeading: 'Souhrny',
+    summariesHint: 'Pravidelný přehled v určený čas.',
+    summariesEmpty: 'Zatím žádné souhrny',
+    summariesEmptyHint: 'Vytvoř první souhrn — třeba ranní přehled v 8:00.',
+    newSummary: 'Nový souhrn',
+    summaryName: 'Název souhrnu',
+    scheduleTime: 'Čas',
+    scheduleDays: 'Kdy',
+    dayDaily: 'Každý den',
+    dayWeekdays: 'Všední dny',
+    dayWeekends: 'Víkend',
+    dayPicked: 'Vybrané dny',
+    dayOfMonth: 'N-tého v měsíci',
+    dayOfMonthLabel: 'Den v měsíci',
+    // D74: 29–31 clamp to the month's last day rather than skipping short months.
+    dayOfMonthClampHint: 'V kratších měsících se posune na poslední den měsíce.',
+    perRecipientNote: 'Čísla označená „osobní“ se počítají pro každého příjemce zvlášť.',
+
+    // deliveries
+    deliveriesHeading: 'Doručení',
+    // Deliberately explicit: this LOOKS like the Log but means something else.
+    deliveriesHint:
+      'Provozní záznam o odeslání — best effort, ne auditní log. Starší záznamy se automaticky mažou.',
+    deliveriesEmpty: 'Zatím nic neodešlo',
+    kindBroadcast: 'Rozeslané',
+    kindTrigger: 'Pravidlo',
+    kindSchedule: 'Souhrn',
+    kindTest: 'Test',
+    statusSent: 'Odesláno',
+    statusFailed: 'Nedoručeno',
+    statusExpired: 'Vypršelo',
+    colTime: 'Čas',
+    colKind: 'Typ',
+    colRecipient: 'Příjemce',
+    colStatus: 'Stav',
+    filterAll: 'Vše',
+    loadMore: 'Načíst další',
+
+    // shared
+    save: 'Uložit',
+    saving: 'Ukládám…',
+    cancel: 'Zrušit',
+    delete: 'Smazat',
+    deleteConfirm: 'Opravdu smazat?',
+    saveError: 'Nepodařilo se uložit',
+  },
+
+  // ---- v5: app-wide offline ----
+  offline: {
+    banner: 'Jste offline — zobrazená data mohou být starší',
+    bannerSub: 'Změny nelze uložit offline. Náhledy dokumentů a přihlášení vyžadují připojení.',
+    writeBlocked: 'Změny nelze uložit offline',
+    needsConnection: 'Vyžaduje připojení',
+  },
 } as const

@@ -737,6 +737,21 @@ func (s *Store) PinnedRowsFor(ctx context.Context, userID string) ([]pinRow, err
 	return out, rows.Err()
 }
 
+// CountPinnedFor counts the notes pinned visible to one member — household pins
+// ∪ their personal pins, DE-DUPLICATED (a note pinned both ways counts once,
+// exactly as the widget shows it once). COUNT(DISTINCT note_id) is what makes
+// that de-duplication true in SQL rather than in a second pass.
+func (s *Store) CountPinnedFor(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT p.note_id)
+		   FROM note_pins p JOIN notes n ON n.id = p.note_id
+		  WHERE n.archived = 0
+		    AND (p.scope = 'household' OR (p.scope = 'personal' AND p.user_id = ?))`,
+		userID).Scan(&n)
+	return n, err
+}
+
 // ---- small SQL helpers ----
 
 func placeholders(n int) string {

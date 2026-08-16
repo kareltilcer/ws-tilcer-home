@@ -19,6 +19,7 @@ var MigrationsFS embed.FS
 type Module struct {
 	handler *Handler
 	widgets []registry.WidgetProvider
+	metrics *metricProvider
 }
 
 // NewModule builds the notes module over svc.
@@ -26,6 +27,7 @@ func NewModule(svc *Service) *Module {
 	return &Module{
 		handler: NewHandler(svc),
 		widgets: []registry.WidgetProvider{newPripnuteProvider(svc.store)},
+		metrics: &metricProvider{store: svc.store},
 	}
 }
 

@@ -14,6 +14,9 @@ import { PoznamkyPage } from '@/routes/poznamky/PoznamkyPage'
 import { DokumentyPage } from '@/routes/dokumenty/DokumentyPage'
 import { DocumentPermalinkPage } from '@/routes/dokumenty/DocumentPermalinkPage'
 import { LogPage } from '@/routes/log/LogPage'
+import { AdministracePage } from '@/modules/admin/AdministracePage'
+import { NastaveniPage } from '@/platform/settings/NastaveniPage'
+import { OnlineProvider } from '@/platform/pwa/offline'
 
 // RequireAdmin guards the Log route at the route level (not just by hiding the
 // nav item): a non-admin who deep-links to /log gets the refusal screen.
@@ -26,6 +29,9 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
+        {/* Connectivity is app-wide state: the offline banner and every disabled
+            write control read from here (D71). */}
+        <OnlineProvider>
         <AuthProvider>
           <BrowserRouter>
             <Routes>
@@ -47,11 +53,24 @@ export default function App() {
                     </RequireAdmin>
                   }
                 />
+                {/* v5: Administrace is admin-only at the ROUTE level too — a
+                    non-admin deep-linking here gets the refusal screen, not a
+                    stripped-down view. Nastavení is for everyone. */}
+                <Route
+                  path={routes.administrace}
+                  element={
+                    <RequireAdmin>
+                      <AdministracePage />
+                    </RequireAdmin>
+                  }
+                />
+                <Route path={routes.nastaveni} element={<NastaveniPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </BrowserRouter>
         </AuthProvider>
+        </OnlineProvider>
       </ThemeProvider>
     </QueryClientProvider>
   )

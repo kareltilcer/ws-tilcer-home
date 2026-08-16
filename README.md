@@ -168,6 +168,41 @@ versioning**, so that mirror bucket is the only second copy of the bytes — tre
 | `HOME_DOCS_PUBLIC_BASE_URL` | absolute base for the permanent `/d/{id}` links. Empty = relative to the app origin | *(unset)* |
 | `HOME_DOCS_LOCAL_DIR` | **development only** filesystem store, used when no bucket is set | `/data/blobs` (image default) |
 
+**Notifications (v5) — Web Push + the summary scheduler.** Home is its own push
+sender: one service worker on one origin, therefore **one subscription per
+device**, and every module sends through the same channel. Members opt in per
+device in **Nastavení → Oznámení**; the `admin` module only configures *what* is
+sent.
+
+The VAPID keypair is what identifies this server to every browser push service.
+**Generate it once and keep it:**
+
+```bash
+go run ./cmd/vapidgen
+```
+
+Rotating it does not "reset" anything — it **silently invalidates every existing
+subscription**, and each household device has to open the settings panel and
+subscribe again. Treat it like the auth secret. Leave all three unset and push is
+cleanly disabled: nothing is sent, subscribing is refused with a reason, and the
+rest of the app is untouched.
+
+| Var | Purpose | Value |
+| --- | --- | --- |
+| `HOME_VAPID_PUBLIC_KEY` | VAPID public key (base64url). The only half ever served to the browser | *(from `cmd/vapidgen`)* |
+| `HOME_VAPID_PRIVATE_KEY` | VAPID private key. **Never leaves the server** | *(secret)* |
+| `HOME_VAPID_SUBJECT` | contact for the push service — `mailto:…` or `https://…` | `mailto:karel@tilcer.cz` |
+| `HOME_NOTIF_COALESCE_DEFAULT` | default per-rule window collapsing a burst of one rule's matches into one push; `0` = send every event | `60` (seconds) |
+| `HOME_NOTIF_DELIVERY_RETENTION_DAYS` | prune the delivery log past this age; `0` = keep forever. Deliveries are **operational, not audit** | `30` |
+| `HOME_NOTIF_MAX_FAILDAYS` | prune a subscription that has been failing continuously this long (a device wiped without unsubscribing) | `14` |
+| `HOME_SCHED_TICK_SECONDS` | scheduler granularity. Bounded to 1–60: slots are wall-clock **minutes**, so a longer tick steps over them | `60` |
+| `HOME_SCHED_CATCHUP_GRACE` | fire a slot missed while the process was down, if it is back within this many minutes; older misses are skipped rather than delivered as stale news | `120` |
+
+Schedules are evaluated in `HOME_TIMEZONE` and are DST-correct: an 08:00 summary
+stays at 08:00 local across both boundaries. A day-of-month of 29–31 **clamps to
+the month's last day** in short months, matching the events module's short-month
+rule — "the 31st" fires on 28/29 February rather than skipping the month.
+
 > **Do not** set `HOME_DEV_AUTH_BYPASS` in production — with `HOME_ENV=production`
 > the server refuses to start if it is enabled (fake auth in prod is a security
 > hole). `/readyz` also reports `insecure_auth` whenever the bypass is active.

@@ -9,6 +9,10 @@ export const routes = {
   poznamky: '/poznamky',
   dokumenty: '/dokumenty',
   log: '/log',
+  // v5: Administrace is admin-only and lives in the "Více" overflow beside Log;
+  // Nastavení is for everyone (it holds the per-device notification panel).
+  administrace: '/administrace',
+  nastaveni: '/nastaveni',
 } as const
 
 // There is deliberately no permalink helper here: /d/{id} (D42) is minted by the

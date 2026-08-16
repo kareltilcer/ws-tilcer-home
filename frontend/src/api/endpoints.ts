@@ -40,6 +40,18 @@ import type {
   StatsResponse,
   WidgetCatalogEntry,
   WidgetInstance,
+  Audience,
+  NotificationCatalog,
+  NotificationDeliveryPage,
+  NotificationRule,
+  NotificationRulePage,
+  NotificationSchedule,
+  NotificationSchedulePage,
+  PushCategories,
+  PushPreferences,
+  PushSubscriptionInfo,
+  PushTestResult,
+  SendResult,
 } from './types'
 
 function qs(params: Record<string, string | boolean | number | string[] | undefined>): string {
@@ -294,3 +306,74 @@ export const getEntityTimeline = (type: string, id: string, params: { limit?: nu
   apiFetch<AuditEventDetailPage>(`/api/logs/entity/${type}/${id}${qs(params)}`)
 export const getLogStats = (dimension: string, bucket = 'day', from?: string, to?: string) =>
   apiFetch<StatsResponse>(`/api/logs/stats${qs({ dimension, bucket, from, to })}`)
+
+// ---- v5: push (every member, incl. reader) ----
+
+export const getVapidKey = () => apiFetch<{ key: string }>('/api/push/vapid-key')
+
+export const registerPushSubscription = (body: {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
+  user_agent?: string
+}) => apiFetch<PushSubscriptionInfo>('/api/push/subscriptions', { method: 'POST', body })
+
+export const removePushSubscription = (endpoint: string) =>
+  apiFetch<void>('/api/push/subscriptions', { method: 'DELETE', body: { endpoint } })
+
+/** sendPushTest pushes to the CALLER's own devices only, bypassing their mutes —
+ *  the "does this device actually work?" answer the settings panel promises. */
+export const sendPushTest = () =>
+  apiFetch<PushTestResult>('/api/push/test', { method: 'POST' })
+
+export const getPushPreferences = () => apiFetch<PushPreferences>('/api/push/preferences')
+
+export const updatePushPreferences = (body: {
+  enabled?: boolean
+  categories?: Partial<PushCategories>
+}) => apiFetch<PushPreferences>('/api/push/preferences', { method: 'PATCH', body })
+
+// ---- v5: admin notifications (admin only) ----
+
+const adminBase = '/api/admin/notifications'
+
+export const getNotificationCatalog = () => apiFetch<NotificationCatalog>(`${adminBase}/catalog`)
+
+export const sendBroadcast = (body: { title: string; body: string; url?: string; audience: Audience }) =>
+  apiFetch<SendResult>(`${adminBase}/broadcast`, { method: 'POST', body })
+
+export const listNotificationRules = (params: { enabled?: boolean; limit?: number; cursor?: string } = {}) =>
+  apiFetch<NotificationRulePage>(`${adminBase}/rules${qs(params)}`)
+export const getNotificationRule = (id: string) => apiFetch<NotificationRule>(`${adminBase}/rules/${id}`)
+export const createNotificationRule = (body: Record<string, unknown>) =>
+  apiFetch<NotificationRule>(`${adminBase}/rules`, { method: 'POST', body })
+export const updateNotificationRule = (id: string, body: Record<string, unknown>) =>
+  apiFetch<NotificationRule>(`${adminBase}/rules/${id}`, { method: 'PATCH', body })
+export const deleteNotificationRule = (id: string) =>
+  apiFetch<void>(`${adminBase}/rules/${id}`, { method: 'DELETE' })
+export const testNotificationRule = (id: string) =>
+  apiFetch<SendResult>(`${adminBase}/rules/${id}/test`, { method: 'POST' })
+
+export const listNotificationSchedules = (params: { enabled?: boolean; limit?: number; cursor?: string } = {}) =>
+  apiFetch<NotificationSchedulePage>(`${adminBase}/schedules${qs(params)}`)
+export const getNotificationSchedule = (id: string) => apiFetch<NotificationSchedule>(`${adminBase}/schedules/${id}`)
+export const createNotificationSchedule = (body: Record<string, unknown>) =>
+  apiFetch<NotificationSchedule>(`${adminBase}/schedules`, { method: 'POST', body })
+export const updateNotificationSchedule = (id: string, body: Record<string, unknown>) =>
+  apiFetch<NotificationSchedule>(`${adminBase}/schedules/${id}`, { method: 'PATCH', body })
+export const deleteNotificationSchedule = (id: string) =>
+  apiFetch<void>(`${adminBase}/schedules/${id}`, { method: 'DELETE' })
+export const testNotificationSchedule = (id: string) =>
+  apiFetch<SendResult>(`${adminBase}/schedules/${id}/test`, { method: 'POST' })
+
+export interface DeliveryFilters {
+  kind?: string
+  status?: string
+  rule_id?: string
+  user?: string
+  from?: string
+  to?: string
+  limit?: number
+  cursor?: string
+}
+export const listDeliveries = (f: DeliveryFilters = {}) =>
+  apiFetch<NotificationDeliveryPage>(`${adminBase}/deliveries${qs(f as Record<string, string>)}`)

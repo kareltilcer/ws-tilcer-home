@@ -1,6 +1,49 @@
 package todo
 
-import "context"
+import (
+	"context"
+	"strings"
+	"time"
+)
+
+// CountCardsInKind counts non-archived cards sitting in columns of the given
+// kinds, across non-archived boards — the counting half of the Právě dělám
+// population, for the metrics catalog (D69).
+func (s *Store) CountCardsInKind(ctx context.Context, kinds []string) (int, error) {
+	if len(kinds) == 0 {
+		return 0, nil
+	}
+	args := make([]any, 0, len(kinds))
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	q := `SELECT COUNT(*)
+	        FROM cards c
+	        JOIN columns col ON col.id = c.column_id AND col.kind IN (` +
+		strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",") + `)
+	        JOIN boards b ON b.id = col.board_id AND b.archived = 0
+	       WHERE c.archived = 0`
+	var n int
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(&n)
+	return n, err
+}
+
+// CountDoneBetween counts cards stamped done within [from, to). done_at is set
+// on the move into a done column and cleared on the way out, so this is "how
+// many were finished in this window" without touching the audit log.
+func (s *Store) CountDoneBetween(ctx context.Context, from, to time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM cards c
+		  JOIN columns col ON col.id = c.column_id
+		  JOIN boards b ON b.id = col.board_id AND b.archived = 0
+		 WHERE c.archived = 0
+		   AND c.done_at IS NOT NULL
+		   AND c.done_at >= ? AND c.done_at < ?`,
+		from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)).Scan(&n)
+	return n, err
+}
 
 // NowCard is a card sitting in a kind='now' column, with its board/column
 // context — the shape the dashboard aggregates (FR-N1). Defined here (not in the

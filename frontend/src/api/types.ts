@@ -512,3 +512,164 @@ export interface PinnedDocument {
 export interface PripnuteDokumentyWidget {
   documents: PinnedDocument[]
 }
+
+// ---- v5: push notifications + admin (Administrace) ----
+
+/** Per-user mute preferences (D53a): a master switch plus one toggle per category. */
+export interface PushPreferences {
+  enabled: boolean
+  categories: PushCategories
+  updated_at: string | null
+}
+
+export interface PushCategories {
+  broadcast: boolean
+  triggers: boolean
+  summaries: boolean
+}
+
+export interface PushSubscriptionInfo {
+  id: string
+  endpoint: string
+  user_agent: string | null
+  created_at: string
+  last_seen_at: string
+}
+
+/** What a self-test reports: endpoints attempted on THIS account, and how many
+ *  the push service actually accepted. */
+export interface PushTestResult {
+  subscriptions: number
+  sent: number
+}
+
+/** Who a notification goes to. Default scope is "all" (D66). */
+export interface Audience {
+  scope: 'all' | 'roles' | 'users'
+  roles?: string[]
+  users?: string[]
+}
+
+export interface NotificationRule {
+  id: string
+  name: string
+  enabled: boolean
+  action_key: string | null
+  action_prefix: string | null
+  filter_module: string | null
+  filter_entity_type: string | null
+  filter_level: string | null
+  audience: Audience
+  title_template: string | null
+  body_template: string | null
+  coalesce_window_seconds: number
+  exclude_actor: boolean
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface NotificationRulePage {
+  items: NotificationRule[]
+  next_cursor: string | null
+}
+
+export type DayPreset = 'daily' | 'weekdays' | 'weekends'
+export type WeekdayToken = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+
+/** Exactly one recurrence form is set. day_of_month is 1–31; 29–31 clamp to the
+ *  month's last day in short months (D74) — deliberately NOT capped at 28. */
+export interface DaysSpec {
+  preset?: DayPreset
+  weekdays?: WeekdayToken[]
+  day_of_month?: number
+}
+
+export interface ScheduleSpec {
+  time_local: string
+  days: DaysSpec
+}
+
+export interface NotificationSchedule {
+  id: string
+  name: string
+  enabled: boolean
+  schedule: ScheduleSpec
+  audience: Audience
+  title_template: string
+  body_template: string
+  last_fired_at: string | null
+  /** Server-rendered Czech phrase ("Každý den v 8:00") — one source of truth. */
+  description: string
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface NotificationSchedulePage {
+  items: NotificationSchedule[]
+  next_cursor: string | null
+}
+
+export type DeliveryKind = 'broadcast' | 'trigger' | 'schedule' | 'test'
+export type DeliveryStatus = 'sent' | 'failed' | 'expired'
+
+export interface NotificationDelivery {
+  id: string
+  ts: string
+  kind: DeliveryKind
+  category: keyof PushCategories
+  rule_id: string | null
+  user_id: string
+  user_label: string
+  subscription_id: string | null
+  status: DeliveryStatus
+  error: string | null
+}
+
+export interface NotificationDeliveryPage {
+  items: NotificationDelivery[]
+  next_cursor: string | null
+}
+
+export interface ActionDescriptor {
+  key: string
+  module: string
+  /** Human Czech phrase — "Když někdo dokončí připomínku". */
+  label: string | null
+}
+
+export interface MetricDescriptor {
+  key: string
+  label: string
+  unit: string | null
+  scope: 'household' | 'personal'
+}
+
+export interface TokenPalette {
+  time: string[]
+  event?: string[]
+  change?: string[]
+  metric?: string[]
+}
+
+export interface HouseholdMember {
+  user_id: string
+  email: string
+  display_name: string
+  roles: string[]
+  subscriptions: number
+}
+
+/** Everything the composer needs so keys are PICKED, never typed. */
+export interface NotificationCatalog {
+  actions: ActionDescriptor[]
+  metrics: MetricDescriptor[]
+  tokens: Record<string, TokenPalette>
+  members: HouseholdMember[]
+}
+
+export interface SendResult {
+  recipients: number
+  subscriptions: number
+}

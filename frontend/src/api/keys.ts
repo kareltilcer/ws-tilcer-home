@@ -25,4 +25,12 @@ export const qk = {
   documentsResolve: (path: string) => ['documents', 'resolve', path] as const,
   // Widget payloads arrive inside the dashboard response, so there is no per-widget
   // query to key — invalidate `dashboard` (a prefix of everything under it) instead.
+
+  // v5 — push (every member) and the admin notification config (admin only).
+  pushVapid: ['push', 'vapid'] as const,
+  pushPrefs: ['push', 'prefs'] as const,
+  adminRules: ['admin', 'rules'] as const,
+  adminSchedules: ['admin', 'schedules'] as const,
+  adminCatalog: ['admin', 'catalog'] as const,
+  adminDeliveries: (filters?: unknown) => ['admin', 'deliveries', filters ?? {}] as const,
 }

@@ -270,7 +270,6 @@ func dispositionFor(mode contentMode, contentType, filename string) string {
 	}
 }
 
-
 // parseRange parses a single-range `bytes=` header. Multi-range requests are not
 // supported (they need a multipart/byteranges response and no real client needs one
 // here), so they are answered as a full 200 rather than an error.

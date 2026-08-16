@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.5.2
+  version: 0.6.0
   description: >-
-    API for the `home` household-management service (v4). Companion to PRD.md.
+    API for the `home` household-management service (v5) — adds the admin-only `admin` module (Web Push notifications: broadcast, audit-key triggers, scheduled summaries; tags `push`, `admin-notifications`) and an installable reads-only-offline PWA. Companion to PRD.md.
     Six modules: `logging` (a spine; read/browse endpoints only — writes are
     in-process, not HTTP), `todo` (Trello-style board), `events` (Okno do
     budoucnosti — all-day, optionally recurring events with reminders), `notes`
@@ -57,6 +57,10 @@ tags:
   - name: logs
     description: Audit-log browser (admin only)
 
+  - name: push
+    description: Per-user Web Push subscription + notification preferences (any member; new in v5)
+  - name: admin-notifications
+    description: Admin-only notification config — broadcast, trigger rules, summary schedules, catalog, deliveries (new in v5)
 paths:
   # ---------------- Auth (Mode B, home-hosted) ----------------
   /api/auth/login:
@@ -358,32 +362,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Column" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "422": { $ref: "#/components/responses/Unprocessable" }
-  /api/boards/{id}/columns/reorder:
-    parameters:
-      - $ref: "#/components/parameters/PathId"
-    post:
-      tags: [columns]
-      summary: Reorder several columns on a board atomically
-      description: >-
-        Rewrites the position of each listed column in one transaction
-        (all-or-nothing). Used when converting a priority-sorted view back to a
-        manual arrangement. Every column must belong to the board.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ColumnReorderRequest" }
-      responses:
-        "200":
-          description: Reordered; returns the board's columns in the new order
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Column" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
@@ -882,9 +860,8 @@ paths:
       tags: [notes]
       summary: List/search notes (FTS5 when q is present)
       description: >-
-        Without `q`, lists the folder's notes (newest-updated first) as one full
-        slice. With `q`, runs an FTS5 free-text search over note title + body,
-        capped at 100 hits. Neither is cursor-paged. Reads only.
+        Without `q`, lists notes (newest-updated first, paged). With `q`, runs an
+        FTS5 free-text search over note title + body. Reads only.
       parameters:
         - name: q
           in: query
@@ -897,6 +874,8 @@ paths:
         - name: include_archived
           in: query
           schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: OK
@@ -983,12 +962,7 @@ paths:
     patch:
       tags: [notes]
       summary: Update a note (title, body_md, archived)
-      description: >-
-        Last-write-wins (PRD D38). Renaming re-derives the slug (URL changes).
-        Restoring (archived=false) requires a live parent folder (else 422) and
-        re-frees the slug against live siblings.
-      parameters:
-        - $ref: "#/components/parameters/Via"
+      description: Last-write-wins (PRD D38). Renaming re-derives the slug (URL changes).
       requestBody:
         required: true
         content:
@@ -1024,8 +998,6 @@ paths:
       tags: [notes]
       summary: Move a note to a folder and/or position
       description: Reparenting may re-derive the slug and changes the note's URL (PRD D32).
-      parameters:
-        - $ref: "#/components/parameters/Via"
       requestBody:
         required: true
         content:
@@ -1052,8 +1024,6 @@ paths:
         editor/admin — one per note. `personal` ("jen pro mě") is a per-user view
         preference any member (incl. reader) may set and is NOT audited — one per
         note per user (PRD D35). Requires the CSRF header.
-      parameters:
-        - $ref: "#/components/parameters/Via"
       requestBody:
         required: true
         content:
@@ -1061,10 +1031,10 @@ paths:
             schema: { $ref: "#/components/schemas/PinRequest" }
       responses:
         "200":
-          description: The caller's pin state for the note after the (idempotent) pin.
+          description: Pinned (idempotent)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PinState" }
+              schema: { $ref: "#/components/schemas/NotePin" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
           description: Non-editor setting a household pin
@@ -1081,86 +1051,10 @@ paths:
           in: query
           required: true
           schema: { type: string, enum: [household, personal] }
-        - $ref: "#/components/parameters/Via"
       responses:
-        "200":
-          description: The caller's pin state for the note after the (idempotent) unpin.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PinState" }
+        "204": { description: Unpinned }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /api/notes/{id}/images:
-    parameters:
-      - $ref: "#/components/parameters/PathId"
-    post:
-      tags: [notes]
-      summary: Upload a pasted/dropped inline image (multipart)
-      description: >-
-        Streams the image to object storage under the `note-images/` prefix (the
-        documents R2 bucket, distinct prefix), sniffs the MIME server-side, checksums
-        (SHA-256), and records the note_images row — only after the object is durable.
-        Returns the reference the editor embeds as `![](url)`; the bytes never live
-        inline in body_md (PRD D30 keeps body_md as the one canonical text). The owning
-        note must exist and be live. Requires the CSRF header. editor/admin.
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema: { $ref: "#/components/schemas/NoteImageUpload" }
-            encoding:
-              file: { contentType: application/octet-stream }
-      responses:
-        "201":
-          description: Stored
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/NoteImageUploadResult" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "413":
-          description: Image exceeds HOME_NOTES_IMAGE_MAX_UPLOAD_MB
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "415":
-          description: Not an allowed image type (png/jpeg/gif/webp, server-sniffed)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "422": { $ref: "#/components/responses/Unprocessable" }
-        "502":
-          description: Object storage unreachable (nothing committed)
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /api/notes/images/{imageId}:
-    parameters:
-      - name: imageId
-        in: path
-        required: true
-        schema: { type: string }
-    get:
-      tags: [notes]
-      summary: Stream an inline image (household-only content URL)
-      description: >-
-        Streams the image from object storage through the backend (storage stays
-        private). Sets ETag=checksum and `Cache-Control: private, immutable,
-        max-age=31536000` (bytes never change), `X-Content-Type-Options: nosniff`, a
-        sandboxed CSP, and `Content-Disposition: inline` (D48). Session-required.
-      responses:
-        "200":
-          description: The image
-          headers:
-            ETag: { schema: { type: string }, description: The image's SHA-256 checksum. }
-            Cache-Control: { schema: { type: string } }
-          content:
-            "*/*":
-              schema: { type: string, format: binary }
-        "304": { description: Not modified (ETag match) }
-        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/notes/folders:
     post:
@@ -1199,11 +1093,6 @@ paths:
     patch:
       tags: [notes]
       summary: Update a folder (rename → new slug, archive)
-      description: >-
-        Archiving must cascade: a non-empty folder cannot be archived here (409) —
-        use DELETE with cascade=true, which archives the whole subtree. Restoring
-        (archived=false) requires a live parent (else 422) and re-frees the slug
-        against live siblings.
       requestBody:
         required: true
         content:
@@ -1314,11 +1203,6 @@ paths:
         overwrite path (PRD D41); a changed file is a NEW document. Preview generation
         is async (the document returns with preview_status="pending"). Requires the
         CSRF header. editor/admin.
-
-
-        Parts are read in order, so the metadata fields must precede the `file` part;
-        a field arriving after it is ignored. Each text field is capped at 8 KiB and
-        at most 16 parts are read before the `file` part (422 beyond either).
       requestBody:
         required: true
         content:
@@ -1401,10 +1285,6 @@ paths:
     get:
       tags: [documents]
       summary: Get a document (metadata, breadcrumb, preview info, permanent URLs, pin state)
-      description: >-
-        A soft-deleted (archived) document is 404 here, as it is on every other read
-        path and on the content endpoints below — the SPA renders that 404 as "this
-        document is gone". Restoring it (PATCH `archived=false`) brings it all back.
       responses:
         "200":
           description: OK
@@ -1485,8 +1365,6 @@ paths:
         editor/admin — one per document. `personal` ("jen pro mě") is a per-user view
         preference any member (incl. reader) may set and is NOT audited — one per
         document per user (PRD D47). Idempotent. Requires the CSRF header.
-      parameters:
-        - $ref: "#/components/parameters/Via"
       requestBody:
         required: true
         content:
@@ -1494,10 +1372,10 @@ paths:
             schema: { $ref: "#/components/schemas/PinRequest" }
       responses:
         "200":
-          description: The caller's pin state for the document after the (idempotent) pin.
+          description: Pinned (idempotent)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PinState" }
+              schema: { $ref: "#/components/schemas/DocumentPin" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
           description: Non-editor setting a household pin
@@ -1514,13 +1392,8 @@ paths:
           in: query
           required: true
           schema: { type: string, enum: [household, personal] }
-        - $ref: "#/components/parameters/Via"
       responses:
-        "200":
-          description: The caller's pin state for the document after the (idempotent) unpin.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PinState" }
+        "204": { description: Unpinned }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1535,9 +1408,7 @@ paths:
         Content-Disposition for safe types, else attachment. Sets ETag=checksum and
         `Cache-Control: private, immutable, max-age=31536000` (bytes never change, D41),
         `X-Content-Type-Options: nosniff`, and a sandboxed CSP (D48). Supports HTTP Range.
-        Stable for the document's life (PRD D42). Session-required. A soft-deleted
-        (archived) document is 404 on all four content endpoints: the objects survive
-        (the delete is reversible) but a link shared before the delete stops serving it.
+        Stable for the document's life (PRD D42). Session-required.
       parameters:
         - name: Range
           in: header
@@ -1557,35 +1428,19 @@ paths:
         "304": { description: Not modified (ETag match) }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
-    head:
-      tags: [documents]
-      summary: Headers only (size, type, ETag) without transferring the file
-      description: Identical headers and status codes to GET, with no response body.
-      responses:
-        "200": { description: Headers only }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
   /api/documents/{id}/download:
     parameters:
       - $ref: "#/components/parameters/PathId"
     get:
       tags: [documents]
       summary: Download the original bytes (always attachment)
-      description: 'Same bytes as /raw but always `Content-Disposition: attachment`.'
+      description: "Same bytes as /raw but always `Content-Disposition: attachment`."
       responses:
         "200":
           description: The file (attachment)
           content:
             "*/*":
               schema: { type: string, format: binary }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-    head:
-      tags: [documents]
-      summary: Headers only (size, type, ETag) without transferring the file
-      description: Identical headers and status codes to GET, with no response body.
-      responses:
-        "200": { description: Headers only }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/documents/{id}/preview:
@@ -1612,16 +1467,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-    head:
-      tags: [documents]
-      summary: Headers only (size, type, ETag) without transferring the preview
-      description: Identical headers and status codes to GET, with no response body.
-      responses:
-        "200": { description: Headers only }
-        "204": { description: No preview (download-only type) }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { description: Preview not ready (pending) or failed }
   /api/documents/{id}/thumbnail:
     parameters:
       - $ref: "#/components/parameters/PathId"
@@ -1635,14 +1480,6 @@ paths:
           content:
             image/webp:
               schema: { type: string, format: binary }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { description: No thumbnail generated }
-    head:
-      tags: [documents]
-      summary: Headers only (size, type, ETag) without transferring the thumbnail
-      description: Identical headers and status codes to GET, with no response body.
-      responses:
-        "200": { description: Headers only }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: No thumbnail generated }
   /api/documents/folders:
@@ -1702,22 +1539,13 @@ paths:
       tags: [documents]
       summary: Delete a document folder (soft by default)
       description: >-
-        A folder holding LIVE children requires `cascade=true` (else 409 with the
-        child count) — including when `hard=true`, which is the irreversible path.
-        `hard=true` is admin-gated and purges every descendant document's R2 objects
-        (PRD D50). A hard delete of a LIVE folder is additionally REFUSED (409)
-        whenever the subtree holds already-archived rows at any depth: those never
-        appear in the tree the caller confirmed against, so `cascade=true` cannot be
-        consent for purging them and their files. Delete such rows individually first.
-        An ARCHIVED folder is exempt from that guard — purging a soft-deleted folder
-        is precisely what a hard delete on one means, and the soft delete archived its
-        whole subtree on the way, so the guard would otherwise refuse forever. There
-        `cascade=true` is instead required against the archived subtree itself (409
-        with its counts), since the live counts are zero by then.
+        A non-empty folder requires `cascade=true` (else 409 with the child count).
+        `hard=true` purges and is admin-gated, and purges every descendant document's
+        R2 objects (PRD D50).
       parameters:
         - name: cascade
           in: query
-          description: Delete even if it holds live subfolders/documents (each child logged).
+          description: Delete even if it holds subfolders/documents (each child logged).
           schema: { type: boolean, default: false }
         - name: hard
           in: query
@@ -1728,14 +1556,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: >-
-            Folder holds live children and cascade is not set (`error: conflict`,
-            returns the child count), or a hard delete of an archived folder came
-            without cascade (`error: conflict`, returns its archived subtree's counts),
-            or a hard delete of a live folder would purge archived rows in the subtree
-            (`error: archived_descendants`, returns how many). The last one has its own
-            code because cascade cannot resolve it: those rows must be deleted
-            individually first.
+          description: Folder not empty and cascade not set (returns child count)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1940,6 +1761,392 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  # ---------------- Per-user push (any authenticated member) ----------------
+  /api/push/vapid-key:
+    get:
+      tags: [push]
+      summary: Fetch the VAPID public key (for PushManager.subscribe)
+      description: >-
+        Returns the server's VAPID PUBLIC key as base64url, needed by the browser as
+        `applicationServerKey`. Session-gated; never returns the private key.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VapidKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/push/subscriptions:
+    post:
+      tags: [push]
+      summary: Register (or refresh) this device's push subscription
+      description: >-
+        Upsert on `endpoint` — a re-subscribe with the same endpoint updates the keys
+        and last_seen, it does not duplicate. Bound to the caller's user. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushSubscriptionRequest" }
+      responses:
+        "200":
+          description: Subscription updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushSubscription" }
+        "201":
+          description: Subscription created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushSubscription" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [push]
+      summary: Remove this device's push subscription (unsubscribe)
+      description: Idempotent — 204 even if the endpoint is already gone. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string, format: uri }
+      responses:
+        "204": { description: Unsubscribed (or already absent) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/push/test:
+    post:
+      tags: [push]
+      summary: Send a test notification to the caller's own devices
+      description: >-
+        The last step of the permission gauntlet: it answers "did it actually arrive
+        on this device?". Open to every member (`reader` included) because it can only
+        ever reach the CALLER's own endpoints — the recipient is the session's user id,
+        never anything from the request. Mutes are bypassed on purpose (FR-ADM6's rule
+        applied to the member's own self-test): the question is whether the device
+        works, not whether they want this category. CSRF required.
+      responses:
+        "202":
+          description: Attempted on every one of the caller's endpoints
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushTestResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422":
+          description: The caller has no registered device to test
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: The server has no VAPID keypair configured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/push/preferences:
+    get:
+      tags: [push]
+      summary: Read this user's notification preferences
+      description: First read defaults every field to true.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushPreferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [push]
+      summary: Update this user's notification preferences (master + per-category mutes)
+      description: Partial update; honoured by the send path at delivery time. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushPreferencesUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushPreferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  # ---------------- Admin notifications (admin role only) ----------------
+  /api/admin/notifications/broadcast:
+    post:
+      tags: [admin-notifications]
+      summary: Send a custom notification now (admin)
+      description: >-
+        Requires the `admin` role. Resolves the audience and sends immediately over the
+        shared push channel; records a delivery batch and audits `admin.broadcast.send`.
+        CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BroadcastRequest" }
+      responses:
+        "202":
+          description: Accepted; fan-out queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/admin/notifications/rules:
+    get:
+      tags: [admin-notifications]
+      summary: List trigger rules (admin)
+      parameters:
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paged trigger rules
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRulePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin-notifications]
+      summary: Create a trigger rule (admin)
+      description: >-
+        `action_key` (or `action_prefix`) must exist in the action catalog. If
+        title/body templates are omitted, the notification body defaults to the audit
+        event's Czech summary. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationRuleCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/admin/notifications/rules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-notifications]
+      summary: Get a trigger rule (admin)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [admin-notifications]
+      summary: Update a trigger rule (admin)
+      description: Partial update. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationRuleUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [admin-notifications]
+      summary: Delete a trigger rule (admin)
+      description: CSRF required.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/rules/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-notifications]
+      summary: Send a test of this rule to the calling admin only (admin)
+      description: >-
+        Renders the rule with a sample/most-recent matching event and sends only to the
+        caller's own subscriptions, bypassing audience and mute. CSRF required.
+      responses:
+        "202":
+          description: Test queued to the caller's devices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/schedules:
+    get:
+      tags: [admin-notifications]
+      summary: List summary schedules (admin)
+      parameters:
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paged schedules
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedulePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin-notifications]
+      summary: Create a summary schedule (admin)
+      description: >-
+        Body templates may reference `{{metric.<key>}}` tokens; every referenced key
+        must exist in the metrics catalog. Time is wall-clock in Europe/Prague. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationScheduleCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/admin/notifications/schedules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-notifications]
+      summary: Get a schedule (admin)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [admin-notifications]
+      summary: Update a schedule (admin)
+      description: Partial update. CSRF required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationScheduleUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [admin-notifications]
+      summary: Delete a schedule (admin)
+      description: CSRF required.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/schedules/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-notifications]
+      summary: Send a test of this schedule to the calling admin only (admin)
+      description: >-
+        Resolves metrics for the caller and sends only to the caller's own subscriptions,
+        bypassing audience and mute. CSRF required.
+      responses:
+        "202":
+          description: Test queued to the caller's devices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/notifications/catalog:
+    get:
+      tags: [admin-notifications]
+      summary: Reference catalog for composing rules/schedules (admin)
+      description: >-
+        Returns, from the live registry, the audit action keys (for trigger rules), the
+        published metric descriptors (for summary schedules), and the token palette per
+        context. The composer UI uses this to offer dropdowns rather than free-typed keys.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationCatalog" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/notifications/deliveries:
+    get:
+      tags: [admin-notifications]
+      summary: Browse the operational delivery log (admin)
+      description: >-
+        Per-send records (sent/failed/expired) for debugging. Operational data, pruned by
+        retention — NOT the audit spine. Newest-first, UUIDv7 keyset.
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [broadcast, trigger, schedule, test] } }
+        - { name: status, in: query, schema: { type: string, enum: [sent, failed, expired] } }
+        - { name: rule_id, in: query, schema: { type: string } }
+        - { name: user, in: query, description: Recipient user id, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paged deliveries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDeliveryPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -1975,14 +2182,6 @@ components:
       name: cursor
       in: query
       description: UUIDv7 keyset cursor from the previous page.
-      schema: { type: string }
-    Via:
-      name: via
-      in: query
-      description: >-
-        Cross-module attribution recorded into the audit event's `meta` (e.g.
-        `via=dashboard` when the mutation originates from a Nástěnka overlay
-        edit rather than the Poznámky/Dokumenty page). Free-form; omitted when absent.
       schema: { type: string }
 
   responses:
@@ -2195,20 +2394,6 @@ components:
       properties:
         position: { type: string, description: New order key. }
 
-    ColumnReorderRequest:
-      type: object
-      required: [columns]
-      properties:
-        columns:
-          type: array
-          minItems: 1
-          items:
-            type: object
-            required: [id, position]
-            properties:
-              id: { type: string }
-              position: { type: string, description: New order key. }
-
     BoardTree:
       type: object
       required: [board, columns]
@@ -2350,7 +2535,6 @@ components:
         parent_id: { type: [string, "null"], description: NULL = root. }
         name: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling folders+notes." }
-        icon: { type: string, description: "Optional emoji icon; empty string = client renders the 📁 default." }
         position: { type: string, description: Lexorank order key among siblings. }
         archived: { type: boolean, default: false }
         created_by: { type: [string, "null"] }
@@ -2362,13 +2546,11 @@ components:
       properties:
         name: { type: string, minLength: 1 }
         parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
-        icon: { type: string, description: "Optional emoji icon (server trims + length-bounds). Omit/empty for none." }
     FolderUpdate:
       type: object
       properties:
         name: { type: string, minLength: 1 }
         archived: { type: boolean }
-        icon: { type: string, description: "Set the emoji icon (empty string clears it). Omit to leave unchanged." }
     FolderMoveRequest:
       type: object
       required: [position]
@@ -2456,31 +2638,14 @@ components:
       properties:
         folder_id: { type: [string, "null"], description: Target folder (null = root). }
         position: { type: string, description: New order key within the target. }
-    NoteImageUpload:
-      type: object
-      required: [file]
-      description: multipart/form-data body for a pasted/dropped inline image (single `file` part).
-      properties:
-        file: { type: string, format: binary }
-    NoteImageUploadResult:
-      type: object
-      required: [id, url, content_type, byte_size]
-      description: >-
-        The stored image. The editor embeds `url` in body_md as `![](url)`; the bytes
-        never live inline. Content is served household-only through the backend.
-      properties:
-        id: { type: string, description: Image id (UUIDv7). }
-        url: { type: string, description: "Content URL, /api/notes/images/{id}." }
-        content_type: { type: string, description: Server-sniffed image type (never the client's claim). }
-        byte_size: { type: integer, format: int64 }
     NotePage:
       type: object
       required: [items]
-      description: A note list / search result. Search is capped (100) and the folder listing is a full slice, so there is no cursor.
       properties:
         items:
           type: array
           items: { $ref: "#/components/schemas/NoteSummary" }
+        next_cursor: { type: [string, "null"] }
     NotesTree:
       type: object
       required: [roots]
@@ -2514,7 +2679,7 @@ components:
         slug_path: { type: string }
     PinState:
       type: object
-      description: The caller's view of a note's / document's pin state.
+      description: The caller's view of a note's pin state.
       required: [household, personal]
       properties:
         household: { type: boolean, description: "Pinned pro všechny (household)." }
@@ -2524,6 +2689,15 @@ components:
       required: [scope]
       properties:
         scope: { type: string, enum: [household, personal] }
+    NotePin:
+      type: object
+      required: [note_id, scope, position]
+      properties:
+        note_id: { type: string }
+        scope: { type: string, enum: [household, personal] }
+        user_id: { type: [string, "null"], description: NULL for household; the caller for personal. }
+        position: { type: string }
+        created_at: { type: string, format: date-time }
 
     # ----- Documents (Dokumenty) -----
     DocFolder:
@@ -2535,7 +2709,6 @@ components:
         parent_id: { type: [string, "null"], description: NULL = root. }
         name: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
-        icon: { type: string, description: "Optional emoji icon; empty string = client renders the 📁 default." }
         position: { type: string, description: Lexorank order key among siblings. }
         archived: { type: boolean, default: false }
         created_by: { type: [string, "null"] }
@@ -2547,13 +2720,11 @@ components:
       properties:
         name: { type: string, minLength: 1 }
         parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
-        icon: { type: string, description: "Optional emoji icon (server trims + length-bounds). Omit/empty for none." }
     DocFolderUpdate:
       type: object
       properties:
         name: { type: string, minLength: 1 }
         archived: { type: boolean }
-        icon: { type: string, description: "Set the emoji icon (empty string clears it). Omit to leave unchanged." }
     DocFolderMoveRequest:
       type: object
       required: [position]
@@ -2597,7 +2768,7 @@ components:
         folder_id: { type: [string, "null"], description: NULL = root (unfiled). }
         title: { type: string, description: Display title (editable); defaults to the filename sans extension. }
         slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
-        description: { type: [string, "null"], description: Optional free text, indexed for search. }
+        description: { type: [string, "null"], description: "Optional free text, indexed for search." }
         original_filename: { type: string }
         content_type: { type: string, description: Server-sniffed MIME (not the client's Content-Type — PRD D48). }
         byte_size: { type: integer }
@@ -2690,13 +2861,6 @@ components:
           type: array
           description: Documents with no folder (folder_id null).
           items: { $ref: "#/components/schemas/DocumentSummary" }
-        max_upload_mb:
-          type: integer
-          description: >-
-            The operator-configured per-file upload cap (HOME_DOCS_MAX_UPLOAD_MB), so the
-            client can refuse an over-cap file before transferring it instead of
-            hardcoding a limit that drifts from the server's.
-          example: 50
     DocFolderNode:
       type: object
       required: [folder, subfolders, documents]
@@ -2715,6 +2879,15 @@ components:
         type: { type: string, enum: [folder, document] }
         id: { type: string }
         slug_path: { type: string }
+    DocumentPin:
+      type: object
+      required: [document_id, scope, position]
+      properties:
+        document_id: { type: string }
+        scope: { type: string, enum: [household, personal] }
+        user_id: { type: [string, "null"], description: NULL for household; the caller for personal. }
+        position: { type: string }
+        created_at: { type: string, format: date-time }
 
     # ----- Auth (Mode B) -----
     LoginRequest:
@@ -2987,5 +3160,350 @@ components:
 # Default auth for all endpoints: the home session cookie. Health and the login
 # endpoint override with `security: []`. State-changing routes additionally require
 # the CSRF header (csrfToken) — enforced in handlers; documented per the scheme above.
+
+    VapidKey:
+      type: object
+      required: [key]
+      properties:
+        key: { type: string, description: "VAPID public key, base64url" }
+
+    PushSubscriptionRequest:
+      type: object
+      required: [endpoint, keys]
+      properties:
+        endpoint: { type: string, format: uri }
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh: { type: string, description: base64url }
+            auth: { type: string, description: base64url }
+        user_agent: { type: [string, "null"] }
+
+    PushSubscription:
+      type: object
+      required: [id, endpoint, created_at, last_seen_at]
+      properties:
+        id: { type: string }
+        endpoint: { type: string, format: uri }
+        user_agent: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+
+    PushPreferences:
+      type: object
+      required: [enabled, categories]
+      properties:
+        enabled: { type: boolean, description: Master switch }
+        categories:
+          type: object
+          required: [broadcast, triggers, summaries]
+          properties:
+            broadcast: { type: boolean }
+            triggers: { type: boolean }
+            summaries: { type: boolean }
+        updated_at: { type: [string, "null"], format: date-time }
+
+    PushTestResult:
+      type: object
+      description: >-
+        What a self-test attempted on the caller's own account. `sent` is what the
+        push service actually accepted, which is the only honest basis for telling
+        the member their device works.
+      required: [subscriptions, sent]
+      properties:
+        subscriptions: { type: integer, description: The caller's endpoints attempted }
+        sent: { type: integer, description: "Of those, how many were accepted" }
+
+    PushPreferencesUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        enabled: { type: boolean }
+        categories:
+          type: object
+          properties:
+            broadcast: { type: boolean }
+            triggers: { type: boolean }
+            summaries: { type: boolean }
+
+    Audience:
+      type: object
+      description: Who receives a notification. `roles`/`users` are used only for the matching scope.
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [all, roles, users] }
+        roles:
+          type: array
+          items: { type: string, enum: [admin, editor, reader] }
+        users:
+          type: array
+          items: { type: string }
+
+    BroadcastRequest:
+      type: object
+      required: [title, body, audience]
+      properties:
+        title: { type: string, minLength: 1 }
+        body: { type: string, minLength: 1 }
+        url:
+          type: [string, "null"]
+          # "/" or "/something", never "//host". Written without a lookahead so
+          # it holds under RE2 as well as ECMA-262.
+          pattern: "^/($|[^/])"
+          maxLength: 512
+          description: >-
+            In-app path a click opens (default "/"). Must be a path, not an
+            absolute or protocol-relative URL: the service worker resolves it
+            against the app origin, and a value carrying its own scheme would
+            win over that base and send a click off-origin. The length cap keeps
+            the encrypted push payload inside the ~4 KB Web Push record.
+        audience: { $ref: "#/components/schemas/Audience" }
+
+    SendResult:
+      type: object
+      required: [recipients, subscriptions]
+      properties:
+        recipients: { type: integer, description: Distinct users targeted after mute filtering }
+        subscriptions: { type: integer, description: Device endpoints the payload was queued to }
+
+    ScheduleSpec:
+      type: object
+      required: [time_local, days]
+      properties:
+        time_local: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Wall-clock HH:MM in Europe/Prague }
+        days:
+          type: object
+          description: Exactly one recurrence form.
+          properties:
+            preset: { type: string, enum: [daily, weekdays, weekends] }
+            weekdays:
+              type: array
+              items: { type: string, enum: [mon, tue, wed, thu, fri, sat, sun] }
+            day_of_month: { type: integer, minimum: 1, maximum: 31, description: "1-31; a value the month lacks (29-31) clamps to that month's last day, matching the events short-month clamp (PRD D19/D74). Not capped at 28." }
+
+    NotificationRule:
+      type: object
+      required: [id, name, enabled, audience, exclude_actor, coalesce_window_seconds, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        action_key: { type: [string, "null"], description: Exact audit action key (mutually exclusive with action_prefix) }
+        action_prefix: { type: [string, "null"], description: "Match all action keys under this dotted prefix, e.g. \"event.\"" }
+        filter_module:
+          type: [string, "null"]
+          enum: [todo, events, notes, documents, dashboard, logging, platform, admin, null]
+          description: >-
+            Qualifies action_key, which is a bare verb and therefore not unique
+            across modules. The composer sets it from the module the action was
+            picked from; null matches the verb in any module.
+        filter_entity_type: { type: [string, "null"] }
+        filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: [string, "null"] }
+        body_template: { type: [string, "null"], description: Omit ⇒ defaults to the audit event's Czech summary }
+        coalesce_window_seconds: { type: integer, minimum: 0 }
+        exclude_actor: { type: boolean }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    NotificationRuleCreate:
+      type: object
+      required: [name, audience]
+      description: Exactly one of action_key / action_prefix must be set.
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean, default: true }
+        action_key: { type: [string, "null"] }
+        action_prefix: { type: [string, "null"] }
+        filter_module:
+          type: [string, "null"]
+          description: >-
+            Qualifies action_key. A key/module pair no module actually emits is
+            refused with 422 rather than stored as a rule that could never fire.
+        filter_entity_type: { type: [string, "null"] }
+        filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: [string, "null"] }
+        body_template: { type: [string, "null"] }
+        coalesce_window_seconds: { type: [integer, "null"], minimum: 0, description: "Per-rule; omit ⇒ server default 60s; 0 = fire every event" }
+        exclude_actor: { type: boolean, default: false, description: "Default false — notify everyone incl. the actor" }
+
+    NotificationRuleUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean }
+        action_key: { type: [string, "null"] }
+        action_prefix: { type: [string, "null"] }
+        filter_module: { type: [string, "null"] }
+        filter_entity_type: { type: [string, "null"] }
+        filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: [string, "null"] }
+        body_template: { type: [string, "null"] }
+        coalesce_window_seconds: { type: [integer, "null"], minimum: 0 }
+        exclude_actor: { type: boolean }
+
+    NotificationRulePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationRule" }
+        next_cursor: { type: [string, "null"] }
+
+    NotificationSchedule:
+      type: object
+      required: [id, name, enabled, schedule, audience, title_template, body_template, description, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        schedule: { $ref: "#/components/schemas/ScheduleSpec" }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: string }
+        body_template: { type: string, description: "May contain {{metric.<key>}}, {{now}}, {{date}} tokens" }
+        description:
+          type: string
+          description: >-
+            The recurrence as a Czech phrase ("Každý den v 8:00"), rendered SERVER-side
+            from the same rules the ticker applies, so the list and the ticker can never
+            disagree about what a pattern means.
+        last_fired_at: { type: [string, "null"], format: date-time }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    NotificationScheduleCreate:
+      type: object
+      required: [name, schedule, audience, title_template, body_template]
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean, default: true }
+        schedule: { $ref: "#/components/schemas/ScheduleSpec" }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: string, minLength: 1 }
+        body_template: { type: string, minLength: 1 }
+
+    NotificationScheduleUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        enabled: { type: boolean }
+        schedule: { $ref: "#/components/schemas/ScheduleSpec" }
+        audience: { $ref: "#/components/schemas/Audience" }
+        title_template: { type: string, minLength: 1 }
+        body_template: { type: string, minLength: 1 }
+
+    NotificationSchedulePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationSchedule" }
+        next_cursor: { type: [string, "null"] }
+
+    ActionDescriptor:
+      type: object
+      required: [key, module]
+      properties:
+        key: { type: string, description: "e.g. \"card.move\", \"reminder.complete\"" }
+        module: { type: string }
+        label: { type: [string, "null"], description: Human label / sample Czech summary }
+
+    MetricDescriptor:
+      type: object
+      required: [key, label]
+      properties:
+        key: { type: string, description: e.g. "todo.pravedelam_count" }
+        label: { type: string, description: Czech label for the composer }
+        unit: { type: [string, "null"], description: "e.g. \"úkolů\", \"připomínek\"" }
+        scope: { type: string, enum: [household, personal], description: Whether the value personalizes per recipient }
+
+    NotificationCatalog:
+      type: object
+      required: [actions, metrics, tokens, members]
+      properties:
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/ActionDescriptor" }
+        metrics:
+          type: array
+          items: { $ref: "#/components/schemas/MetricDescriptor" }
+        members:
+          type: array
+          description: >-
+            The household directory, served here so the composer needs one round trip.
+            Home has no user table — auth owns identity — so this is projected from the
+            session store, which caches each identity and its roles at login.
+          items: { $ref: "#/components/schemas/HouseholdMember" }
+        tokens:
+          type: object
+          description: Insertable token palette per context.
+          properties:
+            event:
+              type: array
+              items: { type: string }
+            change:
+              type: array
+              items: { type: string }
+            metric:
+              type: array
+              items: { type: string }
+            time:
+              type: array
+              items: { type: string }
+
+    HouseholdMember:
+      type: object
+      description: >-
+        A household member as home knows them, with a count of their subscribed
+        devices — the audience picker says so, because selecting somebody with no
+        device reaches nobody.
+      required: [user_id, email, display_name, roles, subscriptions]
+      properties:
+        user_id: { type: string }
+        email: { type: string, format: email }
+        display_name: { type: string, description: Falls back to the email when unset }
+        roles:
+          type: array
+          items: { type: string }
+        subscriptions: { type: integer, description: How many devices this member has registered }
+
+    NotificationDelivery:
+      type: object
+      required: [id, ts, kind, user_id, user_label, status, category]
+      properties:
+        id: { type: string }
+        ts: { type: string, format: date-time }
+        kind: { type: string, enum: [broadcast, trigger, schedule, test] }
+        category: { type: string, enum: [broadcast, triggers, summaries] }
+        rule_id: { type: [string, "null"] }
+        user_id: { type: string }
+        user_label:
+          type: string
+          description: >-
+            The recipient's display name, resolved from the member directory —
+            the log exists to answer "did it reach Eva?", which a raw id cannot.
+            Falls back to the user id for a member home no longer has a session for.
+        subscription_id: { type: [string, "null"] }
+        status: { type: string, enum: [sent, failed, expired] }
+        error: { type: [string, "null"] }
+
+    NotificationDeliveryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NotificationDelivery" }
+        next_cursor: { type: [string, "null"] }
 security:
   - sessionCookie: []

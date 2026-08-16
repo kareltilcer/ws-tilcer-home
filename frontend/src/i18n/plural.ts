@@ -29,4 +29,12 @@ export const PLURAL = {
   folders: ['složka', 'složky', 'složek'],
   documents: ['dokument', 'dokumenty', 'dokumentů'],
   files: ['soubor', 'soubory', 'souborů'],
+  // v5 — Administrace + oznámení.
+  recipients: ['příjemce', 'příjemci', 'příjemců'],
+  people: ['člověk', 'lidé', 'lidí'],
+  devices: ['zařízení', 'zařízení', 'zařízení'],
+  notifications: ['oznámení', 'oznámení', 'oznámení'],
+  rules: ['pravidlo', 'pravidla', 'pravidel'],
+  summaries: ['souhrn', 'souhrny', 'souhrnů'],
+  seconds: ['sekunda', 'sekundy', 'sekund'],
 } satisfies Record<string, PluralForms>
