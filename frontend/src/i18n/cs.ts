@@ -37,6 +37,10 @@ export const cs = {
     moreHint: 'Čtyři denní moduly zůstávají v dosahu palce. Zbytek je tady.',
     logDesc: 'Auditní historie — jen pro správce',
     dokumentyDesc: 'Soubory — náhled, stažení, připnutí',
+    // v6 (D84): Finance joins the overflow for EVERYONE — no admin gate, unlike
+    // Log and Administrace.
+    finance: 'Finance',
+    financeDesc: 'Rozdělení měsíčních příjmů',
   },
   common: {
     loading: 'Načítání…',
@@ -61,6 +65,7 @@ export const cs = {
     eventsUpdated: 'Události byly mezitím upraveny',
     notesUpdated: 'Poznámky byly mezitím upraveny',
     documentsUpdated: 'Dokumenty byly mezitím upraveny',
+    financeUpdated: 'Finance byly mezitím upraveny',
   },
   dashboard: {
     title: 'Nástěnka',
@@ -465,6 +470,108 @@ export const cs = {
     delete: 'Smazat',
     deleteConfirm: 'Opravdu smazat?',
     saveError: 'Nepodařilo se uložit',
+  },
+
+  // ---- v6: Finance ----
+  //
+  // The vocabulary below is FIXED IN THE PRD (§V6-7) and used verbatim, so the
+  // page, the widget, the metric labels and the notification tokens all say the
+  // same words. "Kandy" stays: it is the household's own name for the joint
+  // account, and translating it away would make the app read as somebody else's.
+  finance: {
+    title: 'Finance',
+    lede: 'Měsíční příjmy rozdělené na osobní účty, provozní účet a spoření.',
+    months: 'Měsíce',
+    add: 'Přidat měsíc',
+    edit: 'Upravit měsíc',
+    save: 'Uložit změny',
+    cancel: 'Zrušit',
+    remove: 'Smazat',
+    formLede: 'Dva příjmy a čtyři sazby. Zbytek se dopočítá.',
+
+    // inputs
+    month: 'Měsíc',
+    monthTaken: '— už zadaný',
+    monthTakenHint: 'Už zadané měsíce nejdou vybrat — upravte je v seznamu.',
+    income: 'Příjem',
+    incomeKaja: 'Příjem Kája',
+    incomeAndy: 'Příjem Andy',
+    // Not "neplatná hodnota": it says what a valid one looks like, because the
+    // usual mistake is a tečka ("60.000") that would otherwise save as 60 Kč.
+    incomeInvalid: 'Příjem zadejte číslicemi — tisíce oddělte mezerou, desetiny čárkou (např. 60 000).',
+    rates: 'Sazby',
+    ratePersonal: 'Osobní',
+    rateOperational: 'Provozní',
+    rateFun: 'Zábavné spoření',
+    rateNoFun: 'Nezábavné spoření',
+    ratesMustSum: 'Sazby musí dát dohromady 100 %.',
+    ratesOk: 'sedí — 100 %',
+    // A running remainder rather than a validation slap: the form tells you where
+    // you are the whole time, instead of refusing at the end.
+    ratesRemaining: (n: number) => `zbývá ${n} %`,
+    ratesOver: (n: number) => `přebývá ${n} %`,
+    ratesBalance: 'Doplnit do 100 % (Nezábavné)',
+
+    // the split, as the flow viz and the bar name it
+    totalIncome: 'Celkový příjem',
+    allocation: 'Rozdělení',
+    personal: 'Osobní',
+    needs: 'Potřeby',
+    operational: 'Provozní účet (Kandy)',
+    operationalNeeds: 'Provozní účet (Kandy) · potřeby',
+    funSavings: 'Zábavné spoření',
+    noFunSavings: 'Nezábavné spoření',
+    toSavings: 'Do spoření',
+    restToKandy: 'Zbytek → Kandy',
+    stageIncome: 'Příjem',
+    stagePersonal: (p: number) => `Každý si nechá ${p} % osobně`,
+    stageJoint: 'Společné účty',
+    ofIncome: (n: number) => `${n} % z příjmu`,
+    ofTotal: (n: number) => `${n} % z celku`,
+    operationalNote: (received: string) => `přijato ${received}, spoření odchází`,
+    noIncomeThisMonth: 'V tomto měsíci bez příjmu — do společných účtů nepřispívá.',
+    reconciliation: (total: string) =>
+      `Potřeby pohlcují zaokrouhlení, takže součty za osobu i za účet sedí přesně na ${total}.`,
+    // A negative `needs` is correct arithmetic, not an error: the UI shows 0 Kč
+    // and states the rounding underneath. The value is never clamped in the data.
+    roundingFootnote: (v: string) => `zaokrouhlení: ${v}`,
+    previewTitle: 'Náhled rozdělení',
+    previewNegative: (v: string) =>
+      `Potřeby vyjdou na ${v} — ukazujeme 0 Kč a zaokrouhlení uvádíme pod hodnotou.`,
+
+    // stat tiles — a big value, a quiet label, one line of context; no sparklines
+    tileLatest: 'Poslední měsíc',
+    tileLatestMeta: (month: string) => `${month} · celkový příjem`,
+    tileSaved: 'Naspořeno celkem',
+    tileSavedMeta: (fun: string, nofun: string) => `zábavné ${fun} / nezábavné ${nofun}`,
+    tileAverage: 'Průměrný měsíční příjem',
+    tileAverageMeta: (months: string) => `Kája + Andy · ${months}`,
+
+    // the missing-month prompt — the module's most valuable pixel
+    missingTitle: (month: string) => `${month} ještě nikdo nezadal`,
+    missingBody: 'Dokud měsíc chybí, nezobrazí se na Nástěnce ani ve spoření.',
+    missingAction: (month: string) => `Zadat ${month}`,
+    widgetKajaKeeps: 'Kája si nechá',
+    widgetAndyKeeps: 'Andy si nechá',
+
+    // states
+    emptyTitle: 'Zatím žádné měsíce',
+    emptyBody: 'Přidejte první měsíc a uvidíte rozdělení příjmů.',
+    errorTitle: 'Měsíce se nepodařilo načíst',
+    errorBody: 'Zkuste to znovu — data zůstala na serveru, nic se neztratilo.',
+    monthExists: 'Tento měsíc už je zadaný.',
+    saveError: 'Měsíc se nepodařilo uložit',
+    created: (month: string) => `Měsíc ${month} přidán`,
+    updated: (month: string) => `Měsíc ${month} upraven`,
+    deleted: (month: string) => `Měsíc ${month} trvale smazán`,
+
+    // Delete is PERMANENT (D87) — the one exception to a convention the rest of
+    // the app has taught, so the copy carries the whole weight.
+    deleteTitle: (month: string) => `Smazat měsíc ${month}?`,
+    deleteBody:
+      'Smazání je trvalé — měsíc se nedá vrátit zpět. Na rozdíl od poznámek a dokumentů se nic nearchivuje.',
+    deleteConfirm: 'Smazat trvale',
+    deleteError: 'Smazání se nezdařilo',
   },
 
   // ---- v5: app-wide offline ----

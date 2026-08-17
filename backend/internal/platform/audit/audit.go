@@ -23,6 +23,7 @@ const (
 	ModuleDocuments = "documents"
 	ModuleDashboard = "dashboard"
 	ModuleAdmin     = "admin"
+	ModuleFinance   = "finance"
 )
 
 // PlatformActions are the action verbs emitted by platform/ packages. They are

@@ -590,6 +590,8 @@ func inAppURL(e audit.Entry) string {
 			return "/d/" + e.EntityID
 		}
 		return "/dokumenty"
+	case audit.ModuleFinance:
+		return "/finance"
 	default:
 		return "/"
 	}

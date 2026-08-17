@@ -951,6 +951,7 @@ function moduleLabel(module: string): string {
     events: cs.nav.okno,
     notes: cs.nav.poznamky,
     documents: cs.nav.dokumenty,
+    finance: cs.nav.finance,
     logging: cs.nav.log,
     platform: 'Přihlášení a oznámení',
     dashboard: cs.nav.nastenka,

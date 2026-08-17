@@ -1,10 +1,13 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.7.0
+  version: 0.8.0
   description: >-
-    API for the `home` household-management service (v5) — adds the admin-only `admin` module (Web Push notifications: broadcast, audit-key triggers, scheduled summaries; tags `push`, `admin-notifications`) and an installable reads-only-offline PWA. Companion to PRD.md.
-    Six modules: `logging` (a spine; read/browse endpoints only — writes are
+    API for the `home` household-management service. **0.8.0 = the v6 SPEC** (draft): adds the
+    `finance` module (Finance — the retiring `fin` service absorbed into Home: two monthly incomes
+    split into personal / operational / two savings accounts by a LOCKED formula, derived on read
+    and never stored; tag `finance`). **0.7.0 was the deployed v5 build.** v5 — adds the admin-only `admin` module (Web Push notifications: broadcast, audit-key triggers, scheduled summaries; tags `push`, `admin-notifications`) and an installable reads-only-offline PWA. Companion to PRD.md.
+    Eight modules (`admin` from v5 and `finance` from v6 are summarised above): `logging` (a spine; read/browse endpoints only — writes are
     in-process, not HTTP), `todo` (Trello-style board), `events` (Okno do
     budoucnosti — all-day, optionally recurring events with reminders), `notes`
     (Poznámky — Markdown notes in a folder tree, slug-path URLs, a pinned-notes
@@ -61,6 +64,8 @@ tags:
     description: Per-user Web Push subscription + notification preferences (any member; new in v5)
   - name: admin-notifications
     description: Admin-only notification config — broadcast, trigger rules, summary schedules, catalog, deliveries (new in v5)
+  - name: finance
+    description: Finance — monthly household income split into personal/operational/savings accounts; split derived on read (new in v6)
 paths:
   # ---------------- Auth (Mode B, home-hosted) ----------------
   /api/auth/login:
@@ -2147,6 +2152,119 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  # ---------------- Finance (v6) ----------------
+  /api/finance/months:
+    get:
+      tags: [finance]
+      summary: List months with their computed split (newest first)
+      description: >-
+        Every saved month, newest first, each carrying its INPUTS (two incomes + the
+        four rates) and its DERIVED split. The split is computed on read and never
+        stored (PRD D82) — storing only the inputs is what keeps the locked formula
+        the single source of truth. Reads are open to any authenticated member,
+        `reader` included (PRD D84).
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        # NOT the shared Cursor parameter, which is a UUIDv7: finance keysets on
+        # `month`, because the user-visible order is by month and month is unique
+        # (ordering by id would put a back-filled month in the wrong place). The
+        # cursor is therefore the previous page's last `month` key, and an id
+        # passed here would be compared lexically against `month` and silently
+        # return a wrong or empty page.
+        - name: cursor
+          in: query
+          description: >-
+            Keyset cursor from the previous page's `next_cursor` — a YYYY-MM month
+            key, NOT a UUIDv7. Returns the months strictly older than it.
+          schema: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceMonthPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    post:
+      tags: [finance]
+      summary: Record a month
+      description: >-
+        Persists the inputs only; the split comes back computed. `month` is UNIQUE.
+        The four rates must sum to exactly 100 — enforced in the service AND by a
+        table CHECK.
+        Requires `editor`/`admin`; audited as `finance.month.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinanceMonthCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceMonth" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/finance/months/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [finance]
+      summary: Get one month (inputs + computed split)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceMonth" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [finance]
+      summary: Correct a month (incomes, rates, or the month itself)
+      description: >-
+        Partial update. `rates`, IF PRESENT, must be the complete four-value block
+        summing to 100 — a single rate is meaningless on its own, so a partial rates
+        object is rejected 422. Changing `month` must not collide with another row (409). The split is recomputed and returned. Requires `editor`/`admin`;
+        audited as `finance.month.update` WITH a field-level diff, so a rate
+        correction is traceable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinanceMonthUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceMonth" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [finance]
+      summary: Delete a month (PERMANENT)
+      description: >-
+        Removes the row outright — carried over from `fin` (PRD D87). There is no
+        soft delete, no `hard` flag and no admin tier: an ordinary `editor`/`admin`
+        write. The month becomes re-enterable immediately. Because nothing is
+        recoverable from the table afterwards, the `month.delete` audit event carries
+        a FULL-ROW DIFF (month, both incomes, all four rates) — that event is the only
+        surviving record of the deleted values. The UI must confirm and state that the
+        deletion cannot be undone.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -3614,5 +3732,89 @@ components:
           type: array
           items: { $ref: "#/components/schemas/NotificationDelivery" }
         next_cursor: { type: [string, "null"] }
+    # ----- Finance (v6) -----
+    # Column vocabulary is carried over verbatim from the retiring `fin` service
+    # (PRD D83): the two income slots keep their names. Only the wire style is
+    # Home's — snake_case, PATCH, /api/finance (PRD D92).
+    FinanceRates:
+      type: object
+      description: >-
+        Percentages OF TOTAL INCOME. Whole integers, each >= 0, summing to exactly
+        100. Not a partial structure: all four are always sent together.
+      required: [personal, operational, fun, no_fun]
+      properties:
+        personal: { type: integer, minimum: 0, maximum: 100, description: Personal/wants — the share each person keeps on their own account }
+        operational: { type: integer, minimum: 0, maximum: 100, description: Operational/needs — what stays in the joint "Kandy" account }
+        fun: { type: integer, minimum: 0, maximum: 100, description: Fun savings (pooled, not per person) }
+        no_fun: { type: integer, minimum: 0, maximum: 100, description: No-fun savings (pooled, not per person) }
+    FinanceSplit:
+      type: object
+      description: >-
+        The DERIVED breakdown — computed on read from the inputs by the locked
+        formula (PRD §V6-4 FR-F3), never stored. All values are whole CZK.
+        Invariants: personal_X + to_operational_X == income_X per person;
+        fun_savings + no_fun_savings + needs == operational_received;
+        personal_kaja + personal_andy + operational_received == total_income.
+        `needs` is the remainder and absorbs all rounding.
+      required:
+        [total_income, personal_kaja, personal_andy, to_operational_kaja, to_operational_andy,
+         operational_received, fun_savings, no_fun_savings, needs]
+      properties:
+        total_income: { type: integer, description: income_kaja + income_andy }
+        personal_kaja: { type: integer, description: round(income_kaja * personal/100) }
+        personal_andy: { type: integer, description: round(income_andy * personal/100) }
+        to_operational_kaja: { type: integer, description: income_kaja - personal_kaja }
+        to_operational_andy: { type: integer, description: income_andy - personal_andy }
+        operational_received: { type: integer, description: to_operational_kaja + to_operational_andy }
+        fun_savings: { type: integer, description: round(total_income * fun/100) }
+        no_fun_savings: { type: integer, description: round(total_income * no_fun/100) }
+        needs: { type: integer, description: operational_received - fun_savings - no_fun_savings (the remainder) }
+    FinanceMonth:
+      type: object
+      required: [id, month, income_kaja, income_andy, rates, split, created_at, updated_at]
+      properties:
+        id: { type: string, description: UUIDv7. Seeded rows keep the id they had in `fin` (PRD D91). }
+        month: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$", description: "Calendar month, YYYY-MM. UNIQUE — delete is permanent, so no lingering row can hold a month." }
+        income_kaja: { type: integer, minimum: 0, description: Whole CZK }
+        income_andy: { type: integer, minimum: 0, description: Whole CZK }
+        rates: { $ref: "#/components/schemas/FinanceRates" }
+        split: { $ref: "#/components/schemas/FinanceSplit" }
+        created_by:
+          type: [string, "null"]
+          description: Home user id. NULL for rows seeded from `fin`, which recorded no actor.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FinanceMonthCreate:
+      type: object
+      required: [month, income_kaja, income_andy, rates]
+      properties:
+        month: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
+        income_kaja: { type: integer, minimum: 0 }
+        income_andy: { type: integer, minimum: 0 }
+        rates: { $ref: "#/components/schemas/FinanceRates" }
+    FinanceMonthUpdate:
+      type: object
+      description: >-
+        Partial update. Omitted fields are left alone. `rates` is all-or-nothing —
+        a partial rates object is 422.
+      properties:
+        month: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
+        income_kaja: { type: integer, minimum: 0 }
+        income_andy: { type: integer, minimum: 0 }
+        rates: { $ref: "#/components/schemas/FinanceRates" }
+    FinanceMonthPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/FinanceMonth" }
+        next_cursor:
+          type: [string, "null"]
+          description: >-
+            The last item's `month` (YYYY-MM), to pass back as `cursor`. A month
+            key, not a UUIDv7 — finance keysets on `month`, unlike the other
+            paged collections.
+
 security:
   - sessionCookie: []

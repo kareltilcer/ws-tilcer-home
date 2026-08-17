@@ -396,7 +396,7 @@ Keep **Kandy** — it is the household's own name for the joint account, and tra
 
 ## 11. Security
 
-No new surface, and nothing to configure. Reads member-gated, writes `editor`/`admin` + CSRF, hard delete `admin`. **Money never becomes a float in storage or transport** — integers end to end; the only `float64` in the system lives inside `Compute` between the multiplication and `math.Round`, which is exactly where `fin` put it.
+No new surface, and nothing to configure. Reads member-gated, writes `editor`/`admin` + CSRF — **delete included, on the same `RequireWrite` gate** *(corrected during the build: "hard delete `admin`" here, in PRD D84 and in PRD §V6-8 predates OQ-V6-1's resolution and contradicts §5 above, FR-F5 and `openapi.yaml`; there is no admin-only route in this module)*. **Money never becomes a float in storage or transport** — integers end to end; the only `float64` in the system lives inside `Compute` between the multiplication and `math.Round`, which is exactly where `fin` put it.
 
 ## 12. Tests
 

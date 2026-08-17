@@ -13,6 +13,7 @@ import {
   ScrollText,
   Settings,
   Sun,
+  Wallet,
   WifiOff,
   type LucideIcon,
 } from 'lucide-react'
@@ -49,8 +50,13 @@ const PRIMARY: NavItem[] = [
 // v5 extends the same overflow: Administrace joins Log for admins only, and
 // Nastavení joins it for EVERYONE — it holds the per-device notification panel,
 // which is the one notification surface a reader also gets.
+//
+// v6 extends it once more: Finance sits beside Dokumenty with NO admin gate
+// (D84). It is a once-a-month destination, so it does not earn one of the four
+// thumb tabs — but every member sees it, unlike Log and Administrace.
 const OVERFLOW: NavItem[] = [
   { to: routes.dokumenty, label: cs.nav.dokumenty, icon: Files, desc: cs.nav.dokumentyDesc },
+  { to: routes.finance, label: cs.nav.finance, icon: Wallet, desc: cs.nav.financeDesc },
   { to: routes.log, label: cs.nav.log, icon: ScrollText, desc: cs.nav.logDesc, adminOnly: true },
   { to: routes.administrace, label: cs.admin.title, icon: Megaphone, desc: cs.admin.navDesc, adminOnly: true },
   { to: routes.nastaveni, label: cs.settings.title, icon: Settings, desc: cs.settings.subtitle },

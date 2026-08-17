@@ -47,6 +47,10 @@
   --color-c3: var(--c3);
   --color-c4: var(--c4);
   --color-c5: var(--c5);
+  --color-fin-personal: var(--fin-personal);
+  --color-fin-needs: var(--fin-needs);
+  --color-fin-fun: var(--fin-fun);
+  --color-fin-nofun: var(--fin-nofun);
 
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 4px);
@@ -95,6 +99,24 @@
   --c3: oklch(0.790 0.100 78);
   --c4: oklch(0.710 0.110 300);
   --c5: oklch(0.740 0.090 190);
+  /* Finance's four buckets (v6). PATH A of the design addendum's palette
+     decision: the shared --c1…--c5 values are UNCHANGED — only the assignment
+     moves, to c1 · c2 · c4 · c3. That ordering passes the data-viz validator's
+     adjacent-pair and normal-vision checks in both themes (worst adjacent ΔE
+     13.8 dark / 18.2 light), where the obvious c1·c2·c3·c4 fails: c2↔c3
+     (green↔amber) is ΔE 4.4 protan and 12.3 under normal vision.
+     The ALL-PAIRS weakness remains (c1↔c4 is ΔE 0.8 protan in every possible
+     ordering), so secondary encoding is MANDATORY wherever the four appear
+     together: the O/P/Z/N marks, the distinct swatch shapes, the 2 px surface
+     gaps in the bar, and the always-present legend. Colour never carries a
+     bucket on its own.
+     These are aliases, not new values — they resolve through var(--c*), so the
+     .light block below re-steps them for free. Nothing in a component hardcodes
+     a colour. */
+  --fin-personal: var(--c1);
+  --fin-needs: var(--c2);
+  --fin-fun: var(--c4);
+  --fin-nofun: var(--c3);
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;
   --font: 'Hanken Grotesk', system-ui, sans-serif;
