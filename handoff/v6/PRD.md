@@ -1196,6 +1196,8 @@ Code ids stay English (D20); this is the display vocabulary, fixed here so the p
 
 ## V6-12. Data migration & `fin` retirement
 
+> **Steps 1–2 are DONE (2026-08-17).** The export was taken from the live service (**15 months, `2025-06`…`2026-08`, no gaps**), the seed was generated, **every row's split was re-derived with the locked formula and matched the live values exactly**, and the file applied cleanly and idempotently to a database carrying the `09001` schema. Artefacts live in **`services/home/v6-seed/`** (`fin-months-export.json` · `gen_seed.py` · `09900_finance_seed.sql` · `verify_migration.py` · `README.md`). Steps 3–6 remain.
+
 ### Step 1 — Export (before anything is built against it)
 
 Export `fin`'s months from the **live service**, not from a backup, so what is seeded is what people actually see:
@@ -1207,11 +1209,11 @@ GET  https://fin.tilcer.cz/months         # Authorization: Bearer <access_token>
 
 **A cookie session is not enough** — `/months` sits behind `RequireBearer`, so a plain authenticated GET returns 401. The token is short-lived; refresh via `POST /token/refresh` if the export outlives it.
 
-Save the JSON verbatim as the migration's provenance. The `sqlite3 .dump` of `fin`'s volume is an acceptable second source and a useful cross-check, but the API response is the reference because it is the thing the users have been looking at.
+Save the JSON verbatim as the migration's provenance (**done — `services/home/v6-seed/fin-months-export.json`**). The `sqlite3 .dump` of `fin`'s volume is an acceptable second source and a useful cross-check, but the API response is the reference because it is the thing the users have been looking at.
 
 ### Step 2 — Generate the seed
 
-A small generator turns the export into `09900_finance_seed.sql`: one `INSERT OR IGNORE` per month, **preserving `id`, `created_at` and `updated_at`**, `created_by` NULL. The generated file is committed — it is data, not code, and it must be reviewable in a diff. Guard rails the generator enforces:
+A small generator (**`v6-seed/gen_seed.py`**) turns the export into `09900_finance_seed.sql`: one `INSERT OR IGNORE` per month, **preserving `id`, `created_at` and `updated_at`**, `created_by` NULL. The generated file is committed — it is data, not code, and it must be reviewable in a diff. Guard rails the generator enforces:
 
 - every row's four rates sum to exactly 100 (else the table CHECK rejects the whole migration — loudly, which is the intent);
 - incomes are non-negative integers;
@@ -1231,7 +1233,7 @@ Compare `fin`'s `GET /months` against Home's `GET /api/finance/months`, **row fo
 - **every one of the nine computed split values equal** — this is the part that catches a mis-ported formula, and it is why comparing inputs alone is not enough;
 - `created_at` preserved.
 
-Ship this as a throwaway script beside the generator. **Any mismatch stops the retirement.**
+Shipped as **`v6-seed/verify_migration.py`**, self-tested against a clean export (exit 0) and one with a single split value off by 1 (exit 1, naming the month and field). **Any mismatch stops the retirement.**
 
 ### Step 5 — Retire, in order (D96)
 

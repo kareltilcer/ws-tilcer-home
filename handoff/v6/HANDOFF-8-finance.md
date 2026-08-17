@@ -274,7 +274,8 @@ func MigrationFSWithSeed() (fs.FS, error) { return registry.MergeMigrations(Migr
 
 `cmd/home/main.go` calls `MigrationFSWithSeed()`; `testsupport` keeps calling `MigrationFS()`. **Default = no seed** is deliberate: a future caller that forgets about this gets the safe behaviour.
 
-**The seed file** — generated, not hand-written, and committed (it is data, and it must be reviewable in a diff):
+**The seed file** — generated, not hand-written, and committed (it is data, and it must be reviewable in a diff). **It already exists**: `services/home/v6-seed/09900_finance_seed.sql`, generated 2026-08-17 from the live export, 15 rows (`2025-06`…`2026-08`), splits re-derived and matched, applied and re-applied against the `09001` schema to prove idempotency. Copy it in; do not re-key it.
+
 
 ```sql
 -- +goose Up
@@ -413,7 +414,7 @@ No new surface, and nothing to configure. Reads member-gated, writes `editor`/`a
 
 ## 13. Migrate, verify, retire (PRD §V6-12) — the half that isn't code
 
-**Do not reorder these.** Each step assumes the previous one passed.
+**Do not reorder these.** Each step assumes the previous one passed. **Steps 1–2 are already done** — see `services/home/v6-seed/README.md`; start at step 3.
 
 1. **Export** from the **live** `fin`, not a backup: `POST /login` (site `fin`, as Kája or Andy) for an `access_token`, then `GET https://fin.tilcer.cz/months` with `Authorization: Bearer <token>` — `/months` sits behind `RequireBearer`, so a cookie session alone returns 401. Keep the raw JSON as provenance. A `sqlite3 .dump` of the volume is a useful cross-check, but the API response is the reference because it is what the users have been looking at.
 2. **Generate** `09900_finance_seed.sql` (§7) with the guard rails, and commit both the generator and its input.
