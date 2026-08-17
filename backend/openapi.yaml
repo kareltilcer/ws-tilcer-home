@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.6.0
+  version: 0.7.0
   description: >-
     API for the `home` household-management service (v5) — adds the admin-only `admin` module (Web Push notifications: broadcast, audit-key triggers, scheduled summaries; tags `push`, `admin-notifications`) and an installable reads-only-offline PWA. Companion to PRD.md.
     Six modules: `logging` (a spine; read/browse endpoints only — writes are
@@ -3282,9 +3282,39 @@ components:
               items: { type: string, enum: [mon, tue, wed, thu, fri, sat, sun] }
             day_of_month: { type: integer, minimum: 1, maximum: 31, description: "1-31; a value the month lacks (29-31) clamps to that month's last day, matching the events short-month clamp (PRD D19/D74). Not capped at 28." }
 
+    NotificationCondition:
+      type: object
+      description: >-
+        One "count compared to a number" clause. `key` names a metric or list
+        from the catalog — a list's value is its length (a shared key names the
+        same selection, per the catalog contract).
+      required: [key, op, value]
+      properties:
+        key: { type: string, description: Metric or list key, e.g. "events.pripominky_today" }
+        op: { type: string, enum: [gt, gte, lt, lte, eq, neq] }
+        value: { type: integer, minimum: 0 }
+
+    NotificationConditions:
+      type: object
+      description: >-
+        A condition block gating a send: with mode "all" every item must hold,
+        with "any" at least one. Evaluated at fire time (schedules) or send
+        time (trigger rules, after the coalescing window). A block with no
+        items means "no conditions" and is stored as null. A condition whose
+        value cannot be resolved FAILS OPEN — a transient read error must not
+        suppress a notification.
+      required: [mode, items]
+      properties:
+        mode: { type: string, enum: [all, any] }
+        items:
+          type: array
+          maxItems: 8
+          items: { $ref: "#/components/schemas/NotificationCondition" }
+
     NotificationRule:
       type: object
-      required: [id, name, enabled, audience, exclude_actor, coalesce_window_seconds, created_at, updated_at]
+      required: [id, name, enabled, audience, exclude_actor, coalesce_window_seconds,
+                 conditions, active_from_local, active_to_local, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -3302,9 +3332,32 @@ components:
         filter_level: { type: [string, "null"], enum: [info, warn, error, null] }
         audience: { $ref: "#/components/schemas/Audience" }
         title_template: { type: [string, "null"] }
-        body_template: { type: [string, "null"], description: Omit ⇒ defaults to the audit event's Czech summary }
+        body_template:
+          type: [string, "null"]
+          description: >-
+            Omit ⇒ defaults to the audit event's Czech summary. May carry
+            {{event.…}}, {{change.…}}, {{now}}/{{date}} and household-scoped
+            {{metric.…}}/{{list.…}} tokens — counts and lists are resolved at
+            SEND time (after the coalescing window), so they are current.
         coalesce_window_seconds: { type: integer, minimum: 0 }
         exclude_actor: { type: boolean }
+        conditions:
+          oneOf:
+            - $ref: "#/components/schemas/NotificationConditions"
+            - type: "null"
+          description: >-
+            Evaluated at send time; keys must be household-scoped (a trigger
+            renders once for its whole audience). Null ⇒ always send.
+        active_from_local:
+          type: [string, "null"]
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: >-
+            Wall-clock window start (Europe/Prague). Set both bounds or
+            neither; from > to wraps midnight (22:00–06:00). A send falling
+            outside the window is dropped, not queued.
+        active_to_local:
+          type: [string, "null"]
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -3330,6 +3383,12 @@ components:
         body_template: { type: [string, "null"] }
         coalesce_window_seconds: { type: [integer, "null"], minimum: 0, description: "Per-rule; omit ⇒ server default 60s; 0 = fire every event" }
         exclude_actor: { type: boolean, default: false, description: "Default false — notify everyone incl. the actor" }
+        conditions:
+          oneOf:
+            - $ref: "#/components/schemas/NotificationConditions"
+            - type: "null"
+        active_from_local: { type: [string, "null"], pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        active_to_local: { type: [string, "null"], pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
 
     NotificationRuleUpdate:
       type: object
@@ -3347,6 +3406,13 @@ components:
         body_template: { type: [string, "null"] }
         coalesce_window_seconds: { type: [integer, "null"], minimum: 0 }
         exclude_actor: { type: boolean }
+        conditions:
+          oneOf:
+            - $ref: "#/components/schemas/NotificationConditions"
+            - type: "null"
+          description: Null or a block with no items clears the conditions.
+        active_from_local: { type: [string, "null"], pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        active_to_local: { type: [string, "null"], pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
 
     NotificationRulePage:
       type: object
@@ -3359,7 +3425,8 @@ components:
 
     NotificationSchedule:
       type: object
-      required: [id, name, enabled, schedule, audience, title_template, body_template, description, created_at, updated_at]
+      required: [id, name, enabled, schedule, audience, title_template, body_template, conditions,
+                 description, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -3367,7 +3434,16 @@ components:
         schedule: { $ref: "#/components/schemas/ScheduleSpec" }
         audience: { $ref: "#/components/schemas/Audience" }
         title_template: { type: string }
-        body_template: { type: string, description: "May contain {{metric.<key>}}, {{now}}, {{date}} tokens" }
+        body_template: { type: string, description: "May contain {{metric.<key>}}, {{list.<key>}}, {{now}}, {{date}} tokens" }
+        conditions:
+          oneOf:
+            - $ref: "#/components/schemas/NotificationConditions"
+            - type: "null"
+          description: >-
+            Evaluated when the slot fires: a summary whose conditions do not
+            hold is skipped for the day (the slot is still spent). A
+            personal-scoped condition key is evaluated per recipient and skips
+            exactly the recipients it fails for. Null ⇒ always send.
         description:
           type: string
           description: >-
@@ -3389,6 +3465,10 @@ components:
         audience: { $ref: "#/components/schemas/Audience" }
         title_template: { type: string, minLength: 1 }
         body_template: { type: string, minLength: 1 }
+        conditions:
+          oneOf:
+            - $ref: "#/components/schemas/NotificationConditions"
+            - type: "null"
 
     NotificationScheduleUpdate:
       type: object
@@ -3400,6 +3480,14 @@ components:
         audience: { $ref: "#/components/schemas/Audience" }
         title_template: { type: string, minLength: 1 }
         body_template: { type: string, minLength: 1 }
+        conditions:
+          oneOf:
+            - $ref: "#/components/schemas/NotificationConditions"
+            - type: "null"
+          description: >-
+            Same three states as NotificationRuleUpdate: an omitted field keeps
+            the stored block, null (or a block with no items) clears it, a block
+            sets it.
 
     NotificationSchedulePage:
       type: object

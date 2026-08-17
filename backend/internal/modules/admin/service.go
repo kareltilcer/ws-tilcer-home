@@ -156,6 +156,9 @@ func (s *Service) CreateRule(ctx context.Context, in RuleCreate) (*Rule, error) 
 	if in.CoalesceWindowSeconds != nil {
 		r.CoalesceWindowSeconds = *in.CoalesceWindowSeconds
 	}
+	r.Conditions = in.Conditions.normalized()
+	r.ActiveFromLocal = trimPtr(in.ActiveFromLocal)
+	r.ActiveToLocal = trimPtr(in.ActiveToLocal)
 	now := s.now().UTC()
 	r.CreatedAt, r.UpdatedAt = now, now
 
@@ -226,6 +229,15 @@ func (s *Service) UpdateRule(ctx context.Context, id string, in RuleUpdate) (*Ru
 	}
 	if in.ExcludeActor != nil {
 		r.ExcludeActor = *in.ExcludeActor
+	}
+	if in.Conditions != nil {
+		r.Conditions = *in.Conditions // already normalized by the decoder
+	}
+	if in.ActiveFromLocal != nil {
+		r.ActiveFromLocal = trimPtr(*in.ActiveFromLocal)
+	}
+	if in.ActiveToLocal != nil {
+		r.ActiveToLocal = trimPtr(*in.ActiveToLocal)
 	}
 	r.UpdatedAt = s.now().UTC()
 
@@ -320,11 +332,101 @@ func (s *Service) validateRule(r Rule) error {
 		if err := ValidateTemplate(*r.TitleTemplate, ContextTrigger, s.metrics, s.lists); err != nil {
 			return httpx.ErrUnprocessable(err.Error())
 		}
+		// Same rule as summaries: a list is a multi-line block and a title is a
+		// one-line headline; refuse the mismatch at save time.
+		if len(ListKeysIn(*r.TitleTemplate)) > 0 {
+			return httpx.ErrUnprocessable("seznam patří do textu oznámení, ne do nadpisu")
+		}
 	}
 	if r.BodyTemplate != nil {
 		if err := ValidateTemplate(*r.BodyTemplate, ContextTrigger, s.metrics, s.lists); err != nil {
 			return httpx.ErrUnprocessable(err.Error())
 		}
+	}
+	// A trigger renders ONCE for its whole audience, so a personal metric or
+	// list has no recipient to be computed for — refuse it here rather than
+	// send Karel's pinned notes to the entire household.
+	for _, tmpl := range []*string{r.TitleTemplate, r.BodyTemplate} {
+		if tmpl == nil {
+			continue
+		}
+		for _, key := range append(MetricKeysIn(*tmpl), ListKeysIn(*tmpl)...) {
+			if s.keyIsPersonal(key) {
+				return httpx.ErrUnprocessable(fmt.Sprintf(
+					"osobní údaj {{%s}} nelze použít v pravidle — počítá se pro každého příjemce zvlášť", key))
+			}
+		}
+	}
+	if err := s.validateConditions(r.Conditions, ContextTrigger); err != nil {
+		return err
+	}
+	if err := validateActiveWindow(r.ActiveFromLocal, r.ActiveToLocal); err != nil {
+		return err
+	}
+	return nil
+}
+
+// maxConditionItems caps a condition block. More than a handful stops being a
+// rule and starts being a program, which the whitelisted-token design (D61)
+// deliberately refuses to be.
+const maxConditionItems = 8
+
+// validateConditions checks a condition block the way templates are checked:
+// at save time, with a Czech reason for the field. In the trigger context a
+// personal-scope key is refused — a trigger send has no recipient to compute
+// it for (the same reason validateRule refuses personal template tokens).
+func (s *Service) validateConditions(c *Conditions, context string) error {
+	if c == nil {
+		return nil
+	}
+	if c.Mode != ModeAll && c.Mode != ModeAny {
+		return httpx.ErrUnprocessable("podmínky musí mít režim „všechny“ nebo „aspoň jedna“")
+	}
+	if len(c.Items) > maxConditionItems {
+		return httpx.ErrUnprocessable(fmt.Sprintf("podmínek může být nejvýše %d", maxConditionItems))
+	}
+	for _, it := range c.Items {
+		if conditionOps[it.Op] == nil {
+			return httpx.ErrUnprocessable(fmt.Sprintf("neznámé porovnání v podmínce: %q", it.Op))
+		}
+		if it.Value < 0 {
+			return httpx.ErrUnprocessable("podmínka porovnává počty — hodnota nemůže být záporná")
+		}
+		if !s.metrics.Has(it.Key) && !s.lists.Has(it.Key) {
+			return httpx.ErrUnprocessable(fmt.Sprintf("neznámý údaj v podmínce: %s", it.Key))
+		}
+		if context == ContextTrigger && s.keyIsPersonal(it.Key) {
+			return httpx.ErrUnprocessable(fmt.Sprintf(
+				"osobní údaj %s nelze použít v podmínce pravidla — počítá se pro každého příjemce zvlášť", it.Key))
+		}
+	}
+	return nil
+}
+
+// keyIsPersonal asks BOTH catalogs, because a condition or token key may be
+// published as a metric, a list, or (sharing one selection) both.
+func (s *Service) keyIsPersonal(key string) bool {
+	one := []string{key}
+	return s.metrics.HasPersonal(one) || s.lists.HasPersonal(one)
+}
+
+// validateActiveWindow checks a rule's wall-clock window: both bounds or
+// neither, HH:MM shaped, and not degenerate. from > to is legal and means the
+// window wraps midnight (22:00–06:00).
+func validateActiveWindow(from, to *string) error {
+	hasFrom := from != nil && *from != ""
+	hasTo := to != nil && *to != ""
+	if hasFrom != hasTo {
+		return httpx.ErrUnprocessable("vyplňte oba časy okna (od i do), nebo žádný")
+	}
+	if !hasFrom {
+		return nil
+	}
+	if !scheduler.ValidateTimeLocal(*from) || !scheduler.ValidateTimeLocal(*to) {
+		return httpx.ErrUnprocessable("časy okna musí být ve tvaru HH:MM")
+	}
+	if *from == *to {
+		return httpx.ErrUnprocessable("okno nemůže začínat a končit ve stejný čas")
 	}
 	return nil
 }
@@ -401,6 +503,7 @@ func (s *Service) CreateSchedule(ctx context.Context, in ScheduleCreate) (*Sched
 		Audience:      in.Audience,
 		TitleTemplate: in.TitleTemplate,
 		BodyTemplate:  in.BodyTemplate,
+		Conditions:    in.Conditions.normalized(),
 		CreatedBy:     actorID(ctx),
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -456,6 +559,9 @@ func (s *Service) UpdateSchedule(ctx context.Context, id string, in ScheduleUpda
 	}
 	if in.BodyTemplate != nil {
 		sc.BodyTemplate = *in.BodyTemplate
+	}
+	if in.Conditions != nil {
+		sc.Conditions = *in.Conditions // already normalized by the decoder
 	}
 	sc.UpdatedAt = s.now().UTC()
 
@@ -533,7 +639,7 @@ func (s *Service) validateSchedule(sc Schedule) error {
 	if err := ValidateTemplate(sc.BodyTemplate, ContextSummary, s.metrics, s.lists); err != nil {
 		return httpx.ErrUnprocessable(err.Error())
 	}
-	return nil
+	return s.validateConditions(sc.Conditions, ContextSummary)
 }
 
 // ---- broadcast + test sends ----
@@ -599,7 +705,12 @@ func (s *Service) TestRule(ctx context.Context, id string) (SendResult, error) {
 		return SendResult{}, err
 	}
 	sample := sampleEntry(*r, s.now().In(s.location))
-	title, body := s.listener.render(*r, sample, sampleChanges())
+	// The test resolves REAL metric/list values (like TestSchedule does) and
+	// deliberately ignores the rule's conditions and active window — the point
+	// is "does my text read right", not "would it fire right now".
+	rc := RenderContext{Now: s.now().In(s.location), Event: &sample, Changes: sampleChanges(),
+		Metrics: map[string]int{}, Lists: map[string]ListValue{}}
+	title, body := s.listener.render(ctx, *r, &rc)
 	return s.sendTest(ctx, push.Envelope{
 		Module: sample.Module, Type: "trigger", Title: title, Body: body,
 		URL: inAppURL(sample), Category: push.CategoryTriggers, RuleID: r.ID,
@@ -665,14 +776,33 @@ func (s *Service) FireSchedule(ctx context.Context, due scheduler.Due) {
 	}
 	recipients = push.SortedUserIDs(recipients)
 
+	// Conditions whose keys are all household-shared hold for everyone or for
+	// no one, so they are judged ONCE — and a summary they fail is skipped for
+	// the day (MarkFired already spent the slot, which is what "skipped" should
+	// mean: the 20:00 check happened, there was nothing to say).
+	//
+	// The render context exists BEFORE the check so condition values seed it: a
+	// key both gated on and printed costs one read, and the text can never
+	// contradict the gate that let it through.
+	now := s.now().In(s.location)
+	condPersonal := s.conditionsPersonalize(sc.Conditions)
+	shared := RenderContext{Now: now, Metrics: map[string]int{}, Lists: map[string]ListValue{}}
+	if !condPersonal && !s.conditionsSatisfied(ctx, &shared, sc.Conditions, "", sc.TitleTemplate, sc.BodyTemplate, "schedule "+sc.ID) {
+		s.logger.Info("admin: summary skipped, conditions not met", "schedule", sc.ID)
+		return
+	}
+
 	// A summary whose numbers AND lists are all household-shared renders ONCE for
 	// everyone; a single personal token (pinned notes, counted or named) forces a
-	// render per recipient (D60).
-	if !s.personalizes(*sc) {
-		rc := s.summaryContext(ctx, *sc, "")
+	// render per recipient (D60). A personal CONDITION forces the same path —
+	// spelled out here rather than folded into a combined helper, so the
+	// per-recipient skip below cannot silently decouple from the branch that
+	// enables it.
+	if !condPersonal && !s.templatesPersonalize(*sc) {
+		s.resolveInto(ctx, &shared, sc.TitleTemplate, sc.BodyTemplate, "", "schedule "+sc.ID, anyScope)
 		s.sender.Send(ctx, recipients, push.Envelope{
 			Module: "admin", Type: "summary",
-			Title: Render(sc.TitleTemplate, rc), Body: Render(sc.BodyTemplate, rc),
+			Title: Render(sc.TitleTemplate, shared), Body: Render(sc.BodyTemplate, shared),
 			URL: "/", Category: push.CategorySummaries, Kind: push.KindSchedule, RuleID: sc.ID,
 		})
 		return
@@ -682,11 +812,27 @@ func (s *Service) FireSchedule(ctx context.Context, due scheduler.Due) {
 	// is resolved ONCE and seeded into every render. Re-resolving it per
 	// recipient would repeat each household read N times, and a list read is an
 	// event scan plus an expansion — not the single COUNT this loop was shaped
-	// around when metrics were the only summary token.
-	shared := s.summaryContextScoped(ctx, *sc, "", householdScope)
+	// around when metrics were the only summary token. Household CONDITION
+	// clauses of a personal block are seeded the same way, for the same reason.
+	s.resolveInto(ctx, &shared, sc.TitleTemplate, sc.BodyTemplate, "", "schedule "+sc.ID, householdScope)
+	if condPersonal {
+		for _, key := range sc.Conditions.Keys() {
+			if !s.keyIsPersonal(key) {
+				// resolveInto has already run, so a printed list is present and
+				// reused; nothing left for printsList to reorder.
+				// A failure here is retried — and warned about — per recipient.
+				_, _ = s.conditionValue(ctx, &shared, "", key, nil)
+			}
+		}
+	}
 	for _, userID := range recipients {
 		rc := shared.clone()
-		s.resolveInto(ctx, &rc, *sc, userID, personalScope)
+		// A personal condition ("máš připnuté poznámky") is a per-recipient
+		// question, so it skips exactly the recipients it fails for.
+		if condPersonal && !s.conditionsSatisfied(ctx, &rc, sc.Conditions, userID, sc.TitleTemplate, sc.BodyTemplate, "schedule "+sc.ID) {
+			continue
+		}
+		s.resolveInto(ctx, &rc, sc.TitleTemplate, sc.BodyTemplate, userID, "schedule "+sc.ID, personalScope)
 		s.sender.Send(ctx, []string{userID}, push.Envelope{
 			Module: "admin", Type: "summary",
 			Title: Render(sc.TitleTemplate, rc), Body: Render(sc.BodyTemplate, rc),
@@ -695,10 +841,96 @@ func (s *Service) FireSchedule(ctx context.Context, due scheduler.Due) {
 	}
 }
 
-// personalizes reports whether a schedule must be rendered once per recipient,
-// asking BOTH catalogs — a summary that names only personal lists personalizes
-// exactly as much as one that counts them.
-func (s *Service) personalizes(sc Schedule) bool {
+// conditionsPersonalize reports whether any condition key is personal-scoped —
+// which turns the block from one household question into one per recipient.
+func (s *Service) conditionsPersonalize(c *Conditions) bool {
+	keys := c.Keys()
+	return s.metrics.HasPersonal(keys) || s.lists.HasPersonal(keys)
+}
+
+// conditionValue resolves one condition key through the render context: a
+// value already there (from the templates or an earlier clause) is reused, and
+// one resolved here is left for the render, so a key both gated on and printed
+// costs one read. Metrics first — a COUNT is cheaper than a list read —
+// falling back to the same-keyed list's length (the platform/lists contract
+// makes the two name one selection).
+//
+// printsList names the keys the templates will print AS A LIST. For those the
+// order flips: the list read the render needs anyway also answers the clause,
+// where a metric read would leave the list still to fetch — two reads for one
+// selection, which is exactly what seeding rc is meant to avoid.
+func (s *Service) conditionValue(ctx context.Context, rc *RenderContext, userID, key string, printsList map[string]bool) (int, error) {
+	if lv, ok := rc.Lists[key]; ok {
+		return len(lv.Items), nil
+	}
+	if s.metrics.Has(key) && !(printsList[key] && s.lists.Has(key)) {
+		if v, ok := rc.Metrics[key]; ok {
+			return v, nil
+		}
+		v, err := s.metrics.Resolve(ctx, userID, key, rc.Now)
+		if err != nil {
+			return 0, err
+		}
+		rc.Metrics[key] = v
+		return v, nil
+	}
+	items, err := s.lists.Resolve(ctx, userID, key, rc.Now)
+	if err != nil {
+		return 0, err
+	}
+	d, _ := s.lists.Descriptor(key)
+	rc.Lists[key] = ListValue{Items: items, Empty: d.Empty}
+	return len(items), nil
+}
+
+// conditionsSatisfied evaluates a block for one recipient, resolving values
+// through rc so the render pass reuses them. It FAILS OPEN PER CLAUSE: a value
+// that cannot be resolved satisfies that clause only — a summary suppressed by
+// a transient read error is a notification LOST (the same choice Render makes
+// when it degrades a broken token to a placeholder), but a clause that read
+// fine and evaluated false still counts, so one flaky resolver cannot override
+// a healthy clause that alone suppresses the send. The warning is what makes
+// the failure findable. Both modes short-circuit: a true clause decides "any",
+// a false one decides "all" — with broken clauses counting as true, no later
+// clause can change either answer.
+// The templates travel with the block so a clause on a key the body PRINTS as
+// a list resolves list-first — see conditionValue.
+func (s *Service) conditionsSatisfied(ctx context.Context, rc *RenderContext, c *Conditions, userID, titleTmpl, bodyTmpl, what string) bool {
+	if c == nil || len(c.Items) == 0 {
+		return true
+	}
+	printsList := map[string]bool{}
+	for _, key := range append(ListKeysIn(titleTmpl), ListKeysIn(bodyTmpl)...) {
+		printsList[key] = true
+	}
+	for _, it := range c.Items {
+		met := true // fail open: an unresolvable clause never suppresses
+		if cmp := conditionOps[it.Op]; cmp == nil {
+			// a stored op this build no longer knows (rollback, mixed deploy)
+			s.logger.Warn("admin: unknown condition op, treating clause as met",
+				"op", it.Op, "key", it.Key, "target", what)
+		} else if v, err := s.conditionValue(ctx, rc, userID, it.Key, printsList); err != nil {
+			s.logger.Warn("admin: condition resolve failed, treating clause as met",
+				"err", err, "key", it.Key, "target", what)
+		} else {
+			met = cmp(v, it.Value)
+		}
+		if c.Mode == ModeAny && met {
+			return true
+		}
+		if c.Mode != ModeAny && !met {
+			return false
+		}
+	}
+	return c.Mode != ModeAny
+}
+
+// templatesPersonalize reports whether a schedule's TEMPLATES force a render
+// per recipient, asking BOTH catalogs — a summary that names only personal
+// lists personalizes exactly as much as one that counts them. A personal
+// CONDITION forces the per-recipient path too; FireSchedule combines the two
+// checks explicitly so the coupling is visible at the call site.
+func (s *Service) templatesPersonalize(sc Schedule) bool {
 	metricKeys := append(MetricKeysIn(sc.TitleTemplate), MetricKeysIn(sc.BodyTemplate)...)
 	if s.metrics.HasPersonal(metricKeys) {
 		return true
@@ -726,7 +958,7 @@ func personalScope(scope string) bool  { return scope == lists.ScopePersonal }
 
 func (s *Service) summaryContextScoped(ctx context.Context, sc Schedule, userID string, want scopeFilter) RenderContext {
 	rc := RenderContext{Now: s.now().In(s.location), Metrics: map[string]int{}, Lists: map[string]ListValue{}}
-	s.resolveInto(ctx, &rc, sc, userID, want)
+	s.resolveInto(ctx, &rc, sc.TitleTemplate, sc.BodyTemplate, userID, "schedule "+sc.ID, want)
 	return rc
 }
 
@@ -736,13 +968,18 @@ func (s *Service) summaryContextScoped(ctx context.Context, sc Schedule, userID 
 // title and body is attempted once — even when the attempt fails, so a broken
 // resolver costs one read and one warning per pass, not one per mention.
 //
+// It works from the TEMPLATES rather than a schedule, because trigger rules
+// resolve their metric/list tokens through the same pass (at send time, so the
+// counts are current rather than as-of the event that opened a coalescing
+// window). `what` labels the warnings.
+//
 // Lists resolve FIRST: a list key shared with a metric key names the same
 // selection (the platform/lists contract on Descriptor.Key), so the metric loop
 // reuses len(items) instead of paying for the same read — for events a full
 // event scan plus a recurrence expansion — twice.
-func (s *Service) resolveInto(ctx context.Context, rc *RenderContext, sc Schedule, userID string, want scopeFilter) {
+func (s *Service) resolveInto(ctx context.Context, rc *RenderContext, titleTmpl, bodyTmpl, userID, what string, want scopeFilter) {
 	tried := map[string]bool{}
-	for _, key := range append(ListKeysIn(sc.TitleTemplate), ListKeysIn(sc.BodyTemplate)...) {
+	for _, key := range append(ListKeysIn(titleTmpl), ListKeysIn(bodyTmpl)...) {
 		if _, done := rc.Lists[key]; done || tried[key] {
 			continue
 		}
@@ -759,14 +996,14 @@ func (s *Service) resolveInto(ctx context.Context, rc *RenderContext, sc Schedul
 		}
 		items, err := s.lists.Resolve(ctx, userID, key, rc.Now)
 		if err != nil {
-			s.logger.Warn("admin: list resolve failed", "err", err, "list", key, "schedule", sc.ID)
+			s.logger.Warn("admin: list resolve failed", "err", err, "list", key, "target", what)
 			continue // ⇒ the placeholder, which reads differently from "there are none"
 		}
 		rc.Lists[key] = ListValue{Items: items, Empty: d.Empty}
 	}
 
 	tried = map[string]bool{}
-	for _, key := range append(MetricKeysIn(sc.TitleTemplate), MetricKeysIn(sc.BodyTemplate)...) {
+	for _, key := range append(MetricKeysIn(titleTmpl), MetricKeysIn(bodyTmpl)...) {
 		if _, done := rc.Metrics[key]; done || tried[key] {
 			continue
 		}
@@ -784,7 +1021,7 @@ func (s *Service) resolveInto(ctx context.Context, rc *RenderContext, sc Schedul
 		}
 		v, err := s.metrics.Resolve(ctx, userID, key, rc.Now)
 		if err != nil {
-			s.logger.Warn("admin: metric resolve failed", "err", err, "metric", key, "schedule", sc.ID)
+			s.logger.Warn("admin: metric resolve failed", "err", err, "metric", key, "target", what)
 			continue // leaves the token unresolved ⇒ rendered as the placeholder
 		}
 		rc.Metrics[key] = v
@@ -802,9 +1039,12 @@ func (s *Service) BuildCatalog(ctx context.Context) (Catalog, error) {
 		actions = append(actions, ActionDescriptor{Key: a.Key, Module: a.Module, Label: &label})
 	}
 
+	// The trigger palette carries the household-scoped half only: a trigger
+	// renders once for its whole audience, so validateRule refuses personal
+	// keys — and a palette must never offer what a save would refuse.
 	var (
-		mets    []MetricDescriptor
-		metKeys []string
+		mets           []MetricDescriptor
+		metKeys, hhMet []string
 	)
 	for _, d := range s.metrics.Catalog() {
 		unit := d.Unit
@@ -814,15 +1054,21 @@ func (s *Service) BuildCatalog(ctx context.Context) (Catalog, error) {
 		}
 		mets = append(mets, MetricDescriptor{Key: d.Key, Label: d.Label, Unit: unitPtr, Scope: d.Scope})
 		metKeys = append(metKeys, d.Key)
+		if d.Scope != metrics.ScopePersonal {
+			hhMet = append(hhMet, d.Key)
+		}
 	}
 
 	var (
-		lsts     []ListDescriptor
-		listKeys []string
+		lsts             []ListDescriptor
+		listKeys, hhList []string
 	)
 	for _, d := range s.lists.Catalog() {
 		lsts = append(lsts, ListDescriptor{Key: d.Key, Label: d.Label, Empty: d.Empty, Scope: d.Scope})
 		listKeys = append(listKeys, d.Key)
+		if d.Scope != lists.ScopePersonal {
+			hhList = append(hhList, d.Key)
+		}
 	}
 
 	members, err := s.pushStore.Members(ctx)
@@ -842,7 +1088,7 @@ func (s *Service) BuildCatalog(ctx context.Context) (Catalog, error) {
 		Lists:   lsts,
 		Tokens: map[string]TokenPalette{
 			ContextBroadcast: PaletteFor(ContextBroadcast, nil, nil),
-			ContextTrigger:   PaletteFor(ContextTrigger, nil, nil),
+			ContextTrigger:   PaletteFor(ContextTrigger, hhMet, hhList),
 			ContextSummary:   PaletteFor(ContextSummary, metKeys, listKeys),
 		},
 		Members: members,
@@ -972,7 +1218,33 @@ func ruleChanges(old, next Rule) []audit.Change {
 	add("exclude_actor", boolText(old.ExcludeActor), boolText(next.ExcludeActor))
 	add("title_template", derefOr(old.TitleTemplate, ""), derefOr(next.TitleTemplate, ""))
 	add("body_template", derefOr(old.BodyTemplate, ""), derefOr(next.BodyTemplate, ""))
+	add("conditions", conditionsText(old.Conditions), conditionsText(next.Conditions))
+	add("active_window", windowText(old), windowText(next))
 	return out
+}
+
+// conditionsText renders a condition block for the audit diff — compact but
+// readable, joined by the combinator so "any" and "all" diff differently.
+func conditionsText(c *Conditions) string {
+	if c == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(c.Items))
+	for _, it := range c.Items {
+		parts = append(parts, fmt.Sprintf("%s %s %d", it.Key, it.Op, it.Value))
+	}
+	sep := " a "
+	if c.Mode == ModeAny {
+		sep = " nebo "
+	}
+	return strings.Join(parts, sep)
+}
+
+func windowText(r Rule) string {
+	if r.ActiveFromLocal == nil || r.ActiveToLocal == nil {
+		return ""
+	}
+	return *r.ActiveFromLocal + "–" + *r.ActiveToLocal
 }
 
 func boolText(b bool) string {

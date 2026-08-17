@@ -52,23 +52,21 @@ type listener struct {
 }
 
 // coalesceBuffer collapses a burst of one rule's matches into a single push
-// (D57). The first match starts the timer and remembers the rendered text; later
-// matches within the window bump the count and refresh the render to the newest
-// event, so the notification describes the most recent change and says how many
-// others came with it.
+// (D57). The first match starts the timer and remembers the event; later
+// matches within the window bump the count and swap in the newest event, so
+// the notification describes the most recent change and says how many others
+// came with it.
+//
+// It keeps the EVENT, not rendered text: rendering happens at send time, so a
+// template's {{metric.…}} counts and the rule's conditions are judged against
+// the world as it is when the push goes out — not as it was when the window
+// opened, up to 24 hours earlier.
 type coalesceBuffer struct {
-	rule   Rule
-	title  string
-	body   string
-	url    string
-	module string
-	// actor tracks the SAME event the rendered text describes. It has to move
-	// with the render: exclude_actor means "don't tell the person who did this",
-	// and "this" is the newest change, not the one that happened to open the
-	// window.
-	actor string
-	count int
-	timer *time.Timer
+	rule    Rule
+	entry   audit.Entry
+	changes []audit.Change
+	count   int
+	timer   *time.Timer
 }
 
 func newListener(svc *Service) *listener {
@@ -260,12 +258,9 @@ func (l *listener) forget(id string) {
 	}
 }
 
-// handleMatch renders the notification and either sends it now or folds it into
-// the rule's coalescing window.
+// handleMatch either sends the notification now or folds the event into the
+// rule's coalescing window. Rendering happens in send, not here.
 func (l *listener) handleMatch(ctx context.Context, r Rule, e audit.Entry, changes []audit.Change) error {
-	title, body := l.render(r, e, changes)
-	url := inAppURL(e)
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -277,7 +272,7 @@ func (l *listener) handleMatch(ctx context.Context, r Rule, e audit.Entry, chang
 		// path is: shutdown cancels that context BEFORE the flush runs, and a
 		// send killed there is a notification lost — the cursor has already moved
 		// past its event. flush waits for it through l.inflight instead.
-		l.dispatch(context.WithoutCancel(ctx), r, title, body, url, e.Module, 1, e.ActorUser)
+		l.dispatch(context.WithoutCancel(ctx), r, e, changes, 1)
 		return nil
 	}
 
@@ -286,14 +281,11 @@ func (l *listener) handleMatch(ctx context.Context, r Rule, e audit.Entry, chang
 		// Describe the NEWEST event: "kdo naposledy co udělal" is more useful
 		// than the first thing that happened in the window. The actor moves with
 		// it, so exclude_actor keeps filtering the person the text is about.
-		buf.title, buf.body, buf.url, buf.module, buf.actor = title, body, url, e.Module, e.ActorUser
+		buf.entry, buf.changes = e, changes
 		return nil
 	}
 
-	buf := &coalesceBuffer{
-		rule: r, title: title, body: body, url: url,
-		module: e.Module, actor: e.ActorUser, count: 1,
-	}
+	buf := &coalesceBuffer{rule: r, entry: e, changes: changes, count: 1}
 	buf.timer = time.AfterFunc(window, func() {
 		// Dispatch UNDER the lock, not after releasing it — see dispatch. A timer
 		// that has already fired cannot be stopped, so this is the one path that
@@ -308,8 +300,7 @@ func (l *listener) handleMatch(ctx context.Context, r Rule, e audit.Entry, chang
 		}
 		// Detach from the tailer's context: the flush happens after that call
 		// returned, and a cancelled request context must not kill the send.
-		l.dispatch(context.WithoutCancel(ctx), pending.rule, pending.title, pending.body,
-			pending.url, pending.module, pending.count, pending.actor)
+		l.dispatch(context.WithoutCancel(ctx), pending.rule, pending.entry, pending.changes, pending.count)
 	})
 	l.buffers[r.ID] = buf
 	return nil
@@ -333,17 +324,17 @@ func (l *listener) handleMatch(ctx context.Context, r Rule, e audit.Entry, chang
 //
 // Starting the goroutine under the lock is safe: it blocks on l.mu only inside
 // send, which is a different goroutine and simply waits for the caller to unlock.
-func (l *listener) dispatch(ctx context.Context, r Rule, title, body, url, module string, count int, actorUserID string) {
+func (l *listener) dispatch(ctx context.Context, r Rule, e audit.Entry, changes []audit.Change, count int) {
 	l.inflight.Add(1)
 	go func() {
 		defer l.inflight.Done()
-		l.send(ctx, r, title, body, url, module, count, actorUserID)
+		l.send(ctx, r, e, changes, count)
 	}()
 }
 
 // send is the synchronous half of dispatch. Flush needs to WAIT for a send, so
 // the work cannot live inside the goroutine that dispatch starts.
-func (l *listener) send(ctx context.Context, r Rule, title, body, url, module string, count int, actorUserID string) {
+func (l *listener) send(ctx context.Context, r Rule, e audit.Entry, changes []audit.Change, count int) {
 	// The rule may have been edited, disabled or deleted while this notification
 	// sat in its coalescing window — up to 24 hours of it. Re-resolve before
 	// sending so a rule an admin has just turned off cannot get one last word in.
@@ -351,6 +342,28 @@ func (l *listener) send(ctx context.Context, r Rule, title, body, url, module st
 	if !ok {
 		return
 	}
+	// The active window and the conditions are judged HERE, at send time: "jen
+	// večer" means when the push would arrive, and "jen když něco zbývá" means
+	// against the counts as they are now — not as they were when the coalescing
+	// window opened. Both skips log at Info (like the schedule path) — a drop
+	// here may be an entire coalesced batch, and "why didn't my rule fire" has
+	// to be answerable from the logs.
+	now := l.svc.now().In(l.svc.location)
+	if !ruleActiveAt(r, now) {
+		l.svc.logger.Info("admin: trigger skipped, outside active window", "rule", r.ID, "count", count)
+		return
+	}
+	// The render context exists BEFORE the condition check so condition values
+	// seed it: a key both gated on and printed costs one read, and the text can
+	// never contradict the gate that let it through.
+	rc := RenderContext{Now: now, Event: &e, Changes: changes,
+		Metrics: map[string]int{}, Lists: map[string]ListValue{}}
+	if !l.svc.conditionsSatisfied(ctx, &rc, r.Conditions, "",
+		derefOr(r.TitleTemplate, ""), derefOr(r.BodyTemplate, ""), "rule "+r.ID) {
+		l.svc.logger.Info("admin: trigger skipped, conditions not met", "rule", r.ID, "count", count)
+		return
+	}
+	title, body := l.render(ctx, r, &rc)
 	if count > 1 {
 		body = withMoreSuffix(body, count-1)
 	}
@@ -359,8 +372,8 @@ func (l *listener) send(ctx context.Context, r Rule, title, body, url, module st
 		l.svc.logger.Error("admin: resolve trigger audience", "err", err, "rule", r.ID)
 		return
 	}
-	if r.ExcludeActor && actorUserID != "" {
-		recipients = withoutUser(recipients, actorUserID)
+	if r.ExcludeActor && e.ActorUser != "" {
+		recipients = withoutUser(recipients, e.ActorUser)
 	}
 	if len(recipients) == 0 {
 		return
@@ -368,15 +381,33 @@ func (l *listener) send(ctx context.Context, r Rule, title, body, url, module st
 	l.svc.sender.Send(ctx, push.SortedUserIDs(recipients), push.Envelope{
 		// The envelope carries the ORIGINATING module so a click lands where
 		// the change happened, not on a generic admin screen.
-		Module:   module,
+		Module:   e.Module,
 		Type:     "trigger",
 		Title:    title,
 		Body:     body,
-		URL:      url,
+		URL:      inAppURL(e),
 		Category: push.CategoryTriggers,
 		Kind:     push.KindTrigger,
 		RuleID:   r.ID,
 	})
+}
+
+// ruleActiveAt applies a rule's wall-clock window. "HH:MM" strings compare
+// correctly as strings, and from > to means the window wraps midnight
+// (22:00–06:00 covers late evening AND early morning).
+func ruleActiveAt(r Rule, now time.Time) bool {
+	if r.ActiveFromLocal == nil || r.ActiveToLocal == nil {
+		return true
+	}
+	from, to := *r.ActiveFromLocal, *r.ActiveToLocal
+	if from == "" || to == "" {
+		return true
+	}
+	cur := now.Format("15:04")
+	if from < to {
+		return cur >= from && cur < to
+	}
+	return cur >= from || cur < to
 }
 
 // flush sends every coalescing window still open, and waits for them AND for any
@@ -412,7 +443,7 @@ func (l *listener) flush(ctx context.Context) {
 		delete(l.buffers, id)
 		// ctx, not context.WithoutCancel(ctx): the caller's deadline is what keeps
 		// the shutdown inside the container's grace period.
-		l.dispatch(ctx, buf.rule, buf.title, buf.body, buf.url, buf.module, buf.count, buf.actor)
+		l.dispatch(ctx, buf.rule, buf.entry, buf.changes, buf.count)
 	}
 	l.mu.Unlock()
 
@@ -433,13 +464,17 @@ func (l *listener) flush(ctx context.Context) {
 	}
 }
 
-// render produces the notification text for one event.
-func (l *listener) render(r Rule, e audit.Entry, changes []audit.Change) (title, body string) {
-	rc := RenderContext{Now: l.svc.now().In(l.svc.location), Event: &e, Changes: changes}
+// render produces the notification text for the event carried by rc, resolving
+// any {{metric.…}} / {{list.…}} tokens the templates use — values a condition
+// check already seeded into rc are reused, not re-read. Trigger tokens are
+// household-scoped (validateRule refuses the personal ones), so one resolve
+// with no recipient serves the whole audience.
+func (l *listener) render(ctx context.Context, r Rule, rc *RenderContext) (title, body string) {
+	l.svc.resolveInto(ctx, rc, derefOr(r.TitleTemplate, ""), derefOr(r.BodyTemplate, ""), "", "rule "+r.ID, anyScope)
 
 	title = "Home"
 	if r.TitleTemplate != nil && strings.TrimSpace(*r.TitleTemplate) != "" {
-		title = Render(*r.TitleTemplate, rc)
+		title = Render(*r.TitleTemplate, *rc)
 	} else if r.Name != "" {
 		title = r.Name
 	}
@@ -448,9 +483,9 @@ func (l *listener) render(r Rule, e audit.Entry, changes []audit.Change) (title,
 	// summary" — which is already a human sentence, written by the module that
 	// made the change. That is why a rule with no body at all still reads well.
 	if r.BodyTemplate != nil && strings.TrimSpace(*r.BodyTemplate) != "" {
-		body = Render(*r.BodyTemplate, rc)
+		body = Render(*r.BodyTemplate, *rc)
 	} else {
-		body = e.Summary
+		body = rc.Event.Summary
 	}
 	return title, body
 }

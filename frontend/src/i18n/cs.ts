@@ -390,6 +390,34 @@ export const cs = {
     notifyActorHint: 'Vypni, když nechceš, aby oznámení chodilo tomu, kdo změnu udělal.',
     enabledLabel: 'Zapnuto',
 
+    // conditions ("poslat jen když")
+    conditions: 'Poslat jen když (nepovinné)',
+    conditionsHintRule: 'Oznámení odejde, jen když podmínky platí ve chvíli odeslání.',
+    conditionsHintSummary:
+      'Souhrn se pošle, jen když podmínky platí v naplánovaný čas. Osobní údaje se vyhodnocují pro každého příjemce zvlášť.',
+    conditionAdd: 'Přidat podmínku',
+    conditionKeyPlaceholder: 'Vyber údaj…',
+    conditionModeAll: 'musí platit všechny podmínky',
+    conditionModeAny: 'stačí jedna podmínka',
+    conditionRemove: 'Odebrat podmínku',
+    conditionIncomplete: 'Vyber údaj v každé podmínce.',
+    opGt: 'je víc než',
+    opGte: 'je aspoň',
+    opLt: 'je míň než',
+    opLte: 'je nejvýš',
+    opEq: 'je přesně',
+    opNeq: 'není',
+
+    // active window (rules)
+    activeWindow: 'Posílat jen v určitou dobu (nepovinné)',
+    activeWindowHint:
+      'Mimo tuto dobu se oznámení nepošle. Konec před začátkem znamená okno přes půlnoc (např. 20:00–06:00).',
+    activeFrom: 'Od',
+    activeTo: 'Do',
+    activeWindowIncomplete: 'Vyplň oba časy, nebo žádný.',
+    ruleConditionsBadge: 'jen za podmínek',
+    ruleWindowBadge: 'jen',
+
     // schedules
     summariesHeading: 'Souhrny',
     summariesHint: 'Pravidelný přehled v určený čas.',

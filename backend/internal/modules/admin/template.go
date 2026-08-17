@@ -135,8 +135,10 @@ func validateToken(token, context string, metrics, lists KeyLister) error {
 		return nil
 
 	case strings.HasPrefix(token, "metric."):
-		if context != ContextSummary {
-			return fmt.Errorf("číslo {{%s}} lze použít jen v souhrnu", token)
+		// Numbers belong to summaries AND trigger rules (a rule may say "zbývá
+		// {{metric.…}} úkolů"); only a broadcast has no fire moment to count at.
+		if context == ContextBroadcast {
+			return fmt.Errorf("číslo {{%s}} lze použít jen v pravidle nebo v souhrnu", token)
 		}
 		key := strings.TrimPrefix(token, "metric.")
 		if metrics == nil || !metrics.Has(key) {
@@ -145,8 +147,8 @@ func validateToken(token, context string, metrics, lists KeyLister) error {
 		return nil
 
 	case strings.HasPrefix(token, "list."):
-		if context != ContextSummary {
-			return fmt.Errorf("seznam {{%s}} lze použít jen v souhrnu", token)
+		if context == ContextBroadcast {
+			return fmt.Errorf("seznam {{%s}} lze použít jen v pravidle nebo v souhrnu", token)
 		}
 		key := strings.TrimPrefix(token, "list.")
 		if lists == nil || !lists.Has(key) {
@@ -500,6 +502,10 @@ func PaletteFor(context string, metricKeys, listKeys []string) TokenPalette {
 		// The change palette is shape-based; the composer offers the two suffixes
 		// and the admin names the field.
 		p.Change = []string{"change.<pole>.old", "change.<pole>.new"}
+		// Trigger rules may also print counts and lists — the caller passes the
+		// HOUSEHOLD-scoped keys only, because a trigger renders once for its
+		// whole audience and a personal value has no recipient to belong to.
+		fallthrough
 	case ContextSummary:
 		p.Metric = make([]string, 0, len(metricKeys))
 		for _, k := range metricKeys {

@@ -10,6 +10,64 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/scheduler"
 )
 
+// Condition is one "count compared to a number" clause. Key names a METRIC or
+// LIST from the catalogs — a list's value is its length (the platform/lists
+// contract makes a shared key count the same selection). Op is one of
+// conditionOps below.
+type Condition struct {
+	Key   string `json:"key"`
+	Op    string `json:"op"`
+	Value int    `json:"value"`
+}
+
+// Conditions is a saved condition block: every item ("all") or at least one
+// ("any") must hold for the notification to be sent. Nil means "always send".
+type Conditions struct {
+	Mode  string      `json:"mode"` // "all" | "any"
+	Items []Condition `json:"items"`
+}
+
+// normalized collapses "no items" to nil, so "no conditions" has exactly one
+// representation in the database and in responses, and defaults an empty mode
+// to "all" so a saved block always evaluates the same way it validates.
+func (c *Conditions) normalized() *Conditions {
+	if c == nil || len(c.Items) == 0 {
+		return nil
+	}
+	out := *c
+	if out.Mode == "" {
+		out.Mode = ModeAll
+	}
+	return &out
+}
+
+// Keys returns the metric/list keys a condition block references.
+func (c *Conditions) Keys() []string {
+	if c == nil {
+		return nil
+	}
+	out := make([]string, 0, len(c.Items))
+	for _, it := range c.Items {
+		out = append(out, it.Key)
+	}
+	return out
+}
+
+// Condition combinators and comparison operators.
+const (
+	ModeAll = "all"
+	ModeAny = "any"
+)
+
+var conditionOps = map[string]func(v, want int) bool{
+	"gt":  func(v, want int) bool { return v > want },
+	"gte": func(v, want int) bool { return v >= want },
+	"lt":  func(v, want int) bool { return v < want },
+	"lte": func(v, want int) bool { return v <= want },
+	"eq":  func(v, want int) bool { return v == want },
+	"neq": func(v, want int) bool { return v != want },
+}
+
 // Rule is a trigger rule: an audited action bound to a push (FR-ADM2).
 type Rule struct {
 	ID                    string        `json:"id"`
@@ -25,9 +83,17 @@ type Rule struct {
 	BodyTemplate          *string       `json:"body_template"`
 	CoalesceWindowSeconds int           `json:"coalesce_window_seconds"`
 	ExcludeActor          bool          `json:"exclude_actor"`
-	CreatedBy             string        `json:"created_by"`
-	CreatedAt             time.Time     `json:"created_at"`
-	UpdatedAt             time.Time     `json:"updated_at"`
+	// Conditions gate the SEND, not the match: they are evaluated when the
+	// notification is about to go out (after the coalescing window), so "jen
+	// když zbývá něco nedodělaného" is judged against the current counts.
+	Conditions *Conditions `json:"conditions"`
+	// ActiveFromLocal/ActiveToLocal bound the rule to a wall-clock window
+	// ("HH:MM" in HOME_TIMEZONE, may wrap midnight). Both nil ⇒ always.
+	ActiveFromLocal *string   `json:"active_from_local"`
+	ActiveToLocal   *string   `json:"active_to_local"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // RuleCreate is the create payload (openapi NotificationRuleCreate).
@@ -44,6 +110,9 @@ type RuleCreate struct {
 	BodyTemplate          *string       `json:"body_template"`
 	CoalesceWindowSeconds *int          `json:"coalesce_window_seconds"`
 	ExcludeActor          *bool         `json:"exclude_actor"`
+	Conditions            *Conditions   `json:"conditions"`
+	ActiveFromLocal       *string       `json:"active_from_local"`
+	ActiveToLocal         *string       `json:"active_to_local"`
 }
 
 // RuleUpdate is a partial update (openapi NotificationRuleUpdate). A nil field
@@ -65,6 +134,11 @@ type RuleUpdate struct {
 	BodyTemplate          **string       `json:"body_template"`
 	CoalesceWindowSeconds *int           `json:"coalesce_window_seconds"`
 	ExcludeActor          *bool          `json:"exclude_actor"`
+	// Conditions follows the same three-state scheme as the nullable strings:
+	// absent ⇒ keep, null (or a block with no items) ⇒ clear, a block ⇒ set.
+	Conditions      **Conditions `json:"conditions"`
+	ActiveFromLocal **string     `json:"active_from_local"`
+	ActiveToLocal   **string     `json:"active_to_local"`
 }
 
 // ruleUpdateFields is every key a rule patch may carry. A custom UnmarshalJSON
@@ -76,6 +150,7 @@ var ruleUpdateFields = map[string]bool{
 	"filter_module": true, "filter_entity_type": true, "filter_level": true,
 	"audience": true, "title_template": true, "body_template": true,
 	"coalesce_window_seconds": true, "exclude_actor": true,
+	"conditions": true, "active_from_local": true, "active_to_local": true,
 }
 
 // UnmarshalJSON decodes a rule patch, keeping "absent" and "null" apart for
@@ -124,53 +199,83 @@ func (u *RuleUpdate) UnmarshalJSON(data []byte) error {
 		{"filter_level", &u.FilterLevel},
 		{"title_template", &u.TitleTemplate},
 		{"body_template", &u.BodyTemplate},
+		{"active_from_local", &u.ActiveFromLocal},
+		{"active_to_local", &u.ActiveToLocal},
 	} {
-		v, err := patchString(raw, f.key)
+		v, err := patchField[string](raw, f.key)
 		if err != nil {
 			return err
 		}
 		*f.dst = v
 	}
+
+	conds, err := patchField[Conditions](raw, "conditions")
+	if err != nil {
+		return err
+	}
+	// A block with no items normalizes to the cleared state, so the composer
+	// can always send the full object.
+	if conds != nil && *conds != nil {
+		*conds = (*conds).normalized()
+	}
+	u.Conditions = conds
 	return nil
 }
 
-// patchString resolves one nullable string field of a patch:
+// patchField resolves one nullable field of a patch:
 //
-//	absent      → nil          (leave the stored value alone)
-//	null        → &(*string)(nil) (clear the stored value)
-//	"something" → &&"something" (set it)
-func patchString(raw map[string]json.RawMessage, key string) (**string, error) {
+//	absent  → nil        (leave the stored value alone)
+//	null    → &(*T)(nil) (clear the stored value)
+//	a value → &&value    (set it)
+func patchField[T any](raw map[string]json.RawMessage, key string) (**T, error) {
 	msg, present := raw[key]
 	if !present {
 		return nil, nil
 	}
 	if string(bytes.TrimSpace(msg)) == "null" {
-		var cleared *string
+		var cleared *T
 		return &cleared, nil
 	}
-	var s string
-	if err := json.Unmarshal(msg, &s); err != nil {
+	var v T
+	if err := strictUnmarshal(msg, &v); err != nil {
 		return nil, err
 	}
-	p := &s
+	p := &v
 	return &p, nil
+}
+
+// strictUnmarshal decodes the way httpx.DecodeJSON does: an unknown field is an
+// error. Every hand-rolled decode in this file needs it, because a type with a
+// custom UnmarshalJSON takes its whole payload OFF the request decoder's
+// DisallowUnknownFields path. Without it a mistyped key inside a patch is
+// silently DROPPED rather than refused — a clause written as {"valu": 3} would
+// store value 0, turning "víc než 3" into "víc než 0" — while the very same body
+// is a 422 on the create endpoint, which has no custom unmarshaller.
+func strictUnmarshal(data []byte, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst)
 }
 
 // Schedule is a summary schedule (FR-ADM3).
 type Schedule struct {
-	ID                 string        `json:"id"`
-	Name               string        `json:"name"`
-	Enabled            bool          `json:"enabled"`
-	Schedule           ScheduleSpec  `json:"schedule"`
-	Audience           push.Audience `json:"audience"`
-	TitleTemplate      string        `json:"title_template"`
-	BodyTemplate       string        `json:"body_template"`
-	LastFiredAt        *time.Time    `json:"last_fired_at"`
-	LastFiredLocalDate string        `json:"-"`
-	Description        string        `json:"description"` // "Každý den v 8:00"
-	CreatedBy          string        `json:"created_by"`
-	CreatedAt          time.Time     `json:"created_at"`
-	UpdatedAt          time.Time     `json:"updated_at"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Enabled       bool          `json:"enabled"`
+	Schedule      ScheduleSpec  `json:"schedule"`
+	Audience      push.Audience `json:"audience"`
+	TitleTemplate string        `json:"title_template"`
+	BodyTemplate  string        `json:"body_template"`
+	// Conditions gate the fire: a summary whose conditions do not hold at its
+	// slot is skipped for that day (a personal-scope condition skips just the
+	// recipients it fails for). Nil ⇒ always send.
+	Conditions         *Conditions `json:"conditions"`
+	LastFiredAt        *time.Time  `json:"last_fired_at"`
+	LastFiredLocalDate string      `json:"-"`
+	Description        string      `json:"description"` // "Každý den v 8:00"
+	CreatedBy          string      `json:"created_by"`
+	CreatedAt          time.Time   `json:"created_at"`
+	UpdatedAt          time.Time   `json:"updated_at"`
 }
 
 // ScheduleSpec is the wall-clock recurrence (openapi ScheduleSpec).
@@ -187,6 +292,7 @@ type ScheduleCreate struct {
 	Audience      push.Audience `json:"audience"`
 	TitleTemplate string        `json:"title_template"`
 	BodyTemplate  string        `json:"body_template"`
+	Conditions    *Conditions   `json:"conditions"`
 }
 
 // ScheduleUpdate is a partial update.
@@ -197,6 +303,70 @@ type ScheduleUpdate struct {
 	Audience      *push.Audience `json:"audience"`
 	TitleTemplate *string        `json:"title_template"`
 	BodyTemplate  *string        `json:"body_template"`
+	// Conditions follows RuleUpdate's three-state scheme, and for the same
+	// reason: with a plain *Conditions, JSON null is indistinguishable from an
+	// omitted key, so the natural way to say "no conditions" — which is also
+	// what a read-modify-write of the GET response sends — would silently mean
+	// "keep". Absent ⇒ keep, null (or a block with no items) ⇒ clear.
+	Conditions **Conditions `json:"conditions"`
+}
+
+// scheduleUpdateFields is every key a schedule patch may carry. Like
+// ruleUpdateFields, this exists because the custom UnmarshalJSON below bypasses
+// the decoder's DisallowUnknownFields.
+var scheduleUpdateFields = map[string]bool{
+	"name": true, "enabled": true, "schedule": true, "audience": true,
+	"title_template": true, "body_template": true, "conditions": true,
+}
+
+// UnmarshalJSON decodes a schedule patch, keeping "absent" and "null" apart for
+// the conditions block. The plain fields go through the normal decoder.
+func (u *ScheduleUpdate) UnmarshalJSON(data []byte) error {
+	// A distinct type so this method is not called recursively. Conditions is
+	// carried as raw bytes and discarded here — patchField below is what decodes
+	// it — but it has to be DECLARED, or the strict pass would refuse the key.
+	type plain struct {
+		Name          *string         `json:"name"`
+		Enabled       *bool           `json:"enabled"`
+		Schedule      *ScheduleSpec   `json:"schedule"`
+		Audience      *push.Audience  `json:"audience"`
+		TitleTemplate *string         `json:"title_template"`
+		BodyTemplate  *string         `json:"body_template"`
+		Conditions    json.RawMessage `json:"conditions"`
+	}
+	var p plain
+	// Strict, so a typo NESTED in schedule or audience is refused here the way it
+	// would be on the create endpoint — the outer key check below sees only the
+	// top level.
+	if err := strictUnmarshal(data, &p); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key := range raw {
+		if !scheduleUpdateFields[key] {
+			return fmt.Errorf("json: unknown field %q", key)
+		}
+	}
+
+	*u = ScheduleUpdate{
+		Name: p.Name, Enabled: p.Enabled, Schedule: p.Schedule,
+		Audience: p.Audience, TitleTemplate: p.TitleTemplate, BodyTemplate: p.BodyTemplate,
+	}
+
+	conds, err := patchField[Conditions](raw, "conditions")
+	if err != nil {
+		return err
+	}
+	// A block with no items normalizes to the cleared state, so the composer
+	// can always send the full object.
+	if conds != nil && *conds != nil {
+		*conds = (*conds).normalized()
+	}
+	u.Conditions = conds
+	return nil
 }
 
 // BroadcastRequest is an ad-hoc send (FR-ADM1).
