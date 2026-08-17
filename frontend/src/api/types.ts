@@ -550,6 +550,23 @@ export interface Audience {
   users?: string[]
 }
 
+export type ConditionOp = 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'neq'
+
+/** One "count compared to a number" clause. `key` names a metric or list from
+ *  the catalog — a list's value is its length. */
+export interface NotificationCondition {
+  key: string
+  op: ConditionOp
+  value: number
+}
+
+/** A condition block gating a send: "all" ⇒ every clause must hold, "any" ⇒ at
+ *  least one. Null ⇒ always send; a block with no items clears on save. */
+export interface NotificationConditions {
+  mode: 'all' | 'any'
+  items: NotificationCondition[]
+}
+
 export interface NotificationRule {
   id: string
   name: string
@@ -564,6 +581,11 @@ export interface NotificationRule {
   body_template: string | null
   coalesce_window_seconds: number
   exclude_actor: boolean
+  /** Evaluated at SEND time (after coalescing); household-scoped keys only. */
+  conditions: NotificationConditions | null
+  /** "HH:MM" wall-clock window; both set or both null; from > to wraps midnight. */
+  active_from_local: string | null
+  active_to_local: string | null
   created_by: string
   created_at: string
   updated_at: string
@@ -598,6 +620,8 @@ export interface NotificationSchedule {
   audience: Audience
   title_template: string
   body_template: string
+  /** Evaluated when the slot fires; a personal-scoped key skips per recipient. */
+  conditions: NotificationConditions | null
   last_fired_at: string | null
   /** Server-rendered Czech phrase ("Každý den v 8:00") — one source of truth. */
   description: string

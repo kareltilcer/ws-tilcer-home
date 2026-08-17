@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -36,7 +37,7 @@ type dbtx interface {
 
 const ruleColumns = `id, name, enabled, action_key, action_prefix, filter_module, filter_entity_type,
 	filter_level, audience, title_template, body_template, coalesce_window_seconds, exclude_actor,
-	created_by, created_at, updated_at`
+	conditions, active_from_local, active_to_local, created_by, created_at, updated_at`
 
 // ListRules returns rules newest-first, keyset-paged by UUIDv7 id.
 func (s *Store) ListRules(ctx context.Context, enabledOnly *bool, limit int, cursor string) ([]Rule, *string, error) {
@@ -120,11 +121,16 @@ func (s *Store) InsertRule(ctx context.Context, tx *sql.Tx, r Rule) error {
 	if err != nil {
 		return err
 	}
+	condsJSON, err := marshalConditions(r.Conditions)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO notification_rules (`+ruleColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO notification_rules (`+ruleColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.Name, b2i(r.Enabled), r.ActionKey, r.ActionPrefix, r.FilterModule, r.FilterEntityType,
 		r.FilterLevel, string(audienceJSON), r.TitleTemplate, r.BodyTemplate, r.CoalesceWindowSeconds,
-		b2i(r.ExcludeActor), r.CreatedBy, r.CreatedAt.UTC().Format(tsFormat), r.UpdatedAt.UTC().Format(tsFormat))
+		b2i(r.ExcludeActor), condsJSON, r.ActiveFromLocal, r.ActiveToLocal,
+		r.CreatedBy, r.CreatedAt.UTC().Format(tsFormat), r.UpdatedAt.UTC().Format(tsFormat))
 	return err
 }
 
@@ -134,15 +140,21 @@ func (s *Store) UpdateRule(ctx context.Context, tx *sql.Tx, r Rule) error {
 	if err != nil {
 		return err
 	}
+	condsJSON, err := marshalConditions(r.Conditions)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
 		`UPDATE notification_rules
 		    SET name = ?, enabled = ?, action_key = ?, action_prefix = ?, filter_module = ?,
 		        filter_entity_type = ?, filter_level = ?, audience = ?, title_template = ?,
-		        body_template = ?, coalesce_window_seconds = ?, exclude_actor = ?, updated_at = ?
+		        body_template = ?, coalesce_window_seconds = ?, exclude_actor = ?,
+		        conditions = ?, active_from_local = ?, active_to_local = ?, updated_at = ?
 		  WHERE id = ?`,
 		r.Name, b2i(r.Enabled), r.ActionKey, r.ActionPrefix, r.FilterModule, r.FilterEntityType,
 		r.FilterLevel, string(audienceJSON), r.TitleTemplate, r.BodyTemplate, r.CoalesceWindowSeconds,
-		b2i(r.ExcludeActor), r.UpdatedAt.UTC().Format(tsFormat), r.ID)
+		b2i(r.ExcludeActor), condsJSON, r.ActiveFromLocal, r.ActiveToLocal,
+		r.UpdatedAt.UTC().Format(tsFormat), r.ID)
 	return err
 }
 
@@ -158,18 +170,21 @@ func scanRule(row scanner) (Rule, error) {
 		r             Rule
 		enabled, excl int
 		audienceJSON  string
+		condsJSON     sql.NullString
 		created, upd  string
 		createdBy     sql.NullString
 	)
 	if err := row.Scan(&r.ID, &r.Name, &enabled, &r.ActionKey, &r.ActionPrefix, &r.FilterModule,
 		&r.FilterEntityType, &r.FilterLevel, &audienceJSON, &r.TitleTemplate, &r.BodyTemplate,
-		&r.CoalesceWindowSeconds, &excl, &createdBy, &created, &upd); err != nil {
+		&r.CoalesceWindowSeconds, &excl, &condsJSON, &r.ActiveFromLocal, &r.ActiveToLocal,
+		&createdBy, &created, &upd); err != nil {
 		return Rule{}, err
 	}
 	r.Enabled = enabled == 1
 	r.ExcludeActor = excl == 1
 	r.CreatedBy = createdBy.String
 	_ = json.Unmarshal([]byte(audienceJSON), &r.Audience)
+	r.Conditions = unmarshalConditions(condsJSON)
 	r.CreatedAt = parseTS(created)
 	r.UpdatedAt = parseTS(upd)
 	return r, nil
@@ -178,7 +193,7 @@ func scanRule(row scanner) (Rule, error) {
 // ---- schedules ----
 
 const scheduleColumns = `id, name, enabled, time_local, days_spec, audience, title_template,
-	body_template, last_fired_at, last_fired_local_date, created_by, created_at, updated_at`
+	body_template, conditions, last_fired_at, last_fired_local_date, created_by, created_at, updated_at`
 
 // ListSchedules returns schedules newest-first, keyset-paged.
 func (s *Store) ListSchedules(ctx context.Context, enabledOnly *bool, limit int, cursor string) ([]Schedule, *string, error) {
@@ -244,10 +259,14 @@ func (s *Store) InsertSchedule(ctx context.Context, tx *sql.Tx, sc Schedule) err
 	if err != nil {
 		return err
 	}
+	condsJSON, err := marshalConditions(sc.Conditions)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO notification_schedules (`+scheduleColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO notification_schedules (`+scheduleColumns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sc.ID, sc.Name, b2i(sc.Enabled), sc.Schedule.TimeLocal, string(daysJSON), string(audienceJSON),
-		sc.TitleTemplate, sc.BodyTemplate, nil, nil, sc.CreatedBy,
+		sc.TitleTemplate, sc.BodyTemplate, condsJSON, nil, nil, sc.CreatedBy,
 		sc.CreatedAt.UTC().Format(tsFormat), sc.UpdatedAt.UTC().Format(tsFormat))
 	return err
 }
@@ -261,13 +280,17 @@ func (s *Store) UpdateSchedule(ctx context.Context, tx *sql.Tx, sc Schedule) err
 	if err != nil {
 		return err
 	}
+	condsJSON, err := marshalConditions(sc.Conditions)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
 		`UPDATE notification_schedules
 		    SET name = ?, enabled = ?, time_local = ?, days_spec = ?, audience = ?,
-		        title_template = ?, body_template = ?, updated_at = ?
+		        title_template = ?, body_template = ?, conditions = ?, updated_at = ?
 		  WHERE id = ?`,
 		sc.Name, b2i(sc.Enabled), sc.Schedule.TimeLocal, string(daysJSON), string(audienceJSON),
-		sc.TitleTemplate, sc.BodyTemplate, sc.UpdatedAt.UTC().Format(tsFormat), sc.ID)
+		sc.TitleTemplate, sc.BodyTemplate, condsJSON, sc.UpdatedAt.UTC().Format(tsFormat), sc.ID)
 	return err
 }
 
@@ -323,18 +346,20 @@ func scanSchedule(row scanner) (Schedule, error) {
 		sc                     Schedule
 		enabled                int
 		daysJSON, audienceJSON string
+		condsJSON              sql.NullString
 		lastFiredAt, lastLocal sql.NullString
 		createdBy              sql.NullString
 		created, upd           string
 	)
 	if err := row.Scan(&sc.ID, &sc.Name, &enabled, &sc.Schedule.TimeLocal, &daysJSON, &audienceJSON,
-		&sc.TitleTemplate, &sc.BodyTemplate, &lastFiredAt, &lastLocal, &createdBy, &created, &upd); err != nil {
+		&sc.TitleTemplate, &sc.BodyTemplate, &condsJSON, &lastFiredAt, &lastLocal, &createdBy, &created, &upd); err != nil {
 		return Schedule{}, err
 	}
 	sc.Enabled = enabled == 1
 	sc.CreatedBy = createdBy.String
 	_ = json.Unmarshal([]byte(daysJSON), &sc.Schedule.Days)
 	_ = json.Unmarshal([]byte(audienceJSON), &sc.Audience)
+	sc.Conditions = unmarshalConditions(condsJSON)
 	if lastFiredAt.Valid && lastFiredAt.String != "" {
 		t := parseTS(lastFiredAt.String)
 		sc.LastFiredAt = &t
@@ -505,6 +530,35 @@ func isDateOnly(v string) bool {
 }
 
 type scanner interface{ Scan(dest ...any) error }
+
+// marshalConditions renders a conditions block for storage: nil stays NULL, so
+// "no conditions" is one representation, not two.
+func marshalConditions(c *Conditions) (any, error) {
+	if c == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// unmarshalConditions reads a stored block back, normalizing so a hand-edited
+// empty block behaves exactly like NULL. A blob that does not parse degrades
+// to "no conditions" — but with a warning, because it silently turns a gated
+// rule into an unconditional one and nothing else would point at the row.
+func unmarshalConditions(ns sql.NullString) *Conditions {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	var c Conditions
+	if err := json.Unmarshal([]byte(ns.String), &c); err != nil {
+		slog.Warn("admin: stored conditions do not parse, treating as none", "err", err, "raw", ns.String)
+		return nil
+	}
+	return c.normalized()
+}
 
 func parseTS(s string) time.Time {
 	t, err := time.Parse(tsFormat, s)

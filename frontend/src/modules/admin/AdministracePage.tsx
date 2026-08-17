@@ -43,6 +43,7 @@ import { useOnline } from '@/platform/pwa/offline'
 import { Composer } from './Composer'
 import { AudiencePicker, audienceValid } from './AudiencePicker'
 import { ScheduleBuilder } from './ScheduleBuilder'
+import { ConditionsBuilder, conditionsForSave, conditionsPhrase, conditionsValid } from './ConditionsBuilder'
 
 type Tab = 'send' | 'rules' | 'summaries' | 'deliveries'
 
@@ -173,6 +174,10 @@ function RulesTab({ catalog }: { catalog?: NotificationCatalog }) {
 
   const save = useMutation({
     mutationFn: (draft: Partial<NotificationRule>) => {
+      // The window is a matched pair — null both unless both are set, so a
+      // half-filled pair can never reach the server (the editor disables save
+      // for that state; this is the backstop).
+      const hasWindow = !!(draft.active_from_local && draft.active_to_local)
       const body: Record<string, unknown> = {
         name: draft.name ?? '',
         audience: draft.audience ?? { scope: 'all' },
@@ -181,6 +186,11 @@ function RulesTab({ catalog }: { catalog?: NotificationCatalog }) {
         coalesce_window_seconds: draft.coalesce_window_seconds ?? 60,
         exclude_actor: draft.exclude_actor ?? false,
         enabled: draft.enabled ?? true,
+        // The full block travels every save; no rows ⇒ null, which clears a
+        // previously stored one.
+        conditions: conditionsForSave(draft.conditions ?? null),
+        active_from_local: hasWindow ? draft.active_from_local : null,
+        active_to_local: hasWindow ? draft.active_to_local : null,
         // An action key is a BARE VERB and bare verbs are not unique across
         // modules, so the module the admin picked from has to travel with it —
         // the server matches on action alone unless filter_module says otherwise.
@@ -303,6 +313,19 @@ function RulesTab({ catalog }: { catalog?: NotificationCatalog }) {
             </div>
             {/* The human phrase, never the raw key, is the primary label. */}
             <div className="mt-1 text-[12.5px] text-muted">{triggerPhrase(r, catalog)}</div>
+            {(r.conditions || (r.active_from_local && r.active_to_local)) && (
+              <div className="mt-0.5 text-[12px] text-subtle">
+                {[
+                  conditionsPhrase(r.conditions, catalog) &&
+                    `${cs.admin.ruleConditionsBadge}: ${conditionsPhrase(r.conditions, catalog)}`,
+                  r.active_from_local &&
+                    r.active_to_local &&
+                    `${cs.admin.ruleWindowBadge} ${r.active_from_local}–${r.active_to_local}`,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Button size="sm" disabled={!online} onClick={() => setEditing(r)}>
                 Upravit
@@ -349,6 +372,8 @@ function RuleEditor({
   // a 200 for a change that never happened. Say so on the field instead.
   const hasTrigger = !!(draft.action_key || draft.action_prefix)
   const audience = draft.audience ?? { scope: 'all' as const }
+  // A half-filled window would be a 422; flag it on the field and hold save.
+  const windowIncomplete = !!draft.active_from_local !== !!draft.active_to_local
   // Resolve the stored trigger back to a catalog entry. A rule saved before the
   // module travelled with the key has no filter_module, so fall back to matching
   // on the key alone rather than showing an empty select for a rule that has one.
@@ -422,6 +447,41 @@ function RuleEditor({
         bodyPlaceholder={cs.admin.ruleBodyPlaceholder}
       />
 
+      <ConditionsBuilder
+        context="trigger"
+        catalog={catalog}
+        value={draft.conditions ?? null}
+        onChange={(c) => onChange({ ...draft, conditions: c })}
+      />
+
+      <div>
+        <span className="mb-1 block text-[12.5px] font-semibold text-muted">{cs.admin.activeWindow}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5">
+            <span className="text-[12px] text-muted">{cs.admin.activeFrom}</span>
+            <Input
+              type="time"
+              value={draft.active_from_local ?? ''}
+              onChange={(e) => onChange({ ...draft, active_from_local: e.target.value || null })}
+              className="w-28 font-mono"
+            />
+          </label>
+          <label className="flex items-center gap-1.5">
+            <span className="text-[12px] text-muted">{cs.admin.activeTo}</span>
+            <Input
+              type="time"
+              value={draft.active_to_local ?? ''}
+              onChange={(e) => onChange({ ...draft, active_to_local: e.target.value || null })}
+              className="w-28 font-mono"
+            />
+          </label>
+        </div>
+        {windowIncomplete && (
+          <span className="mt-1 block text-[12px] text-danger">{cs.admin.activeWindowIncomplete}</span>
+        )}
+        <span className="mt-1 block text-[12px] text-muted text-pretty">{cs.admin.activeWindowHint}</span>
+      </div>
+
       <AudiencePicker
         value={audience}
         onChange={(a) => onChange({ ...draft, audience: a })}
@@ -470,7 +530,14 @@ function RuleEditor({
       </label>
 
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" loading={saving} disabled={!hasTrigger || !audienceValid(audience)} onClick={onSave}>
+        <Button
+          variant="primary"
+          loading={saving}
+          disabled={
+            !hasTrigger || !audienceValid(audience) || !conditionsValid(draft.conditions ?? null) || windowIncomplete
+          }
+          onClick={onSave}
+        >
           {saving ? cs.admin.saving : cs.admin.save}
         </Button>
         <Button onClick={onCancel}>{cs.admin.cancel}</Button>
@@ -500,6 +567,9 @@ function SummariesTab({ catalog }: { catalog?: NotificationCatalog }) {
         title_template: draft.title_template ?? '',
         body_template: draft.body_template ?? '',
         enabled: draft.enabled ?? true,
+        // The full block travels every save; no rows ⇒ null, which clears a
+        // previously stored one (same three states as a rule patch).
+        conditions: conditionsForSave(draft.conditions ?? null),
       }
       return draft.id ? updateNotificationSchedule(draft.id, body) : createNotificationSchedule(body)
     },
@@ -606,6 +676,11 @@ function SummariesTab({ catalog }: { catalog?: NotificationCatalog }) {
             {/* The schedule phrase is rendered SERVER-side so the list and the
                 ticker can never disagree about what a pattern means. */}
             <div className="mt-1 text-[12.5px] text-muted">{s.description}</div>
+            {conditionsPhrase(s.conditions, catalog) && (
+              <div className="mt-0.5 text-[12px] text-subtle">
+                {cs.admin.ruleConditionsBadge}: {conditionsPhrase(s.conditions, catalog)}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Button size="sm" disabled={!online} onClick={() => setEditing(s)}>
                 Upravit
@@ -675,6 +750,13 @@ function SummaryEditor({
       />
       <p className="text-[12px] text-muted text-pretty">{cs.admin.perRecipientNote}</p>
 
+      <ConditionsBuilder
+        context="summary"
+        catalog={catalog}
+        value={draft.conditions ?? null}
+        onChange={(c) => onChange({ ...draft, conditions: c })}
+      />
+
       <AudiencePicker
         value={audience}
         onChange={(a) => onChange({ ...draft, audience: a })}
@@ -682,7 +764,12 @@ function SummaryEditor({
       />
 
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" loading={saving} disabled={!audienceValid(audience)} onClick={onSave}>
+        <Button
+          variant="primary"
+          loading={saving}
+          disabled={!audienceValid(audience) || !conditionsValid(draft.conditions ?? null)}
+          onClick={onSave}
+        >
           {saving ? cs.admin.saving : cs.admin.save}
         </Button>
         <Button onClick={onCancel}>{cs.admin.cancel}</Button>

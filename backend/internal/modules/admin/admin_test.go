@@ -612,9 +612,44 @@ func TestRuleValidation(t *testing.T) {
 			c.Audience = push.Audience{Scope: push.ScopeUsers}
 		}, "komu"},
 		{"unknown token", func(c *admin.RuleCreate) { c.BodyTemplate = str("{{event.nonsense}}") }, "neznámý údaj"},
-		{"metric token in a trigger", func(c *admin.RuleCreate) {
-			c.BodyTemplate = str("{{metric.todo.done_today}}")
-		}, "jen v souhrnu"},
+		// Metric/list tokens are ALLOWED in triggers now — but only known,
+		// household-scoped keys, and a list still never belongs in a title.
+		{"unknown metric in a trigger", func(c *admin.RuleCreate) {
+			c.BodyTemplate = str("{{metric.todo.nonsense}}")
+		}, "neznámé číslo"},
+		{"personal metric in a trigger", func(c *admin.RuleCreate) {
+			c.BodyTemplate = str("{{metric.notes.pinned_count}}")
+		}, "osobní údaj"},
+		{"personal list in a trigger", func(c *admin.RuleCreate) {
+			c.BodyTemplate = str("{{list.notes.pinned_count}}")
+		}, "osobní údaj"},
+		{"list token in a trigger title", func(c *admin.RuleCreate) {
+			c.TitleTemplate = str("{{list.events.pripominky_today}}")
+		}, "ne do nadpisu"},
+		{"condition with unknown key", func(c *admin.RuleCreate) {
+			c.Conditions = &admin.Conditions{Mode: "all", Items: []admin.Condition{{Key: "todo.nonsense", Op: "gt", Value: 0}}}
+		}, "neznámý údaj v podmínce"},
+		{"condition with unknown op", func(c *admin.RuleCreate) {
+			c.Conditions = &admin.Conditions{Mode: "all", Items: []admin.Condition{{Key: "todo.done_today", Op: "between", Value: 0}}}
+		}, "neznámé porovnání"},
+		{"condition with bad mode", func(c *admin.RuleCreate) {
+			c.Conditions = &admin.Conditions{Mode: "some", Items: []admin.Condition{{Key: "todo.done_today", Op: "gt", Value: 0}}}
+		}, "režim"},
+		{"condition with negative value", func(c *admin.RuleCreate) {
+			c.Conditions = &admin.Conditions{Mode: "all", Items: []admin.Condition{{Key: "todo.done_today", Op: "gt", Value: -1}}}
+		}, "záporná"},
+		{"personal condition in a trigger", func(c *admin.RuleCreate) {
+			c.Conditions = &admin.Conditions{Mode: "all", Items: []admin.Condition{{Key: "notes.pinned_count", Op: "gt", Value: 0}}}
+		}, "osobní údaj"},
+		{"half an active window", func(c *admin.RuleCreate) {
+			c.ActiveFromLocal = str("08:00")
+		}, "oba časy"},
+		{"malformed active window", func(c *admin.RuleCreate) {
+			c.ActiveFromLocal, c.ActiveToLocal = str("8am"), str("20:00")
+		}, "HH:MM"},
+		{"degenerate active window", func(c *admin.RuleCreate) {
+			c.ActiveFromLocal, c.ActiveToLocal = str("08:00"), str("08:00")
+		}, "stejný čas"},
 		{"negative coalesce", func(c *admin.RuleCreate) { c.CoalesceWindowSeconds = num(-1) }, "záporné"},
 		// The upper bound matters as much: seconds→time.Duration overflows int64
 		// past ~9.2e9 and comes out NEGATIVE, which the listener reads as "no
@@ -1786,4 +1821,359 @@ func TestBroadcastRefusesAUrlThatIsNotAnInAppPath(t *testing.T) {
 	if got := f.sender.all()[1].env.URL; got != "/" {
 		t.Errorf("envelope url = %q, want the default \"/\"", got)
 	}
+}
+
+// ---- conditions + active window ----
+
+// The motivating case: a 20:00 summary that only arrives when something is
+// still open — "any" of the named counts above zero.
+func TestScheduleSkippedWhenConditionsNotMet(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.metrics.values["events.pripominky_today"] = 0
+	f.metrics.values["todo.pravedelam_count"] = 0
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Večerní kontrola",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Ještě něco zbývá",
+		BodyTemplate:  "Připomínky: {{metric.events.pripominky_today}} · Rozdělané: {{metric.todo.pravedelam_count}}",
+		Conditions: &admin.Conditions{Mode: "any", Items: []admin.Condition{
+			{Key: "events.pripominky_today", Op: "gt", Value: 0},
+			{Key: "todo.pravedelam_count", Op: "gt", Value: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Nothing open ⇒ a quiet evening, no push.
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+	if got := f.sender.count(); got != 0 {
+		t.Fatalf("sent %d, want 0 — both counts are zero and the mode is any", got)
+	}
+
+	// One count above zero ⇒ the summary goes out.
+	f.metrics.values["events.pripominky_today"] = 2
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+	sent := f.sender.all()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d, want 1 — one branch of an any-condition holds", len(sent))
+	}
+	if want := "Připomínky: 2 · Rozdělané: 0"; sent[0].env.Body != want {
+		t.Errorf("body = %q, want %q", sent[0].env.Body, want)
+	}
+}
+
+// "all" requires every clause; one failing clause suppresses the send.
+func TestScheduleAllModeRequiresEveryCondition(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.metrics.values["events.pripominky_today"] = 3
+	f.metrics.values["todo.pravedelam_count"] = 0
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Obojí",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "T", BodyTemplate: "B",
+		Conditions: &admin.Conditions{Mode: "all", Items: []admin.Condition{
+			{Key: "events.pripominky_today", Op: "gt", Value: 0},
+			{Key: "todo.pravedelam_count", Op: "gt", Value: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %d, want 0 — all-mode with one false clause", got)
+	}
+}
+
+// A personal condition skips exactly the recipients it fails for.
+func TestSchedulePersonalConditionSkipsPerRecipient(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.member("u-eva", "Eva", []string{"editor"}, true)
+	f.metrics.perUser["u-karel"] = map[string]int{"notes.pinned_count": 2}
+	f.metrics.perUser["u-eva"] = map[string]int{"notes.pinned_count": 0}
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Připnuté večer",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "Máš připnuté poznámky", BodyTemplate: "Připnuto: {{metric.notes.pinned_count}}",
+		Conditions: &admin.Conditions{Mode: "all", Items: []admin.Condition{
+			{Key: "notes.pinned_count", Op: "gt", Value: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+
+	sent := f.sender.all()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d envelopes, want 1 — Eva has nothing pinned", len(sent))
+	}
+	if len(sent[0].recipients) != 1 || sent[0].recipients[0] != "u-karel" {
+		t.Errorf("recipients = %v, want just Karel", sent[0].recipients)
+	}
+	if want := "Připnuto: 2"; sent[0].env.Body != want {
+		t.Errorf("body = %q, want %q", sent[0].env.Body, want)
+	}
+}
+
+// A condition that cannot be resolved FAILS OPEN: a transient read error must
+// suppress nothing — the same choice Render makes for a broken token.
+func TestScheduleConditionFailsOpenOnResolverError(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.metrics.fail["events.pripominky_today"] = true
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "S podmínkou",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "T", BodyTemplate: "B",
+		Conditions: &admin.Conditions{Mode: "all", Items: []admin.Condition{
+			{Key: "events.pripominky_today", Op: "gt", Value: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+	if got := f.sender.count(); got != 1 {
+		t.Errorf("sent %d, want 1 — a broken resolver must not suppress the summary", got)
+	}
+}
+
+// A condition key resolves metric-first (a COUNT is cheaper than a list read).
+func TestConditionResolvesMetricFirst(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	// events.pripominky_today is in BOTH stub catalogs; make them disagree to
+	// prove which one a condition reads.
+	f.metrics.values["events.pripominky_today"] = 0
+	f.lists.items["events.pripominky_today"] = []string{"Vynést koš"}
+
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Kontrola",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "T", BodyTemplate: "B",
+		Conditions: &admin.Conditions{Mode: "all", Items: []admin.Condition{
+			{Key: "events.pripominky_today", Op: "eq", Value: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.svc.FireSchedule(context.Background(), scheduledDue(sc.ID))
+	if got := f.sender.count(); got != 1 {
+		t.Errorf("sent %d, want 1 — the metric (0) satisfies eq 0; metrics resolve first", got)
+	}
+}
+
+// Trigger rules: conditions are judged at SEND time against current counts.
+func TestTriggerRuleConditionSuppressesSend(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.metrics.values["todo.pravedelam_count"] = 0
+
+	f.rule(t, admin.RuleCreate{
+		Name: "Jen když něco zbývá", ActionKey: str("card.move"),
+		Audience: push.Audience{Scope: push.ScopeAll}, CoalesceWindowSeconds: num(0),
+		Conditions: &admin.Conditions{Mode: "all", Items: []admin.Condition{
+			{Key: "todo.pravedelam_count", Op: "gt", Value: 0},
+		}},
+	})
+	l := f.svc.Listener()
+
+	if err := l.OnEvent(context.Background(), entry("e1", "todo", "card.move"), nil); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := f.sender.count(); got != 0 {
+		t.Fatalf("sent %d, want 0 — the condition is false", got)
+	}
+
+	f.metrics.values["todo.pravedelam_count"] = 3
+	if err := l.OnEvent(context.Background(), entry("e2", "todo", "card.move"), nil); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	f.waitForSends(1)
+}
+
+// Trigger templates may print household counts, resolved at send time.
+func TestTriggerRuleRendersMetricTokens(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+	f.metrics.values["todo.pravedelam_count"] = 4
+
+	f.rule(t, admin.RuleCreate{
+		Name: "S počtem", ActionKey: str("card.move"),
+		Audience: push.Audience{Scope: push.ScopeAll}, CoalesceWindowSeconds: num(0),
+		BodyTemplate: str("{{event.actor_label}} · rozdělaných úkolů: {{metric.todo.pravedelam_count}}"),
+	})
+	l := f.svc.Listener()
+	if err := l.OnEvent(context.Background(), entry("e1", "todo", "card.move"), nil); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	f.waitForSends(1)
+	if want := "Karel · rozdělaných úkolů: 4"; f.sender.all()[0].env.Body != want {
+		t.Errorf("body = %q, want %q", f.sender.all()[0].env.Body, want)
+	}
+}
+
+// The active window drops sends outside it — including across midnight.
+func TestTriggerRuleActiveWindow(t *testing.T) {
+	f := newFixture(t)
+	f.member("u-karel", "Karel", []string{"admin"}, true)
+
+	f.rule(t, admin.RuleCreate{
+		Name: "Jen večer", ActionKey: str("card.move"),
+		Audience: push.Audience{Scope: push.ScopeAll}, CoalesceWindowSeconds: num(0),
+		ActiveFromLocal: str("20:00"), ActiveToLocal: str("06:00"),
+	})
+	l := f.svc.Listener()
+
+	// The fixture clock reads 08:00 Prague — outside 20:00–06:00.
+	if err := l.OnEvent(context.Background(), entry("e1", "todo", "card.move"), nil); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := f.sender.count(); got != 0 {
+		t.Fatalf("sent %d, want 0 — 08:00 is outside a 20:00–06:00 window", got)
+	}
+
+	// 22:30 is inside the wrapped window.
+	f.now = f.now.Add(14*time.Hour + 30*time.Minute)
+	if err := l.OnEvent(context.Background(), entry("e2", "todo", "card.move"), nil); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	f.waitForSends(1)
+}
+
+// Clearing conditions through a PATCH must actually clear them.
+func TestRuleUpdateClearsConditions(t *testing.T) {
+	f := newFixture(t)
+	r := f.rule(t, admin.RuleCreate{
+		Name: "S podmínkou", ActionKey: str("card.move"),
+		Audience: push.Audience{Scope: push.ScopeAll},
+		Conditions: &admin.Conditions{Mode: "all", Items: []admin.Condition{
+			{Key: "todo.pravedelam_count", Op: "gt", Value: 0},
+		}},
+	})
+	if r.Conditions == nil {
+		t.Fatalf("created rule lost its conditions")
+	}
+
+	var patch admin.RuleUpdate
+	if err := json.Unmarshal([]byte(`{"conditions": null}`), &patch); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	upd, err := f.svc.UpdateRule(adminCtx(), r.ID, patch)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if upd.Conditions != nil {
+		t.Errorf("conditions = %+v, want cleared", upd.Conditions)
+	}
+
+	// An empty block clears too — the composer sends the full object each save.
+	r2 := f.rule(t, admin.RuleCreate{
+		Name: "S podmínkou 2", ActionKey: str("card.create"),
+		Audience: push.Audience{Scope: push.ScopeAll},
+		Conditions: &admin.Conditions{Mode: "any", Items: []admin.Condition{
+			{Key: "todo.pravedelam_count", Op: "gt", Value: 0},
+		}},
+	})
+	if err := json.Unmarshal([]byte(`{"conditions": {"mode":"all","items":[]}}`), &patch); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	upd2, err := f.svc.UpdateRule(adminCtx(), r2.ID, patch)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if upd2.Conditions != nil {
+		t.Errorf("conditions = %+v, want cleared by the empty block", upd2.Conditions)
+	}
+}
+
+// Conditions round-trip through the store, and the schedule PATCH clears with
+// an empty block.
+func TestScheduleConditionsRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	sc, err := f.svc.CreateSchedule(adminCtx(), admin.ScheduleCreate{
+		Name:          "Večerní",
+		Schedule:      admin.ScheduleSpec{TimeLocal: "20:00", Days: schedDaily()},
+		Audience:      push.Audience{Scope: push.ScopeAll},
+		TitleTemplate: "T", BodyTemplate: "B",
+		Conditions: &admin.Conditions{Items: []admin.Condition{ // mode omitted ⇒ "all"
+			{Key: "events.pripominky_today", Op: "gt", Value: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := f.svc.GetSchedule(adminCtx(), sc.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Conditions == nil || got.Conditions.Mode != "all" || len(got.Conditions.Items) != 1 {
+		t.Fatalf("conditions did not round-trip: %+v", got.Conditions)
+	}
+
+	// Both ways of saying "no conditions" clear: the empty block the composer
+	// sends, and the JSON null a read-modify-write of the GET response would.
+	for _, tc := range []struct{ name, body string }{
+		{"empty block", `{"conditions": {"mode":"all","items":[]}}`},
+		{"explicit null", `{"conditions": null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := f.svc.UpdateSchedule(adminCtx(), sc.ID, admin.ScheduleUpdate{
+				Conditions: condPatch(t, `{"conditions": {"mode":"all","items":[{"key":"events.pripominky_today","op":"gt","value":0}]}}`),
+			}); err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			upd, err := f.svc.UpdateSchedule(adminCtx(), sc.ID, admin.ScheduleUpdate{Conditions: condPatch(t, tc.body)})
+			if err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			if upd.Conditions != nil {
+				t.Errorf("conditions = %+v, want cleared", upd.Conditions)
+			}
+		})
+	}
+
+	// An omitted key still KEEPS — that is the third state.
+	if _, err := f.svc.UpdateSchedule(adminCtx(), sc.ID, admin.ScheduleUpdate{
+		Conditions: condPatch(t, `{"conditions": {"mode":"all","items":[{"key":"events.pripominky_today","op":"gt","value":0}]}}`),
+	}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	kept, err := f.svc.UpdateSchedule(adminCtx(), sc.ID, admin.ScheduleUpdate{Conditions: condPatch(t, `{"name":"Jiné jméno"}`)})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if kept.Conditions == nil {
+		t.Error("conditions were cleared by a patch that never mentioned them")
+	}
+}
+
+// condPatch decodes a schedule patch body and hands back just its conditions
+// field, so a test can exercise the absent/null/block distinction the way the
+// HTTP handler does.
+func condPatch(t *testing.T, body string) **admin.Conditions {
+	t.Helper()
+	var patch admin.ScheduleUpdate
+	if err := json.Unmarshal([]byte(body), &patch); err != nil {
+		t.Fatalf("unmarshal patch %s: %v", body, err)
+	}
+	return patch.Conditions
 }
