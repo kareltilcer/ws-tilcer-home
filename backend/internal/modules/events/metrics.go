@@ -25,14 +25,12 @@ const (
 // expand-on-read the Připomínky widget uses — occurrences are never stored, so a
 // count is an expansion over a capped window, not a table scan.
 //
-// One deliberate difference from the widget, worth stating because the two are
-// read side by side: these metrics are anchored to the OCCURRENCE DATE, not to
-// reminder_lead. The widget answers "what should I be looking at now?" and shows
-// a reminder from `occurrence − lead` onward; a summary answers "what is due
-// today / what is past its date?", and a reminder with a two-week lead is not
-// something to report as due today merely because its lead has opened. Where the
-// two DO answer the same question — overdue — the counting unit is aligned; see
-// MetricOverdueOpen.
+// The "připomínky na dnešek" metrics resolve through the Připomínky widget's
+// own selection, exactly like the same-keyed lists: a "připomínka na dnešek"
+// is a CURRENT widget row — its lead has opened and its day has not passed —
+// so the number, the lines under it and the dashboard can never disagree
+// (D99). Only MetricDueWithin7d asks about event dates, because a look-ahead
+// is a question about the calendar rather than about reminders.
 type metricProvider struct {
 	store        *Store
 	lookbackDays int
@@ -58,13 +56,13 @@ func (p *metricProvider) Value(ctx context.Context, _ string, key string, asOf t
 	case MetricDueWithin7d:
 		// Every event's occurrences in [today, today+7] — the look-ahead the
 		// Tento měsíc widget shows, counted rather than listed.
-		return p.countOccurrences(ctx, today, today.AddDays(7), false, false, false)
+		return p.count(ctx, occurrenceQuery{from: today, to: today.AddDays(7), maxOcc: p.maxOcc})
 	case MetricPripominkyToday:
-		// A single day, so per-occurrence and per-event counting coincide: an
-		// event cannot recur twice within one date.
-		return p.countOccurrences(ctx, today, today, true, false, false)
+		// Current reminders — the same selection the same-keyed list names, so
+		// "3 připomínky na dnešek" and the three lines under it can never disagree.
+		return p.countCurrent(ctx, today, true)
 	case MetricPripominkyTodayOpen:
-		return p.countOccurrences(ctx, today, today, true, true, false)
+		return p.countCurrent(ctx, today, false)
 	case MetricOverdueOpen:
 		// Reminders with a past uncompleted occurrence, bounded by the same
 		// lookback the dashboard uses — "overdue" has to stop somewhere.
@@ -75,23 +73,33 @@ func (p *metricProvider) Value(ctx context.Context, _ string, key string, asOf t
 		// summary say "20 připomínek po termínu" for a single daily reminder left
 		// alone for twenty days, while the dashboard the household then opens
 		// lists exactly one — the two must not disagree about the same word.
-		return p.countOccurrences(ctx, today.AddDays(-p.lookbackDays), today.AddDays(-1), true, true, true)
+		return p.count(ctx, occurrenceQuery{
+			from: today.AddDays(-p.lookbackDays), to: today.AddDays(-1), maxOcc: p.maxOcc,
+			reminderOnly: true, openOnly: true, perEvent: true,
+		})
 	default:
 		return 0, fmt.Errorf("events: unknown metric %q", key)
 	}
 }
 
-// countOccurrences counts what scanOccurrences selects. The two summary
-// surfaces — a metric's number and a list's items — MUST answer the same
-// question the same way, so the selection lives in one place and this is only
-// the counting half of it (see scanOccurrences in lists.go).
-func (p *metricProvider) countOccurrences(ctx context.Context, from, to dates.Date, reminderOnly, openOnly, perEvent bool) (int, error) {
-	occs, err := scanOccurrences(ctx, p.store, occurrenceQuery{
-		from: from, to: to, maxOcc: p.maxOcc,
-		reminderOnly: reminderOnly, openOnly: openOnly, perEvent: perEvent,
-	})
+// count counts what scanOccurrences selects. The two summary surfaces — a
+// metric's number and a list's items — MUST answer the same question the same
+// way, so the selection lives in one place and this is only the counting half
+// of it (see scanOccurrences in lists.go).
+func (p *metricProvider) count(ctx context.Context, q occurrenceQuery) (int, error) {
+	occs, err := scanOccurrences(ctx, p.store, q)
 	if err != nil {
 		return 0, err
 	}
 	return len(occs), nil
+}
+
+// countCurrent is the counting half of currentLines — the widget's non-overdue
+// rows (see currentReminders in pripominky.go).
+func (p *metricProvider) countCurrent(ctx context.Context, today dates.Date, completedToo bool) (int, error) {
+	rem, err := currentReminders(ctx, p.store, today, p.lookbackDays, p.maxOcc, completedToo)
+	if err != nil {
+		return 0, err
+	}
+	return len(rem), nil
 }

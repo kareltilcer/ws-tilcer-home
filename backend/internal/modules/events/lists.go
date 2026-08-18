@@ -6,25 +6,27 @@ import (
 	"sort"
 	"time"
 
-	"golang.org/x/text/collate"
-	"golang.org/x/text/language"
-
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/recur"
 )
 
-// List keys published by this module. Each one is the NAMED counterpart of the
-// metric with the same key: "3 připomínky na dnešek" and "which three" are the
-// same question asked two ways, so they share a key and — via scanOccurrences —
-// the selection behind it. A summary that used both must never be able to say
-// three and then list four.
+// List keys published by this module. The first four are the NAMED counterpart
+// of the metric with the same key: "3 připomínky na dnešek" and "which three"
+// are the same question asked two ways, so each pair shares one selection — the
+// two "na dnešek" keys resolve through the Připomínky widget's own scan
+// (currentReminders, D99), the other two through scanOccurrences. A summary
+// that used both surfaces must never be able to say three and then list four.
 //
-// All four are HOUSEHOLD-scoped for the same reason the metrics are: completion
-// in this module is shared (D68).
+// ListPripominkyActive has no metric twin: it is the whole Připomínky widget in
+// words, and "how many rows are on the dashboard" is a number nobody asked for.
+//
+// All of them are HOUSEHOLD-scoped for the same reason the metrics are:
+// completion in this module is shared (D68).
 const (
 	ListPripominkyToday     = "events.pripominky_today"
 	ListPripominkyTodayOpen = "events.pripominky_today_open"
+	ListPripominkyActive    = "events.pripominky_active"
 	ListOverdueOpen         = "events.overdue_open"
 	ListDueWithin7d         = "events.due_within_7d"
 )
@@ -45,6 +47,7 @@ func (p *listProvider) Descriptors() []lists.Descriptor {
 	return []lists.Descriptor{
 		{Key: ListPripominkyToday, Label: "Připomínky na dnešek", Empty: "žádné připomínky", Scope: lists.ScopeHousehold},
 		{Key: ListPripominkyTodayOpen, Label: "Nesplněné připomínky na dnešek", Empty: "nic nezbývá", Scope: lists.ScopeHousehold},
+		{Key: ListPripominkyActive, Label: "Aktivní připomínky (i po termínu)", Empty: "žádné aktivní připomínky", Scope: lists.ScopeHousehold},
 		{Key: ListOverdueOpen, Label: "Připomínky po termínu", Empty: "nic po termínu", Scope: lists.ScopeHousehold},
 		{Key: ListDueWithin7d, Label: "Události v příštích 7 dnech", Empty: "žádné události", Scope: lists.ScopeHousehold},
 	}
@@ -55,55 +58,97 @@ func (p *listProvider) Items(ctx context.Context, _ string, key string, asOf tim
 
 	switch key {
 	case ListPripominkyToday:
-		return p.titles(ctx, today, today, true, false, false, false)
+		// A "připomínka na dnešek" is a reminder that is CURRENT: its lead has
+		// opened (today >= occurrence − lead) and its day has not passed — the
+		// widget's non-overdue rows, completed or not, since ticking one off does
+		// not unsay that it was today's reminder. Selecting by the event's own
+		// date would miss the rent due next week whose 1w lead opened this
+		// morning; selecting by "lead opens exactly today" would miss an event
+		// created after its lead had already opened, and would drop an open
+		// reminder from every summary between its first morning and the day it
+		// turns overdue (D99).
+		return p.currentLines(ctx, today, true)
 	case ListPripominkyTodayOpen:
-		return p.titles(ctx, today, today, true, true, false, false)
+		return p.currentLines(ctx, today, false)
+	case ListPripominkyActive:
+		// Everything the Nástěnka Připomínky widget shows right now, overdue
+		// included — one line per event, in the widget's own order, because it
+		// resolves through the widget's own selection (D100).
+		return p.activeLines(ctx, today)
 	case ListOverdueOpen:
 		// Once per event, matching the metric and the Připomínky widget: a daily
 		// reminder left alone for a fortnight is ONE thing to deal with, and it is
 		// dated so "Vynést koš (2. 9.)" says how long it has been waiting.
-		return p.titles(ctx, today.AddDays(-p.lookbackDays), today.AddDays(-1), true, true, true, true)
+		return p.lines(ctx, occurrenceQuery{
+			from: today.AddDays(-p.lookbackDays), to: today.AddDays(-1), maxOcc: p.maxOcc,
+			reminderOnly: true, openOnly: true, perEvent: true,
+		})
 	case ListDueWithin7d:
-		// A multi-day look-ahead, so each line carries its date — a bare list of
-		// titles spanning a week tells the household nothing about when.
-		return p.titles(ctx, today, today.AddDays(7), false, false, false, true)
+		// A multi-day look-ahead — a bare list of titles spanning a week tells
+		// the household nothing about when.
+		return p.lines(ctx, occurrenceQuery{
+			from: today, to: today.AddDays(7), maxOcc: p.maxOcc,
+		})
 	default:
 		return nil, fmt.Errorf("events: unknown list %q", key)
 	}
 }
 
-// titles renders the selected occurrences as one short Czech line each, in the
-// order a household reads them: soonest first, then alphabetically so a day's
-// worth of reminders has a stable order between two sends of the same summary.
-func (p *listProvider) titles(ctx context.Context, from, to dates.Date, reminderOnly, openOnly, perEvent, dated bool) ([]string, error) {
-	occs, err := scanOccurrences(ctx, p.store, occurrenceQuery{
-		from: from, to: to, maxOcc: p.maxOcc,
-		reminderOnly: reminderOnly, openOnly: openOnly, perEvent: perEvent,
-	})
+// lines renders the selected occurrences as one short dated Czech line each,
+// in the one shared reading order (see lessByDayThenCzechTitle).
+func (p *listProvider) lines(ctx context.Context, q occurrenceQuery) ([]string, error) {
+	occs, err := scanOccurrences(ctx, p.store, q)
 	if err != nil {
 		return nil, err
 	}
-	// Czech collation, not byte order: a byte compare files every Č/Ř/Š/Ú/Ž
-	// title after the whole ASCII alphabet, which no household would call
-	// "alphabetical". A collator is not safe for concurrent use, so each call
-	// builds its own — the lists here are a handful of lines.
-	czech := collate.New(language.Czech)
+	czech := czechCollator()
 	sort.SliceStable(occs, func(i, j int) bool {
-		if !occs[i].on.Equal(occs[j].on) {
-			return occs[i].on.Before(occs[j].on)
-		}
-		return czech.CompareString(occs[i].title, occs[j].title) < 0
+		return lessByDayThenCzechTitle(czech, occs[i].on, occs[j].on, occs[i].title, occs[j].title)
 	})
 
 	out := make([]string, 0, len(occs))
 	for _, o := range occs {
-		if dated {
-			out = append(out, fmt.Sprintf("%s (%d. %d.)", o.title, o.on.D, int(o.on.M)))
-			continue
-		}
-		out = append(out, o.title)
+		out = append(out, dateLine(o.title, o.on))
 	}
 	return out, nil
+}
+
+// currentLines names the current reminders — the widget's non-overdue rows —
+// shared with the metric of the same key, which counts exactly these lines.
+func (p *listProvider) currentLines(ctx context.Context, today dates.Date, completedToo bool) ([]string, error) {
+	rem, err := currentReminders(ctx, p.store, today, p.lookbackDays, p.maxOcc, completedToo)
+	if err != nil {
+		return nil, err
+	}
+	return reminderLines(rem), nil
+}
+
+// activeLines names what the Připomínky widget shows, in the widget's order
+// (overdue first, then by date) — it IS the widget's selection rather than a
+// second one shaped to agree with it.
+func (p *listProvider) activeLines(ctx context.Context, today dates.Date) ([]string, error) {
+	rem, err := activeReminders(ctx, p.store, today, p.lookbackDays, p.maxOcc)
+	if err != nil {
+		return nil, err
+	}
+	return reminderLines(rem), nil
+}
+
+// reminderLines renders widget rows as dated list lines, keeping the rows'
+// own order. Dated like every multi-day list: a reminder may be for last
+// Tuesday or for a fortnight out, and "Vynést koš" alone says neither.
+func reminderLines(rem []DashboardReminder) []string {
+	out := make([]string, 0, len(rem))
+	for _, r := range rem {
+		out = append(out, dateLine(r.Title, r.On))
+	}
+	return out
+}
+
+// dateLine is one list line carrying its date — "Vynést koš (2. 9.)", the
+// app-wide short Czech day format.
+func dateLine(title string, on dates.Date) string {
+	return fmt.Sprintf("%s (%d. %d.)", title, on.D, int(on.M))
 }
 
 // ---- the shared selection ----

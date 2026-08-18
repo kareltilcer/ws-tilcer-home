@@ -8,12 +8,58 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
+)
+
+// The provider config the fixture module runs with. The mirror test builds the
+// widget with the SAME numbers, or it would compare two differently-configured
+// selections.
+const (
+	testLookbackDays = 30
+	testMaxOcc       = 500 // matches newFixture's Service (events_test.go)
 )
 
 func eventLists(t *testing.T, f fixture) lists.Provider {
 	t.Helper()
-	return events.NewModule(f.svc, pragueLoc(t), 30).ListProvider()
+	return events.NewModule(f.svc, pragueLoc(t), testLookbackDays).ListProvider()
+}
+
+// asOfDay is the moment a summary resolves its tokens at. The reminder lists
+// select on a DATE, so the tests pin one rather than deriving windows from
+// time.Now(): "an event today, reminded about yesterday" is the whole point of
+// these lists and it cannot be written against a moving today.
+func asOfDay(t *testing.T, day string) time.Time {
+	t.Helper()
+	d, err := time.ParseInLocation("2006-01-02", day, pragueLoc(t))
+	if err != nil {
+		t.Fatalf("parse %q: %v", day, err)
+	}
+	return d.Add(8 * time.Hour) // 08:00, when the morning summary goes out
+}
+
+func mustCreate(t *testing.T, f fixture, title, startsOn, rrule, lead string) events.Event {
+	t.Helper()
+	in := events.EventCreate{Title: title, StartsOn: startsOn, RRule: rrule}
+	if lead != "" {
+		in.ReminderEnabled = true
+		in.ReminderLead = lead
+	}
+	ev, err := f.svc.CreateEvent(f.ctx, in)
+	if err != nil {
+		t.Fatalf("create %q: %v", title, err)
+	}
+	return *ev
+}
+
+func items(t *testing.T, p lists.Provider, key string, at time.Time) []string {
+	t.Helper()
+	got, err := p.Items(context.Background(), "u1", key, at)
+	if err != nil {
+		t.Fatalf("%s: %v", key, err)
+	}
+	return got
 }
 
 func TestEventListsDescriptors(t *testing.T) {
@@ -23,6 +69,7 @@ func TestEventListsDescriptors(t *testing.T) {
 	want := map[string]bool{
 		events.ListPripominkyToday:     true,
 		events.ListPripominkyTodayOpen: true,
+		events.ListPripominkyActive:    true,
 		events.ListOverdueOpen:         true,
 		events.ListDueWithin7d:         true,
 	}
@@ -44,56 +91,113 @@ func TestEventListsDescriptors(t *testing.T) {
 	}
 }
 
-// The list names exactly what the metric counts — that is the whole point of
-// sharing a key between the two catalogs.
-func TestEventListsNameWhatTheMetricsCount(t *testing.T) {
+// "Připomínky na dnešek" are the CURRENT reminders — the widget's non-overdue
+// rows: lead open, day not yet passed (D99). The rent due next week whose 1w
+// lead opened this morning belongs here, and so does the trash due today whose
+// lead opened yesterday — its reminder date is already past (as it is for any
+// event created inside its own lead window), but the reminder is still
+// today's business. The revision whose lead opens in August is not.
+func TestEventListsPripominkyTodayNamesCurrentReminders(t *testing.T) {
 	f := newFixture(t)
-	mod := events.NewModule(f.svc, pragueLoc(t), 30)
-	ctx := context.Background()
-	now := time.Now().In(pragueLoc(t))
-	today := now.Format("2006-01-02")
+	mod := events.NewModule(f.svc, pragueLoc(t), testLookbackDays)
+	at := asOfDay(t, "2026-07-15")
 
-	dueToday, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Zaplatit nájem", StartsOn: today, ReminderEnabled: true, ReminderLead: "1d",
-	})
-	if err != nil {
-		t.Fatalf("create today's event: %v", err)
-	}
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Vynést koš", StartsOn: today, ReminderEnabled: true, ReminderLead: "1d",
-	}); err != nil {
-		t.Fatalf("create second event: %v", err)
-	}
-	// A reminder-less event today is not a "připomínka" for either catalog.
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{Title: "Bez připomínky", StartsOn: today}); err != nil {
-		t.Fatalf("create reminder-less event: %v", err)
+	mustCreate(t, f, "Zaplatit nájem", "2026-07-22", "", "1w")      // lead opened today
+	mustCreate(t, f, "Kontrola kotle", "2026-07-16", "", "1d")      // lead opened today
+	mustCreate(t, f, "Vynést koš", "2026-07-15", "", "1d")          // due today, lead opened yesterday — still current
+	mustCreate(t, f, "Revize ještě daleko", "2026-08-10", "", "1w") // lead opens 08-03
+	mustCreate(t, f, "Bez připomínky", "2026-07-15", "", "")        // not a připomínka at all
+
+	got := items(t, mod.ListProvider(), events.ListPripominkyToday, at)
+	want := []string{"Vynést koš (15. 7.)", "Kontrola kotle (16. 7.)", "Zaplatit nájem (22. 7.)"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("items = %v, want %v (soonest first; the event's own date is what each line carries)", got, want)
 	}
 
-	items, err := mod.ListProvider().Items(ctx, "u1", events.ListPripominkyToday, now)
-	if err != nil {
-		t.Fatalf("pripominky_today: %v", err)
-	}
-	if got := strings.Join(items, "|"); got != "Vynést koš|Zaplatit nájem" {
-		t.Errorf("items = %q, want both reminders sorted by title within the day", got)
-	}
-	count, err := mod.MetricProvider().Value(ctx, "u1", events.MetricPripominkyToday, now)
+	// The list names exactly what the metric counts — the whole point of sharing
+	// a key between the two catalogs.
+	count, err := mod.MetricProvider().Value(context.Background(), "u1", events.MetricPripominkyToday, at)
 	if err != nil {
 		t.Fatalf("pripominky_today metric: %v", err)
 	}
-	if count != len(items) {
-		t.Errorf("metric says %d, the list names %d — the two must agree", count, len(items))
+	if count != len(got) {
+		t.Errorf("metric says %d, the list names %d — the two must agree", count, len(got))
 	}
+}
 
-	// Completion is shared, so ticking one off shortens the open list for everyone.
-	if _, err := f.svc.Complete(f.ctx, dueToday.ID, today, ""); err != nil {
+// Completion is shared, so ticking one off shortens the open list for everyone —
+// and leaves the plain list alone: completing a current reminder does not unsay
+// that it is one of today's.
+func TestEventListsPripominkyTodayOpenDropsCompleted(t *testing.T) {
+	f := newFixture(t)
+	mod := events.NewModule(f.svc, pragueLoc(t), testLookbackDays)
+	at := asOfDay(t, "2026-07-15")
+
+	kotel := mustCreate(t, f, "Kontrola kotle", "2026-07-16", "", "1d")
+	mustCreate(t, f, "Zaplatit nájem", "2026-07-22", "", "1w")
+
+	if _, err := f.svc.Complete(f.ctx, kotel.ID, "2026-07-16", ""); err != nil {
 		t.Fatalf("complete occurrence: %v", err)
 	}
-	open, err := mod.ListProvider().Items(ctx, "u1", events.ListPripominkyTodayOpen, now)
-	if err != nil {
-		t.Fatalf("pripominky_today_open: %v", err)
-	}
-	if strings.Join(open, "|") != "Vynést koš" {
+
+	open := items(t, mod.ListProvider(), events.ListPripominkyTodayOpen, at)
+	if strings.Join(open, "|") != "Zaplatit nájem (22. 7.)" {
 		t.Errorf("open items = %v, want only the uncompleted one", open)
+	}
+	if all := items(t, mod.ListProvider(), events.ListPripominkyToday, at); len(all) != 2 {
+		t.Errorf("plain list = %v, want both — it does not care about completion", all)
+	}
+}
+
+// The active list IS the Připomínky widget, in words: same rows, same order.
+// List and widget resolve through the same selection by construction (D100),
+// so the mirror loop below guards the RENDERING plumbing — dates carried
+// intact into each line, the widget's order kept — while the hand-written
+// expectation at the end is what pins the selection itself.
+func TestEventListsActiveMirrorsThePripominkyWidget(t *testing.T) {
+	f := newFixture(t)
+	mod := events.NewModule(f.svc, pragueLoc(t), testLookbackDays)
+	today := dates.New(2026, 7, 15)
+	at := asOfDay(t, "2026-07-15")
+
+	mustCreate(t, f, "Propásnutá revize", "2026-07-10", "", "1d") // overdue
+	mustCreate(t, f, "Zaplatit nájem", "2026-07-22", "", "1w")    // active (lead open)
+	mustCreate(t, f, "Kontrola kotle", "2026-07-30", "", "1d")    // not active yet
+	zalit := mustCreate(t, f, "Zalít kytky", "2026-07-01", "FREQ=WEEKLY;INTERVAL=1", "1d")
+	if _, err := f.svc.Complete(f.ctx, zalit.ID, "2026-07-01", ""); err != nil {
+		t.Fatalf("complete 07-01: %v", err)
+	}
+	if _, err := f.svc.Complete(f.ctx, zalit.ID, "2026-07-08", ""); err != nil {
+		t.Fatalf("complete 07-08: %v", err)
+	}
+
+	widget := events.NewPripominkyProviderForTest(events.NewStore(f.db), testLookbackDays, testMaxOcc, func() dates.Date { return today })
+	data, err := widget.Data(context.Background(), registry.User{})
+	if err != nil {
+		t.Fatalf("widget data: %v", err)
+	}
+	rem := data.(events.PripominkyWidget).Reminders
+
+	got := items(t, mod.ListProvider(), events.ListPripominkyActive, at)
+	if len(got) != len(rem) {
+		t.Fatalf("list names %d reminders, the widget shows %d: %v vs %+v", len(got), len(rem), got, rem)
+	}
+	for i, r := range rem {
+		on, err := dates.Parse(r.OccurrenceOn)
+		if err != nil {
+			t.Fatalf("widget occurrence %q: %v", r.OccurrenceOn, err)
+		}
+		want := r.Title + " (" + czDay(on) + ")"
+		if got[i] != want {
+			t.Errorf("line %d = %q, want %q — the list must read like the widget, in the widget's order", i, got[i], want)
+		}
+	}
+
+	// And concretely: overdue first, the not-yet-active one absent, the recurring
+	// one advanced past its completions.
+	want := []string{"Propásnutá revize (10. 7.)", "Zalít kytky (15. 7.)", "Zaplatit nájem (22. 7.)"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("items = %v, want %v", got, want)
 	}
 }
 
@@ -102,39 +206,19 @@ func TestEventListsNameWhatTheMetricsCount(t *testing.T) {
 func TestEventListsDateTheirItemsOverAMultiDayWindow(t *testing.T) {
 	f := newFixture(t)
 	p := eventLists(t, f)
-	ctx := context.Background()
-	now := time.Now().In(pragueLoc(t))
-	in3 := now.AddDate(0, 0, 3)
-	ago5 := now.AddDate(0, 0, -5)
+	at := asOfDay(t, "2026-07-15")
 
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Kontrola kotle", StartsOn: in3.Format("2006-01-02"),
-	}); err != nil {
-		t.Fatalf("create upcoming: %v", err)
-	}
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Propásnutá revize", StartsOn: ago5.Format("2006-01-02"),
-		ReminderEnabled: true, ReminderLead: "1d",
-	}); err != nil {
-		t.Fatalf("create past: %v", err)
+	mustCreate(t, f, "Kontrola kotle", "2026-07-18", "", "")
+	mustCreate(t, f, "Propásnutá revize", "2026-07-10", "", "1d")
+
+	upcoming := items(t, p, events.ListDueWithin7d, at)
+	if len(upcoming) != 1 || upcoming[0] != "Kontrola kotle (18. 7.)" {
+		t.Errorf("upcoming = %v, want [Kontrola kotle (18. 7.)]", upcoming)
 	}
 
-	upcoming, err := p.Items(ctx, "u1", events.ListDueWithin7d, now)
-	if err != nil {
-		t.Fatalf("due_within_7d: %v", err)
-	}
-	wantUpcoming := "Kontrola kotle (" + czDay(in3) + ")"
-	if len(upcoming) != 1 || upcoming[0] != wantUpcoming {
-		t.Errorf("upcoming = %v, want [%q]", upcoming, wantUpcoming)
-	}
-
-	overdue, err := p.Items(ctx, "u1", events.ListOverdueOpen, now)
-	if err != nil {
-		t.Fatalf("overdue_open: %v", err)
-	}
-	wantOverdue := "Propásnutá revize (" + czDay(ago5) + ")"
-	if len(overdue) != 1 || overdue[0] != wantOverdue {
-		t.Errorf("overdue = %v, want [%q]", overdue, wantOverdue)
+	overdue := items(t, p, events.ListOverdueOpen, at)
+	if len(overdue) != 1 || overdue[0] != "Propásnutá revize (10. 7.)" {
+		t.Errorf("overdue = %v, want [Propásnutá revize (10. 7.)]", overdue)
 	}
 }
 
@@ -143,21 +227,55 @@ func TestEventListsDateTheirItemsOverAMultiDayWindow(t *testing.T) {
 func TestEventListsNameARecurringOverdueReminderOnce(t *testing.T) {
 	f := newFixture(t)
 	p := eventLists(t, f)
-	now := time.Now().In(pragueLoc(t))
+	at := asOfDay(t, "2026-07-15")
 
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Zalít kytky", StartsOn: now.AddDate(0, 0, -28).Format("2006-01-02"),
-		RRule: "FREQ=WEEKLY;INTERVAL=1", ReminderEnabled: true, ReminderLead: "1d",
-	}); err != nil {
-		t.Fatalf("create recurring: %v", err)
-	}
+	mustCreate(t, f, "Zalít kytky", "2026-06-17", "FREQ=WEEKLY;INTERVAL=1", "1d")
 
-	items, err := p.Items(context.Background(), "u1", events.ListOverdueOpen, now)
-	if err != nil {
-		t.Fatalf("overdue_open: %v", err)
+	got := items(t, p, events.ListOverdueOpen, at)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "Zalít kytky") {
+		t.Errorf("items = %v, want the reminder named once", got)
 	}
-	if len(items) != 1 || !strings.HasPrefix(items[0], "Zalít kytky") {
-		t.Errorf("items = %v, want the reminder named once", items)
+}
+
+// A month lead is calendar arithmetic with clamping, so the reminder date of a
+// 31st is the 28th/29th of the month before — the day the widget starts showing
+// it, and so the FIRST day this list names it. It then stays current until its
+// day passes.
+func TestEventListsPripominkyTodayHandlesAClampedMonthLead(t *testing.T) {
+	f := newFixture(t)
+	p := eventLists(t, f)
+
+	mustCreate(t, f, "Odečet vody", "2026-03-31", "FREQ=MONTHLY;INTERVAL=1", "1m")
+
+	if got := items(t, p, events.ListPripominkyToday, asOfDay(t, "2026-02-27")); len(got) != 0 {
+		t.Errorf("items on 27. 2. = %v, want none — the lead has not opened yet", got)
+	}
+	if got := items(t, p, events.ListPripominkyToday, asOfDay(t, "2026-02-28")); len(got) != 1 {
+		t.Errorf("items on 28. 2. = %v, want the 31. 3. occurrence — 31. 3. − 1m clamps to 28. 2.", got)
+	}
+	if got := items(t, p, events.ListPripominkyToday, asOfDay(t, "2026-03-15")); len(got) != 1 {
+		t.Errorf("items on 15. 3. = %v, want the 31. 3. occurrence — still current until its day passes", got)
+	}
+}
+
+// Once a reminder turns overdue it leaves "na dnešek" and belongs to
+// overdue_open — a summary must name each dashboard row exactly once, never
+// the same event twice under two dates (D99).
+func TestEventListsPripominkyTodayExcludesOverdueRows(t *testing.T) {
+	f := newFixture(t)
+	p := eventLists(t, f)
+	at := asOfDay(t, "2026-07-15")
+
+	// Weekly with the 8. 7. occurrence left uncompleted: the widget's one row
+	// for this event is the overdue 8. 7., even though the 22. 7. occurrence's
+	// 1w lead opens today.
+	mustCreate(t, f, "Zalít kytky", "2026-07-08", "FREQ=WEEKLY;INTERVAL=1", "1w")
+
+	if got := items(t, p, events.ListPripominkyToday, at); len(got) != 0 {
+		t.Errorf("pripominky_today = %v, want none — the event's dashboard row is the overdue one", got)
+	}
+	if got := items(t, p, events.ListOverdueOpen, at); len(got) != 1 || got[0] != "Zalít kytky (8. 7.)" {
+		t.Errorf("overdue_open = %v, want [Zalít kytky (8. 7.)]", got)
 	}
 }
 
@@ -169,4 +287,4 @@ func TestEventListsUnknownKey(t *testing.T) {
 }
 
 // czDay renders the "d. M." suffix the list provider appends.
-func czDay(t time.Time) string { return fmt.Sprintf("%d. %d.", t.Day(), int(t.Month())) }
+func czDay(d dates.Date) string { return fmt.Sprintf("%d. %d.", d.D, int(d.M)) }
