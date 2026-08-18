@@ -20,7 +20,7 @@ func pragueLoc(t *testing.T) *time.Location {
 
 func eventMetrics(t *testing.T, f fixture) metrics.Provider {
 	t.Helper()
-	return events.NewModule(f.svc, pragueLoc(t), 30).MetricProvider()
+	return events.NewModule(f.svc, pragueLoc(t), testLookbackDays).MetricProvider()
 }
 
 func TestEventMetricsDescriptors(t *testing.T) {
@@ -48,60 +48,52 @@ func TestEventMetricsDescriptors(t *testing.T) {
 	}
 }
 
+// The "připomínky" counts are the widget's non-overdue rows, like the lists of
+// the same keys and like the dashboard: a připomínka is "na dnešek" while its
+// lead is open and its day has not passed — the rent whose lead opened this
+// morning and the trash due tonight are both today's business (D99).
 func TestEventMetricsReminderCounts(t *testing.T) {
 	f := newFixture(t)
 	p := eventMetrics(t, f)
 	ctx := context.Background()
-	loc := pragueLoc(t)
-	now := time.Now().In(loc)
-	today := now.Format("2006-01-02")
+	at := asOfDay(t, "2026-07-15")
 
-	dueToday, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Zaplatit nájem", StartsOn: today, ReminderEnabled: true, ReminderLead: "1d",
-	})
-	if err != nil {
-		t.Fatalf("create today's event: %v", err)
-	}
-	// A reminder-less event today must not be counted as a reminder.
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{Title: "Bez připomínky", StartsOn: today}); err != nil {
-		t.Fatalf("create reminder-less event: %v", err)
-	}
-	// Something inside the 7-day look-ahead, but not today.
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Kontrola kotle", StartsOn: now.AddDate(0, 0, 3).Format("2006-01-02"),
-	}); err != nil {
-		t.Fatalf("create upcoming event: %v", err)
-	}
+	rent := mustCreate(t, f, "Zaplatit nájem", "2026-07-16", "", "1d") // lead opened today
+	mustCreate(t, f, "Vynést koš", "2026-07-15", "", "1d")             // due today, lead opened yesterday — still current
+	// A reminder-less event must not be counted as a reminder.
+	mustCreate(t, f, "Bez připomínky", "2026-07-16", "", "")
+	// Something inside the 7-day look-ahead, but not a reminder.
+	mustCreate(t, f, "Kontrola kotle", "2026-07-18", "", "")
 
 	value := func(key string) int {
 		t.Helper()
-		v, err := p.Value(ctx, "u1", key, now)
+		v, err := p.Value(ctx, "u1", key, at)
 		if err != nil {
 			t.Fatalf("%s: %v", key, err)
 		}
 		return v
 	}
 
-	if got := value(events.MetricPripominkyToday); got != 1 {
-		t.Errorf("pripominky_today = %d, want 1 (only the reminder-enabled event)", got)
+	if got := value(events.MetricPripominkyToday); got != 2 {
+		t.Errorf("pripominky_today = %d, want 2 (both current reminders)", got)
 	}
-	if got := value(events.MetricPripominkyTodayOpen); got != 1 {
-		t.Errorf("pripominky_today_open = %d before completion, want 1", got)
+	if got := value(events.MetricPripominkyTodayOpen); got != 2 {
+		t.Errorf("pripominky_today_open = %d before completion, want 2", got)
 	}
-	if got := value(events.MetricDueWithin7d); got != 3 {
-		t.Errorf("due_within_7d = %d, want 3 (both of today's plus the one in 3 days)", got)
+	if got := value(events.MetricDueWithin7d); got != 4 {
+		t.Errorf("due_within_7d = %d, want 4 — the look-ahead is about event dates, reminder or not", got)
 	}
 
 	// Completion is shared: one member marking it done clears it for everyone.
-	if _, err := f.svc.Complete(f.ctx, dueToday.ID, today, ""); err != nil {
+	if _, err := f.svc.Complete(f.ctx, rent.ID, "2026-07-16", ""); err != nil {
 		t.Fatalf("complete occurrence: %v", err)
 	}
 
-	if got := value(events.MetricPripominkyTodayOpen); got != 0 {
-		t.Errorf("pripominky_today_open = %d after completion, want 0", got)
+	if got := value(events.MetricPripominkyTodayOpen); got != 1 {
+		t.Errorf("pripominky_today_open = %d after completion, want 1 (only the trash is left)", got)
 	}
-	if got := value(events.MetricPripominkyToday); got != 1 {
-		t.Errorf("pripominky_today = %d after completion, want 1 (it is still due today)", got)
+	if got := value(events.MetricPripominkyToday); got != 2 {
+		t.Errorf("pripominky_today = %d after completion, want 2 (completing one does not unsay it was today's)", got)
 	}
 }
 
@@ -133,17 +125,12 @@ func TestEventMetricsAreIdenticalForEveryRecipient(t *testing.T) {
 	f := newFixture(t)
 	p := eventMetrics(t, f)
 	ctx := context.Background()
-	now := time.Now().In(pragueLoc(t))
+	at := asOfDay(t, "2026-07-15")
 
-	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
-		Title: "Společná připomínka", StartsOn: now.Format("2006-01-02"),
-		ReminderEnabled: true, ReminderLead: "1d",
-	}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	mustCreate(t, f, "Společná připomínka", "2026-07-16", "", "1d")
 
-	karel, _ := p.Value(ctx, "karel", events.MetricPripominkyTodayOpen, now)
-	eva, _ := p.Value(ctx, "eva", events.MetricPripominkyTodayOpen, now)
+	karel, _ := p.Value(ctx, "karel", events.MetricPripominkyTodayOpen, at)
+	eva, _ := p.Value(ctx, "eva", events.MetricPripominkyTodayOpen, at)
 	if karel != eva || karel != 1 {
 		t.Errorf("household metric differed per user: karel=%d eva=%d, want 1 for both", karel, eva)
 	}
