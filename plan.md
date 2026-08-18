@@ -59,6 +59,36 @@
 - [x] **Phase 6** *(v3)* — `notes` (Poznámky) — backend ✅ + Poznámky frontend ✅ (tree, slug paths, Markdown editor, two-scope pins, `notes.pripnute` widget)
 - [x] **Phase 7** *(v4)* — `documents` (Dokumenty) — backend ✅ + Dokumenty frontend ✅ (see the phase section below)
 - [~] **Phase 8** *(v5)* — `admin` (Administrace) + `platform/push` + `platform/scheduler` + `platform/pwa` — **backend ✅ + frontend ✅**; remaining: Playwright/axe pass and the live deploy (VAPID secrets, real icons)
+- [~] **Phase 9** *(v6)* — `finance` (Finance) + the `fin` migration — **backend ✅ + frontend ✅**; remaining: **the retirement runbook** (deploy → verify against live `fin` → switch `fin` off), which is Karel's, not the build's
+
+---
+
+## Phase 9 — v6: Finance (`finance`) + the `fin` retirement — **backend ✅ + frontend ✅**
+
+> **Build status (2026-08-17).** The eighth module is implemented and green:
+> `go build ./...` + `go test ./...` (incl. `internal/arch`), `tsc -b`, `vite
+> build`, and Vitest (62, of which 21 are Finance's). A real boot with
+> `HOME_DEV_AUTH_BYPASS=true` applied the seed (15 months, `2025-06`…`2026-08`),
+> served them at `/api/finance/months` with **split values identical to live
+> `fin`'s**, and walked the whole module in the browser at 1440 px and 375 px:
+> add through the real form, expand the flow viz, PATCH the rates, delete, and
+> the widget flipping between "Zadat srpen 2026" and the recorded numbers.
+>
+> **Not done here, deliberately:** nothing is committed, nothing is deployed, and
+> **no step of the `fin` retirement has been taken**. See `handoff/v6/HANDOFF-8-finance.md`
+> §13 — steps 1–2 (export, seed) and step 6 (document recovery into
+> `services/fin/`) were already done before this build; steps 3–5 are live ops.
+
+**What was built**
+
+1. **The locked split first** (`split.go` + `split_test.go`) — ported verbatim, rounding order intact: personal rounds first, savings round off the total, `needs` is the subtraction that absorbs the error. Tests: the worked example, six invariants over 11 fixtures, a 20 000-case property test, odd-money cases, and **both** forms of the negative-`needs` edge case asserting nothing clamps it. Plus `TestComputeMatchesFinLiveExport`, which runs the port over the committed 15-row `fin` export and matches all nine split values per month — the D97 comparison, at build time.
+2. **`09001_finance.sql`** — one table, `fin`'s literal column vocabulary, the table-level rate-sum CHECK kept so a bad *seed* row fails loudly at migration time, plain `UNIQUE(month)` (hard delete leaves nothing for a partial index to exclude).
+3. **store / service / http** — split composed in Go on read and never in a query; `WithTx` + audit-in-tx + notify-after-commit; 422/409 validation with Czech messages; **`month.delete` writes a full-row diff** (verified live: all seven fields with their last values).
+4. **Registration** — widget `finance.rozpocet` (two states), four household metrics, the `finance.missing_months` list sharing the metric's key *and its computation*, three audit actions. Verified live in all four catalogs.
+5. **The seed as its own migration source** (`finance/seed`, block 09900) with `MigrationSourcesWithSeed()` used **only** by `cmd/home`. A test asserts a fresh `testsupport.NewDB()` holds **zero** months and a `MigrationFSWithSeed()` database holds **15**.
+6. **Frontend** — Path A palette (`--fin-*` aliases, no new colour values), the year-grouped month list with the allocation bar, the three-stage flow visualisation (columns on desktop, stacked bands at 375 px), the form with a running remainder and a live preview, the permanent-delete confirm, and the widget.
+
+**The four host-side maps that are not registry-driven** (each silently no-ops if skipped) are all updated: `admin/listener.go`'s `inAppURL` → `/finance`, `platform/widgets/registry.tsx`, `AppShell`'s `OVERFLOW` (no `adminOnly`), and the Log's `MODULES` array — which also gained the `admin` and `platform` entries it had been missing since v5.
 
 ---
 

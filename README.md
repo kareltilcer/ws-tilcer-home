@@ -1,11 +1,11 @@
 # home — household management (`home.tilcer.cz`)
 
 A Czech-language household-management SPA over a Go + embedded-SQLite backend,
-and the second consumer of the shared `auth` service. **v2** — a compile-time
+and the second consumer of the shared `auth` service. A compile-time
 **modular monolith**: each module owns its routes, migrations, audit actions, and
 dashboard widgets, wired through a central registry (`internal/platform`,
 `internal/modules/*`). Auth is **Mode B**: home hosts its own login and owns its
-session (no JWT in the browser). Four modules, all built around a central
+session (no JWT in the browser). **Eight modules**, all built around a central
 audit-logging spine:
 
 - **Nástěnka** (`dashboard`) — landing page: a per-user **widget host** that
@@ -13,6 +13,16 @@ audit-logging spine:
 - **Úkoly** (`todo`) — a Trello-style board; contributes the *Právě dělám* widget.
 - **Okno do budoucnosti** (`events`) — all-day, optionally recurring reminders;
   contributes the *Připomínky* and *Tento měsíc* widgets.
+- **Poznámky** (`notes`, v3) — Markdown notes in a folder tree with slug-path
+  URLs, two-scope pinning and inline image upload; contributes *Připnuté poznámky*.
+- **Dokumenty** (`documents`, v4) — files in a folder tree, bytes in a dedicated
+  R2 bucket, previews and permanent `/d/{id}` links; contributes *Připnuté dokumenty*.
+- **Administrace** (`admin`, v5) — admin-only Web Push: broadcasts, audit-key
+  trigger rules and scheduled summaries; plus the installable, reads-offline PWA.
+- **Finance** (`finance`, v6) — the household's monthly income split into personal
+  accounts, the joint operational account and two savings pots, **derived on read**
+  by a locked formula; contributes *Rozpočet měsíce*. A clone of the standalone
+  `fin` service, which v6 retires. **No new environment variable.**
 - **Log** (`logging`) — admin-only audit browser over the logging spine.
 
 Deployed on Coolify as **two apps sharing one origin** (`home.tilcer.cz`),

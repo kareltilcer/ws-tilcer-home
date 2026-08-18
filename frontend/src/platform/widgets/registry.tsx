@@ -4,6 +4,7 @@ import { PripominkyWidget } from '@/modules/events/widgets/PripominkyWidget'
 import { TentoMesicWidget } from '@/modules/events/widgets/TentoMesicWidget'
 import { PripnuteWidget } from '@/modules/notes/widgets/PripnuteWidget'
 import { PripnuteDokumentyWidget } from '@/modules/documents/widgets/PripnuteDokumentyWidget'
+import { RozpocetWidget } from '@/modules/finance/widgets/RozpocetWidget'
 import type { WidgetComponentProps } from './shared'
 
 export type { WidgetComponentProps } from './shared'
@@ -18,4 +19,5 @@ export const widgetRegistry: Record<string, ComponentType<WidgetComponentProps>>
   'events.tento-mesic': TentoMesicWidget,
   'notes.pripnute': PripnuteWidget,
   'documents.pripnute': PripnuteDokumentyWidget,
+  'finance.rozpocet': RozpocetWidget,
 }

@@ -13,6 +13,9 @@ export const routes = {
   // Nastavení is for everyone (it holds the per-device notification panel).
   administrace: '/administrace',
   nastaveni: '/nastaveni',
+  // v6: Finance is an ordinary all-roles destination in the "Více" overflow — a
+  // once-a-month screen does not earn one of the four thumb tabs (D84).
+  finance: '/finance',
 } as const
 
 // There is deliberately no permalink helper here: /d/{id} (D42) is minted by the

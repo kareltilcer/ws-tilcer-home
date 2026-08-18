@@ -22,6 +22,9 @@ import type {
   EventLink,
   EventSeriesPage,
   EventWithLinks,
+  FinanceMonth,
+  FinanceMonthInput,
+  FinanceMonthPage,
   Folder,
   FolderDetail,
   Label,
@@ -377,3 +380,19 @@ export interface DeliveryFilters {
 }
 export const listDeliveries = (f: DeliveryFilters = {}) =>
   apiFetch<NotificationDeliveryPage>(`${adminBase}/deliveries${qs(f as Record<string, string>)}`)
+
+// ---- Finance (v6) ----
+//
+// Reads are open to every member, `reader` included (D84); writes and the
+// PERMANENT delete take the ordinary editor/admin gate server-side.
+
+export const listFinanceMonths = (params: { limit?: number; cursor?: string } = {}) =>
+  apiFetch<FinanceMonthPage>(`/api/finance/months${qs(params)}`)
+export const getFinanceMonth = (id: string) => apiFetch<FinanceMonth>(`/api/finance/months/${id}`)
+export const createFinanceMonth = (body: FinanceMonthInput) =>
+  apiFetch<FinanceMonth>('/api/finance/months', { method: 'POST', body })
+export const updateFinanceMonth = (id: string, body: Partial<FinanceMonthInput>) =>
+  apiFetch<FinanceMonth>(`/api/finance/months/${id}`, { method: 'PATCH', body })
+/** Removes the row outright — there is no archive and no restore (D87). */
+export const deleteFinanceMonth = (id: string) =>
+  apiFetch<void>(`/api/finance/months/${id}`, { method: 'DELETE' })

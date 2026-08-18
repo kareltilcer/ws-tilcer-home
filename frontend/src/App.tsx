@@ -13,6 +13,7 @@ import { OknoPage } from '@/routes/okno/OknoPage'
 import { PoznamkyPage } from '@/routes/poznamky/PoznamkyPage'
 import { DokumentyPage } from '@/routes/dokumenty/DokumentyPage'
 import { DocumentPermalinkPage } from '@/routes/dokumenty/DocumentPermalinkPage'
+import { FinancePage } from '@/routes/finance/FinancePage'
 import { LogPage } from '@/routes/log/LogPage'
 import { AdministracePage } from '@/modules/admin/AdministracePage'
 import { NastaveniPage } from '@/platform/settings/NastaveniPage'
@@ -45,6 +46,9 @@ export default function App() {
                     PERMANENT id-based link, which survives renames and moves (D42). */}
                 <Route path={`${routes.dokumenty}/*`} element={<DokumentyPage />} />
                 <Route path="/d/:id" element={<DocumentPermalinkPage />} />
+                {/* v6: Finance is an ordinary all-roles route — no RequireAdmin.
+                    A reader sees the whole module and can change none of it. */}
+                <Route path={routes.finance} element={<FinancePage />} />
                 <Route
                   path={routes.log}
                   element={

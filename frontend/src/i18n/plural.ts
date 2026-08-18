@@ -37,4 +37,7 @@ export const PLURAL = {
   rules: ['pravidlo', 'pravidla', 'pravidel'],
   summaries: ['souhrn', 'souhrny', 'souhrnů'],
   seconds: ['sekunda', 'sekundy', 'sekund'],
+  // v6 — Finance counts months, everywhere from the list header to the missing-
+  // months prompt.
+  months: ['měsíc', 'měsíce', 'měsíců'],
 } satisfies Record<string, PluralForms>

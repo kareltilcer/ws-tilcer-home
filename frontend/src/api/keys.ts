@@ -33,4 +33,9 @@ export const qk = {
   adminSchedules: ['admin', 'schedules'] as const,
   adminCatalog: ['admin', 'catalog'] as const,
   adminDeliveries: (filters?: unknown) => ['admin', 'deliveries', filters ?? {}] as const,
+
+  // v6 — finance. A few dozen rows fetched in one page, so there is no per-month
+  // query: the list IS the cache, and a mutation invalidates it plus `dashboard`
+  // (which carries the Rozpočet widget's payload).
+  financeMonths: ['finance', 'months'] as const,
 }

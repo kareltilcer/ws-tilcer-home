@@ -59,6 +59,11 @@ var actionLabels = map[string]string{
 	"documents.document_folder.move":   "Když někdo přesune složku dokumentů",
 	"documents.document_folder.delete": "Když někdo smaže složku dokumentů",
 
+	// finance (Finance)
+	"finance.month.create": "Když někdo zadá měsíc do Financí",
+	"finance.month.update": "Když někdo upraví měsíc ve Financích",
+	"finance.month.delete": "Když někdo trvale smaže měsíc z Financí",
+
 	// platform
 	"platform.login":            "Když se někdo přihlásí",
 	"platform.logout":           "Když se někdo odhlásí",

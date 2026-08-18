@@ -26,6 +26,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
@@ -73,7 +74,11 @@ func run(logger *slog.Logger) error {
 	}
 	defer func() { _ = sqldb.Close() }()
 
-	migFS, err := bootstrap.MigrationFS()
+	// WithSeed: the server — and only the server — also applies the one-off
+	// migration carrying `fin`'s historic months (v6, D91). It is INSERT OR
+	// IGNORE, so it is a no-op on every boot after the first. Tests migrate the
+	// schema-only bootstrap.MigrationFS().
+	migFS, err := bootstrap.MigrationFSWithSeed()
 	if err != nil {
 		return err
 	}
@@ -192,6 +197,12 @@ func run(logger *slog.Logger) error {
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)
 
+	// finance (v6) is the simplest module here: one table, no blob store, no
+	// scheduler, no external call, no config of its own. It replaces the
+	// standalone `fin` service, whose historic months arrive through the seed
+	// migration source applied above.
+	financeSvc := finance.NewService(sqldb, sink, notify)
+
 	// documents (v4) is the first module with bytes outside SQLite: it needs an object
 	// store, an async preview worker, and — because Litestream cannot back up a blob
 	// bucket — its own mirror/reconciliation job (D45).
@@ -232,10 +243,11 @@ func run(logger *slog.Logger) error {
 	eventsMod := events.NewModule(eventsSvc, cfg.Timezone, cfg.DashboardLookbackDays)
 	notesMod := notes.NewModule(notesSvc)
 	docsMod := documents.NewModule(docsSvc)
+	financeMod := finance.NewModule(financeSvc, cfg.Timezone)
 
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
-	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod}))
+	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod}))
 	if err != nil {
 		return err
 	}
@@ -244,8 +256,8 @@ func run(logger *slog.Logger) error {
 	// 5b. v5: the metrics catalog — the THIRD registered catalog, beside widgets
 	// and audit actions. Modules publish counts; the admin module's summaries
 	// reference them by key and never touch a feature table (D59/D28).
-	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, dashMod}
-	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod)
+	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, dashMod}
+	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod)
 	if err != nil {
 		return err
 	}
@@ -253,7 +265,7 @@ func run(logger *slog.Logger) error {
 	// behind those counts, so a summary can name today's reminders instead of
 	// only counting them. Collected the same way, read through the same kind of
 	// registry, so admin still imports no feature module.
-	listRegistry, err := lists.Collect(todoMod, eventsMod, notesMod, docsMod)
+	listRegistry, err := lists.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod)
 	if err != nil {
 		return err
 	}
