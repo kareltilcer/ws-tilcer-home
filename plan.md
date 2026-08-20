@@ -1,5 +1,61 @@
 # Implementation Plan — `home` (household management service)
 
+> ## v7 status (2026-08-19) — Zahrada (`garden`), the ninth module
+>
+> **Built on branch `v7-garden`; backend and frontend both green, not yet
+> deployed.** Eleven tables at migration block **10**, 34 routes, and the four
+> pure functions the rest of the module is a consumer of: `timing.go` (anchored
+> windows + the ISO week-53 clamp), `resolve.go` (species→variety through ONE
+> shared `PlantCore`, so the mirror is structural rather than hand-maintained),
+> `occupancy.go` (the derived window every bed-level rule joins on), and
+> `check.go` (C1–C11, pure over a loaded `Snapshot`). `generate.go` carries the
+> regeneration guard: one `mutable()` predicate, tombstones for deleted generated
+> tasks, and `is_edited` as a permanent exemption (D110).
+>
+> **Citizenship:** the `garden.prace` widget (all roles, both states), **six
+> metrics + six lists** (four mirrored through one selection function so a count
+> and its list cannot disagree, plus the two list-only keys), and 31 audit
+> actions including the system-written `garden.frost_warning`.
+>
+> **The module sends no push and holds no bytes** — `internal/arch`'s
+> `TestForbiddenPlatformImports` fails the build on an import of
+> `platform/push` or `platform/blobstore`, and was verified to fail on a
+> deliberate violation. The frost alert is composed entirely in Administrace over
+> the published metric, list and audit event.
+>
+> **Platform edits (five files):** `audit.ModuleGarden`; a generic
+> `scheduler.RegisterJob(name, every, fn)` on the existing Prague-local ticker
+> (the version's only platform addition, and the reason the weather poll is not a
+> second ad-hoc ticker inside a feature module); `bootstrap` migration sources;
+> `config.GardenConfig` (three vars, all defaulted); `admin/listener.go`'s
+> `inAppURL` → `/zahrada`. The four **non-registry host maps** are all updated:
+> `platform/widgets/registry.tsx`, `AppShell.OVERFLOW`, the Log browser's
+> `MODULES`, and `inAppURL`.
+>
+> **Seed:** 82 built-in rules (15 family break-years, 3 family pairs, 64 sourced
+> Czech companion pairs) in `garden/seed`, a PRODUCTION-ONLY migration source at
+> block 10900. `TestSeedExcludedFromTestDB` asserts a fresh `testsupport.NewDB()`
+> has **zero** `garden_rules`, which is what keeps a check fixture from passing
+> because a seeded rule matched. Built-in plant pairs reference crops by
+> `name_cs` (they ship before any crop exists) and the store resolves them to ids
+> at load, dropping rules for crops this garden does not grow.
+>
+> **Frontend:** `src/modules/garden/` — eight routes behind one "Více" entry with
+> an in-page tab strip (the precedent for the next multi-screen module), the
+> pick-then-place crop picker, the timing-window control with its live
+> resolved-date echo, the Kontrola plánu panel (severity as icon **and** word,
+> dismissal with a note, and the `no_history` state rendered as an honest
+> limitation rather than a pass), the occupancy strip, the prompt→preview→apply
+> import with its field-level diff, and both print targets.
+>
+> **Verified end to end** against a fresh database: migrations apply, the seed
+> lands, task generation produces twelve Czech-titled jobs from two plantings,
+> the check fires C1 (from a *seeded* rule), C4, C6 and C7 while reporting
+> `no_history` for C3/C8, and the widget renders both states on Nástěnka.
+>
+> **Remaining:** the "as built" sections in `handoff/v7/PRD.md` §V7 and
+> `CHANGELOG.md`, `REGISTRY.md`, and deployment.
+
 > ## v2 status (2026-07-26) — modular monolith + Mode B + widget host
 >
 > **v2 is implemented on the backend (fully green) and the frontend (builds +

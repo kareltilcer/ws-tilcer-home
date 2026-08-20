@@ -24,6 +24,7 @@ const (
 	ModuleDashboard = "dashboard"
 	ModuleAdmin     = "admin"
 	ModuleFinance   = "finance"
+	ModuleGarden    = "garden"
 )
 
 // PlatformActions are the action verbs emitted by platform/ packages. They are
@@ -86,3 +87,16 @@ type Change struct {
 
 // Ptr is a small helper for building Change values from string literals.
 func Ptr(s string) *string { return &s }
+
+// Exists reports whether an event with this module/action/entity id was already
+// recorded. It lives HERE so audit_events stays this package's contract: a
+// module that needs write-once semantics (garden's one-warning-per-frost-night)
+// asks the spine rather than querying the table itself — the same boundary
+// Record enforces on the write side.
+func Exists(ctx context.Context, tx *sql.Tx, module, action, entityID string) (bool, error) {
+	var n int
+	err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_events WHERE module = ? AND action = ? AND entity_id = ?`,
+		module, action, entityID).Scan(&n)
+	return n > 0, err
+}

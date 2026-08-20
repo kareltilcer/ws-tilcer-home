@@ -108,6 +108,37 @@ type Config struct {
 	// Notif is the v5 notification configuration: the shared Web Push channel
 	// (VAPID) and the wall-clock scheduler that fires summary notifications.
 	Notif NotifConfig
+
+	// Garden is the v7 garden module's configuration: the outbound forecast, and
+	// nothing else. The module runs with none of these set.
+	Garden GardenConfig
+}
+
+// GardenConfig configures the ONE external dependency v7 adds (PRD §V7-9).
+//
+// Every field has a working default, and the module degrades to manual frost
+// dates with no user-visible error when the fetch is off or fails — a forecast
+// that did not load is not something anyone can act on (D112).
+//
+// NOTE WHAT IS NOT HERE: latitude, longitude and altitude. They live in
+// garden_settings next to the frost dates they serve (D112) because they are
+// user data rather than secrets, and a typo should not need a redeploy. Nor is
+// there any notification setting — audience, timing and channels are all
+// Administrace's (D113).
+type GardenConfig struct {
+	// WeatherEnabled is the master switch. false ⇒ manual frost dates only; the
+	// metric resolves to "no data" and any condition gating on it stays silent.
+	WeatherEnabled bool
+	// WeatherURL is the forecast endpoint. Overridable for testing or if the
+	// provider changes.
+	WeatherURL string
+	// WeatherPollHours is the poll interval, 1–24.
+	WeatherPollHours int
+	// ImportMaxBytes caps the pasted LLM JSON. It is untrusted input from a
+	// language model, so the size limit is the first of four defences (the others
+	// are schema validation, explicit enum mapping, and applying only after a
+	// preview).
+	ImportMaxBytes int64
 }
 
 // NotifConfig configures the v5 push channel, the trigger notifier, and the
@@ -469,6 +500,7 @@ func Load(getenv Getenv) (*Config, error) {
 
 	c.Docs = l.docs(c)
 	c.Notif = l.notif()
+	c.Garden = l.garden()
 
 	// Security hard-stop: the dev bypass must never be active in production.
 	if c.DevAuthBypass && c.IsProduction() {
@@ -763,4 +795,30 @@ func (l *loader) csvDefault(key string, def []string) []string {
 		return def
 	}
 	return out
+}
+
+// defaultGardenWeatherURL is Open-Meteo's forecast endpoint: free, keyless and
+// with no account, which is why it is the default rather than a required var.
+const (
+	defaultGardenWeatherURL     = "https://api.open-meteo.com/v1/forecast"
+	defaultGardenWeatherPoll    = 12
+	defaultGardenImportMaxBytes = 1 << 20 // 1 MiB of pasted JSON is ~200 crops
+)
+
+// garden loads the v7 garden configuration (PRD §V7-9). Every value has a
+// working default, so the module runs with none of these set — the forecast is
+// simply the one part of it that can be turned off.
+func (l *loader) garden() GardenConfig {
+	g := GardenConfig{
+		WeatherEnabled:   l.boolDefault("HOME_GARDEN_WEATHER_ENABLED", true),
+		WeatherURL:       l.strDefault("HOME_GARDEN_WEATHER_URL", defaultGardenWeatherURL),
+		WeatherPollHours: l.intDefault("HOME_GARDEN_WEATHER_POLL_HOURS", defaultGardenWeatherPoll),
+		ImportMaxBytes:   defaultGardenImportMaxBytes,
+	}
+	// Clamped rather than rejected: a bad poll interval should not stop the
+	// service booting over a feature that is allowed to be absent entirely.
+	if g.WeatherPollHours < 1 || g.WeatherPollHours > 24 {
+		g.WeatherPollHours = defaultGardenWeatherPoll
+	}
+	return g
 }

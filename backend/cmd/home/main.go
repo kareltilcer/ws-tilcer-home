@@ -27,6 +27,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/garden"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
@@ -203,6 +204,19 @@ func run(logger *slog.Logger) error {
 	// migration source applied above.
 	financeSvc := finance.NewService(sqldb, sink, notify)
 
+	// garden (v7) is the largest module here — eleven tables — but it wires in
+	// like any other: no blob store, no push, no new platform strand. Its ONE
+	// external dependency is a public forecast, polled through the scheduler hook
+	// registered below, and it is soft: every failure is logged and swallowed.
+	gardenSvc := garden.NewService(sqldb, sink, notify, garden.Options{
+		Location:       cfg.Timezone,
+		WeatherEnabled: cfg.Garden.WeatherEnabled,
+		WeatherURL:     cfg.Garden.WeatherURL,
+		WeatherPoll:    time.Duration(cfg.Garden.WeatherPollHours) * time.Hour,
+		ImportMaxBytes: cfg.Garden.ImportMaxBytes,
+		Logger:         logger,
+	})
+
 	// documents (v4) is the first module with bytes outside SQLite: it needs an object
 	// store, an async preview worker, and — because Litestream cannot back up a blob
 	// bucket — its own mirror/reconciliation job (D45).
@@ -244,10 +258,11 @@ func run(logger *slog.Logger) error {
 	notesMod := notes.NewModule(notesSvc)
 	docsMod := documents.NewModule(docsSvc)
 	financeMod := finance.NewModule(financeSvc, cfg.Timezone)
+	gardenMod := garden.NewModule(gardenSvc)
 
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
-	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod}))
+	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod}))
 	if err != nil {
 		return err
 	}
@@ -256,8 +271,8 @@ func run(logger *slog.Logger) error {
 	// 5b. v5: the metrics catalog — the THIRD registered catalog, beside widgets
 	// and audit actions. Modules publish counts; the admin module's summaries
 	// reference them by key and never touch a feature table (D59/D28).
-	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, dashMod}
-	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod)
+	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, dashMod}
+	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod)
 	if err != nil {
 		return err
 	}
@@ -265,7 +280,7 @@ func run(logger *slog.Logger) error {
 	// behind those counts, so a summary can name today's reminders instead of
 	// only counting them. Collected the same way, read through the same kind of
 	// registry, so admin still imports no feature module.
-	listRegistry, err := lists.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod)
+	listRegistry, err := lists.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod)
 	if err != nil {
 		return err
 	}
@@ -321,12 +336,29 @@ func run(logger *slog.Logger) error {
 	sink.SetNudge(notifier.Nudge)
 	notifier.Start(bgCtx)
 
-	scheduler.New(adminSvc.Store(), adminSvc.FireSchedule, scheduler.Config{
+	sched := scheduler.New(adminSvc.Store(), adminSvc.FireSchedule, scheduler.Config{
 		Location:     cfg.Timezone,
 		Tick:         cfg.Notif.SchedTick,
 		CatchupGrace: cfg.Notif.CatchupGrace,
 		Logger:       logger,
-	}).Start(bgCtx)
+	})
+	// v7's ONE platform edit: the garden's forecast poll rides the existing
+	// ticker rather than starting a second one inside a feature module — which is
+	// precisely what this package was created to avoid. The job is soft: every
+	// failure is logged and swallowed, and the module degrades to manual frost
+	// dates with nothing user-visible (D112).
+	//
+	// The module sends NO push. It writes one `garden.frost_warning` audit event
+	// whose Czech summary already reads as a finished notification, and publishes
+	// garden.frost_risk_tonight / garden.frost_sensitive_now. Whether that becomes
+	// a scheduled summary or a trigger rule is chosen in Administrace at runtime
+	// (D113) — both work on day one because the module publishes for both.
+	if cfg.Garden.WeatherEnabled {
+		sched.RegisterJob("garden.weather", time.Duration(cfg.Garden.WeatherPollHours)*time.Hour, gardenSvc.WeatherJob)
+	} else {
+		logger.Info("garden: weather poll disabled (HOME_GARDEN_WEATHER_ENABLED=false) — manual frost dates only")
+	}
+	sched.Start(bgCtx)
 
 	// Deliveries are operational, not audit (D64): prune them on boot, the same
 	// way the audit retention pass runs, so a long-lived household does not

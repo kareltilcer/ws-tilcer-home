@@ -11,6 +11,7 @@ import {
   Moon,
   NotebookText,
   ScrollText,
+  Sprout,
   Settings,
   Sun,
   Wallet,
@@ -54,9 +55,14 @@ const PRIMARY: NavItem[] = [
 // v6 extends it once more: Finance sits beside Dokumenty with NO admin gate
 // (D84). It is a once-a-month destination, so it does not earn one of the four
 // thumb tabs — but every member sees it, unlike Log and Administrace.
+//
+// v7 extends it once more: Zahrada, also with NO admin gate — but unlike every
+// other module it is a doorway to eight sub-pages rather than one screen, so the
+// entry lands on Přehled and the module's own tab strip takes over from there.
 const OVERFLOW: NavItem[] = [
   { to: routes.dokumenty, label: cs.nav.dokumenty, icon: Files, desc: cs.nav.dokumentyDesc },
   { to: routes.finance, label: cs.nav.finance, icon: Wallet, desc: cs.nav.financeDesc },
+  { to: routes.zahrada, label: cs.nav.zahrada, icon: Sprout, desc: cs.nav.zahradaDesc },
   { to: routes.log, label: cs.nav.log, icon: ScrollText, desc: cs.nav.logDesc, adminOnly: true },
   { to: routes.administrace, label: cs.admin.title, icon: Megaphone, desc: cs.admin.navDesc, adminOnly: true },
   { to: routes.nastaveni, label: cs.settings.title, icon: Settings, desc: cs.settings.subtitle },

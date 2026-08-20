@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -909,7 +910,17 @@ func (s *Service) conditionsSatisfied(ctx context.Context, rc *RenderContext, c 
 			// a stored op this build no longer knows (rollback, mixed deploy)
 			s.logger.Warn("admin: unknown condition op, treating clause as met",
 				"op", it.Op, "key", it.Key, "target", what)
-		} else if v, err := s.conditionValue(ctx, rc, userID, it.Key, printsList); err != nil {
+		} else if v, err := s.conditionValue(ctx, rc, userID, it.Key, printsList); errors.Is(err, metrics.ErrNoData) {
+			// "No reading" is a KNOWN state, not a transient failure: a clause on
+			// missing data is simply not met, so a frost gate stays silent rather
+			// than firing on absent data. Said out loud, though — in all-mode this
+			// clause suppresses the WHOLE summary, and a permanently dataless key
+			// (weather turned off, coordinates never set) would otherwise kill it
+			// forever with nothing in the log to find.
+			s.logger.Warn("admin: condition has no data, treating clause as not met",
+				"key", it.Key, "target", what)
+			met = false
+		} else if err != nil {
 			s.logger.Warn("admin: condition resolve failed, treating clause as met",
 				"err", err, "key", it.Key, "target", what)
 		} else {
@@ -1021,7 +1032,12 @@ func (s *Service) resolveInto(ctx context.Context, rc *RenderContext, titleTmpl,
 		}
 		v, err := s.metrics.Resolve(ctx, userID, key, rc.Now)
 		if err != nil {
-			s.logger.Warn("admin: metric resolve failed", "err", err, "metric", key, "target", what)
+			// ErrNoData is a normal state (an unfetched forecast), not a failure
+			// worth a warning — but both degrade the token to the placeholder,
+			// never to a number.
+			if !errors.Is(err, metrics.ErrNoData) {
+				s.logger.Warn("admin: metric resolve failed", "err", err, "metric", key, "target", what)
+			}
 			continue // leaves the token unresolved ⇒ rendered as the placeholder
 		}
 		rc.Metrics[key] = v
