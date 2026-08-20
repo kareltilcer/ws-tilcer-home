@@ -19,6 +19,25 @@ export function fmtDateISO(iso: string): string {
   return `${d}. ${m}. ${y}`
 }
 
+/** todayISO returns a LOCAL calendar date as 'yyyy-MM-dd', optionally shifted by
+ *  a whole number of days.
+ *
+ *  Use this and never `new Date().toISOString().slice(0, 10)`, which yields the
+ *  UTC date: for the first one or two hours after local midnight in
+ *  Europe/Prague that is the PREVIOUS day. Every backend module derives "today"
+ *  in the configured timezone, so a UTC-derived bound sent to it disagrees with
+ *  the server's own answer for those hours — and a UTC-derived default stamps
+ *  user-entered records with yesterday's date.
+ *
+ *  The shift goes through setDate, so month ends and DST transitions land on the
+ *  calendar day a person would name. */
+export function todayISO(offsetDays = 0): string {
+  const d = new Date()
+  if (offsetDays !== 0) d.setDate(d.getDate() + offsetDays)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 /** fmtDateTime renders an RFC3339 timestamp as `d. M. yyyy HH:mm` (24-hour). */
 export function fmtDateTime(iso: string): string {
   const d = new Date(iso)

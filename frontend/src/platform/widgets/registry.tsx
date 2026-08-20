@@ -5,6 +5,7 @@ import { TentoMesicWidget } from '@/modules/events/widgets/TentoMesicWidget'
 import { PripnuteWidget } from '@/modules/notes/widgets/PripnuteWidget'
 import { PripnuteDokumentyWidget } from '@/modules/documents/widgets/PripnuteDokumentyWidget'
 import { RozpocetWidget } from '@/modules/finance/widgets/RozpocetWidget'
+import { PraceWidget } from '@/modules/garden/widgets/PraceWidget'
 import type { WidgetComponentProps } from './shared'
 
 export type { WidgetComponentProps } from './shared'
@@ -20,4 +21,7 @@ export const widgetRegistry: Record<string, ComponentType<WidgetComponentProps>>
   'notes.pripnute': PripnuteWidget,
   'documents.pripnute': PripnuteDokumentyWidget,
   'finance.rozpocet': RozpocetWidget,
+  // v7: the garden's ONLY widget (D123). Harvest surfaces inside it as a
+  // `harvest` task rather than as a second card.
+  'garden.prace': PraceWidget,
 }

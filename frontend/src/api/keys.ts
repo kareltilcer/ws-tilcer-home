@@ -38,4 +38,28 @@ export const qk = {
   // query: the list IS the cache, and a mutation invalidates it plus `dashboard`
   // (which carries the Rozpočet widget's payload).
   financeMonths: ['finance', 'months'] as const,
+
+  // v7 — garden. Every key sits under the one `garden` prefix so a websocket
+  // push can invalidate the whole module in one call, and so the three caches a
+  // planting change affects — the plan, its CHECK and the tasks — always move
+  // together. A stale check is worse than no check.
+  gardenBeds: (includeInactive?: boolean) => ['garden', 'beds', includeInactive ?? false] as const,
+  gardenBedHistory: (id: string) => ['garden', 'beds', id, 'history'] as const,
+  gardenSeasons: ['garden', 'seasons'] as const,
+  gardenSeason: (year: number) => ['garden', 'season', year] as const,
+  gardenCheck: (year: number) => ['garden', 'check', year] as const,
+  gardenPlantings: (filters?: unknown) => ['garden', 'plantings', filters ?? {}] as const,
+  gardenPlanting: (id: string) => ['garden', 'planting', id] as const,
+  gardenPlants: (filters?: unknown) => ['garden', 'plants', filters ?? {}] as const,
+  gardenPlant: (id: string) => ['garden', 'plant', id] as const,
+  gardenVarieties: (plantId: string) => ['garden', 'varieties', plantId] as const,
+  gardenTasks: (filters?: unknown) => ['garden', 'tasks', filters ?? {}] as const,
+  gardenHarvests: (filters?: unknown) => ['garden', 'harvests', filters ?? {}] as const,
+  gardenStorage: (status?: string) => ['garden', 'storage', status ?? ''] as const,
+  gardenRules: (scope?: string) => ['garden', 'rules', scope ?? ''] as const,
+  gardenSettings: ['garden', 'settings'] as const,
+  gardenWeather: ['garden', 'weather'] as const,
+  gardenEnums: ['garden', 'enums'] as const,
+  /** The prefix a mutation invalidates: everything above hangs off it. */
+  gardenAll: ['garden'] as const,
 }

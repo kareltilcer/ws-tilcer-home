@@ -126,6 +126,15 @@ const financeModule: LiveModule = {
   toast: { id: 'live-finance', message: cs.live.financeUpdated },
 }
 
+// A garden change invalidates the plan, its CHECK and the affected tasks
+// together — one prefix covers all three. A stale check is worse than no check,
+// because it is a green tick that has stopped being true.
+const gardenModule: LiveModule = {
+  route: routes.zahrada,
+  keys: [['garden']],
+  toast: { id: 'live-garden', message: cs.live.gardenUpdated },
+}
+
 // classify maps a change type to the module it belongs to, or null for types no
 // screen tracks (which then invalidate only the dashboard and never toast).
 function classify(type: string): LiveModule | null {
@@ -134,6 +143,10 @@ function classify(type: string): LiveModule | null {
   // documents, not to Poznámky's folders.
   if (type.startsWith('document')) return documentsModule
   if (type.startsWith('finance')) return financeModule
+  // Checked before the note/folder and card prefixes: every garden push is
+  // "garden_*", so one test covers plants, beds, seasons, plantings, tasks,
+  // harvests and storage.
+  if (type.startsWith('garden')) return gardenModule
   if (type.startsWith('note') || type.startsWith('folder')) return notesModule
   if (
     type.startsWith('card') ||

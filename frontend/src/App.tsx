@@ -14,6 +14,7 @@ import { PoznamkyPage } from '@/routes/poznamky/PoznamkyPage'
 import { DokumentyPage } from '@/routes/dokumenty/DokumentyPage'
 import { DocumentPermalinkPage } from '@/routes/dokumenty/DocumentPermalinkPage'
 import { FinancePage } from '@/routes/finance/FinancePage'
+import { GardenPage } from '@/modules/garden/GardenPage'
 import { LogPage } from '@/routes/log/LogPage'
 import { AdministracePage } from '@/modules/admin/AdministracePage'
 import { NastaveniPage } from '@/platform/settings/NastaveniPage'
@@ -49,6 +50,11 @@ export default function App() {
                 {/* v6: Finance is an ordinary all-roles route — no RequireAdmin.
                     A reader sees the whole module and can change none of it. */}
                 <Route path={routes.finance} element={<FinancePage />} />
+                {/* v7: Zahrada is the first module with SUB-ROUTES — eight of
+                    them, matched by its own router under this prefix. Also an
+                    ordinary all-roles route: a reader sees the whole module and
+                    can change none of it. */}
+                <Route path={`${routes.zahrada}/*`} element={<GardenPage />} />
                 <Route
                   path={routes.log}
                   element={

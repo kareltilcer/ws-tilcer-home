@@ -40,4 +40,14 @@ export const PLURAL = {
   // v6 — Finance counts months, everywhere from the list header to the missing-
   // months prompt.
   months: ['měsíc', 'měsíce', 'měsíců'],
+  // v7 — Zahrada counts beds, work and warnings on nearly every screen. Note
+  // that `warnings` and `works` are invariant in Czech, which is not a mistake:
+  // "2 varování" and "5 varování" really are the same word.
+  beds: ['záhon', 'záhony', 'záhonů'],
+  works: ['práce', 'práce', 'prací'],
+  warnings: ['varování', 'varování', 'varování'],
+  crops: ['plodina', 'plodiny', 'plodin'],
+  varieties: ['odrůda', 'odrůdy', 'odrůd'],
+  years: ['rok', 'roky', 'let'],
+  plantings: ['výsadba', 'výsadby', 'výsadeb'],
 } satisfies Record<string, PluralForms>

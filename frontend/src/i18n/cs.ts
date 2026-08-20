@@ -41,6 +41,10 @@ export const cs = {
     // Log and Administrace.
     finance: 'Finance',
     financeDesc: 'Rozdělení měsíčních příjmů',
+    // v7: Zahrada joins the same overflow for everyone — and is the first module
+    // that is a doorway to eight sub-pages rather than to one screen.
+    zahrada: 'Zahrada',
+    zahradaDesc: 'Plodiny, plán sezóny a práce na zahradě',
   },
   common: {
     loading: 'Načítání…',
@@ -66,6 +70,7 @@ export const cs = {
     notesUpdated: 'Poznámky byly mezitím upraveny',
     documentsUpdated: 'Dokumenty byly mezitím upraveny',
     financeUpdated: 'Finance byly mezitím upraveny',
+    gardenUpdated: 'Zahrada byla mezitím upravena',
   },
   dashboard: {
     title: 'Nástěnka',
@@ -572,6 +577,261 @@ export const cs = {
       'Smazání je trvalé — měsíc se nedá vrátit zpět. Na rozdíl od poznámek a dokumentů se nic nearchivuje.',
     deleteConfirm: 'Smazat trvale',
     deleteError: 'Smazání se nezdařilo',
+  },
+
+  // ---- v7: Zahrada ----
+  //
+  // The vocabulary below is fixed in PRD §V7-7 and used VERBATIM, so the pages,
+  // the widget, the metric labels and the notification tokens all say the same
+  // words. Everything else is this module's own — and note that its most-read
+  // strings are its warnings.
+  garden: {
+    title: 'Zahrada',
+    lede: 'Plodiny, plán sezóny, kontrola plánu a práce — od výsevu po sklad.',
+
+    // The eight sub-pages, in tab-strip order.
+    tabs: {
+      prehled: 'Přehled',
+      plodiny: 'Plodiny',
+      zahony: 'Záhony',
+      plan: 'Plán',
+      kalendar: 'Kalendář',
+      sklizen: 'Sklizeň',
+      sklad: 'Sklad',
+      trvalky: 'Trvalky',
+    },
+
+    // §V7-7 vocabulary, verbatim.
+    plodina: 'Plodina',
+    odruda: 'Odrůda',
+    celed: 'Čeleď',
+    zahon: 'Záhon',
+    castZahrady: 'Část zahrady',
+    sezona: 'Sezóna',
+    vysadba: 'Výsadba',
+    trvalka: 'Trvalka / dřevina',
+    kontrolaPlanu: 'Kontrola plánu',
+    varovani: 'Varování',
+    ignorovat: 'Ignorovat',
+    prace: 'Práce',
+    terminVysevu: 'Termín výsevu',
+    posledniMraz: 'Poslední jarní mráz',
+    prvniMraz: 'První podzimní mráz',
+    narokNaZiviny: 'Nárok na živiny',
+    sklizen: 'Sklizeň',
+    sklad: 'Sklad',
+    uzavritSezonu: 'Uzavřít sezónu',
+    neovereno: 'Neověřeno',
+
+    // First run. The plan is made of beds, so that is where it starts — and the
+    // ORDER of those beds is data, not tidiness, which is worth saying up front.
+    emptyBedsTitle: 'Zahrada zatím nemá záhony',
+    emptyBedsBody:
+      'Plán se skládá ze záhonů — začněte tím, že je založíte a srovnáte do pořadí, v jakém opravdu stojí. Sousedství se čte z pořadí.',
+    emptyBedsCta: 'Založit první záhon',
+    emptySeasonTitle: 'Pro tenhle rok ještě není sezóna',
+    emptySeasonBody: 'Sezóna drží očekávané datum mrazu, od kterého se počítají všechny termíny.',
+    emptySeasonCta: 'Založit sezónu',
+    emptyPlantsTitle: 'Zatím tu nejsou žádné plodiny',
+    emptyPlantsBody:
+      'Plodina drží, co o ní víte — čeleď, termíny, rozestupy. Můžete ji vyplnit ručně, nebo si nechat pomoct od jazykového modelu.',
+
+    // Kontrola plánu. Severity reads without colour: an icon AND a word.
+    severity: {
+      error: 'Chyba',
+      warn: 'Varování',
+      info: 'Poznámka',
+      tip: 'Dobře',
+    },
+    checkClean: 'Plán je bez varování',
+    checkCleanBody: 'Nic, co by se teď dalo zlepšit. Kontrola se přepočítá po každé změně plánu.',
+    checkGardenWide: 'celá zahrada',
+    // The check that CANNOT RUN. Matter-of-fact, not apologetic, and never a
+    // green tick (D120).
+    noHistoryTitle: 'Rotaci zatím nelze zkontrolovat, chybí historie',
+    noHistoryBody:
+      'Střídání plodin a sled náročnosti se počítají jen z uzavřených sezón. Po prvním „Uzavřít sezónu“ začnou fungovat — do té doby se nehlásí jako splněné, protože nejsou.',
+    dismissTitle: 'Ignorovat varování',
+    dismissBody: 'Varování zmizí z panelu pro tuhle sezónu. Zůstane dohledatelné a jde vrátit zpět.',
+    dismissNote: 'Poznámka (nepovinná)',
+    dismissNotePlaceholder: 'Např. „vím, letos to risknu“',
+    dismissConfirm: 'Ignorovat',
+    dismissed: 'Ignorováno',
+    restore: 'Vrátit zpět',
+    showDismissed: 'Zobrazit ignorovaná',
+
+    // Plán.
+    planTitle: 'Plán sezóny',
+    addPlanting: 'Přidat výsadbu',
+    pickCrop: 'Vyberte plodinu',
+    pickCropSearch: 'Hledat plodinu…',
+    recentlyUsed: 'Naposledy použité',
+    bedFree: 'Volný záhon',
+    bedUsage: (used: number, total: number) => `${used} z ${total} m²`,
+    // Shown instead of bedUsage when a planting is sized by počet rostlin: the
+    // card cannot convert that to m² without the crop's density, and "0 z 5 m²"
+    // under a list of three crops is worse than saying only what is known.
+    bedUsageUnknown: (total: number) => `${total} m²`,
+    occupancyAxis: 'Obsazenost v roce',
+    copySeason: 'Zkopírovat z předchozí sezóny',
+    copyPreview: 'Náhled',
+    copyShift: 'Posunout čeledi o záhonů',
+    copyBefore: 'Před posunem',
+    copyAfter: 'Po posunu',
+    seasonClosed: 'Sezóna je uzavřená — jen ke čtení',
+
+    // Výsadba detail.
+    planned: 'V plánu',
+    actual: 'Ve skutečnosti',
+    shiftTasks: 'Posunout navazující práce',
+    shiftTasksDone: (n: number) => `Posunuto ${n}`,
+    yieldExpected: 'Očekávaný výnos',
+    yieldActual: 'Skutečná sklizeň',
+    failedTitle: 'Nepovedlo se',
+    failReason: 'Co se stalo',
+
+    // Kalendář a práce. A window is written as a RANGE, never a single date.
+    calendarTitle: 'Práce na zahradě',
+    overdue: 'Zmeškané',
+    thisWeek: 'Tento týden',
+    week: (label: string) => `Týden ${label}`,
+    markDone: 'Hotovo',
+    markSkipped: 'Přeskočit',
+    reopen: 'Znovu otevřít',
+    addTask: 'Přidat práci',
+    taskEdited: 'Upraveno ručně',
+    taskEditedHint: 'Tuhle práci jste si upravili, plán s ní už nehýbe.',
+    filterBed: 'Záhon',
+    filterCrop: 'Plodina',
+    filterKind: 'Druh práce',
+    print: 'Vytisknout',
+    printMonth: 'Práce na měsíc',
+    printPlan: 'Plán sezóny',
+
+    // Plodiny a odrůdy.
+    plantsTitle: 'Plodiny',
+    addPlant: 'Přidat plodinu',
+    searchPlants: 'Hledat plodinu…',
+    onlyUnverified: 'Jen neověřené',
+    verify: 'Označit jako ověřené',
+    // Bookkeeping, not an accusation — most of it will be fine.
+    unverifiedHint: 'Vyplnil jazykový model a nikdo to zatím nezkontroloval.',
+    varieties: 'Odrůdy',
+    addVariety: 'Přidat odrůdu',
+    inherits: 'dědí z plodiny',
+    sectionIdentity: 'Základní údaje',
+    sectionAgronomy: 'Nároky a půda',
+    sectionPropagation: 'Množení a rozestupy',
+    sectionTiming: 'Termíny',
+    sectionHarvest: 'Sklizeň a skladování',
+    sectionProblems: 'Škůdci a choroby',
+    sectionNotes: 'Poznámky',
+
+    // The timing-window control — the weirdest input in home.
+    anchorWeek: 'Týden v roce',
+    anchorLastFrost: 'Vůči poslednímu jarnímu mrazu',
+    anchorFirstFrost: 'Vůči prvnímu podzimnímu mrazu',
+    windowFrom: 'Od',
+    windowTo: 'Do',
+    windowWeekHint: 'Týden 1–53, jak se termíny uvádějí v české literatuře.',
+    windowFrostHint: 'Počet dní vůči mrazu. Záporné číslo znamená před ním.',
+    // The live echo is what makes the abstraction land.
+    windowResolved: (range: string) => `Letos vychází na ${range}`,
+    windowNoAnchor: 'Sezóna nemá zadané datum mrazu, takže termín zatím nejde dopočítat.',
+    windowInverted: 'Konec okna nemůže být dřív než začátek.',
+
+    // The LLM escape hatch.
+    promptTitle: 'Nechat vyplnit jazykovým modelem',
+    promptBody:
+      'Zkopírujte připravený text, vložte ho do libovolného jazykového modelu a jeho odpověď vraťte sem. Nic se neuloží, dokud si náhled neprojdete.',
+    promptCopy: 'Zkopírovat text',
+    promptCopied: 'Zkopírováno',
+    promptPaste: 'Vložte odpověď modelu',
+    promptModel: 'Který model odpověděl (nepovinné)',
+    previewTitle: 'Náhled importu',
+    previewCreate: 'Vytvoří se',
+    previewUpdate: 'Změní se',
+    previewReject: 'Nepovedlo se přečíst',
+    previewUnmapped: 'Pole, kterým nerozumíme',
+    previewUnmappedHint: 'Necháváme je stranou a neukládáme je — nic se neztratilo, jen se nepoužije.',
+    previewApply: 'Uložit',
+    previewSummary: (created: number, updated: number, rejected: number) =>
+      `Vytvořeno ${created}, změněno ${updated}, nepovedlo se ${rejected}`,
+    exportKb: 'Exportovat plodiny',
+
+    // Záhony — where the drag order MEANS something.
+    bedsTitle: 'Záhony',
+    addBed: 'Přidat záhon',
+    bedCode: 'Značka',
+    bedName: 'Název',
+    bedType: 'Typ',
+    bedArea: 'Plocha',
+    bedZone: 'Část zahrady',
+    bedNeighbours: 'Sousedí s',
+    adjacencyHint:
+      'Zahrada nemá mapu. Sousedství se určuje z pořadí záhonů v jedné části: dva po sobě jdoucí záhony jsou sousedi. Když je přesunete, přepočítají se varování o sousedních záhonech — proto je srovnejte v pořadí, v jakém opravdu stojí, ne podle abecedy.',
+    moveUp: 'Posunout nahoru',
+    moveDown: 'Posunout dolů',
+    bedHistory: 'Co tu rostlo',
+    bedHistoryEmpty: 'Zatím žádná uzavřená sezóna.',
+
+    // Sklizeň a sklad.
+    harvestTitle: 'Sklizeň',
+    addHarvest: 'Zapsat sklizeň',
+    quickHarvest: 'Rychlý zápis',
+    quantity: 'Množství',
+    unit: 'Jednotka',
+    harvestedOn: 'Datum',
+    destination: 'Kam to šlo',
+    storageTitle: 'Sklad',
+    addStorage: 'Uskladnit',
+    productName: 'Co to je',
+    method: 'Způsob',
+    location: 'Kde',
+    remaining: 'Zbývá',
+    bestBefore: 'Spotřebovat do',
+    // The whole point of the storage log: the number goes down as you eat it.
+    consumeHint: 'Zbývající množství upravte, jak ubývá. Když dojde na nulu, položka se sama označí za spotřebovanou.',
+    markSpoiled: 'Označit za zkažené',
+
+    // Uzavřít sezónu — a review, not a form.
+    closeTitle: 'Uzavřít sezónu',
+    closeLede:
+      'Projděte, co se letos povedlo a co ne. Po uzavření se sezóna zamkne a začne se z ní počítat střídání plodin — je to jediné, co historii vytváří.',
+    closeFrostActual: 'Kdy mráz opravdu přišel',
+    closeOutcome: 'Jak to dopadlo',
+    closeDone: 'Sklidili jsme',
+    closeFailed: 'Nepovedlo se',
+    closeFinalYield: 'Celkem sklizeno',
+    closeConfirm: 'Uzavřít sezónu',
+    closeWarning: 'Po uzavření už do sezóny nepůjde zapisovat. Znovu ji může otevřít jen správce.',
+    reopenSeason: 'Znovu otevřít sezónu',
+    reopenWarning: 'Otevřením se přepíše historie, ze které se počítá střídání plodin.',
+
+    // Nastavení zahrady. Deliberately no audience or channel settings — that is
+    // Administrace's (D113).
+    settingsTitle: 'Nastavení zahrady',
+    settingsLede: 'Poloha a mrazy, od kterých se odvíjejí všechny termíny.',
+    latitude: 'Zeměpisná šířka',
+    longitude: 'Zeměpisná délka',
+    altitude: 'Nadmořská výška',
+    frostThreshold: 'Za mráz považovat teplotu pod',
+    rotationDefault: 'Výchozí pauza pro střídání',
+    workloadThreshold: 'Nabitý týden začíná od',
+    notificationsElsewhere:
+      'Kdo a kdy dostane upozornění na mráz se nastavuje v Administraci, ne tady.',
+    weatherOff: 'Předpověď je vypnutá — mrazy se berou jen z toho, co zadáte ručně.',
+    weatherNoCoords: 'Zadejte polohu a začne se stahovat předpověď.',
+
+    // Widget.
+    widgetTitle: 'Práce na zahradě',
+    widgetQuiet: 'Na zahradě je teď klid',
+    widgetQuietBody: 'Nic nečeká. Od listopadu do února je to tak správně.',
+
+    // Errors.
+    loadFailed: 'Zahradu se nepodařilo načíst',
+    loadFailedBody:
+      'Plán ani zápisy se neztratily. Zkuste to znovu — a pokud jste na zahradě bez signálu, vytiskněte si práci na měsíc.',
   },
 
   // ---- v5: app-wide offline ----

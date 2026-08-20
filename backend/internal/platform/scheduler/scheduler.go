@@ -15,6 +15,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
@@ -91,6 +92,19 @@ type Config struct {
 	Now func() time.Time
 }
 
+// Job is a plain recurring task registered with RegisterJob.
+type job struct {
+	name  string
+	every time.Duration
+	fn    func(ctx context.Context, now time.Time) error
+	// running keeps THIS job's passes from piling up without coupling jobs to
+	// each other: a pass that outlives a tick makes the next tick skip this job
+	// only, and says so in the log. lastRun is only touched while running is
+	// held, so the flag is also what serializes access to it.
+	running atomic.Bool
+	lastRun time.Time
+}
+
 // Scheduler evaluates schedules on a minute ticker.
 type Scheduler struct {
 	store  Store
@@ -98,6 +112,64 @@ type Scheduler struct {
 	cfg    Config
 	logger *slog.Logger
 	now    func() time.Time
+
+	// jobs are plain interval tasks riding the same ticker — see RegisterJob.
+	jobs []*job
+}
+
+// RegisterJob adds a plain recurring task to the SAME Prague-local minute
+// ticker the summaries run on, and changes nothing about how they fire.
+//
+// v5 created this package precisely so that "something has to wake up at a
+// certain time" lives in one place. A feature module that needs a poll — v7's
+// garden weather is the first — would otherwise start a second ad-hoc ticker
+// inside itself, which is the arrangement this package exists to prevent. So the
+// hook is one exported function rather than a new package.
+//
+// The job fires ONCE on the first tick after registration (lastRun is zero) and
+// then every `every` after that. A run that returns an error is retried after
+// jobRetryDelay rather than a full interval — a DNS blip on the first weather
+// poll must not leave the frost gate blind until tomorrow. Timing is otherwise
+// best-effort by design: a forecast is not a wall-clock appointment, and a job
+// that slips a minute across a restart has lost nothing. Register before Start;
+// the set is not mutated afterwards.
+func (s *Scheduler) RegisterJob(name string, every time.Duration, fn func(ctx context.Context, now time.Time) error) {
+	if fn == nil || every <= 0 {
+		return
+	}
+	s.jobs = append(s.jobs, &job{name: name, every: every, fn: fn})
+}
+
+// jobRetryDelay is how soon a FAILED job run is retried. Long enough not to
+// hammer a provider that is down, short enough that a transient failure does
+// not cost the whole interval.
+const jobRetryDelay = 15 * time.Minute
+
+// runJob runs one job if its interval has elapsed. The caller holds j.running.
+// lastRun is stamped before the run so a job can never tight-loop, then pulled
+// back on failure so the next attempt lands jobRetryDelay from now. A panic is
+// NOT retried sooner: a job that panics once will panic again, and the full
+// interval is the pacing that keeps that from being a log storm.
+func (s *Scheduler) runJob(ctx context.Context, j *job, now time.Time) {
+	if !j.lastRun.IsZero() && now.Sub(j.lastRun) < j.every {
+		return
+	}
+	j.lastRun = now
+	if err := s.callJob(ctx, j, now); err != nil {
+		s.logger.Warn("scheduler: job failed", "job", j.name, "err", err, "retry_in", jobRetryDelay)
+		if j.every > jobRetryDelay {
+			j.lastRun = now.Add(jobRetryDelay - j.every)
+		}
+	}
+}
+
+func (s *Scheduler) callJob(ctx context.Context, j *job, now time.Time) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("scheduler: job panicked", "job", j.name, "panic", r)
+		}
+	}()
+	return j.fn(ctx, now)
 }
 
 // New builds the scheduler.
@@ -142,12 +214,31 @@ func (s *Scheduler) Start(ctx context.Context) {
 // Tick evaluates every enabled schedule once. Exported so tests can drive time
 // deterministically instead of sleeping.
 func (s *Scheduler) Tick(ctx context.Context) {
+	now := s.now().In(s.cfg.Location)
+	// Plain interval jobs first and unconditionally: they must keep running even
+	// if the schedule store is unavailable, since a forecast poll has nothing to
+	// do with whether a summary can be loaded. They run OFF the ticker
+	// goroutine: a job doing network or DB work can outlast the tick interval,
+	// and time.Ticker drops ticks a slow receiver misses — a stalled fetch must
+	// never cost a summary its slot minute. Each job carries its own in-flight
+	// flag, so a slow or hung job skips only its own later passes — loudly —
+	// instead of silently starving every other job.
+	for _, j := range s.jobs {
+		if !j.running.CompareAndSwap(false, true) {
+			s.logger.Warn("scheduler: job pass still running, skipping tick", "job", j.name)
+			continue
+		}
+		go func(j *job) {
+			defer j.running.Store(false)
+			s.runJob(ctx, j, now)
+		}(j)
+	}
+
 	schedules, err := s.store.DueCandidates(ctx)
 	if err != nil {
 		s.logger.Error("scheduler: load schedules", "err", err)
 		return
 	}
-	now := s.now().In(s.cfg.Location)
 
 	for _, sc := range schedules {
 		due, ok := s.evaluate(sc, now)

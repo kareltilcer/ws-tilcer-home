@@ -11,11 +11,19 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/catalog"
 )
+
+// ErrNoData is what a provider returns when a metric has NO current reading —
+// a measurement whose source is absent (an unfetched forecast), as opposed to a
+// count of zero or a read failure. Consumers treat it as "unknown": a condition
+// clause on it is NOT met (unlike a transient resolve error, which fails open),
+// and a rendered token degrades to the placeholder rather than to a number.
+var ErrNoData = errors.New("metrics: no data")
 
 // Scopes describe whether a metric's value personalizes. Aliased from the
 // shared catalog core so the metric and list catalogs cannot drift apart — the

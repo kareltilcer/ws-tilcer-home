@@ -16,6 +16,11 @@ export const routes = {
   // v6: Finance is an ordinary all-roles destination in the "Více" overflow — a
   // once-a-month screen does not earn one of the four thumb tabs (D84).
   finance: '/finance',
+  // v7: Zahrada joins the same overflow for everyone, and is the first module
+  // with SUB-PAGES — eight of them behind one nav entry, with an in-page tab
+  // strip. The four thumb tabs stay untouched; the sub-routes hang off this
+  // prefix (/zahrada/plodiny, /zahrada/plan/2027, …).
+  zahrada: '/zahrada',
 } as const
 
 // There is deliberately no permalink helper here: /d/{id} (D42) is minted by the
