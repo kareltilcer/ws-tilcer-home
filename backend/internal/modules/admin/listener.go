@@ -594,6 +594,8 @@ func inAppURL(e audit.Entry) string {
 		return "/finance"
 	case audit.ModuleGarden:
 		return "/zahrada"
+	case audit.ModuleElectricity:
+		return "/elektrina"
 	default:
 		return "/"
 	}

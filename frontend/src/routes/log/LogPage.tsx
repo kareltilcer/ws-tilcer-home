@@ -17,7 +17,7 @@ import { ResponsiveModal } from '@/components/ui/modal'
 
 // Every module that writes audit rows — a missing entry means those events cannot
 // be filtered to at all. Keep in step with the backend module registry.
-const MODULES = ['', 'logging', 'platform', 'todo', 'events', 'notes', 'documents', 'dashboard', 'admin', 'finance', 'garden']
+const MODULES = ['', 'logging', 'platform', 'todo', 'events', 'notes', 'documents', 'dashboard', 'admin', 'finance', 'garden', 'electricity']
 const LEVELS = ['', 'info', 'warn', 'error']
 
 const selectCls =

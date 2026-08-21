@@ -6,7 +6,7 @@ Version history for the `home` service. Full detail lives in `PRD.md` (§10 Deci
 
 ## v8 — 2026-08-20 (spec) · **not built** · Elektřina (electricity)
 
-> OpenAPI **0.9.0 → 0.10.0** (spec). Decisions **D133–D160** (`PRD.md` §V8-10). Triggered by one product addition from Karel: tracking the household's electricity against its zálohy. Scope was frozen the same day after an interview of eleven questions; the resolved brief is `V8-electricity-brief.md`.
+> OpenAPI **0.9.0 → 0.10.0** (spec). Decisions **D133–D162** (`PRD.md` §V8-10). Triggered by one product addition from Karel: tracking the household's electricity against its zálohy. Scope was frozen the same day after an interview of eleven questions; the resolved brief is `V8-electricity-brief.md`.
 
 ### Headline
 
@@ -67,6 +67,8 @@ Ordinary all-roles module in the "více" overflow: `reader` reads, `editor`/`adm
 OpenAPI **0.10.0**: **13 new paths** (106 → **119**) and **32 new schemas** (203 → **235**), one new shared parameter (`DateCursor`), one new tag. Validates against OpenAPI 3.1 with every `$ref` resolving.
 
 **`DateCursor` generalises the `finance` month-key precedent (D149).** These collections are ordered by a natural chronological key — `read_on`, `effective_from`, `starts_on` — so a UUIDv7 cursor would misplace a back-filled row; a malformed cursor 422s rather than silently re-serving page one. Anything that "tidies" a `DateCursor` back into `$ref: Cursor` has broken paging.
+
+**Amended 2026-08-20 by the implementation-planning pass (D161, D162)** — two places where 0.10.0 contradicted the brief it was written from, both fixed in place with no new path and no new schema. `ElectricitySummary.cost_total_haler` and `.balance_haler` are now **nullable and dropped from `required`**: as first written they forced a `0` onto the wire in exactly the state where the spec's own rule — *the module never shows a number it hasn't earned, not a zero* — matters most, leaving the honesty of the headline dependent on every screen remembering to gate on `status`. And `ElectricityHeadroom` gains **`kwh_mix_dkwh`**, the 30/70 figure Přehled leads with: the brief, the build guide and the design all pin ~200 kWh, but only the all-VT and all-NT numbers were published, and a client cannot recover the mix from those without reconstructing the prices. Both are recorded in the brief's new §7b rather than fixed quietly, on the D157–D160 precedent.
 
 **Fixed in passing:** two enum lists in `openapi.yaml` had been stale since v6. `NotificationRule.filter_module` omitted **`finance` and `garden`**, so an admin composing a trigger rule could not qualify a finance or garden action key; `WidgetCatalogEntry.module` omitted the same two despite both shipping widgets. Both now list them — and `filter_module` gains `electricity`, while `WidgetCatalogEntry.module` deliberately does **not**, because v8 publishes no widget. Also observed and avoided: the v7 comma rule caught four fresh unquoted flow-mapping descriptions in the new schemas before they landed.
 

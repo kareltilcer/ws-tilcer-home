@@ -15,6 +15,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance"
 	financeseed "github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance/seed"
@@ -30,7 +31,7 @@ import (
 // MigrationSources returns every SCHEMA migration contributor. Goose applies
 // migrations globally by their numeric filename prefix, so the effective order is
 // logging(01) → platform(02) → todo(03) → events(04) → dashboard(05) → notes(06)
-// → documents(07) → admin(08) → finance(09) → garden(10), regardless of the slice
+// → documents(07) → admin(08) → finance(09) → garden(10) → electricity(11), regardless of the slice
 // order below (PRD §5 D25). The logging (audit) tables must exist before any
 // feature table because every module writes through the audit spine; its 01xxx
 // prefix guarantees that. The slice is listed in prefix order purely so it reads
@@ -56,6 +57,11 @@ func MigrationSources() []registry.MigrationSource {
 		{Name: "admin", FS: admin.MigrationsFS},
 		{Name: "finance", FS: finance.MigrationsFS},
 		{Name: "garden", FS: garden.MigrationsFS},
+		// v8: electricity is block 11 and has NO seed counterpart below —
+		// deliberately, unlike finance and garden. There is no historic data to
+		// carry and no built-in knowledge to preload, so there is nothing for
+		// testsupport to exclude. Do not add one for symmetry.
+		{Name: "electricity", FS: electricity.MigrationsFS},
 	}
 }
 

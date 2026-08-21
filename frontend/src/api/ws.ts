@@ -135,6 +135,16 @@ const gardenModule: LiveModule = {
   toast: { id: 'live-garden', message: cs.live.gardenUpdated },
 }
 
+// Elektřina's three computed views — summary, intervals, history — are
+// projections of the same five tables, so one prefix invalidates all of them
+// together. A summary left stale beside a fresh reading list is a number that
+// has silently stopped being true.
+const electricityModule: LiveModule = {
+  route: routes.elektrina,
+  keys: [['electricity']],
+  toast: { id: 'live-electricity', message: cs.live.electricityUpdated },
+}
+
 // classify maps a change type to the module it belongs to, or null for types no
 // screen tracks (which then invalidate only the dashboard and never toast).
 function classify(type: string): LiveModule | null {
@@ -147,6 +157,9 @@ function classify(type: string): LiveModule | null {
   // "garden_*", so one test covers plants, beds, seasons, plantings, tasks,
   // harvests and storage.
   if (type.startsWith('garden')) return gardenModule
+  // Every electricity push is "electricity_*", so one test covers readings,
+  // tariffs, advances, payments and periods.
+  if (type.startsWith('electricity')) return electricityModule
   if (type.startsWith('note') || type.startsWith('folder')) return notesModule
   if (
     type.startsWith('card') ||

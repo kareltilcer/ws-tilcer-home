@@ -16,6 +16,7 @@ import {
   Sun,
   Wallet,
   WifiOff,
+  Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { Toaster } from 'sonner'
@@ -59,10 +60,17 @@ const PRIMARY: NavItem[] = [
 // v7 extends it once more: Zahrada, also with NO admin gate — but unlike every
 // other module it is a doorway to eight sub-pages rather than one screen, so the
 // entry lands on Přehled and the module's own tab strip takes over from there.
+//
+// v8 extends it a final time: Elektřina, ungated, a doorway to four sub-pages
+// behind v7's tab strip. It is the only module in the app with NO Nástěnka
+// surface whatsoever (D147) and no notification of any kind, so this nav entry
+// is quite literally the only way anyone will ever find it — which is why the
+// description has to say what the module answers, not what it contains.
 const OVERFLOW: NavItem[] = [
   { to: routes.dokumenty, label: cs.nav.dokumenty, icon: Files, desc: cs.nav.dokumentyDesc },
   { to: routes.finance, label: cs.nav.finance, icon: Wallet, desc: cs.nav.financeDesc },
   { to: routes.zahrada, label: cs.nav.zahrada, icon: Sprout, desc: cs.nav.zahradaDesc },
+  { to: routes.elektrina, label: cs.nav.elektrina, icon: Zap, desc: cs.nav.elektrinaDesc },
   { to: routes.log, label: cs.nav.log, icon: ScrollText, desc: cs.nav.logDesc, adminOnly: true },
   { to: routes.administrace, label: cs.admin.title, icon: Megaphone, desc: cs.admin.navDesc, adminOnly: true },
   { to: routes.nastaveni, label: cs.settings.title, icon: Settings, desc: cs.settings.subtitle },

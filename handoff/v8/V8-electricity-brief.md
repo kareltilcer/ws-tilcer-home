@@ -4,7 +4,7 @@
 > All open questions answered (OQ-V8-1…10, plus OQ-V8-3a raised and closed during the interview).
 > Folded into `PRD.md` as **§V8-1 … §V8-11**, `openapi.yaml` → **0.10.0**, `CHANGELOG.md`, `REGISTRY.md`,
 > `HANDOFF-10-electricity.md` and a `HANDOFF-design.md` §v8 addendum.
-> Decisions **D133–D160** (D157–D160 were forced back into the brief by the `HANDOFF-10` pass — see §7a).
+> Decisions **D133–D162** (D157–D160 were forced back into the brief by the `HANDOFF-10` pass — see §7a; D161–D162 by the implementation-planning pass — see §7b).
 > Migration block **11**. **Tenth** module (v7's `garden` is the ninth and is specified but not yet built).
 
 ---
@@ -325,6 +325,15 @@ Writing `HANDOFF-10-electricity.md` against this brief surfaced four places wher
 
 Two smaller gaps closed in place: **D155 counts a month at equality** (due on the 15th ⇒ paid on the 15th), and the §4.5 worked example now pins **splatnost 15.**, because the doporučená záloha in it is 1 795 Kč at splatnost ≤ 20 and 1 796 Kč at splatnost 25 — a fixture that doesn't state the due day isn't reproducible.
 
+### 7b. The two corrections the implementation-planning pass forced back (D161–D162)
+
+Planning the build against 0.10.0 surfaced two places where the **wire contradicted the brief it was written from**. Both are amendments to existing schemas — no new path, no new schema, still 13/235 — and both are recorded here rather than fixed quietly, on the §7a precedent:
+
+| # | Decision |
+|---|---|
+| **D161** | **`summary.cost_total_haler` and `summary.balance_haler` are nullable, and null — never 0 — in `insufficient_data` and `blocked`.** 0.10.0 declared both `required` integers, which forced a `0` onto the wire in exactly the state where §4.4's rule bites hardest: *the module never shows a number it hasn't earned, not a zero*. A `0 Kč nedoplatek` is a lie that looks like good news, and leaving the rule to "every screen checks `status` first" is how it eventually stops being true on one of them. Dropped from `required` and made nullable, matching `recommended_advance_haler`'s existing shape. `actual` stays populated when it is valid — the figures **before** a gap do not become unknown because the ones after it are. |
+| **D162** | **`summary.headroom` carries `kwh_mix_dkwh`.** §4.6, `HANDOFF-10` §2.7 and the design all lead with the 30/70 figure and pin **~200 kWh**, but 0.10.0 published only the all-VT and all-NT numbers — from which a client cannot recover the mix without reconstructing the prices, landing somewhere other than the server's own test. Served, computed with **one** division and no intermediate rounding: `divRound(energy_budget_haler · 100000, 3·price_vt_haler + 7·price_nt_haler)`, because rounding a blended price first moves the answer by a whole kWh. Karel's numbers: `divRound(8 576 500 000, 4 276 278) = 2006` → **200 kWh** ✓. Still a **stated heuristic, never a measurement**. |
+
 ---
 
 ## 8. Questions asked and answered (2026-08-20)
@@ -362,3 +371,7 @@ Two items are still blank and are the implementer's first questions back: the **
 11. Entering the closing reading (`ends_on + 1`) empties the forecast, flips Přehled from *predikce* to *skutečnost*, and enables the computed-vs-invoiced comparison (D157).
 12. `compute.go` has no `database/sql` import (asserted by a test), and `internal/arch` stays green.
 13. `electricity` registers **no** widget, metric or list — asserted, so a future refactor can't quietly add one.
+14. *(D161)* In `insufficient_data` **and** in `blocked`, `cost_total_haler` and `balance_haler` serialize as **`null`, not `0`** — asserted on the wire, not only in the UI — while `actual` stays populated whenever it is valid.
+15. *(D162)* `headroom.kwh_mix_dkwh` is served, and Karel's numbers land on **2006 dkWh = 200 kWh** — one division, no blended price rounded first.
+
+*(Items 1–13 are the frozen set; 14–15 were appended by the planning pass. The numbering of 1–13 is load-bearing — `HANDOFF-10` cites §9/#7 and §9/#12 — so new criteria are appended, never inserted.)*
