@@ -805,3 +805,57 @@ func TestPatchCanClearARecordedInvoiceFigure(t *testing.T) {
 		t.Errorf("an explicit null must clear the field, got %s", rr.Body.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Log summaries — the one place the SERVER formats money
+// ---------------------------------------------------------------------------
+
+// TestLogSummariesSpeakKoruny pins the summary prose, because the summary is
+// frozen at write time: a wrong unit is not a rendering bug that a later deploy
+// repairs, it is a wrong sentence sitting in the log forever. The two precisions
+// are the ones the screens use — whole koruny for a záloha that somebody pays,
+// haléře for a unit price typed off the supplier's contract.
+func TestLogSummariesSpeakKoruny(t *testing.T) {
+	x := newH(t)
+	if _, err := x.svc.CreateAdvance(editorCtx(), electricity.AdvanceInput{
+		EffectiveFrom: dp("2026-06-24"), AmountHaler: i64(150_000), DueDay: ip(15),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.svc.CreateTariff(editorCtx(), electricity.TariffInput{
+		EffectiveFrom: dp("2026-06-24"), PriceVTHaler: i64(485_865),
+		PriceNTHaler: i64(402_669), MonthlyFeeHaler: i64(64_235),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := electricity.ParseMonth("2026-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.svc.CreatePayment(editorCtx(), electricity.PaymentInput{
+		Month: &m, AmountHaler: i64(150_000),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Written as an ESCAPE for the same reason service.go writes it that way: a
+	// literal U+00A0 here is invisible in a diff, and one whitespace-normalising
+	// pass would quietly turn this guard into an assertion about a plain space.
+	const nbsp = "\u00a0"
+	for _, tc := range []struct{ action, want string }{
+		{"advance.create", "Předpis záloh od 24. 6. 2026 — 1" + nbsp + "500" + nbsp + "Kč/měs, splatnost 15."},
+		{"tariff.create", "Ceník od 24. 6. 2026 — VT 4" + nbsp + "858,65" + nbsp + "Kč/MWh, NT 4" + nbsp +
+			"026,69" + nbsp + "Kč/MWh, poplatky 642,35" + nbsp + "Kč/měs"},
+		{"payment.create", "Zaplacená záloha za 2026-07 — 1" + nbsp + "500" + nbsp + "Kč"},
+	} {
+		var got string
+		if err := x.db.QueryRow(
+			`SELECT summary FROM audit_events WHERE action = ? AND module = 'electricity'`,
+			tc.action).Scan(&got); err != nil {
+			t.Fatalf("%s: %v", tc.action, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s summary =\n %q\nwant\n %q", tc.action, got, tc.want)
+		}
+	}
+}
