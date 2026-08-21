@@ -87,13 +87,73 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 // Small helpers for diffs and formatting
 // ---------------------------------------------------------------------------
 
-func kc(haler int64) string { return strconv.FormatInt(haler, 10) + " h" }
+// nbsp is written as an ESCAPE deliberately: a literal U+00A0 sitting in the
+// source is indistinguishable from a plain space to the next person reading it.
+const nbsp = "\u00a0"
 
-func kwh(dkwh int64) string {
-	if dkwh%10 == 0 {
-		return strconv.FormatInt(dkwh/10, 10) + " kWh"
+// Money in a log summary is written by the SERVER — the one place that happens.
+// Everywhere else the API hands over haléře and the screen formats them
+// (types.go), but a summary is prose frozen at write time, so it has to carry
+// the same two precisions the screens use, or the log disagrees with the page it
+// describes. Same rule, same reason as frontend/src/modules/electricity/format.ts:
+//
+//	kc  — TOTALS (zálohy, platby), whole koruny:  150000 → "1 500 Kč"
+//	kc2 — UNIT PRICES and FEES, two decimals:     485865 → "4 858,65 Kč"
+//
+// A unit price's haléře ARE the number, typed off the supplier's contract; a
+// total's last haléř is the residue of a dozen roundings and means nothing.
+func kc(haler int64) string {
+	k := haler / 100
+	switch r := haler % 100; {
+	case r >= 50:
+		k++
+	case r <= -50:
+		k--
 	}
-	return strconv.FormatInt(dkwh/10, 10) + "," + strconv.FormatInt(dkwh%10, 10) + " kWh"
+	return group(k) + nbsp + "Kč"
+}
+
+func kc2(haler int64) string {
+	sign := ""
+	if haler < 0 {
+		sign, haler = "−", -haler
+	}
+	return sign + group(haler/100) + "," + fmt.Sprintf("%02d", haler%100) + nbsp + "Kč"
+}
+
+// group writes an integer with Czech NON-BREAKING thousands separators, so
+// "1 500 Kč" never wraps into "1" / "500 Kč" halfway across a log line.
+func group(n int64) string {
+	sign := ""
+	if n < 0 {
+		sign, n = "−", -n
+	}
+	d := strconv.FormatInt(n, 10)
+	var b strings.Builder
+	for i := 0; i < len(d); i++ {
+		if i > 0 && (len(d)-i)%3 == 0 {
+			b.WriteString(nbsp)
+		}
+		b.WriteByte(d[i])
+	}
+	return sign + b.String()
+}
+
+// kwh groups and non-breaks exactly like the money helpers above, for the same
+// reason: a register reads five digits, and "12 345,6 kWh" on the odečty screen
+// must be the same string the log froze. Keep in step with kwh() in
+// frontend/src/modules/electricity/format.ts — the tenth is kept, never rounded,
+// because a METER READING must never be rounded at all.
+func kwh(dkwh int64) string {
+	sign := ""
+	if dkwh < 0 {
+		sign, dkwh = "−", -dkwh
+	}
+	body := group(dkwh / 10)
+	if tenth := dkwh % 10; tenth != 0 {
+		body += "," + strconv.FormatInt(tenth, 10)
+	}
+	return sign + body + nbsp + "kWh"
 }
 
 func diffStr(field, old, new string, out *[]audit.Change) {
@@ -360,7 +420,7 @@ func (s *Service) CreateTariff(ctx context.Context, in TariffInput) (Tariff, err
 		}
 		return s.record(ctx, tx, "tariff.create", "electricity_tariff", t.ID,
 			fmt.Sprintf("Ceník od %s — VT %s/MWh, NT %s/MWh, poplatky %s/měs",
-				czDate(t.EffectiveFrom), kc(t.PriceVTHaler), kc(t.PriceNTHaler), kc(t.MonthlyFeeHaler)), nil)
+				czDate(t.EffectiveFrom), kc2(t.PriceVTHaler), kc2(t.PriceNTHaler), kc2(t.MonthlyFeeHaler)), nil)
 	})
 	if err != nil {
 		return Tariff{}, err
@@ -475,8 +535,8 @@ func (s *Service) DeleteTariff(ctx context.Context, id string) error {
 		}
 		return s.record(ctx, tx, "tariff.delete", "electricity_tariff", id,
 			fmt.Sprintf("Smazán ceník od %s — VT %s/MWh, NT %s/MWh, poplatky %s/měs",
-				czDate(cur.EffectiveFrom), kc(cur.PriceVTHaler), kc(cur.PriceNTHaler),
-				kc(cur.MonthlyFeeHaler)), nil)
+				czDate(cur.EffectiveFrom), kc2(cur.PriceVTHaler), kc2(cur.PriceNTHaler),
+				kc2(cur.MonthlyFeeHaler)), nil)
 	})
 	if err != nil {
 		return err
