@@ -72,7 +72,7 @@ function StreamView() {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   })
 
-  const events = query.data?.pages.flatMap((p) => p.items) ?? []
+  const events = query.data?.pages.flatMap((p) => p.items ?? []) ?? []
 
   return (
     <>
@@ -126,6 +126,13 @@ function StreamView() {
         <div className="grid place-items-center py-16">
           <Spinner />
         </div>
+      ) : query.isError && events.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border bg-s1 p-8 text-center">
+          <p className="mb-3 text-sm text-danger">Záznamy se nepodařilo načíst.</p>
+          <Button variant="secondary" size="sm" loading={query.isFetching} onClick={() => void query.refetch()}>
+            Zkusit znovu
+          </Button>
+        </div>
       ) : events.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border bg-s1 p-8 text-center text-sm text-muted">
           Žádné záznamy pro tento filtr.
@@ -162,6 +169,8 @@ const LEVEL_CLS: Record<string, string> = {
 function LogRow({ event, onOpenTimeline }: { event: AuditEvent; onOpenTimeline: (type: string, id: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const detail = useQuery({ queryKey: [...qk.logs(), 'detail', event.id], queryFn: () => api.getLog(event.id), enabled: expanded })
+  // An event with no field changes may come back without the array at all.
+  const changes = detail.data?.changes ?? []
 
   return (
     <li className="rounded-lg border border-border bg-s1">
@@ -182,11 +191,18 @@ function LogRow({ event, onOpenTimeline }: { event: AuditEvent; onOpenTimeline: 
         <div className="border-t border-border px-3 py-3 pl-9">
           {detail.isLoading ? (
             <Spinner className="h-4 w-4" />
+          ) : detail.isError && !detail.data ? (
+            <div>
+              <p className="mb-2 text-[13px] text-danger">Detail záznamu se nepodařilo načíst.</p>
+              <Button variant="secondary" size="sm" loading={detail.isFetching} onClick={() => void detail.refetch()}>
+                Zkusit znovu
+              </Button>
+            </div>
           ) : (
             <>
-              {(detail.data?.changes.length ?? 0) > 0 ? (
+              {changes.length > 0 ? (
                 <div className="space-y-1.5">
-                  {detail.data!.changes.map((c, i) => (
+                  {changes.map((c, i) => (
                     <DiffLine key={i} change={c} />
                   ))}
                 </div>
@@ -256,7 +272,14 @@ function EntityTimeline({ type, id, open, onOpenChange }: { type: string; id: st
         <div className="grid place-items-center py-8">
           <Spinner />
         </div>
-      ) : (q.data?.items.length ?? 0) === 0 ? (
+      ) : q.isError && !q.data ? (
+        <div className="py-6 text-center">
+          <p className="mb-3 text-sm text-danger">Historii se nepodařilo načíst.</p>
+          <Button variant="secondary" size="sm" loading={q.isFetching} onClick={() => void q.refetch()}>
+            Zkusit znovu
+          </Button>
+        </div>
+      ) : (q.data?.items?.length ?? 0) === 0 ? (
         <p className="text-sm text-subtle">Žádná historie.</p>
       ) : (
         <ol className="space-y-3 border-l border-border pl-4">
@@ -268,7 +291,7 @@ function EntityTimeline({ type, id, open, onOpenChange }: { type: string; id: st
                 <span>{fmtDateTime(e.ts)}</span>
               </div>
               <div className="text-sm text-fg">{e.summary}</div>
-              {e.changes.length > 0 && (
+              {(e.changes?.length ?? 0) > 0 && (
                 <div className="mt-1 space-y-1">
                   {e.changes.map((c, i) => (
                     <DiffLine key={i} change={c} />
@@ -305,6 +328,13 @@ function StatsView() {
       {stats.isLoading ? (
         <div className="grid place-items-center py-16">
           <Spinner />
+        </div>
+      ) : stats.isError && !stats.data ? (
+        <div className="py-6 text-center">
+          <p className="mb-3 text-sm text-danger">Analytiku se nepodařilo načíst.</p>
+          <Button variant="secondary" size="sm" loading={stats.isFetching} onClick={() => void stats.refetch()}>
+            Zkusit znovu
+          </Button>
         </div>
       ) : totals.length === 0 ? (
         <p className="text-sm text-muted">Žádná data.</p>

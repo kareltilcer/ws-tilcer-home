@@ -3228,6 +3228,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/AuditEvent"
         - type: object
+          required: [changes]
           properties:
             changes:
               type: array

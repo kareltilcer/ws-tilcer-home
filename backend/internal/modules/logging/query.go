@@ -144,7 +144,7 @@ func (s *Store) Get(ctx context.Context, id string) (*AuditEventDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AuditEventDetail{AuditEvent: ev, Changes: changes[ev.ID]}, nil
+	return &AuditEventDetail{AuditEvent: ev, Changes: orEmptyChanges(changes[ev.ID])}, nil
 }
 
 // Timeline returns the chronological (oldest-first) history of one entity, each
@@ -212,7 +212,7 @@ func (s *Store) Timeline(ctx context.Context, entityType, entityID, from, to str
 	}
 	page.Items = make([]AuditEventDetail, len(events))
 	for i, e := range events {
-		page.Items[i] = AuditEventDetail{AuditEvent: e, Changes: changes[e.ID]}
+		page.Items[i] = AuditEventDetail{AuditEvent: e, Changes: orEmptyChanges(changes[e.ID])}
 	}
 	page.NextCursor = nextCursor
 	return page, nil
@@ -294,7 +294,7 @@ func (s *Store) Stats(ctx context.Context, dimension, bucket, from, to string) (
 		return StatsResult{}, err
 	}
 
-	res := StatsResult{Dimension: dimension, Bucket: bucket}
+	res := StatsResult{Dimension: dimension, Bucket: bucket, Buckets: []StatBucket{}, Totals: []StatTotal{}}
 	for bkey, counts := range bucketCounts {
 		res.Buckets = append(res.Buckets, StatBucket{TS: bkey, Counts: counts})
 	}
@@ -522,7 +522,7 @@ func scanEvent(row scannable) (AuditEvent, error) {
 }
 
 func scanEvents(rows *sql.Rows) ([]AuditEvent, error) {
-	var out []AuditEvent
+	out := []AuditEvent{}
 	for rows.Next() {
 		e, err := scanEvent(rows)
 		if err != nil {
@@ -531,6 +531,16 @@ func scanEvents(rows *sql.Rows) ([]AuditEvent, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// orEmptyChanges keeps a nil slice out of the response: the API declares
+// `changes` as an array, and an event with no field changes would otherwise
+// serialise as null and break clients that index into it.
+func orEmptyChanges(x []AuditChange) []AuditChange {
+	if x == nil {
+		return []AuditChange{}
+	}
+	return x
 }
 
 func nsToPtr(ns sql.NullString) *string {
