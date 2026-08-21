@@ -1,21 +1,28 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.10.0
+  version: 0.10.1
   description: >-
-    API for the `home` household-management service. **0.10.0 = the v8 SPEC** (draft): adds the
+    API for the `home` household-management service. **0.10.1 = v8 AS BUILT, and is what is
+    deployed** — 0.10.0 was the v8 spec, and this is its reconciliation against the shipped code
+    (2026-08-21): the `electricity` and `garden` sections now describe the server rather than the
+    intention, and `AuditEventDetail.changes` is required because empty collections serialise as
+    `[]`, never null. Where a description says ⚠ AS BUILT, it records a deviation the code took and
+    the spec followed — not a design.
+    v8 adds the
     `electricity` module (Elektřina — VT/NT meter readings taken at arbitrary dates, a ceník
     versioned by effective date, zálohy with a due day, user-set settlement periods, and a
     nedoplatek/přeplatek prediction computed on read; tag `electricity`). It is the leanest module
     home has: NO widget, NO metric, NO list and NO push — nothing on Nástěnka, nothing in the
     notification catalogs. Its energy is integer TENTHS OF KWH (`*_dkwh`) and its money is integer
     HALÉŘE (`*_haler`), because this module's prices are not whole koruny.
-    **0.9.0 was the v7 SPEC**: adds the `garden` module (Zahrada — a two-level crop
+    **0.9.0 was the v7 spec, and shipped inside 0.10.1**: it adds the `garden` module (Zahrada — a two-level crop
     knowledge base with anchored timing windows, beds whose order is the adjacency model, a per-season
     plan whose checks are computed on read and never block a save, a garden-owned work calendar with
-    od–do windows, plus harvest, storage and an LLM import/export round trip; tag `garden`). The module
+    od–do windows, plus harvest, storage and an LLM import/export — export is a SUPERSET of what
+    import accepts; tag `garden`). The module
     sends NO push: it publishes catalog keys and one nightly audit event, and Administrace delivers.
-    **0.8.0 was the v6 spec, and is what shipped**: it added the
+    **0.8.0 was the v6 spec**: it added the
     `finance` module (Finance — the retiring `fin` service absorbed into Home: two monthly incomes
     split into personal / operational / two savings accounts by a LOCKED formula, derived on read
     and never stored; tag `finance`). **0.7.0 was the deployed v5 build.** v5 — adds the admin-only `admin` module (Web Push notifications: broadcast, audit-key triggers, scheduled summaries; tags `push`, `admin-notifications`) and an installable reads-only-offline PWA. Companion to PRD.md.
@@ -2342,10 +2349,12 @@ paths:
         the garden's frost dates, altitude). Because one registry produces the
         validator, this schema and /api/garden/enums, a prompt cannot ask a model
         for a field the importer would reject.
+
+        The template is always the CROP shape. There is no `target` switch and no `name`
+        parameter as built — the importer only accepts crops (see /api/garden/plants/import),
+        so a variety or rule prompt would ask for something nothing could take back in.
       parameters:
-        - { name: name, in: query, description: "Crop name to fill in, e.g. `Rajče`.", schema: { type: string } }
-        - { name: target, in: query, description: Which record shape to request., schema: { type: string, enum: [plant, variety, rule], default: plant } }
-        - { name: plant_id, in: query, description: "When updating an existing crop, its current values are included so the model fills gaps instead of overwriting.", schema: { type: string } }
+        - { name: plant_id, in: query, description: "When updating an existing crop, its current values are included so the model fills gaps instead of overwriting. An unknown id is a 404.", schema: { type: string } }
       responses:
         "200":
           description: OK
@@ -2357,12 +2366,20 @@ paths:
   /api/garden/plants/import:
     post:
       tags: [garden]
-      summary: Import crops/varieties/rules from LLM-produced JSON
+      summary: Import crops from LLM-produced JSON
       description: >-
-        Accepts a single object or an ARRAY, so twenty crops arrive in one paste;
-        each element validates independently and the response reports per-element
-        status. Enum matching is lenient (Czech words map to enum members) but an
-        unmappable enum is a 422 naming field and value — NEVER a silent default.
+        CROPS ONLY as built. The body is a single crop object or an ARRAY of them, so
+        twenty crops arrive in one paste; an element without `name_cs` is rejected.
+        There is no variety and no rule import — /api/garden/export emits both, but
+        nothing here reads them back, so the PRD D126 round trip is NOT shipped.
+
+        Each element validates independently and the response reports per-element
+        status, so three bad rows out of twenty do not cost the other seventeen. Enum
+        matching is lenient (Czech words map to enum members) but an unmappable enum
+        rejects that element naming field and value — NEVER a silent default. A body
+        that is not JSON at all, is empty, or carries more than 200 elements fails the
+        whole request instead.
+
         With `dry_run=true` (the default) nothing is persisted and the response is a
         preview: the resulting record, a field-level diff when it updates an existing
         row, and the input fields that could not be mapped. Applying records
@@ -2371,6 +2388,7 @@ paths:
         `garden.plant.create` / `garden.plant.update` per applied element.
       parameters:
         - { name: dry_run, in: query, schema: { type: boolean, default: true } }
+        - { name: model, in: query, description: "Which model produced the JSON, recorded verbatim on every applied row as `source_model` provenance and echoed back on the result. Free text, because the name is evidence rather than an enum.", schema: { type: string } }
       requestBody:
         required: true
         content:
@@ -2391,9 +2409,16 @@ paths:
       tags: [garden]
       summary: Export the knowledge base (plants, varieties, rules)
       description: >-
-        Emits the SAME JSON shape /api/garden/plants/import accepts (PRD D126), so an
-        export re-imports to an equivalent state — a readable backup and a way to move
-        the knowledge base between installs.
+        A readable backup and a way to move the knowledge base between installs. Pairs
+        in `rules` export by LABEL rather than by id, since an id from this database
+        means nothing in the next.
+
+        ⚠ AS BUILT, NOT AS DESIGNED. This is a SUPERSET of what can be imported, so the
+        PRD D126 round trip is NOT shipped: `plants` re-imports through
+        /api/garden/plants/import, but `varieties` and `rules` are EXPORT-ONLY — the
+        importer accepts a crop object or an array of crop objects and nothing else, and
+        feeding it this document back rejects every element. Treat the file as a record
+        of the knowledge base, not as a restore.
       responses:
         "200":
           description: OK
@@ -2511,7 +2536,8 @@ paths:
       summary: Update a variety
       description: >-
         Setting a field to null RESTORES inheritance from the species; omitting it
-        leaves the override alone. Audited as `garden.variety.update`.
+        leaves the override alone. Renaming onto a name another live variety of the same
+        species already holds is a 409. Audited as `garden.variety.update`.
       requestBody:
         required: true
         content:
@@ -2526,6 +2552,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
     delete:
       tags: [garden]
@@ -2543,11 +2570,13 @@ paths:
       description: >-
         The returned order is not cosmetic: consecutive beds within one `zone` are
         NEIGHBOURS (PRD D117), which is the whole adjacency model behind check C11.
+
+        UNPAGED as built: every bed comes back in one response, ordered
+        `zone, position, id`. There is no `limit`, no `cursor` and no `zone` filter —
+        the planner needs the whole adjacency chain to render at all, and a garden has
+        tens of beds rather than thousands.
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
-        - { name: zone, in: query, schema: { type: string } }
-        - { name: active, in: query, schema: { type: boolean } }
+        - { name: include_inactive, in: query, description: "Also return retired beds; by default only active ones come back.", schema: { type: boolean, default: false } }
       responses:
         "200":
           description: OK
@@ -2560,7 +2589,9 @@ paths:
       summary: Create a bed
       description: >-
         `area_m2` derives from `length_cm × width_cm` when omitted and may be set
-        explicitly for irregular shapes. Audited as `garden.bed.create`.
+        explicitly for irregular shapes — but one of the two must be there: a body
+        carrying neither `area_m2` nor BOTH dimensions is a 422, because a bed with no
+        area cannot be sized, over-booked or checked. Audited as `garden.bed.create`.
       requestBody:
         required: true
         content:
@@ -2668,9 +2699,10 @@ paths:
     get:
       tags: [garden]
       summary: List seasons (newest year first)
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+      description: >-
+        UNPAGED as built: every season comes back in one response. There is no `limit`
+        and no `cursor` — a household accumulates one row a year, so a page boundary
+        would only ever hide the beginning of the garden's own history.
       responses:
         "200":
           description: OK
@@ -2683,10 +2715,17 @@ paths:
       summary: Create a season, optionally copying and shifting a previous one
       description: >-
         With `copy_from`, every non-permanent planting of that year is copied; with
-        `shift`, bed assignments rotate by that offset over the ordered active beds,
-        either per planting or per FAMILY BLOCK so a family moves together. Planned
+        `shift`, EVERY planting slides that many beds from its OWN bed over the ordered
+        active beds, wrapping at the end — so a family spread across A1 and A3 lands on
+        A2 and A4 and keeps its shape. (`shift.by_family` is accepted but has no effect;
+        see the schema.) An offset larger than the number of beds is a 422. Planned
         dates re-anchor against the NEW season's frost dates — frost-anchored windows
         move, week-anchored ones stay (PRD D102).
+
+        A `copy_from` onto a year that ALREADY EXISTS fills that season's plan instead of
+        inserting a row, and is audited as `garden.season.update`; a target that already
+        holds plantings is a 409, since a second copy would duplicate every one of them.
+        A bare create on a taken year is a 409 too.
 
         With `dry_run=true` nothing is persisted and the response carries the
         prospective plan PLUS its check (PRD D129), so the UI can show what the shift
@@ -2814,12 +2853,13 @@ paths:
 
         C3 and C8 read CLOSED seasons only; with none they return status
         `no_history` rather than a pass — a check that cannot run must not look like
-        one that ran and found nothing. Dismissed warnings are returned with
-        `dismissed=true` unless `include_dismissed=false`. A warning NEVER blocks a
-        save (PRD D109); this endpoint is advisory, always.
-      parameters:
-        - { name: bed_id, in: query, description: Restrict to one bed (the planner's inline badge)., schema: { type: string } }
-        - { name: include_dismissed, in: query, schema: { type: boolean, default: true } }
+        one that ran and found nothing. Dismissed warnings are ALWAYS returned, carrying
+        `dismissed=true` and their note: a warning that vanished could not be restored
+        from a screen that never shows it. A warning NEVER blocks a save (PRD D109);
+        this endpoint is advisory, always.
+
+        The whole season is checked every time. As built there is no `bed_id` filter and
+        no `include_dismissed` switch — the panel filters client-side.
       responses:
         "200":
           description: OK
@@ -2835,24 +2875,29 @@ paths:
       tags: [garden]
       summary: Silence one warning for this season
       description: >-
-        The `key` is the warning's stable key, derived from (rule, bed, sorted
-        plantings, season). Change the plan enough that the key changes and the
-        warning correctly comes back. Audited as `garden.season.update`.
+        The `key` is the warning's stable key, derived from (check, rule, bed, sorted
+        plantings, season, per-check discriminator). Change the plan enough that the key
+        changes and the warning correctly comes back. Audited as `garden.season.update`.
+
+        THE RESPONSE IS THE RECOMPUTED CHECK, not the dismissal — 200 rather than 201,
+        because the caller's next question is always "what does the panel say now" and a
+        second GET to answer it would render a panel one edit out of date. Dismissing the
+        same key twice is an upsert (it refreshes the note and the stamp), so there is no
+        conflict to report.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GardenWarningDismissal" }
       responses:
-        "201":
-          description: Dismissed
+        "200":
+          description: Dismissed — the season's recomputed check
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GardenWarningDismissal" }
+              schema: { $ref: "#/components/schemas/GardenCheckResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
   /api/garden/seasons/{year}/check/dismissals/{key}:
     parameters:
@@ -2872,11 +2917,11 @@ paths:
       summary: List plantings
       description: >-
         `permanent=true` returns the trvalky/dřeviny view — plantings with no season
-        (PRD D106). Omitting both `season` and `permanent` returns everything.
+        (PRD D106). Omitting both `year` and `permanent` returns everything.
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
-        - { name: season, in: query, schema: { type: integer } }
+        - { name: year, in: query, description: "The season's YEAR, matching how seasons are addressed (PRD D128). A non-numeric value is a 422.", schema: { type: integer } }
         - { name: bed_id, in: query, schema: { type: string } }
         - { name: plant_id, in: query, schema: { type: string } }
         - { name: permanent, in: query, schema: { type: boolean } }
@@ -2935,9 +2980,16 @@ paths:
       description: >-
         Recording an ACTUAL date changes NO planned window (PRD D119) — the response's
         `drift` block states the difference instead, and POST …/shift-tasks is the
-        explicit way to move the work. Changing a PLANNED date, the crop, the variety
-        or the quantity re-runs generation under the D110 rules. Refused with 409 in a
-        closed season. Audited as `garden.planting.update` with a field-level diff.
+        explicit way to move the work. Changing a PLANNED date, the bed, the variety or
+        the quantity re-runs generation under the D110 rules.
+
+        THE CROP CANNOT BE CHANGED HERE. `plant_id` is not in the update schema and a
+        body carrying one is ignored rather than honoured — a planting that became a
+        different crop would take its harvests, its rotation history and its generated
+        work with it. Delete the planting and create the right one.
+
+        Refused with 409 in a closed season. Audited as `garden.planting.update` with a
+        field-level diff.
       requestBody:
         required: true
         content:
@@ -3000,19 +3052,26 @@ paths:
       summary: The work calendar
       description: >-
         Tasks whose window OVERLAPS [from, to] — not tasks that start inside it, which
-        would hide every job already under way. Ordered overdue-first, then by
-        `window_from`, then lexorank; this is the same selection the
-        `garden.prace` widget renders.
+        would hide every job already under way. Ordered by `window_from`, then lexorank
+        `position`, then id; there is NO overdue-first term in the query as built — the
+        `garden.prace` widget groups overdue work itself, off the `overdue` flag every
+        row carries. This is otherwise the same selection that widget renders.
+
+        THIS COLLECTION'S `cursor` IS NOT THE HOUSE UUIDv7 ONE. Because the sort does not
+        lead with the id, the cursor is an OPAQUE COMPOSITE of
+        `(window_from, position, id)`; anything else is a 422. Pass back exactly what the
+        previous page returned.
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
-        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: from, in: query, description: "Overlap bound, with `to`: matches work whose window touches the range.", schema: { type: string, format: date } }
         - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: to_end, in: query, description: "The OVERDUE bound — matches only work whose WHOLE window has passed (`window_to <= to_end`). It is the opposite of the `from`/`to` overlap, which excludes exactly the rows this returns, so missed work needs its own query. This is what `garden.tasks_overdue` selects on.", schema: { type: string, format: date } }
         - { name: status, in: query, schema: { $ref: "#/components/schemas/GardenTaskStatus" } }
         - { name: kind, in: query, schema: { $ref: "#/components/schemas/GardenTaskKind" } }
         - { name: bed_id, in: query, schema: { type: string } }
         - { name: planting_id, in: query, schema: { type: string } }
-        - { name: season, in: query, schema: { type: integer } }
+        - { name: year, in: query, description: "The season's YEAR, matching how seasons are addressed (PRD D128). A non-numeric value is a 422.", schema: { type: integer } }
       responses:
         "200":
           description: OK
@@ -3103,6 +3162,9 @@ paths:
         second send must not look like an error. Called from the widget with
         `meta.via="dashboard"`. An ordinary `editor` write: there is no `reader`
         exception anywhere in this module (PRD D124). Audited as `garden.task.update`.
+
+        The 409 below is the CLOSED-SEASON guard only — it never means "already
+        complete", which is the whole of D131.
       requestBody:
         required: false
         content:
@@ -3124,6 +3186,10 @@ paths:
     post:
       tags: [garden]
       summary: Un-tick a task (IDEMPOTENT)
+      description: >-
+        Completion's inverse and equally idempotent: re-opening an already-open task is a
+        200 carrying the same task. The 409 below is the CLOSED-SEASON guard only — it
+        never means "already open". Audited as `garden.task.update`.
       responses:
         "200":
           description: Re-opened (or already open)
@@ -3138,13 +3204,15 @@ paths:
     get:
       tags: [garden]
       summary: List harvest entries
+      description: >-
+        Filtered by season year and by planting only. There is no date-range filter as
+        built — a season IS the date range anyone asks for here, and it is the same
+        clause `garden.harvest_season` sums, so a page and the dashboard cannot disagree.
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
-        - { name: season, in: query, schema: { type: integer } }
+        - { name: year, in: query, description: "The season's YEAR, matching how seasons are addressed (PRD D128). A non-numeric value is a 422.", schema: { type: integer } }
         - { name: planting_id, in: query, schema: { type: string } }
-        - { name: from, in: query, schema: { type: string, format: date } }
-        - { name: to, in: query, schema: { type: string, format: date } }
       responses:
         "200":
           description: OK
@@ -3160,6 +3228,9 @@ paths:
         `unit` defaults to the crop's `harvest_unit`, so the form never asks. Note
         that `garden.harvest_season` sums KG ONLY — rows in ks/l/svazek are excluded
         from the metric, and the UI says so rather than adding apples to bunches.
+        A date before the crop reached its bed is a 422, and a harvest reaches its
+        season through its planting, so all three write routes here are refused with 409
+        once that season is closed — these rows ARE the history C3 and C8 read.
         Audited as `garden.harvest.create`.
       requestBody:
         required: true
@@ -3175,6 +3246,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
   /api/garden/harvests/{id}:
     parameters:
@@ -3193,6 +3265,7 @@ paths:
     patch:
       tags: [garden]
       summary: Correct a harvest entry
+      description: Refused with 409 once the planting's season is closed.
       requestBody:
         required: true
         content:
@@ -3207,15 +3280,18 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
     delete:
       tags: [garden]
       summary: Delete a harvest entry (soft)
+      description: Refused with 409 once the planting's season is closed.
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/garden/storage:
     get:
       tags: [garden]
@@ -3224,8 +3300,6 @@ paths:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
         - { name: status, in: query, schema: { $ref: "#/components/schemas/GardenStorageStatus" } }
-        - { name: location, in: query, schema: { type: string } }
-        - { name: expiring_before, in: query, schema: { type: string, format: date } }
       responses:
         "200":
           description: OK
@@ -3310,7 +3384,6 @@ paths:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
         - { name: scope, in: query, schema: { $ref: "#/components/schemas/GardenRuleScope" } }
-        - { name: ref, in: query, description: "Rules touching this plant id or family enum, on either side.", schema: { type: string } }
         - { name: include_disabled, in: query, schema: { type: boolean, default: true } }
       responses:
         "200":
@@ -3447,11 +3520,16 @@ paths:
       tags: [garden]
       summary: Every garden enum with its Czech label
       description: >-
-        Families, plant types, hardiness, feeder classes, sow methods, timing anchors,
-        task kinds, storage methods, harvest units, rule scopes, check keys. Served by
-        the SAME registry that generates the importer's validator and the LLM prompt
-        schema (PRD D114), so the frontend, the model and the validator cannot
-        disagree about what a legal value is.
+        Families, plant types, hardiness, feeder classes, root depths, sun, water needs,
+        sow methods, timing anchors, task kinds and statuses, planting statuses, season
+        statuses, storage methods and statuses, harvest units, harvest destinations, rule
+        scopes, verdicts and severities. Served by the SAME registry that generates the
+        importer's validator and the LLM prompt schema (PRD D114), so the frontend, the
+        model and the validator cannot disagree about what a legal value is.
+
+        The C1–C11 CHECK KEYS ARE NOT HERE. They are not registry members — they live in
+        the check engine and reach the client as `GardenWarning.check` and as the keys of
+        `GardenSettings.checks`.
       responses:
         "200":
           description: OK
@@ -3475,7 +3553,7 @@ paths:
         which is what makes every interval, ceník and period boundary unambiguous.
         Reads are open to any authenticated member, `reader` included.
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ElectricityLimit"
         - $ref: "#/components/parameters/DateCursor"
       responses:
         "200":
@@ -3575,7 +3653,7 @@ paths:
         stored end is a second source of truth that eventually disagrees with the next
         row's start.
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ElectricityLimit"
         - $ref: "#/components/parameters/DateCursor"
       responses:
         "200":
@@ -3672,7 +3750,7 @@ paths:
         The předpis záloh — a monthly amount and a due day, versioned by
         `effective_from` exactly like the ceník (PRD D144).
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ElectricityLimit"
         - $ref: "#/components/parameters/DateCursor"
       responses:
         "200":
@@ -3759,7 +3837,7 @@ paths:
         recorded payment WINS over the schedule for its month (PRD D144), so the
         common case is zero typing and the month that differed is one row.
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ElectricityLimit"
         - name: cursor
           in: query
           description: >-
@@ -3852,7 +3930,7 @@ paths:
         until `ends_on_confirmed` is true (PRD D153) — suppliers often do not state it
         in advance, and the prediction has to project somewhere.
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/ElectricityLimit"
         - $ref: "#/components/parameters/DateCursor"
       responses:
         "200":
@@ -4002,15 +4080,25 @@ paths:
       parameters:
         - name: from
           in: query
-          description: First month, YYYY-MM. Defaults to the earliest reading's month.
+          description: >-
+            First month, YYYY-MM. Defaults to the EARLIER of the first period's start
+            month and the earliest reading's month — a reading entered before the period
+            that contains it is ordinary, and starting at the period would hide months
+            the charts can genuinely fill.
           schema: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
         - name: to
           in: query
           description: >-
-            Last month, YYYY-MM. Defaults to the current month. An explicit range wider
-            than 1200 months (a century) is a 422, not a clamp — the defaults are bounded
-            by the data, but a hand-written `?from=0001-01&to=9999-12` would otherwise
-            materialise a month point per month for every period.
+            Last month, YYYY-MM. Defaults to the LATER of the current month and the last
+            period's `ends_on` month, so a period running past today is charted to its
+            end rather than cut off at the present.
+
+            A range wider than 1200 months (a century) is a 422, not a clamp — and the
+            cap is applied to the EFFECTIVE range, whatever `from` and `to` resolve to
+            after the defaults above, not only to a fully explicit one. A single
+            hand-written `?from=0001-01` reaches the same size as
+            `?from=0001-01&to=9999-12` and would otherwise materialise a month point per
+            month for every period.
           schema: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
       responses:
         "200":
@@ -4019,6 +4107,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ElectricityHistory" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            No settlement period exists yet — the same honest first-run answer
+            `/summary` and `/intervals` give, since there is nothing to chart before the
+            first období is created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
 components:
@@ -4065,7 +4161,11 @@ components:
         A season is addressed by its YEAR, not by a surrogate id (PRD D128) — the year
         is unique, immutable and user-visible, and it makes /zahrada/plan/2027 map 1:1
         onto the API. A knowing, single-entity deviation from addressing by id.
-      schema: { type: integer, minimum: 1900, maximum: 2999 }
+
+        A year outside 1900–2200, or one that is not a number at all, is a 422 and NOT a
+        404: the caller sent something that could never name a season, which is a
+        malformed request rather than a missing row.
+      schema: { type: integer, minimum: 1900, maximum: 2200 }
     DateCursor:
       name: cursor
       in: query
@@ -4077,7 +4177,28 @@ components:
         against a date and silently return a wrong page (PRD D149 — the `finance`
         month-key precedent, PRD D92). A malformed value is 422, never a silent
         re-serve of page one.
-      schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+
+        The pattern below is as tight as a regex usefully gets; the SERVER PARSES the
+        value, so an impossible date the pattern cannot express — `2026-02-30`,
+        `2027-04-31` — is a 422 all the same. Treat the pattern as a first filter, not
+        as the contract.
+      schema: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$" }
+    ElectricityLimit:
+      name: limit
+      in: query
+      description: >-
+        ⚠ AS BUILT, NOT AS DESIGNED. The five `electricity` collections do NOT use the
+        house `Limit` (default 50, maximum 200, clamping): they default to 100, accept
+        up to 500, and an out-of-range value — 0, negative, non-numeric or above 500 —
+        FALLS BACK TO 100 rather than clamping to the ceiling, so `?limit=600` returns
+        100 items and not 500.
+
+        This is a KNOWN INCONSISTENCY to be aligned with the house parameter in a later
+        version, not a deliberate contract. It is documented here only so the spec
+        describes what shipped; every other module (`admin`, `garden`, `logging`,
+        `finance`) uses 50/200 with a clamp, and nothing should be built on the
+        difference.
+      schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
 
   responses:
     Unauthorized:
@@ -5005,9 +5126,15 @@ components:
       allOf:
         - $ref: "#/components/schemas/AuditEvent"
         - type: object
+          required: [changes]
           properties:
             changes:
               type: array
+              description: >-
+                ALWAYS an array, never null — an event with no field changes serialises `[]`.
+                Go marshals a nil slice as `null`, which crashes a client that indexes into the
+                detail view; `orEmptyChanges` closes it on every log read. The same guarantee
+                already held for `items`, `buckets` and `totals` in this tag.
               items: { $ref: "#/components/schemas/AuditChange" }
     AuditEventPage:
       type: object
@@ -5675,21 +5802,34 @@ components:
         verified_at: { type: [string, "null"], format: date-time }
     GardenPlantCore:
       type: object
-      description: The knowledge-base fields shared by a species and by a variety's overrides.
+      description: >-
+        The knowledge-base fields shared by a species and by a variety's overrides.
+
+        EVERY PROPERTY HERE IS NULLABLE ON THE WIRE, AND NONE IS EVER ABSENT. One shape
+        serves both levels, so each field serialises explicitly: `null` means "not set"
+        on a species and "inherit from the species" on a variety (PRD D103) — the same
+        null read two ways, which is what lets one schema serve both. A reader must
+        handle null on all of them, including the booleans and the arrays.
       properties:
         name_latin: { type: [string, "null"] }
-        feeder_class: { $ref: "#/components/schemas/GardenFeederClass" }
+        feeder_class:
+          oneOf:
+            - $ref: "#/components/schemas/GardenFeederClass"
+            - type: "null"
         root_depth: { type: [string, "null"], enum: [shallow, medium, deep, null] }
         sun: { type: [string, "null"], enum: [full, partial, shade, null] }
         water_need: { type: [string, "null"], enum: [low, medium, high, null] }
         soil_ph_min: { type: [number, "null"] }
         soil_ph_max: { type: [number, "null"] }
         rotation_break_years: { type: [integer, "null"], minimum: 0, maximum: 10, description: Defaults from the family when null. }
-        sow_method: { $ref: "#/components/schemas/GardenSowMethod" }
-        needs_pricking_out: { type: boolean }
-        needs_support: { type: boolean, description: "Care flag — the generator emits an `support` (Opora a vyvazování) task only for crops that need one." }
-        wants_mulch: { type: boolean, description: "Care flag — drives the `mulch` (Mulčování) task." }
-        wants_pest_check: { type: boolean, description: "Care flag — drives a monthly `pest_check` (Kontrola škůdců) task across the occupancy window." }
+        sow_method:
+          oneOf:
+            - $ref: "#/components/schemas/GardenSowMethod"
+            - type: "null"
+        needs_pricking_out: { type: [boolean, "null"] }
+        needs_support: { type: [boolean, "null"], description: "Care flag — the generator emits an `support` (Opora a vyvazování) task only for crops that need one. Null reads as false on a species and as inherit on a variety, so an explicit `false` is how a variety says no to a species that says yes." }
+        wants_mulch: { type: [boolean, "null"], description: "Care flag — drives the `mulch` (Mulčování) task. Null reads as false on a species and as inherit on a variety." }
+        wants_pest_check: { type: [boolean, "null"], description: "Care flag — drives a `pest_check` (Kontrola škůdců) task every 30 days across the occupancy window, capped at twelve. Null reads as false on a species and as inherit on a variety." }
         hardening_days: { type: [integer, "null"], minimum: 0 }
         sow_depth_cm: { type: [number, "null"], minimum: 0 }
         spacing_row_cm: { type: [number, "null"], minimum: 0 }
@@ -5700,24 +5840,43 @@ components:
         germination_temp_c: { type: [integer, "null"] }
         days_to_maturity_min: { type: [integer, "null"], minimum: 0 }
         days_to_maturity_max: { type: [integer, "null"], minimum: 0 }
-        win_sow_indoor: { $ref: "#/components/schemas/GardenTimingWindow" }
-        win_sow_direct: { $ref: "#/components/schemas/GardenTimingWindow" }
-        win_transplant: { $ref: "#/components/schemas/GardenTimingWindow" }
-        win_harvest: { $ref: "#/components/schemas/GardenTimingWindow" }
-        harvest_unit: { $ref: "#/components/schemas/GardenHarvestUnit" }
+        win_sow_indoor:
+          oneOf:
+            - $ref: "#/components/schemas/GardenTimingWindow"
+            - type: "null"
+        win_sow_direct:
+          oneOf:
+            - $ref: "#/components/schemas/GardenTimingWindow"
+            - type: "null"
+        win_transplant:
+          oneOf:
+            - $ref: "#/components/schemas/GardenTimingWindow"
+            - type: "null"
+        win_harvest:
+          oneOf:
+            - $ref: "#/components/schemas/GardenTimingWindow"
+            - type: "null"
+        harvest_unit:
+          oneOf:
+            - $ref: "#/components/schemas/GardenHarvestUnit"
+            - type: "null"
+          description: >-
+            Required on a SPECIES (a crop that states no unit is refused with a 422) and
+            therefore never null on one. Null on a variety, and on a resolved
+            `GardenEffective` it falls back to `kg`.
         yield_per_m2: { type: [number, "null"], minimum: 0, description: "kg per m², used by check C4's sizing hints and by the yield comparison." }
         yield_per_plant: { type: [number, "null"], minimum: 0 }
         storage_methods:
-          type: array
+          type: [array, "null"]
           items: { $ref: "#/components/schemas/GardenStorageMethod" }
         storage_temp_c: { type: [integer, "null"] }
         storage_humidity: { type: [integer, "null"], minimum: 0, maximum: 100 }
         shelf_life_days: { type: [integer, "null"], minimum: 0 }
         pests:
-          type: array
+          type: [array, "null"]
           items: { $ref: "#/components/schemas/GardenPestIssue" }
         diseases:
-          type: array
+          type: [array, "null"]
           items: { $ref: "#/components/schemas/GardenPestIssue" }
         notes_md: { type: [string, "null"], description: Markdown. Indexed in FTS5 with the names and the pest/disease names. }
     GardenPlant:
@@ -5779,7 +5938,7 @@ components:
             is_favourite: { type: boolean }
             retired: { type: boolean }
             effective:
-              $ref: "#/components/schemas/GardenPlant"
+              $ref: "#/components/schemas/GardenEffective"
             provenance: { $ref: "#/components/schemas/GardenProvenance" }
             created_at: { type: string, format: date-time }
             updated_at: { type: string, format: date-time }
@@ -5789,7 +5948,31 @@ components:
         record — variety value if non-null, else species value — produced by the one
         shared resolution function every consumer reads through, so the planner, the
         task generator, the check and the widget cannot disagree about when to sow
-        this variety.
+        this variety. It is present on GET /api/garden/varieties/{id} and omitted from
+        the list; it is never accepted on a write.
+    GardenEffective:
+      allOf:
+        - $ref: "#/components/schemas/GardenPlantCore"
+        - type: object
+          required: [plant_id, plant_name, family, plant_type, hardiness]
+          properties:
+            plant_id: { type: string }
+            plant_name: { type: string }
+            family: { $ref: "#/components/schemas/GardenFamily" }
+            plant_type: { $ref: "#/components/schemas/GardenPlantType" }
+            hardiness: { $ref: "#/components/schemas/GardenHardiness" }
+            variety_id: { type: [string, "null"] }
+            variety_name: { type: [string, "null"] }
+      description: >-
+        A species with every overridable field resolved against a variety (PRD D103) —
+        what the planner, the task generator, the check engine and the widget all read,
+        never a plant and a variety side by side.
+
+        It is NOT a `GardenPlant`: there is no `id`, no `name_cs`, no `variety_count`, no
+        `provenance` and no timestamps, because a resolved record is a computed view of
+        two rows rather than a row of its own. What it adds instead is the identity of
+        both sides — `plant_id`/`plant_name` and the variety pair, null when no variety
+        was named.
     GardenVarietyCreate:
       allOf:
         - $ref: "#/components/schemas/GardenPlantCore"
@@ -5800,6 +5983,7 @@ components:
             supplier: { type: string }
             description_md: { type: string }
             is_favourite: { type: boolean }
+            verified: { type: boolean, description: Set true to clear the "neověřeno" badge; stamps verified_by/at from the session. }
     GardenVarietyUpdate:
       allOf:
         - $ref: "#/components/schemas/GardenPlantCore"
@@ -5813,6 +5997,7 @@ components:
             description_md: { type: [string, "null"] }
             is_favourite: { type: boolean }
             retired: { type: boolean }
+            verified: { type: boolean, description: "Set true to clear the \"neověřeno\" badge, false to withdraw it; both stamp or clear verified_by/at. A claim you cannot withdraw is one the next reader cannot trust." }
     GardenVarietyPage:
       type: object
       required: [items]
@@ -5845,6 +6030,11 @@ components:
         updated_at: { type: string, format: date-time }
     GardenBedCreate:
       type: object
+      description: >-
+        THE BED MUST END UP WITH AN AREA. Send `area_m2` directly, or send BOTH
+        `length_cm` and `width_cm` and let it derive; a body with neither — or with only
+        one dimension — is a 422, because a bed with no area cannot be sized,
+        over-booked or checked.
       required: [name, code, type]
       properties:
         name: { type: string, minLength: 1 }
@@ -5856,6 +6046,7 @@ components:
         sun_exposure: { type: string, enum: [full, partial, shade] }
         zone: { type: string }
         soil_notes_md: { type: string }
+        is_active: { type: boolean, default: true, description: Send false to create a bed already retired. }
     GardenBedUpdate:
       type: object
       description: Partial. Omitted fields are left alone.
@@ -5942,19 +6133,37 @@ components:
         shift:
           type: object
           description: >-
-            Rotate bed assignments over the ordered active beds. `by_family` moves a
-            whole family as a block rather than each planting independently — the
-            "posuň rodiny o jeden záhon" move.
+            Rotate bed assignments over the ordered active beds — the
+            "posuň rodiny o jeden záhon" move. Every planting slides `offset` beds from
+            its OWN bed, wrapping at the end, so a family keeps its shape: one spread
+            across A1 and A3 lands on A2 and A4. An `offset` whose magnitude exceeds the
+            number of active beds is a 422.
           properties:
             offset: { type: integer }
-            by_family: { type: boolean, default: true }
+            by_family:
+              type: boolean
+              default: true
+              description: >-
+                ⚠ ACCEPTED BUT INERT AS BUILT. It changes nothing: the shift is always
+                the per-planting slide described above, which IS the family block move.
+                The earlier family-anchored version measured every planting of a family
+                from one anchor bed and so collapsed A1+A3 onto A2 — over-booking one bed
+                and emptying another — and was removed. The field is still read from the
+                body so older clients do not break; do not build on it.
     GardenSeasonUpdate:
       type: object
       description: >-
         Partial. Changing a frost date RE-ANCHORS every frost-anchored planned date in
         the season that the user has not manually overridden.
       properties:
-        status: { $ref: "#/components/schemas/GardenSeasonStatus" }
+        status:
+          type: string
+          enum: [planning, active]
+          description: >-
+            Only the two OPEN states are settable here. `closed` is refused with a 422:
+            closing is a ritual that records observed frost dates and per-planting
+            outcomes, so it has its own action (POST …/close), and re-opening is
+            admin-only.
         last_frost_on: { type: [string, "null"], format: date }
         first_frost_on: { type: [string, "null"], format: date }
         notes_md: { type: [string, "null"] }
@@ -6009,10 +6218,22 @@ components:
     GardenOccupancy:
       type: object
       description: >-
-        DERIVED, never stored. from = first of (sowed_on, sow_direct_on,
-        transplant_on); to = cleared_on or harvest_to. This — not calendar-year
-        membership — is what "shares a bed" means everywhere in the module (PRD D107),
-        so spring špenát and autumn pórek in one bed never warn against each other.
+        DERIVED, never stored. This — not calendar-year membership — is what "shares a
+        bed" means everywhere in the module (PRD D107), so spring špenát and autumn pórek
+        in one bed never warn against each other.
+
+        `from` is the day the crop reaches THE BED: the first set of `sowed_on`,
+        `sow_direct_on`, `transplanted_on`, `transplant_on`, falling back to `planted_on`
+        for a permanent, which is in the ground from the day it was planted. NO INDOOR
+        DATE EVER DATES A BED — when the plan has a `sow_indoor_on`, `sowed_on` names the
+        tray rather than the bed and is skipped, or a seedling on a windowsill in March
+        would collide with the spring crop still standing outside.
+
+        `to` is the first set of `cleared_on`, `removed_on`, `harvest_to`.
+
+        Either bound may be null, meaning open-ended: for the conflict checks that is
+        deliberate and conservative — an un-dated planting overlaps everything in its bed
+        and provokes a question rather than silence.
       properties:
         from: { type: [string, "null"], format: date }
         to: { type: [string, "null"], format: date }
@@ -6064,6 +6285,15 @@ components:
         removed_on: { type: [string, "null"], format: date }
         occupancy: { $ref: "#/components/schemas/GardenOccupancy" }
         drift: { $ref: "#/components/schemas/GardenDrift" }
+        harvest_unit:
+          oneOf:
+            - $ref: "#/components/schemas/GardenHarvestUnit"
+            - type: "null"
+          description: >-
+            The crop's RESOLVED (species+variety) unit, carried beside the two yield
+            numbers because both are stated in it. Without it a screen showing a yield
+            shows a bare number and one asking for a yield asks an ambiguous question —
+            which is how a count of onions becomes kilograms. Derived, never stored.
         yield_actual: { type: [number, "null"], description: "Σ harvests, in the crop's unit. Derived." }
         yield_expected: { type: [number, "null"], description: yield_per_m2 × area (or per plant × count). Derived. }
         notes_md: { type: [string, "null"] }
@@ -6074,6 +6304,7 @@ components:
       required: [plant_id]
       properties:
         season_id: { type: [string, "null"], description: Omit or null for a permanent planting. }
+        season_year: { type: integer, description: "The planner's actual path: it knows the year from its URL, not the season's surrogate id, so it sends this and the server resolves it to `season_id` (PRD D128). An unknown year is a 404. Send one or the other, not both — `season_id` wins." }
         bed_id: { type: string }
         location_label: { type: string }
         plant_id: { type: string }
@@ -6092,9 +6323,13 @@ components:
     GardenPlantingUpdate:
       type: object
       description: >-
-        Partial. Setting an ACTUAL date changes no planned window (PRD D119). Changing
-        a PLANNED date, the crop, the variety or the quantity re-runs task generation
-        under the D110 rules.
+        Partial. Setting an ACTUAL date changes no planned window (PRD D119). Changing a
+        PLANNED date, the bed, the variety or the quantity re-runs task generation under
+        the D110 rules.
+
+        THE CROP IS NOT UPDATABLE. `plant_id` is deliberately absent, and one sent anyway
+        is ignored rather than applied — a planting that became a different crop would
+        carry its harvests, its rotation history and its generated work across with it.
       properties:
         bed_id: { type: [string, "null"] }
         location_label: { type: [string, "null"] }
@@ -6113,6 +6348,8 @@ components:
         cleared_on: { type: [string, "null"], format: date }
         status: { $ref: "#/components/schemas/GardenPlantingStatus" }
         fail_reason: { type: [string, "null"] }
+        planted_on: { type: [string, "null"], format: date, description: Permanents only. }
+        rootstock: { type: [string, "null"], description: Podnož. Permanents only. }
         removed_on: { type: [string, "null"], format: date }
         notes_md: { type: [string, "null"] }
     GardenPlantingPage:
@@ -6170,6 +6407,7 @@ components:
         window_to: { type: string, format: date }
         due_hint: { type: string, format: date }
         season_id: { type: string }
+        season_year: { type: integer, description: "The planner's actual path: it knows the year from its URL, not the season's surrogate id, so it sends this and the server resolves it to `season_id` (PRD D128). An unknown year is a 404. Send one or the other, not both — `season_id` wins." }
         planting_id: { type: string }
         bed_id: { type: string }
         notes_md: { type: string }
@@ -6218,7 +6456,7 @@ components:
         blocks a save (PRD D109).
       required: [key, check, severity, title_cs]
       properties:
-        key: { type: string, description: "Stable: hash(rule, bed, sorted plantings, season). Change the plan enough and the warning correctly returns." }
+        key: { type: string, description: "Stable and opaque: hash(check, rule, bed, sorted plantings, season year, per-check discriminator). The check id is in the hash so two checks firing on the same tuple do not share a dismissal, and the discriminator separates a check that can fire more than once on it — C10 per date field, C11 per reason. The YEAR is in it deliberately, so a copied season does not inherit last year's dismissals. Change the plan enough and the warning correctly returns." }
         check: { type: string, enum: [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11] }
         severity: { $ref: "#/components/schemas/GardenWarningSeverity" }
         title_cs: { type: string }
@@ -6286,8 +6524,8 @@ components:
       required: [planting_id, harvested_on, quantity]
       properties:
         planting_id: { type: string }
-        harvested_on: { type: string, format: date }
-        quantity: { type: number, minimum: 0 }
+        harvested_on: { type: string, format: date, description: Defaults to today. A date before the crop reached its bed is a 422. }
+        quantity: { type: number, exclusiveMinimum: 0, description: "STRICTLY POSITIVE. A zero row is not a harvest: it would still stamp `first_harvest_on`, flip the planting to `harvesting` and make `yield_actual` non-null — so the season-close review would read \"už zapsáno\" and never offer the box for the real figure, which then could not be entered at all once the season froze." }
         unit: { $ref: "#/components/schemas/GardenHarvestUnit" }
         destination: { type: string, enum: [fresh, storage, gift, compost] }
         quality: { type: string }
@@ -6506,7 +6744,7 @@ components:
             longitude: { type: [number, "null"] }
             altitude_m: { type: [integer, "null"] }
     GardenImportRequest:
-      description: A single record or an array of them; each element validates independently.
+      description: A single CROP object or an array of them; each element validates independently.
       oneOf:
         - type: object
           additionalProperties: true
@@ -6517,7 +6755,7 @@ components:
       required: [index, action, ok]
       properties:
         index: { type: integer }
-        action: { type: string, enum: [create, update, skip, reject] }
+        action: { type: string, enum: [create, update, skip, reject], description: "`skip` is reserved and NEVER emitted as built — an element either creates, updates or is rejected. Keep handling it, but do not expect it." }
         ok: { type: boolean }
         target_id: { type: [string, "null"] }
         name: { type: [string, "null"] }
@@ -6550,8 +6788,15 @@ components:
     GardenExport:
       type: object
       description: >-
-        The importer's own shape (PRD D126), so an export re-imports to an equivalent
-        state — a readable backup and a way to move the knowledge base between installs.
+        A readable backup and a way to move the knowledge base between installs. Pairs
+        in `rules` carry LABELS rather than ids, since an id from this database means
+        nothing in the next.
+
+        ⚠ A SUPERSET OF WHAT THE IMPORTER TAKES, so the PRD D126 round trip is NOT
+        shipped: `plants` re-imports through /api/garden/plants/import, but `varieties`
+        and `rules` are EXPORT-ONLY — that endpoint accepts a crop object or an array of
+        crop objects and nothing else, and feeding it this document back rejects every
+        element. Treat the file as a record of the knowledge base, not as a restore.
       required: [version, exported_at, plants, varieties, rules]
       properties:
         version: { type: string, example: "garden-kb/1" }
@@ -6791,6 +7036,22 @@ components:
         starts_on: { type: string, format: date }
         ends_on: { type: string, format: date, description: "Defaults to starts_on plus one year minus one day, with ends_on_confirmed false." }
         ends_on_confirmed: { type: boolean, default: false }
+        invoiced_total_haler: { type: [integer, "null"] }
+        invoiced_balance_haler: { type: [integer, "null"] }
+        invoiced_vt_dkwh:
+          type: [integer, "null"]
+          minimum: 0
+          description: >-
+            ⚠ The minimum is enforced ONLY by the table CHECK, not by the service, so a
+            negative value surfaces as a 500 rather than the 422 every sibling amount
+            returns. A known defect, recorded here rather than fixed.
+        invoiced_nt_dkwh:
+          type: [integer, "null"]
+          minimum: 0
+          description: >-
+            ⚠ Same as `invoiced_vt_dkwh`: a negative value is a 500, not a 422. Known
+            defect, recorded not fixed.
+        invoiced_at: { type: [string, "null"], format: date }
         note: { type: string }
     ElectricityPeriodUpdate:
       type: object
@@ -6803,8 +7064,19 @@ components:
         ends_on_confirmed: { type: boolean }
         invoiced_total_haler: { type: [integer, "null"] }
         invoiced_balance_haler: { type: [integer, "null"] }
-        invoiced_vt_dkwh: { type: [integer, "null"] }
-        invoiced_nt_dkwh: { type: [integer, "null"] }
+        invoiced_vt_dkwh:
+          type: [integer, "null"]
+          minimum: 0
+          description: >-
+            ⚠ The minimum is enforced ONLY by the table CHECK, not by the service, so a
+            negative value surfaces as a 500 rather than the 422 every sibling amount
+            returns. A known defect, recorded here rather than fixed.
+        invoiced_nt_dkwh:
+          type: [integer, "null"]
+          minimum: 0
+          description: >-
+            ⚠ Same as `invoiced_vt_dkwh`: a negative value is a 500, not a 422. Known
+            defect, recorded not fixed.
         invoiced_at: { type: [string, "null"], format: date }
         note: { type: [string, "null"] }
     ElectricityPeriodPage:
@@ -6879,6 +7151,8 @@ components:
             and is flagged in the UI.
         due_on: { type: string, format: date, description: The schedule's due_day clamped into this month (PRD D155). }
         is_due: { type: boolean, description: "True once due_on has arrived — INCLUSIVE: due on the 15th means paid on the 15th." }
+        due_clamped: { type: boolean, description: "True when the schedule's due_day exceeded this month's length and was clamped into it (PRD D155) — a due_day of 31 in February. The raw day stays stored; only this month's due_on moved." }
+        paid_on: { type: [string, "null"], format: date, description: "The recorded payment's paid_on, when `source` is `payment` and a date was entered. Metadata only — attribution is by the month key, never by this (PRD D144)." }
     ElectricityAdvancesSummary:
       type: object
       required: [counted_months, expected_total_haler, due_so_far_haler, months_counted, months_due]
@@ -6929,7 +7203,10 @@ components:
         in the two states where the module has not earned them. "The module never shows
         a number it hasn't earned, not a zero" is therefore carried by the type, rather
         than by every screen remembering to gate on `status` first.
-      required: [period, status, blocking, advances]
+      required:
+        [period, status, blocking, last_reading_on, days_since_last_reading, forecast,
+         cost_total_haler, energy_total_haler, fee_total_haler, advances, balance_haler,
+         recommended_advance_kc, recommended_advance_haler, invoice_comparison]
       properties:
         period: { $ref: "#/components/schemas/ElectricityPeriod" }
         status:
@@ -6943,6 +7220,21 @@ components:
             missing; figures before the earliest gap are still valid. `insufficient_data`
             — fewer than two readings, or no ceník effective on or before the period
             start; Přehled says "zatím nelze předpovědět" and shows `headroom` instead.
+        reason:
+          type: string
+          enum:
+            [no_tariff, need_second_reading, second_reading_same_day,
+             missing_opening_reading, tariff_change_inside_interval]
+          description: >-
+            Names WHAT IS MISSING when the module cannot predict, so the screen never
+            says "zatím nelze předpovědět" without saying why — an unexplained refusal
+            is indistinguishable from a bug.
+
+            OPTIONAL: the key is ABSENT when there is nothing to name, never null and
+            never an empty string. Set only alongside `insufficient_data` and `blocked`.
+            Note the deliberate asymmetry with `blocking`: `no_tariff` is missing
+            CONFIGURATION rather than a missing reading, so it carries a reason and no
+            `blocking` entry at all.
         blocking:
           type: array
           items: { $ref: "#/components/schemas/ElectricityBlocking" }
@@ -6958,7 +7250,15 @@ components:
           oneOf:
             - $ref: "#/components/schemas/ElectricitySpan"
             - type: "null"
-          description: Null when `status` is `complete` or `insufficient_data`.
+          description: >-
+            NULL when `status` is `blocked` or `insufficient_data` — there is no average
+            to project from.
+
+            NOT null when `status` is `complete`: the closing reading dated `ends_on` + 1
+            exists, so the forecast span is present but ALL-ZERO — `from_on` equals
+            `to_on` (both `ends_on` + 1), `days` is 0, and every kWh and haléř figure,
+            the two averages included, is 0. Read "is there anything still to forecast"
+            off `days`, never off the presence of this object.
         cost_total_haler:
           type: [integer, "null"]
           description: >-
@@ -6967,6 +7267,20 @@ components:
             unresolved gap, PRD D137/D140) — the figures BEFORE the gap stay valid in
             `actual`, but no period total exists. Never 0 in those states: a 0 Kč
             nedoplatek is a lie that looks like good news.
+        energy_total_haler:
+          type: [integer, "null"]
+          description: >-
+            The energy half of `cost_total_haler` — actual plus forecast, no poplatky.
+            NULL in exactly the same states as `cost_total_haler`, and never 0 in them:
+            the three totals are filled together or not at all, so one can never be a
+            number while another is absent.
+        fee_total_haler:
+          type: [integer, "null"]
+          description: >-
+            The poplatky half — the (calendar month × ceník version) chunks over the
+            whole period (PRD D143), so `energy_total_haler` plus `fee_total_haler`
+            equals `cost_total_haler` exactly. NULL in exactly the same states as
+            `cost_total_haler`.
         advances: { $ref: "#/components/schemas/ElectricityAdvancesSummary" }
         balance_haler:
           type: [integer, "null"]
@@ -6974,12 +7288,22 @@ components:
             expected zálohy minus cost_total_haler. POSITIVE is a přeplatek, NEGATIVE a
             nedoplatek (PRD D146). NULL exactly when `cost_total_haler` is null — the
             zálohy are always known, but a balance against an unknown cost is not.
+        recommended_advance_kc:
+          type: [integer, "null"]
+          description: >-
+            The doporučená záloha in WHOLE KORUNY, and the original from which
+            `recommended_advance_haler` is derived by ×100. The rounding up to koruny
+            happens here, in one ceil-division straight from haléře, because dividing to
+            haléře and rounding afterwards moves the answer by a koruna. Null exactly
+            when `recommended_advance_haler` is.
         recommended_advance_haler:
           type: [integer, "null"]
           description: >-
             (cost_total_haler minus the zálohy already due) divided by the months not
             yet due, rounded UP to whole koruny, floored at 0. Null when no month
-            remains.
+            remains. Derived as `recommended_advance_kc` × 100 and therefore always a
+            whole hundred — served in haléře only so it matches every other `*_haler`
+            field on this response.
         headroom: { $ref: "#/components/schemas/ElectricityHeadroom" }
         invoice_comparison:
           oneOf:

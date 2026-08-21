@@ -4,9 +4,9 @@ Version history for the `home` service. Full detail lives in `PRD.md` (§10 Deci
 
 ---
 
-## v8 — 2026-08-20 (spec) · **not built** · Elektřina (electricity)
+## v8 — 2026-08-20 (spec) · **deployed 2026-08-21** · Elektřina (electricity)
 
-> OpenAPI **0.9.0 → 0.10.0** (spec). Decisions **D133–D162** (`PRD.md` §V8-10). Triggered by one product addition from Karel: tracking the household's electricity against its zálohy. Scope was frozen the same day after an interview of eleven questions; the resolved brief is `V8-electricity-brief.md`.
+> OpenAPI **0.9.0 → 0.10.0** (spec) → **0.10.1** (as built). Decisions **D133–D162** (`PRD.md` §V8-10), plus **D169–D175 taken during the build** (`PRD.md` §V8-12). Triggered by one product addition from Karel: tracking the household's electricity against its zálohy. Scope was frozen the same day after an interview of eleven questions; the resolved brief is `V8-electricity-brief.md`.
 
 ### Headline
 
@@ -72,15 +72,27 @@ OpenAPI **0.10.0**: **13 new paths** (106 → **119**) and **32 new schemas** (2
 
 **Fixed in passing:** two enum lists in `openapi.yaml` had been stale since v6. `NotificationRule.filter_module` omitted **`finance` and `garden`**, so an admin composing a trigger rule could not qualify a finance or garden action key; `WidgetCatalogEntry.module` omitted the same two despite both shipping widgets. Both now list them — and `filter_module` gains `electricity`, while `WidgetCatalogEntry.module` deliberately does **not**, because v8 publishes no widget. Also observed and avoided: the v7 comma rule caught four fresh unquoted flow-mapping descriptions in the new schemas before they landed.
 
+### As built — 2026-08-21, OpenAPI **0.10.1** (PR #17 `4d217c1`, plus #18 `afce38e` and #19 `81102af`)
+
+Built in one pass and deployed with v7. `compute.go` was written and pinned by both worked fixtures **before a line of SQL existed**, and its purity is a test rather than a comment: no `database/sql`, no `net/http`, no `time.Now`. Mutation-checked twice — turning the forecast's single division into a rounded-average-times-*n* drifted the total by 19 haléře and failed four assertions; a real `float64` declaration failed the purity test. The five bans (widget, metric, list, push, blob) are enforced by `internal/arch`, and `platform/widgets/registry.tsx` is verifiably **absent from the diff** — an entry there for a module with no widget provider produces a dashboard tile that resolves to nothing: no compile error, no runtime error, an empty card.
+
+**Seven decisions the build took (D169–D175).** A counted month's `due_on` always comes from the schedule's `due_day`, never from a payment's `paid_on` — the prototype's rule made an undated payment never count as due and quietly skewed the doporučená záloha (D169). `no_tariff` turned out not to be a blocking kind at all but `insufficient_data` plus a **`reason` enum on the wire** (D170). `forecast` is an all-zero span when `complete` and null when `blocked`, the opposite of what 0.10.0 said (D171). The summary serves `energy_total_haler`, `fee_total_haler` and `recommended_advance_kc`, and counted months carry `paid_on` + `due_clamped`, because a client re-deriving them lands on a different number than the server's own tests (D172). And the nudge line **escalates in words only** — at 15 and 90 days, never in colour or size — which closes the design addendum's one open question (D175).
+
+**Two fixes shipped straight after the module.** PR #19 (D173): the log summary is the **one place the server formats money and energy**, because a summary is prose frozen at write time — a wrong unit is not a rendering bug a later deploy repairs, it is a wrong sentence sitting in the log forever. `kc()` now prints whole koruny with Czech non-breaking separators and a new `kc2()` the two-decimal form for unit prices and fees, mirroring the split already stated in the frontend's `format.ts`; `kwh()` gets the same grouping, so a five-digit register reads `12 345,6 kWh` in the log exactly as on Odečty. PR #18 (D174): **empty collections are arrays, and a failed request is not an empty log** — Go marshalled a nil slice as `null`, crashing a client that indexes into the log detail, while every view's `?? []` fallback rendered a 500 as "no records for this filter", the opposite of what happened. `AuditEventDetail.changes` is now required, and a Vitest file asserts each view's error branch beats its empty state, so reordering the ternary fails the build.
+
+**The contract, reconciled.** 0.10.1 = **119 paths, 236 schemas, 6 parameters**. It also closes a defect predating v8: **`backend/openapi.yaml` in the repo had never left 0.8.0**, because neither the v7 nor the v8 build updated it — 0.9.0 and 0.10.0 lived only in `handoff/v7/` and `handoff/v8/`, so the served contract described neither `garden` nor `electricity`. Add "update `backend/openapi.yaml`" to the module checklist, beside the non-registry host maps.
+
+**Two known defects, recorded not fixed.** The electricity collections use `limit` default **100** / ceiling **500** and do **not clamp**, where every other module uses 50/200 and clamps — documented through a module-local `ElectricityLimit` parameter marked ⚠ AS BUILT so nobody reads it as design. And a negative `invoiced_vt_dkwh` / `invoiced_nt_dkwh` reaches the table `CHECK` unvalidated and surfaces as a **500 instead of the 422 every sibling field returns**.
+
 ### Still to do
 
-Implementation. `HANDOFF-10-electricity.md` and the `HANDOFF-design.md` §v8 addendum are written; nothing is built. v7 is likewise still unbuilt, so `garden` (block 10) lands before `electricity` (block 11).
+Karel owes three things the module cannot invent: the záloha's **`due_day`** (1–31, entered through the UI — there is no seed), the supplier's **real period end date** when it arrives, and a decision on **when the first záloha was paid** — červen 2026 does not count toward the period, so a June payment for this supply belongs to the record as `2026-07`. Do not "fix" that by changing the counted-months rule.
 
 ---
 
-## v7 — 2026-08-18 (spec) · **not built** · Zahrada (garden)
+## v7 — 2026-08-18 (spec) · **deployed 2026-08-21** · Zahrada (garden)
 
-> OpenAPI **0.8.0 → 0.9.0** (spec). Decisions **D101–D132** (`PRD.md` §V7-10). Triggered by one product addition from Karel: the kitchen garden. Scope was frozen the same day after a sixteen-question interview; the resolved brief is `V7-garden-brief.md`.
+> OpenAPI **0.8.0 → 0.9.0** (spec), shipped inside **0.10.1**. Decisions **D101–D132** (`PRD.md` §V7-10), plus **D163–D168 taken during the build** (`PRD.md` §V7-12). Triggered by one product addition from Karel: the kitchen garden. Scope was frozen the same day after a sixteen-question interview; the resolved brief is `V7-garden-brief.md`.
 
 ### Headline
 
@@ -153,9 +165,21 @@ OpenAPI **0.9.0**: **34 new paths** (72 → **106**) and **79 new schemas** (124
 
 **Fixed in passing:** four inline flow-mapping descriptions in `openapi.yaml` contained **unquoted commas**, so YAML was parsing the tail of each as a stray null key rather than as description text — `FinanceRates.fun` / `.no_fun` ("(pooled, not per person)") and two `key:` descriptions mentioning `events.pripominky_today`. Latent rather than fatal, since JSON Schema tolerates unknown keywords and 0.8.0 still validated, but the text was silently truncated. All four are now quoted. **Rule going forward: any inline `{ … }` description containing a comma must be quoted.**
 
+### As built — 2026-08-19/21, deployed 2026-08-21 (PR #16 `fd79fed`)
+
+Eleven tables at block **10**, **34 routes / 61 operations**, the `garden.prace` widget, six metrics, six lists, **31 audit actions** (not the twelve the spec bullet claimed) and the 82-rule seed at block `10900`. Built in the mandated order — the four pure functions first, no DB and no HTTP: `timing.go` (anchored windows and the ISO week-53 clamp) → `resolve.go` (species+variety through one shared `PlantCore`, so the mirror is structural rather than hand-maintained) → `occupancy.go` → `check.go` (C1–C11, pure over a loaded snapshot). `TestForbiddenPlatformImports` was proved by a deliberate violation: the module cannot import `platform/push` or `platform/blobstore` without failing the build, so the frost alert really is composed entirely in Administrace over the published metric, list and nightly audit event.
+
+**Six decisions the build took (D163–D168).** `by_family` on the season copy is **accepted but inert** — the family-anchored shift collapsed A1 and A3 onto A2, because a shift is only meaningful relative to where a planting actually was (D163). A planting's **crop cannot be changed** by `PATCH`; that is a delete-and-recreate, and the spec's "the crop" among the regeneration triggers was wrong (D164). Dismissing a warning returns **200 + the recomputed check**, not 201 + the dismissal row, because a dismissal can change sibling warnings and the caller always re-renders anyway (D165). A harvest quantity is **strictly positive** — a zero row reads as "harvested, nothing came" and poisons `yield_actual` (D166). A season is closed **only by its own action** (D167). And the garden collections do not all follow the house paging contract: beds and seasons are **unpaged**, `/tasks` keysets on an opaque composite, and the filter is `year`, not `season` (D168).
+
+**What the spec had wrong, now corrected in place.** Seven endpoints documented filters that were never implemented, `GardenVariety.effective` is its own shape (`GardenEffective`, not a `GardenPlant`), fourteen `GardenPlantCore` properties serialise as explicit `null` rather than being absent, occupancy reads more fields than §V7-5 listed — including suppressing `sowed_on` when the sowing was indoors — and `/tasks` is ordered `window_from, position, id` with no overdue-first term. The **catalog keys are not the ones the prose claimed** either: `garden.harvest_season` and `garden.frost_risk_tonight` are metric-only, `garden.harvest_ready` and `garden.frost_sensitive_now` list-only.
+
+**One gap, recorded not fixed: the D126 export↔import round trip did not ship.** The export emits plants, varieties and rules; the importer accepts crops only, so feeding an export back is refused. The export is a **superset** of what import understands, and both the spec prose and the acceptance criterion now say so instead of promising the round trip.
+
+**`backend/openapi.yaml` was never updated by this build** — it stayed at 0.8.0, with no `garden` paths at all, until the 2026-08-21 as-built pass folded 0.9.0 and 0.10.0 into **0.10.1**.
+
 ### Still to do
 
-`HANDOFF-9-garden.md`, a §v7 design addendum in `HANDOFF-design.md`, then implementation. Nothing is built.
+The **Playwright/axe pass at 375/1440 in both themes**, outstanding since v5. Teaching the importer varieties and rules would close D126 — roughly a day's work, not a line.
 
 ---
 
