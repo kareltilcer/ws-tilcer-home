@@ -25,6 +25,10 @@ const (
 	ModuleAdmin     = "admin"
 	ModuleFinance   = "finance"
 	ModuleGarden    = "garden"
+	// ModuleElectricity is v8's Elektřina. Every module passes the constant and
+	// never a literal, so a typo in a module name is a compile error rather than
+	// a row that quietly falls out of the log browser's filter.
+	ModuleElectricity = "electricity"
 )
 
 // PlatformActions are the action verbs emitted by platform/ packages. They are

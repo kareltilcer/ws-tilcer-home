@@ -25,6 +25,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/garden"
@@ -204,6 +205,12 @@ func run(logger *slog.Logger) error {
 	// migration source applied above.
 	financeSvc := finance.NewService(sqldb, sink, notify)
 
+	// electricity (v8) takes the timezone because that is the ONE place a clock
+	// enters the module: `today` is resolved per request in the service and
+	// travels into the pure compute.go on the snapshot, so all three computed
+	// endpoints agree about what day it is even across a midnight.
+	elecSvc := electricity.NewService(sqldb, sink, notify, cfg.Timezone)
+
 	// garden (v7) is the largest module here — eleven tables — but it wires in
 	// like any other: no blob store, no push, no new platform strand. Its ONE
 	// external dependency is a public forecast, polled through the scheduler hook
@@ -260,6 +267,12 @@ func run(logger *slog.Logger) error {
 	financeMod := finance.NewModule(financeSvc, cfg.Timezone)
 	gardenMod := garden.NewModule(gardenSvc)
 
+	// electricity (v8) is the LEANEST module here. It appears in exactly ONE
+	// collection below — featureModules — and is deliberately absent from
+	// CollectWidgets, metrics.Collect and lists.Collect (D147): it publishes
+	// nothing to Nástěnka and nothing to the notification catalogs.
+	elecMod := electricity.NewModule(elecSvc)
+
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
 	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod}))
@@ -271,7 +284,7 @@ func run(logger *slog.Logger) error {
 	// 5b. v5: the metrics catalog — the THIRD registered catalog, beside widgets
 	// and audit actions. Modules publish counts; the admin module's summaries
 	// reference them by key and never touch a feature table (D59/D28).
-	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, dashMod}
+	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, elecMod, dashMod}
 	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod)
 	if err != nil {
 		return err

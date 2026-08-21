@@ -15,6 +15,7 @@ import { DokumentyPage } from '@/routes/dokumenty/DokumentyPage'
 import { DocumentPermalinkPage } from '@/routes/dokumenty/DocumentPermalinkPage'
 import { FinancePage } from '@/routes/finance/FinancePage'
 import { GardenPage } from '@/modules/garden/GardenPage'
+import { ElectricityPage } from '@/modules/electricity/ElectricityPage'
 import { LogPage } from '@/routes/log/LogPage'
 import { AdministracePage } from '@/modules/admin/AdministracePage'
 import { NastaveniPage } from '@/platform/settings/NastaveniPage'
@@ -55,6 +56,11 @@ export default function App() {
                     ordinary all-roles route: a reader sees the whole module and
                     can change none of it. */}
                 <Route path={`${routes.zahrada}/*`} element={<GardenPage />} />
+                {/* v8: Elektřina — four sub-routes under one prefix, the same
+                    shape as Zahrada. An ordinary all-roles route with no admin
+                    gate anywhere in the module (D151): a reader sees every
+                    number and can change nothing. */}
+                <Route path={`${routes.elektrina}/*`} element={<ElectricityPage />} />
                 <Route
                   path={routes.log}
                   element={

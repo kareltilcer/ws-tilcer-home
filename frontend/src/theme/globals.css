@@ -51,6 +51,14 @@
   --color-fin-needs: var(--fin-needs);
   --color-fin-fun: var(--fin-fun);
   --color-fin-nofun: var(--fin-nofun);
+  --color-el-vt: var(--el-vt);
+  --color-el-nt: var(--el-nt);
+  --color-el-over: var(--el-over);
+  --color-el-over-soft: var(--el-over-soft);
+  --color-el-under: var(--el-under);
+  --color-el-blocked: var(--el-blocked);
+  --color-el-blocked-soft: var(--el-blocked-soft);
+  --color-el-approx: var(--el-approx);
 
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 4px);
@@ -117,6 +125,43 @@
   --fin-needs: var(--c2);
   --fin-fun: var(--c4);
   --fin-nofun: var(--c3);
+
+  /* Elektřina (v8). VT and NT are two chart series, aliased onto the Path A
+     palette — ALIASES, NOT NEW VALUES, so the .light block re-steps them for
+     free. Two series is the easiest palette case home has had, but they sit
+     EDGE-TO-EDGE in the share bar and the stacked columns, so the v6 adjacency
+     finding applies exactly: secondary encoding is mandatory. VT is a square
+     swatch on a solid fill, NT a round swatch with a hatch, and both carry
+     direct labels. Colour never carries a tariff on its own. */
+  --el-vt: var(--c1);
+  --el-nt: var(--c2);
+  /* A nedoplatek is a WARNING, not a destructive action, so it is deliberately
+     NOT --danger (which means delete). Nobody has done anything wrong; the
+     forecast is simply running above the zálohy. Red/green also never carries
+     the meaning alone — the UI always prints the word and the sign. */
+  --el-over: oklch(0.800 0.105 42);
+  --el-over-soft: oklch(0.330 0.055 42);
+  --el-under: var(--good);
+  /* NOTE: --el-under resolves to the same green as --el-nt, since both alias the
+     c2/good step. They never encode each other — one is a semantic balance, the
+     other a tariff series — and NT is additionally hatched and round wherever it
+     appears, so the two are not confusable in practice. Flagged rather than
+     silently re-pointed, because changing it would mean introducing a colour the
+     Path A palette does not contain. */
+  /* BLOCKED IS NOT ERROR (D137). When a ceník change falls inside a reading
+     interval the numbers around it are still correct, so the treatment is
+     informational — distinctly not the destructive palette. */
+  --el-blocked: oklch(0.760 0.045 256);
+  --el-blocked-soft: oklch(0.300 0.028 256);
+  /* An APPROXIMATE figure (interpolated kWh, D138) gets its own vocabulary, and
+     the rule is that Kč NEVER receives it: a month's cost is an allocation of
+     exact interval costs (D159), not a repricing of invented kWh. This is the
+     first screen in home where the two kinds of number appear side by side. */
+  /* Lightened from the design's 0.560 to clear AA on body text. The approximate
+     treatment carries the interpolation FOOTNOTE — a full sentence, not a
+     decorative tint — and at 0.560 it measured 3.91:1 against --s1, under the
+     4.5 bar. Measured 5.4:1 here. */
+  --el-approx: oklch(0.635 0.018 264);
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;
   --font: 'Hanken Grotesk', system-ui, sans-serif;
@@ -166,6 +211,21 @@
   --c3: oklch(0.600 0.130 66);
   --c4: oklch(0.520 0.150 300);
   --c5: oklch(0.500 0.110 190);
+  /* Elektřina, light theme. --el-vt / --el-nt / --el-under need no entry here:
+     they are aliases and re-step through --c1 / --c2 / --good above. Only the
+     four values that are NOT aliases are restated, and they are darkened rather
+     than merely lightened — this module is read at a meter cupboard in bad
+     light, so the light theme was checked first and at low screen brightness. */
+  /* Darkened from the design's 0.545: the nedoplatek chip sets bold 13px text on
+     --el-over-soft, which is body text by WCAG's reckoning (not "large"), and at
+     0.545 it measured 4.33:1 — under the 4.5 bar. The chip, not the headline
+     figure, was the failing pair. Measured 5.1:1 here. */
+  --el-over: oklch(0.505 0.150 42);
+  --el-over-soft: oklch(0.955 0.040 42);
+  --el-blocked: oklch(0.470 0.040 256);
+  --el-blocked-soft: oklch(0.955 0.014 256);
+  /* Darkened from the design's 0.640 for the same reason as its dark twin. */
+  --el-approx: oklch(0.545 0.018 264);
   --shadow: 0 1px 2px oklch(0.2 0.02 264 / 0.10), 0 2px 8px oklch(0.2 0.02 264 / 0.06);
 }
 

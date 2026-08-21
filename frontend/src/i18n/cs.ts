@@ -45,6 +45,11 @@ export const cs = {
     // that is a doorway to eight sub-pages rather than to one screen.
     zahrada: 'Zahrada',
     zahradaDesc: 'Plodiny, plán sezóny a práce na zahradě',
+    // v8: the description answers the QUESTION the module answers, not what it
+    // contains. Nothing anywhere else will ever mention Elektřina — no widget, no
+    // notification — so this line has to earn the trip on its own.
+    elektrina: 'Elektřina',
+    elektrinaDesc: 'Odečty, ceník a zálohy — vyjdou, nebo doplatím?',
   },
   common: {
     loading: 'Načítání…',
@@ -71,6 +76,7 @@ export const cs = {
     documentsUpdated: 'Dokumenty byly mezitím upraveny',
     financeUpdated: 'Finance byly mezitím upraveny',
     gardenUpdated: 'Zahrada byla mezitím upravena',
+    electricityUpdated: 'Elektřina byla mezitím upravena',
   },
   dashboard: {
     title: 'Nástěnka',
@@ -840,5 +846,288 @@ export const cs = {
     bannerSub: 'Změny nelze uložit offline. Náhledy dokumentů a přihlášení vyžadují připojení.',
     writeBlocked: 'Změny nelze uložit offline',
     needsConnection: 'Vyžaduje připojení',
+  },
+
+  // v8 — Elektřina (PRD §V8-7). The vocabulary in `word` is FIXED by the spec and
+  // is used verbatim on the pages, in the forms and in the Log, so a person reads
+  // the same noun everywhere.
+  //
+  // Everything else is owned here, and in this module the COPY DOES WORK THE
+  // LAYOUT CANNOT. Four sentences carry most of it: why a prediction is only a
+  // prediction, what is missing when one is impossible, what the záloha buys
+  // before any consumption is known, and why a stale odečet is an explanation
+  // rather than a scolding.
+  electricity: {
+    title: 'Elektřina',
+    lede: 'Odečty, ceník, zálohy a jeden odhad: vyjdou zálohy, nebo doplatím?',
+
+    word: {
+      reading: 'Odečet',
+      readings: 'Odečty',
+      vt: 'VT',
+      nt: 'NT',
+      vtLong: 'Vysoký tarif',
+      ntLong: 'Nízký tarif',
+      tariff: 'Ceník',
+      priceVT: 'Cena VT',
+      priceNT: 'Cena NT',
+      monthlyFee: 'Měsíční poplatky',
+      advance: 'Záloha',
+      advanceSchedule: 'Předpis záloh',
+      dueDay: 'Den splatnosti',
+      period: 'Zúčtovací období',
+      expectedEnd: 'předpokládaný konec',
+      invoice: 'Vyúčtování',
+      consumption: 'Spotřeba',
+      costs: 'Náklady',
+      prediction: 'Predikce',
+      actualFact: 'Skutečnost',
+      underpay: 'Nedoplatek',
+      overpay: 'Přeplatek',
+      recommended: 'Doporučená záloha',
+      addReading: 'Zadat odečet',
+      energy: 'Energie',
+    },
+
+    tabs: {
+      prehled: 'Přehled',
+      odecty: 'Odečty',
+      cenik: 'Ceníky a poplatky',
+      historie: 'Historie a grafy',
+    },
+
+    // The headline. The number is confident; the hedge sits above and below it,
+    // never inside it — shrinking or greying the figure would trade away the one
+    // payoff the module has.
+    head: {
+      kickerEstimate: 'Odhad k',
+      kickerActual: 'Skutečnost k',
+      basisPrediction: (days: string) => `predikce z průměru za posledních ${days}`,
+      basisActual: (days: string, on: string) =>
+        `skutečnost za ${days} — uzavírací odečet k ${on} je zapsaný`,
+      costLine: (cost: string, advances: string) =>
+        `spočtené náklady ${cost} · zálohy ${advances}`,
+      progress: (elapsed: string, remaining: string) => `${elapsed} uplynulo · ${remaining} zbývá`,
+    },
+
+    // "Zatím nelze předpovědět" always NAMES what is missing. An unexplained
+    // refusal is indistinguishable from a bug.
+    cannotPredict: 'Zatím nelze předpovědět',
+    reason: {
+      need_second_reading: 'potřebuji druhý odečet',
+      second_reading_same_day: 'druhý odečet je ze stejného dne jako počáteční',
+      no_tariff: 'k začátku období neplatí žádný ceník',
+      missing_opening_reading: 'potřebuji odečet k prvnímu dni období',
+      tariff_change_inside_interval: 'chybí odečet ke změně ceny',
+    },
+
+    // The headroom line — the answer available with ZERO consumption data, and
+    // for the first weeks the only real number on the screen.
+    headroom: {
+      title: 'Co záloha zaplatí',
+      line: (forEnergy: string, advance: string, fee: string) =>
+        `Ze zálohy ${advance} jdou ${fee} na poplatky, takže na elektřinu zbývá ${forEnergy} měsíčně.`,
+      allVT: 'vše ve VT',
+      allNT: 'vše v NT',
+      mix: 'při 30 % VT a 70 % NT',
+      // Named as a guess, because it is one. It is never presented as measured.
+      mixNote: 'Poměr 30/70 je odhad, ne měření — skutečný poměr uvidíte po druhém odečtu.',
+      missing: 'K začátku období chybí ceník nebo předpis záloh — doplňte je na kartě Ceník.',
+    },
+
+    // Blocked is NOT an error: the numbers above the gap are still correct.
+    blocked: {
+      badge: 'blokováno',
+      heading: 'Chybí odečet',
+      belowNote: 'Níže uvedené hodnoty nelze spočítat, dokud odečet nedoplníte. Čísla nad tímto místem platí dál.',
+      prefill: 'Formulář se předvyplní tímto datem. Hodnoty doplňte podle elektroměru — nic se neodhaduje.',
+    },
+
+    // The nudge (D156). Escalation is IN WORDS ONLY: the colour and the size never
+    // change, because a line that turns red has started chasing, and chasing is
+    // exactly what was refused.
+    nudge: {
+      line: (days: string) => `Poslední odečet před ${days}`,
+      today: 'Poslední odečet je z dneška',
+      // A reading DATED IN THE FUTURE is unusual but legal — a mistyped date, or
+      // a closing odečet entered ahead of time. "před −42 dny" is nonsense, so
+      // this case names the date instead of counting backwards to it.
+      future: (on: string) => `Poslední odečet je datovaný k ${on}`,
+      futureHint: 'Datum je v budoucnosti — pokud jde o překlep, opravte ho v Odečtech.',
+      fresh: 'Čerstvý odečet — predikce stojí na aktuálním průměru.',
+      ageing: 'Čím starší odečet, tím starší průměr, ze kterého predikce vychází.',
+      stale: 'Predikce zestárla — čísla níž berte jako orientační, dokud nezadáte nový odečet.',
+      never: 'Zatím není zapsaný žádný odečet.',
+    },
+
+    reading: {
+      formTitle: 'Zadat odečet',
+      editTitle: 'Upravit odečet',
+      date: 'Datum odečtu',
+      vt: 'Stav VT (kWh)',
+      nt: 'Stav NT (kWh)',
+      note: 'Poznámka',
+      notePlaceholder: 'např. odečet kvůli změně ceny',
+      hint: 'Opište celé kWh z displeje elektroměru — bez desetinné čárky.',
+      save: 'Uložit odečet',
+      empty: 'Zatím žádné odečty',
+      emptyHint: 'První odečet patří k prvnímu dni zúčtovacího období.',
+      onlyOne: 'Zatím je zapsaný jediný odečet, takže není co porovnávat. Interval se objeví u druhého.',
+      deleteConfirm: 'Smazat odečet?',
+      // The Kč on a row is ENERGY ONLY and says so. Poplatky are chunked by
+      // (měsíc × ceník) and belong to no single interval.
+      intervalEnergy: 'energie',
+      intervalDays: 'interval',
+      pricedBy: 'ceník od',
+      unpriceable: 'Tento interval nelze nacenit — uvnitř něj se mění cena.',
+    },
+
+    tariff: {
+      title: 'Ceníky a poplatky',
+      lede: 'Ceny platí od data dál, dokud je nevystřídá další ceník. Úprava jednoho ceníku nikdy nehne čísly před ním.',
+      formTitle: 'Nový ceník',
+      editTitle: 'Upravit ceník',
+      effectiveFrom: 'Platí od',
+      priceVT: 'Cena VT (Kč/MWh)',
+      priceNT: 'Cena NT (Kč/MWh)',
+      fee: 'Měsíční poplatky (Kč)',
+      withVAT: 'Všechny tři částky zadávejte s DPH a včetně distribuce — použijí se přesně tak, jak je napíšete.',
+      validity: (from: string, to: string) => `${from} – ${to}`,
+      // The newest version has no end, and its end is DERIVED rather than stored
+      // (D136) — so there is nothing to print on the right. "dosud" would be
+      // wrong for the common case of a version dated in the future, which has not
+      // been running at all; "od <datum>" is true whether it starts tomorrow or
+      // started last year.
+      validityOpen: (from: string) => `od ${from}`,
+      coversDays: (days: string) => `platí pro ${days} tohoto období`,
+      future: 'budoucí',
+      futureNote: 'Ceník s budoucím datem je běžná věc — predikce ho začne používat okamžitě.',
+      empty: 'Zatím žádný ceník',
+      deleteConfirm: 'Smazat ceník?',
+      save: 'Uložit ceník',
+    },
+
+    advance: {
+      title: 'Předpis záloh',
+      lede: 'Záloha platí od data dál, stejně jako ceník. Když jste některý měsíc zaplatili jinak, zapište platbu — ta má přednost.',
+      formTitle: 'Nový předpis záloh',
+      editTitle: 'Upravit předpis záloh',
+      effectiveFrom: 'Platí od',
+      amount: 'Záloha (Kč/měsíc)',
+      dueDay: 'Den splatnosti',
+      dueDayHint: 'Číslo 1–31. V kratších měsících se posune na poslední den — 31. v únoru vyjde na 28.',
+      // The clamped date is already printed immediately before this note, so
+      // repeating it says nothing. What the reader needs is WHY it moved: the
+      // předpis names a day this particular month does not have.
+      clamped: 'předpis má pozdější den, tento měsíc tolik dní nemá',
+      empty: 'Zatím žádný předpis záloh',
+      save: 'Uložit předpis',
+      deleteConfirm: 'Smazat předpis záloh?',
+    },
+
+    payment: {
+      title: 'Zaplacené zálohy',
+      lede: 'Nepovinné. Zapisujte jen měsíce, kdy jste zaplatili jinak, než říká předpis.',
+      month: 'Měsíc',
+      amount: 'Zaplaceno (Kč)',
+      paidOn: 'Datum platby',
+      empty: 'Žádné platby nejsou zapsané — počítá se předpis.',
+      save: 'Uložit platbu',
+      deleteConfirm: 'Smazat platbu?',
+    },
+
+    advances: {
+      title: 'Zálohy',
+      // NOT "Zaplaceno zatím". The figure behind this label is due_so_far_haler —
+      // the sum of counted months whose den splatnosti has passed, taken from the
+      // PŘEDPIS unless a platba was recorded. Calling it "zaplaceno" would assert
+      // money left the account for a měsíc nobody confirmed paying.
+      dueSoFar: 'Splatné zatím',
+      dueSoFarNote: 'Podle předpisu — zaplacené zálohy zapisujte v Cenících a poplatcích.',
+      expectedTotal: 'Za celé období',
+      monthsCounted: (months: string) => `${months} v tomto období`,
+      showMonths: 'Zobrazit započtené měsíce',
+      hideMonths: 'Skrýt započtené měsíce',
+      // D145 is the module's most surprising arithmetic, so the disclosure spells
+      // out the rule rather than leaving it as folklore.
+      countRule: 'Měsíc se počítá, pokud období obsahuje jeho první den. Roční období proto vyjde vždy na 12 měsíců, ať začíná kterýkoli den.',
+      sourcePayment: 'zaplaceno',
+      sourceSchedule: 'z předpisu',
+      sourceNone: 'bez předpisu',
+      due: 'splatnost',
+      duePassed: 'už proběhla',
+      recommendedVs: (recommended: string, current: string) =>
+        `doporučeno ${recommended} · nyní ${current}`,
+      recommendedNote: 'Záloha, při které by období skončilo na nule.',
+    },
+
+    period: {
+      title: 'Zúčtovací období',
+      formTitle: 'Nové zúčtovací období',
+      editTitle: 'Upravit období',
+      startsOn: 'Začátek',
+      endsOn: 'Konec',
+      endsOnHint: 'Předvyplní se na rok minus den. Dokud ho dodavatel nepotvrdí, zůstává předpokládaný.',
+      confirmed: 'Konec potvrzený dodavatelem',
+      none: 'Žádné zúčtovací období',
+      noneHint: 'Elektřina se počítá po zúčtovacích obdobích — jedno založte a doplňte odečet k jeho prvnímu dni.',
+      create: 'Založit období',
+      save: 'Uložit období',
+      deleteConfirm: 'Smazat období?',
+      invoiceTitle: 'Vyúčtování od dodavatele',
+      invoiceHint: 'Nepovinné, vyplňte, až dorazí. Nic se tím nezamyká — období zůstává upravitelné.',
+      invoiceTotal: 'Vyúčtovaná částka (Kč)',
+      invoiceBalance: 'Nedoplatek (−) / přeplatek (+) (Kč)',
+      invoiceVT: 'Konečný stav VT (kWh)',
+      invoiceNT: 'Konečný stav NT (kWh)',
+      invoiceAt: 'Datum vyúčtování',
+      // Two lines, because a difference in kWh and a difference in Kč mean
+      // completely different things.
+      comparisonKc: (computed: string, invoiced: string, diff: string) =>
+        `spočteno ${computed} · vyúčtováno ${invoiced} · rozdíl ${diff}`,
+      comparisonKwh: (computed: string, invoiced: string, diff: string) =>
+        `naše kWh ${computed} · jejich ${invoiced} · rozdíl ${diff}`,
+      comparisonHint: 'Rozdíl v kWh znamená jiný odečet, rozdíl jen v Kč jinou cenu.',
+      // The same panel BEFORE the uzavírací odečet exists. Our side is still part
+      // predikce, so the difference is mostly our own projection — attributing it
+      // to their odečet would be false, and the hedge has to say so plainly.
+      comparisonForecast: 'Naše strana je zatím predikce — chybí uzavírací odečet.',
+      comparisonForecastHint:
+        'Dokud odečet k poslednímu dni období nezapíšete, je rozdíl hlavně naše predikce, ne nesouhlas s dodavatelem.',
+    },
+
+    history: {
+      title: 'Historie a grafy',
+      empty: 'Historie zatím není',
+      emptyHint: 'Grafy se objeví, jakmile budou zapsané aspoň dva odečty.',
+      consumption: 'Spotřeba po měsících',
+      cost: 'Náklady po měsících',
+      // The approximation caveat, carried by the marks plus ONE footnote — never
+      // by a warning banner over the chart.
+      approximate: 'přibližné',
+      approxNote: 'Spotřeba se mezi odečty rozpočítává rovnoměrně na dny, takže sloupce kWh jsou přibližné. Koruny jsou přesné — počítají se z opravdových odečtů a jen se rozdělují mezi měsíce.',
+      pastPeriods: 'Uzavřená období',
+    },
+
+    // Form verbs. Module-scoped rather than added to `common`, which several
+    // other screens read and which is not this module's to reshape.
+    form: {
+      cancel: 'Zrušit',
+      saving: 'Ukládám…',
+      save: 'Uložit',
+      saveFailed: 'Uložení se nezdařilo',
+      delete: 'Smazat',
+      edit: 'Upravit',
+      add: 'Přidat',
+      optional: 'nepovinné',
+      loadMore: 'Načíst starší odečty',
+    },
+
+    // Errors the user can actually act on.
+    error: {
+      loadFailed: 'Nepodařilo se načíst',
+      loadFailedHint: 'Nic se neztratilo — všechno se počítá až při čtení.',
+      retry: 'Zkusit znovu',
+    },
   },
 } as const

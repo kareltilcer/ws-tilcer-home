@@ -62,4 +62,24 @@ export const qk = {
   gardenEnums: ['garden', 'enums'] as const,
   /** The prefix a mutation invalidates: everything above hangs off it. */
   gardenAll: ['garden'] as const,
+
+  // v8 — Elektřina. Everything sits under the one `electricity` prefix, and every
+  // mutation invalidates ALL of it rather than the collection it touched.
+  //
+  // That is deliberate and not laziness: the summary, the intervals and the
+  // history are three views of ONE computation, so any write to any of the five
+  // entities can move all three. A fresh reading list beside a stale summary is
+  // worse than a spinner — it is a number that has quietly stopped being true,
+  // and nothing on the screen would say so.
+  electricityReadings: (cursor?: string) => ['electricity', 'readings', cursor ?? ''] as const,
+  electricityTariffs: ['electricity', 'tariffs'] as const,
+  electricityAdvances: ['electricity', 'advances'] as const,
+  electricityPayments: ['electricity', 'payments'] as const,
+  electricityPeriods: ['electricity', 'periods'] as const,
+  electricitySummary: (periodId?: string) => ['electricity', 'summary', periodId ?? ''] as const,
+  electricityIntervals: (periodId?: string) => ['electricity', 'intervals', periodId ?? ''] as const,
+  electricityHistory: (from?: string, to?: string) =>
+    ['electricity', 'history', from ?? '', to ?? ''] as const,
+  /** The prefix every electricity mutation invalidates. */
+  electricityAll: ['electricity'] as const,
 }

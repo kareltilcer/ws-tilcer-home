@@ -116,6 +116,512 @@
 - [x] **Phase 7** *(v4)* — `documents` (Dokumenty) — backend ✅ + Dokumenty frontend ✅ (see the phase section below)
 - [~] **Phase 8** *(v5)* — `admin` (Administrace) + `platform/push` + `platform/scheduler` + `platform/pwa` — **backend ✅ + frontend ✅**; remaining: Playwright/axe pass and the live deploy (VAPID secrets, real icons)
 - [~] **Phase 9** *(v6)* — `finance` (Finance) + the `fin` migration — **backend ✅ + frontend ✅**; remaining: **the retirement runbook** (deploy → verify against live `fin` → switch `fin` off), which is Karel's, not the build's
+- [x] **Phase 10** *(v7)* — `garden` (Zahrada) — backend ✅ + frontend ✅ (see the v7 status block at the top); remaining: the "as built" doc pass and deployment
+- [x] **Phase 11** *(v8)* — `electricity` (Elektřina) — **backend ✅ + frontend ✅**; remaining: the "as built" doc pass and deployment
+
+---
+
+## Phase 11 — v8: Elektřina (`electricity`) — **backend ✅ + frontend ✅**
+
+> **Build status (2026-08-20), branch `v8-electricity`.** All eight steps of the
+> build order are implemented and green: `go build/vet/test ./...` across 25
+> packages (**53 of the tests are Elektřina's**), plus `tsc -b`, `vite build`,
+> Vitest (**83 total, 14 of them this module's**) and oxlint with **zero findings
+> in the new code**.
+>
+> **Frontend:** `src/modules/electricity/` — four routes behind one "Více" entry
+> on v7's tab-strip pattern, with **Zadat odečet in the module header** rather
+> than on a tab, because it is the one action anybody arrives to perform and no
+> notification will ever bring them here. All four Přehled states are built as
+> designed screens: the headroom day-one screen, the ordinary prediction, the
+> date-anchored hard block, and the `complete` flip from *predikce* to
+> *skutečnost*. Nine host-side files touched; **`platform/widgets/registry.tsx`
+> verified untouched in the diff**.
+>
+> **Verified in the browser at 375 px** against a real backend, not only in
+> tests: Karel's day-one state renders *"Zatím nelze předpovědět — potřebuji
+> druhý odečet"* over **857,65 Kč ≈ 200 / 176 / 213 kWh** with 12 counted months
+> and no zero anywhere; a second reading flips it to a prediction whose VT and NT
+> lines (870,50 + 1 586,00) sum exactly to the 2 456,50 energy total, D158 holding
+> on screen; the blocked interval shows as its own unpriceable row on Odečty; and
+> a future-dated ceník appears on Ceníky with its derived validity range. Zero
+> horizontal overflow at 375 px. Czech diacritics round-trip through the API
+> intact (an earlier mojibake was a Windows console artefact of `curl`, not the
+> app).
+>
+> **Six frontend bugs found by looking at the running app**, none of which any
+> test would have caught: a negative day count in the nudge line (*"před −42
+> dní"*) for a reading dated in the future; an ungrouped `1460 Kč` beside a
+> grouped `1 500 Kč`; *"dosud"* ("until now") printed as the end of a **future**
+> ceník's validity range; one month total rendered at two different precisions on
+> the same screen; and the headroom chips showing `200,6 / 176,5 kWh` where the
+> spec pins whole `200 / 176`. All fixed, and the last one is now pinned by a test.
+>
+> **Two AA failures found and fixed in the delivered design tokens.** The brief's
+> `scripts/validate_palette.js` was a design-side tool and is not in this repo, so
+> the check was done directly in the browser (canvas-sampled sRGB, since
+> `getComputedStyle` returns `oklch()` here and naive parsing silently produces
+> nonsense). `--el-approx` measured **3.91 dark / 3.38 light** against `--s1` while
+> carrying the interpolation footnote — a full sentence of body text — and
+> `--el-over` measured **4.33** on its own soft chip in light, where the chip sets
+> bold 13 px text that WCAG counts as body, not large. Both retuned; **every new
+> token now clears 4.5:1 in both themes** (approx 5.3/4.97, over-on-soft
+> 6.47/5.35, blocked-on-soft 6.33/6.00, under 8.14/5.18).
+>
+> **`compute.go` first, as specified** — 1150 lines, pure, pinned by both worked
+> fixtures before a line of SQL existed. Its tests were mutation-checked twice:
+> turning the forecast's single division into a rounded-average-times-n drifted
+> the total by 19 haléře and failed four assertions, and a real `float64`
+> declaration failed the purity test. The `internal/arch` ban was verified the
+> same way — an import of `platform/metrics` fails the build with the reason
+> printed.
+>
+> **Verified against a real boot**, not only in tests. Migrations applied through
+> block 11 on an empty database; Karel's actual day-one state entered through the
+> live API returned `insufficient_data`, all four totals as **JSON `null`**, the
+> headroom at **857,65 Kč ≈ 176 / 213 / 200 kWh**, and **12 counted months
+> 2026-07…2027-06 with 2026-06 absent**. A second reading flipped it to `ok` and
+> every figure reconciled by hand, fee chunking included (7/30 of June + 11 whole
+> months + 23/30 of June 2027 = 7 708,20 Kč). A future ceník moved only the
+> forecast; a ceník change between two readings produced the hard block, and
+> **adding the missing odečet left the pre-gap interval byte-identical** — the
+> acceptance criterion, checked on the wire. The catalogs read **15 actions, 0
+> metrics, 0 lists, 0 widgets**.
+>
+> **Three host maps edited, the fourth verified untouched.** `audit.go`,
+> `bootstrap.go`, `main.go`, `admin/listener.go` and `arch_test.go` on the
+> backend; `platform/widgets/registry.tsx` is absent from the diff and must stay
+> that way.
+>
+> **One behaviour decided during the build, and worth Karel's eye** (§11.4): a
+> counted month's `due_on` always comes from the *schedule's* `due_day`, never
+> from a payment's `paid_on`. The design prototype used `paid_on` when a payment
+> existed, which makes a payment recorded without a date never count as due and
+> quietly skews the doporučená záloha. D155 also says `due_day` is read in exactly
+> one place, which the uniform rule honours. A month with no schedule at all falls
+> back to the month's last day, so a past unscheduled month counts as due and a
+> future one does not. Neither pinned fixture is affected.
+
+### Original plan, 2026-08-20 (below, for the record)
+
+> **Sources, in precedence order.** `handoff/v8/PRD.md` §V8-1…§V8-11 (**source of
+> truth**, D133–D160) → `handoff/v8/openapi.yaml` **0.10.0**, tag `electricity`
+> (the wire) → `handoff/v8/V8-electricity-brief.md` (the *why*, and the two
+> worked fixtures) → `handoff/v8/HANDOFF-10-electricity.md` (the build guide) →
+> `handoff/v8/HANDOFF-design.md` §v8 + `design/v8/Home.dc.html` (the screens).
+> Where the handoff and the brief disagree, the brief wins; where the brief and
+> the PRD disagree, the PRD wins.
+>
+> **What v8 is.** A tenth module: VT/NT meter readings at arbitrary dates, a
+> ceník versioned by effective date, zálohy with a due day, user-set settlement
+> periods, and one answer — *vyjdou zálohy, nebo doplatím?* Five tables at
+> migration block **11**, thirteen paths, fifteen audit actions, **one pure
+> function file**, no env var, no seed, no blob, no job, no outbound call.
+>
+> **What makes it different from every previous phase.** It is the first module
+> that contributes **nothing** to Nástěnka and nothing to the notification
+> catalogs (D147, D156) — so the four non-registry host maps become **three**,
+> and the fourth (`platform/widgets/registry.tsx`) inverts into a trap: touching
+> it produces a dashboard tile that resolves to nothing — no compile error, no
+> runtime error, an empty card. **Verify that file is absent from the diff.**
+>
+> **Where the risk is.** Not in volume or wiring — both are the smallest Home has
+> had. It is concentrated entirely in `compute.go`, in boundary arithmetic where
+> an off-by-one day is invisible until the vyúčtování arrives a year later
+> disagreeing by 300 Kč. Hence: `compute.go` first, pinned by the two fixtures,
+> before a line of SQL.
+
+### 11.0 Spec reconciliations to settle first
+
+Six places where the four v8 documents were silent or disagreed. **All six are
+now settled**; R1 and R2 were approved by Karel on 2026-08-20 and are **applied**
+— `openapi.yaml` 0.10.0 amended in place (no new path, no new schema; still
+13/235, validated: parses, no stray null keys, all 245 `$ref`s resolve), recorded
+as **D161–D162** in `PRD.md` §V8-10 and `V8-electricity-brief.md` §7b, and
+propagated to `HANDOFF-10`, the acceptance criteria and the CHANGELOG.
+
+| # | Conflict | Resolution |
+|---|---|---|
+| **R1** | `ElectricitySummary` marks `cost_total_haler` and `balance_haler` **required**, but the PRD and brief say the totals are *"not produced"* when prediction is impossible, and that the module *"never shows a number it hasn't earned — not a zero"*. A required integer forces a `0` onto the wire in exactly the state where a `0 Kč nedoplatek` is a lie that looks like good news. | **APPLIED — D161.** Both are now `type: [integer, "null"]` and dropped from `required`, matching `recommended_advance_haler`'s existing shape. "Never a zero" is now enforced by the type rather than by every screen remembering to check `status` first. In Go they are `*int64`, so the struct's zero value is not a valid summary; `actual` stays populated when it is valid, because the figures *before* a gap do not become unknown because the ones after it are. |
+| **R2** | `ElectricityHeadroom` carries `kwh_all_vt_dkwh` / `kwh_all_nt_dkwh` but **no mix field**, while brief §4.6, handoff §2.7 and the design all require the *"~200 kWh at a 30/70 mix"* figure and pin it as a test value. It cannot be derived client-side from the two wire fields without re-deriving the prices. | **APPLIED — D162.** `kwh_mix_dkwh` added to `ElectricityHeadroom` and to its `required` list. Computed with **one** division and no intermediate rounding: `divRound(energy_budget_haler · 100000, 3·price_vt_haler + 7·price_nt_haler)` — rounding a blended price first moves the answer by a whole kWh. Against Karel's numbers: `divRound(8 576 500 000, 4 276 278) = 2006` → **200 kWh** ✓. Served, not derived on the client: the summary carries no prices. Note it is a **fourth** `divRound` outside the money path — §11.1's "exactly three rounding points" governs money, and no Kč passes through this figure. |
+| **R3** | Blocking kinds: the wire enum is `[period_start, tariff_change]`; handoff §2.3 names **three** internal kinds, the third being `no_tariff`. | Internally three, on the wire two. `missing_opening_reading` → `period_start`; `tariff_change_inside_interval` → `tariff_change`; **`no_tariff` is not a blocking entry at all** — it is `status: insufficient_data` with the Czech reason *"k začátku období neplatí žádný ceník"*, exactly as the OpenAPI `status` enum already describes it and as the design prototype's `reasonMap` renders it. No spec change. |
+| **R4** | `compute.go`'s import whitelist is given as `time, fmt, sort, errors, strings` — but the file needs `platform/dates` for the `Date` value type, where `AddDays`, `DaysUntil`, `DaysInMonth` and `Today(loc)` already live. Re-implementing them locally would be the second source of truth this module exists to avoid. | Whitelist = `time`, `fmt`, `sort`, `errors`, `strings`, **`platform/dates`** — and nothing else. `platform/dates` is a pure value package whose only clock call is `Today(loc)`, which the **no-`time.Now`** assertion in the same test already keeps out of `compute.go`. |
+| **R5** | Sub-route naming: PRD §V8-7 says `/elektrina/cenik`, handoff §5 says `/ceniky`, the design prototype's tab key is `ceniky`. | **PRD wins: `/elektrina/cenik`.** The tab *label* stays **"Ceníky a poplatky"** as in the design. |
+| **R6** | The handoff sketches `BuildIntervals` returning a single `*Blocking`; the wire carries `blocking` as an **array**. | Compute returns the ordered list, earliest first, and the summary treats the **earliest** as the one that truncates `Actual`. One element in practice today; the array is what the wire promises and what a second gap would need. |
+
+### 11.1 `compute.go` + `compute_test.go` — **build this first, no SQL yet**
+
+The module. Pure: no `database/sql`, no `net/http`, no `time.Now`. Takes a
+loaded `Snapshot` (period, readings, all tariffs, all advances, payments,
+`Today` resolved by the caller) and returns the whole summary. Přehled, Odečty,
+`/intervals` and Historie all read through it, so no two views can disagree about
+a number. Why first: once endpoints exist, *"fix the rounding"* is a change
+re-verified through four screens; before they exist it is a change to one
+function with a test that says whether it is right. `fin` shipped **two
+contradictory implementations** of its split — that is the failure this
+discipline exists to prevent.
+
+- `divRound(num, den)` — half-away-from-zero; **every** rounding in the file goes
+  through it. Money `int64` haléře, energy `int64` tenths of kWh, **no float in
+  the money path**, not transiently, not "just for the average".
+- **Exactly three rounding points**, and no fourth: (1) interval energy
+  `divRound(vt·p_vt + nt·p_nt, 10000)`; (2) forecast run
+  `divRound(n·(dVT·p_vt + dNT·p_nt), elapsed·10000)` — one division, never a
+  rounded per-day average multiplied back up; (3) fee chunk
+  `divRound(fee·days_in_chunk, days_in_month)`, keyed (calendar month × ceník
+  version). Comment the `int64` headroom (worst case ~10^16, three orders spare).
+- Internally **every window is half-open `[from, to)`**; the inclusive `ends_on`
+  becomes `ends_on + 1` **exactly once**, at the edge of the file. Half the
+  plausible bugs here are one function using inclusive bounds while its caller
+  uses half-open.
+- **D137 hard block:** a ceník `effective_from` **strictly** inside an interval
+  (`d1 < ef < d2`). Equality at either end is *not* a block. `Actual` covers
+  `[starts_on, earliest_block)` and stays valid and visible; totals, balance and
+  recommendation are **not produced**. The forecast is **never** hard-blocked — a
+  future version there is the normal case (D142); the block is a fact about
+  *measurement*, and there is nothing to measure in the future.
+- **D141 boundary is the last reading, not today.** The most commonly
+  mis-implemented sentence in the brief.
+- **D157:** a reading dated `ends_on + 1` ⇒ `Closed`, empty forecast, `status:
+  complete`, and the computed-vs-invoiced comparison becomes meaningful.
+- **D158 VT/NT display split:** round VT, `NT = total − VT`. The `needs` pattern
+  from the fin split; the **only** place the remainder technique is used here.
+  Assert the identity on every fixture.
+- **D145 counted months / D155 due day:** a month counts iff the period contains
+  its 1st; `due_on = min(due_day, days_in_month)`, due **inclusive**. `due_day`
+  is read in exactly one place and moves only the doporučená záloha — never the
+  period total, never the counting.
+- **D146 doporučená záloha:** one ceil-div straight from haléře to Kč —
+  `(num + rem·100 − 1) / (rem·100)` — never haléře → round → convert.
+- `BuildHistory` lives in this file so it cannot become a second interval walk.
+  kWh per month interpolated and labelled *"přibližné"* (D138); **Kč per month is
+  an allocation of already-exact interval costs by day count** (D159), never a
+  repricing of the invented kWh.
+- **D161: `CostTotalHaler` and `BalanceHaler` are `*int64`, nil — never 0 — in
+  `insufficient_data` and `blocked`.** The struct's zero value is therefore not a
+  valid summary. `Actual` stays populated when it is valid: the figures *before* a
+  gap do not become unknown because the ones after it are.
+- `Headroom` is filled whenever totals are not produced (including the blocked
+  case), so the first screen Karel ever sees carries a real number rather than an
+  empty panel. **D162: the 30/70 mix is one division** —
+  `divRound(ForEnergyHaler · 100000, 3·price_vt + 7·price_nt)` — never a blended
+  price rounded first, which moves the answer by a whole kWh. This is a `divRound`
+  outside the money path; the three-rounding-point rule governs **money**.
+
+**`compute_test.go`, written alongside — not after.** Table-driven. The two
+fixtures are the gate:
+
+- **Brief §4.5, the general case** (period 1. 4. 2026 – 31. 3. 2027; ceník A od
+  1. 1. 2026 = 3 200 / 2 400 / 350, ceník B od 1. 1. 2027 = 3 600 / 2 700 / 380;
+  záloha 1 800 **splatnost 15.**; readings 12 000/30 000 and 12 640/31 480;
+  `Today = 2026-08-20`) → `Actual.Energy 560 000` · `Actual.Fee 140 000` ·
+  `Forecast.Days 243` (153 A + 90 B) · `Forecast.Energy 1 167 049` ·
+  `Forecast.Fee 289 000` · **`CostTotal 2 156 049`** · `AdvancesTotal 2 160 000`
+  · **`Balance +3 951`** · **`RecommendedKc 1795`**. *(All eleven figures were
+  re-derived independently while writing this plan; they reconcile.)*
+- **`due_day` is load-bearing** — the same fixture at `due_day = 25` yields
+  `ceil(1 436 049 / 800) =` **1 796**. Keep both as separate cases; a fixture
+  that does not state the due day is not reproducible.
+- **Brief §4.6, Karel's day one** (ceník od 24. 6. 2026 = 485 865 / 402 669 /
+  64 235 h; záloha 150 000; období 24. 6. 2026 – 23. 6. 2027 unconfirmed; one
+  reading 320/700 dkWh) → `status insufficient_data`, `blocking` empty, forecast
+  nil, **`CostTotalHaler == nil` and `BalanceHaler == nil`** — assert nil, *not*
+  0, and assert it again on the serialized JSON, since a pointer that is nil in Go
+  and `0` on the wire is exactly the bug D161 exists to prevent — `Months` exactly
+  12 (`2026-07 … 2027-06`, **`2026-06` absent**), `AdvancesTotal 1 800 000`,
+  `Headroom {85 765 h, 1765, 2130, 2006}` → **857,65 Kč ≈ 176 / 213 / 200 kWh**.
+- One-liners, one case each: a whole month inside one version costs **exactly**
+  the fee (`64 235`, not 64 234) · period-boundary counting (start on the 1st →
+  12; a one-day period; a one-month-plus-a-day period → 2) · `due_day = 31` →
+  28. 2. 2027, 29. 2. 2028, 30. 4., and moving it 1 → 31 leaves `CostTotal`,
+  `AdvancesTotal` and `Months` byte-identical · `due_day = 15` with `Today` = the
+  15th **is** due · monotonicity refused in **both** directions naming **both**
+  neighbours · a block at 1. 1. 2027 between readings 1. 12. and 1. 2., where
+  adding the missing reading clears it and **every figure dated before
+  1. 12. 2026 is byte-identical to the blocked run** — that assertion *is* the
+  test · `effective_from == d1` and `== d2` price cleanly · a future ceník moves
+  only `Forecast` · editing ceník A moves only A's days · D157's closing-reading
+  flip · D158's identity, including a fixture built so two independent roundings
+  would be off by one · D159's `Σ history.Cost == CostTotal`.
+- **Property test, ~1 000 randomised sequences** (3–20 readings, 1–4 versions,
+  random bounds and `due_day`): `Σ interval energy == Actual.Energy` · `Σ fee
+  chunks == FeeTotal` · `Energy + Fee == CostTotal` · `AdvancesTotal − CostTotal
+  == Balance` · VT+NT sums to energy on both sides · no panic on any block, empty
+  or closed period, or zero-consumption run. Finance's `TestInvariants` in
+  another domain, for the same reason: to make a **second** way of totalling the
+  same numbers impossible to introduce later.
+- **`compute_purity_test.go`** — `go/parser` over `compute.go`, import set a
+  **subset** of the R4 whitelist (a whitelist, not a `database/sql` blacklist:
+  what actually creeps in is `net/http` or a store type), plus the no-`time.Now`
+  assertion — a summary that consults the clock changes while it is being read,
+  and the three views would disagree across a midnight.
+
+### 11.2 `migrations/11001_electricity.sql` — the module's only migration
+
+Five tables at block **11**, applied last (`… finance(09) → garden(10) →
+electricity(11)`). UUIDv7 ids, `deleted_at`/`created_by`/`created_at`/
+`updated_at`, `TEXT` dates with GLOB CHECKs, and **partial** unique indexes
+`WHERE deleted_at IS NULL` — a soft-deleted row must not hold a date hostage.
+**No lexorank `position`**: every collection is chronological, and a draggable
+order over dates would be a second, contradictory truth. **No seed source and no
+`MigrationSourcesWithSeed()` entry** — do not add one for symmetry; there is
+nothing for `testsupport` to exclude. No FTS; a reading's `note` is plain text,
+length-capped, **not** Markdown (do not route it through the notes sanitiser).
+
+Four rules cannot be CHECKs — three are cross-row, one would destroy user intent
+— and all live in `service.go` (§11.4).
+
+### 11.3 `store.go`
+
+Ordinary SQL, soft-delete filters throughout. One read carries weight:
+**`Snapshot(ctx, periodID)`** — five queries, no N+1 (the period; readings in
+`[starts_on, ends_on+1]` **ascending** — through `ends_on + 1`, not `ends_on`,
+because the closing reading is dated the day *after* the period; **all** tariffs,
+not just those inside the period, since the version governing `starts_on`
+normally starts well before it; all advances; payments), resolving `Today` from
+`HOME_TIMEZONE` **once**. `Summarize`, `BuildIntervals` and `BuildHistory`
+consume that one struct: three endpoints, one load path, one truth. Everything
+else is CRUD with **date** keyset pagination.
+
+### 11.4 `service.go` — validate → `WithTx` (write + audit **in the same tx**) → notify after commit
+
+- ⚠ `audit.Sink.Record(ctx, tx, audit.Event{…})` — the type is **`audit.Event`**,
+  not the live-sync notifier's `Entry`. Two structs on two paths; audit inside
+  the tx, notify after commit.
+- **Field-level diffs on all five entities** — *"who changed the VT price and to
+  what"* is what this module's Log entries exist to answer.
+- **Monotonicity, in the tx, both neighbours, always** (on create, and on update
+  when `read_on`/`vt_dkwh`/`nt_dkwh` changed): **422** naming the offending
+  neighbour and its value. Checking only `prev` lets a back-filled row break the
+  chain in front of it, and with D150 in force a falling counter is always a
+  typo. **Delete needs no check** (`a ≤ b ≤ c` ⇒ `a ≤ c`); it *can* create a hard
+  block, discovered on read, not prevented on write. A duplicate live `read_on` →
+  **409**.
+- **Period overlap → 422** (guard query in the tx; SQLite has no exclusion
+  constraints). Adjacent periods (`ends_on + 1 == next.starts_on`) are legal.
+- **D160 tariff delete → 409, narrowly:** only when *some* live period has no
+  version other than this one with `effective_from ≤ P.starts_on`. Deleting a
+  middle version legitimately reprices its days and is audited like any other
+  change. Advances and payments have **no** such guard — a counted month with
+  neither contributes 0 Kč and renders *"bez předpisu"*.
+- **`ends_on` default (D153):** omitted ⇒ `starts_on + 1 year − 1 day`,
+  `ends_on_confirmed = false`.
+- **`due_day` is clamped at read, never on write** — a stored clamp turns a 31
+  into a 28 the first February and stays wrong.
+- **Nothing is ever locked (D139).** No closed-period guard, no 409 on editing a
+  period that carries an invoice, no admin tier. Do not add one; the audit spine
+  is the compensating control, exactly as in finance.
+
+### 11.5 `http.go` — 13 paths, tag `electricity`
+
+Five CRUD collections + `/summary`, `/intervals`, `/history`. Reads: any
+authenticated member, **`reader` included**. Writes: `editor`/`admin` + CSRF.
+**No admin-only route** (D151), delete included. Do not invent `/recompute`,
+`/close` or `/import`.
+
+⚠ **Cursors are dates, not UUIDv7 (D149)** — `read_on` · `effective_from`
+(tariffs, advances) · `starts_on` · `month` (payments; the finance month-key
+precedent). Declared **inline**, never `$ref`-ing the shared UUIDv7 `Cursor`: an
+id compared lexically against a date silently returns a wrong or empty page.
+Malformed → **422**, never a silent re-serve of page one.
+
+### 11.6 `module.go` + wiring — **three host edits, not four**
+
+`registry.Module`: name, routes, `MigrationsFS`, **15 audit actions**
+(`reading|tariff|advance|payment|period` × `create|update|delete`), all
+`editor`/`admin`, **none with a `system` actor** — there is no background job, so
+nothing here can be written by anything but a person. **No `Widgets()`, no metric
+provider, no list provider**, no scheduler, no push, no blobstore. If
+`registry.Module` makes any of those mandatory, return **`nil`** — not an empty
+non-nil slice, which would put an empty section in the admin composer.
+
+| File | Edit |
+|---|---|
+| `backend/internal/bootstrap/bootstrap.go` | `{Name: "electricity", FS: electricity.MigrationsFS}` in `MigrationSources()`. **Nothing** in `MigrationSourcesWithSeed()` |
+| `backend/cmd/home/main.go` | `elecSvc` / `elecMod`, added to `featureModules` **only** — not to `registry.CollectWidgets`, `metrics.Collect` or `lists.Collect` |
+| `backend/internal/platform/audit/audit.go` | `ModuleElectricity = "electricity"` |
+| `backend/internal/modules/admin/listener.go` | `case audit.ModuleElectricity: return "/elektrina"` in `inAppURL` |
+| `backend/internal/arch/arch_test.go` | an `"electricity"` entry in `forbiddenImports` banning **all five** of `platform/{metrics,lists,push,scheduler,blobstore}` — the garden precedent, extended, because all five are what a later "small improvement" reaches for, and this module's whole shape is the claim that it needs none |
+| `frontend/src/app/routes.ts` | `elektrina: '/elektrina'` |
+| `frontend/src/app/AppShell.tsx` | **add** Elektřina → `/elektrina` to `OVERFLOW`, **no** `adminOnly`, lucide `Zap` |
+| `frontend/src/routes/log/LogPage.tsx` | **add** `'electricity'` to `MODULES` |
+| `frontend/src/api/ws.ts` | an `electricityModule` `LiveModule` + `type.startsWith('electricity')` in `classify()` |
+| `frontend/src/platform/widgets/registry.tsx` | ⚠ **DO NOT TOUCH** — verify it is absent from the diff |
+
+### 11.7 Frontend — `src/modules/electricity/`
+
+Not `src/routes/` (that is v6's legacy placement and an open tidy, not a pattern
+to copy; do not move finance as part of this work). Routes: `/elektrina`
+(Přehled) · `/elektrina/odecty` · `/elektrina/cenik` (label *"Ceníky a
+poplatky"*, per **R5**) · `/elektrina/historie`, behind one "Více" entry for
+everyone, reusing **v7's module-header + scroll-snapped tab strip** rather than
+inventing a second sub-nav. The four thumb tabs are untouched. Query keys
+`['electricity', …]`; **any mutation invalidates `summary`, `intervals` and
+`history` together** — a stale summary beside a fresh reading list is worse than
+a spinner, because it is a number that has quietly stopped being true. Live-sync
+toast *"Elektřina byla mezitím upravena"*. Offline: read-only from the persisted
+cache, writes disabled, **no queue** — the meter cupboard is exactly where signal
+is worst, and the answer is *"zapiš si to a zadej to doma"*.
+
+Screens per `HANDOFF-design.md` §v8 and `design/v8/Home.dc.html`, which carries a
+working prototype of all four at both breakpoints in both themes, with a scenario
+switcher covering every state:
+
+- **Přehled** — headline (kicker with the projected-to date and the
+  **předpokládaný konec** badge above, display mono figure in the middle, basis
+  line below: hedge above and below, confidence in the middle), progress line,
+  VT/NT split with the two-segment share bar, zálohy with the counted-months
+  disclosure, doporučená vs. current, the odečet line. **Four first-class states,
+  none a fallback:** `ok` · `insufficient_data` — the **headroom** screen,
+  Karel's day one and the primary screen for weeks, so **no spinner, no blank
+  panel, and above all no zero** · `blocked` — valid figures above a
+  date-anchored divider, the blocked region below it in the `--el-blocked`
+  language, **not** the destructive one · `complete` — *predikce* →
+  *skutečnost*, hedges gone, and the number stays exactly where it was so the eye
+  does not have to re-find it.
+- **The nudge line** — *"poslední odečet před 47 dny"* with a **Zadat odečet**
+  button. A tone problem before a layout problem: it must read as *explanation*
+  (the honest reason the prediction is stale), never as a scold, or it breaks the
+  same promise a push would. The design's answer, to carry over: escalation **in
+  words only** — the sub-line changes at 15 and 90 days; colour and size never do.
+- **Odečty** — rows designed to be **compared**, not just read, each carrying the
+  interval that ends at it, because a mistyped register is what makes one
+  interval look absurd beside its neighbours. **Kč is energy only and labelled
+  *energie***; poplatky appear once, on Přehled, as their own line. The form is
+  the product: date (default today), two whole-kWh numeric fields ≥44 px well
+  apart so the wrong register is hard to hit, an optional note, and a save that
+  does not require scrolling — **~15 seconds, one-handed, in bad light**. The
+  wire carries `*_dkwh`; the form ×10 on submit, ÷10 for display, `step="1"
+  inputMode="numeric"`, no decimal separator, and renders one decimal only when
+  `dkwh % 10 != 0` so a value from a future decimal meter is never silently
+  truncated. Pre-filled variant from the hard block: **the date only, never the
+  values** (D137). The monotonicity 422 names the neighbour and its value.
+- **Ceníky a poplatky** — versions in date order with **derived** validity ranges
+  (D136 stores no end, so this list is the only place a user can see where one
+  version stops and the next begins) and *"platí pro 153 dní tohoto období"*; a
+  future-dated version as the **normal** case; the 409 delete refusal; the záloha
+  schedule with `due_day` and its únor clamp made visible.
+- **Historie a grafy** — VT/NT month columns in the **approximate** treatment
+  (`--el-approx`, hatch on NT) plus one footnote — not a banner over the chart —
+  and exact Kč beside them in mono. **Exact vs. approximate is a token-level
+  rule, and Kč never receives the approximate treatment.** Past periods with
+  computed-vs-invoiced in **Kč and kWh** (D154), the second line being what tells
+  you whether a discrepancy was a price surprise or an odhadnutý odečet on the
+  supplier's side.
+- **Zúčtovací období** — create, the expected-vs-confirmed end, the overlap 422
+  naming the period it collides with, and the vyúčtování's four optional fields
+  with their two comparison lines. **No close/archive ritual** (D139).
+- **Tokens** — copy the v8 block from `design/v8/Home.dc.html` into
+  `theme/globals.css` for **both** themes: `--el-vt: var(--c1)` / `--el-nt:
+  var(--c2)` (**aliases, no new colour values**), `--el-over` / `--el-over-soft`
+  / `--el-under` (nedoplatek is a **warning, not the destructive red used for
+  delete** — nobody has done anything wrong, the forecast is simply above the
+  zálohy), `--el-blocked` / `--el-blocked-soft` (blocked ≠ error: the numbers
+  around it are still correct), `--el-approx`. Run `scripts/validate_palette.js`
+  in both modes and paste the output into the design system doc. VT and NT differ
+  by **more than colour** — square vs. round swatch, hatch on NT, direct labels,
+  `aria-label` naming the tariff and its value.
+- **`cs.ts`** — PRD §V8-7 vocabulary **verbatim**, so pages and Log say the same
+  words; own the rest as sentences a person would say (the four *"zatím nelze
+  předpovědět"* reasons each naming what is missing, the headroom sentence with
+  its 30/70 caveat, the block line, the monotonicity refusal, *"poslední odečet
+  před {N} dny"*, the computed-vs-invoiced pair, the D138 footnote, *"bez
+  předpisu"*). Three plural forms for *den · odečet · měsíc · ceník*; kWh, MWh
+  and Kč do not inflect. ⚠ **First Home module with decimal koruny** — totals are
+  whole (`21 560 Kč`), unit prices and fees are not (`4 858,65 Kč/MWh`,
+  `642,35 Kč/měs`); state the rule **per figure type** in the system doc, not per
+  screen. **Reader:** controls **disabled and visible**, never hidden — including
+  **Zadat odečet**, the one button a reader will most want to press.
+- **Light theme first, 375 px first** — the inverse of Home's usual order,
+  because this app is used standing at a meter cupboard, on a phone, in bad
+  light, reading six digits off a display.
+
+### 11.8 Verification
+
+- `go build ./... && go vet ./... && go test ./...` including `internal/arch`
+  (the cross-module ban **and** the new five-package ban), the purity test, and
+  an assertion that `electricity` contributes **no** widget, metric or list, so a
+  later refactor cannot quietly add one.
+- Service/HTTP: overlap → 422, adjacent → 201 · `reader` GET 200 on all six read
+  paths, `reader` write 403, missing CSRF 403 · a malformed cursor on each of the
+  five collections → 422, **and a UUIDv7 passed as a `read_on` cursor → 422, not
+  an empty page** · every mutation writes exactly one audit event **in the tx**,
+  and a rolled-back write leaves none · `due_day` 0 or 32 → 422, `month =
+  "2026-13"` → 422, `history?from=2026-1` → 422, negative amounts → 422.
+- Migrations apply `… finance(09) → garden(10) → electricity(11)` on an empty DB
+  **and** after a Litestream restore; `11001_electricity.sql` is the only one.
+- `tsc -b`, `vite build`, Vitest; a real boot with `HOME_DEV_AUTH_BYPASS=true`
+  walking Karel's day-one state → a second reading → a mid-interval ceník change
+  → the closing reading, at 1440 px and 375 px, **light theme first**.
+- `openapi.yaml` 0.10.0 validates with every `$ref` resolving. ⚠ **The v7 YAML
+  rule:** an inline flow-mapping `description:` containing a comma **must be
+  quoted**, or YAML eats the tail as a stray null key — precisely the shape the
+  five inline cursor declarations need.
+
+### 11.9 Definition of done
+
+Brief §9 (1–13) and handoff §8, in short: both fixtures land on **2 156 049 h /
++3 951 h / 1 795 Kč** and on the day-one headroom **857,65 Kč ≈ 176 / 213 /
+200 kWh**, to the haléř · exactly **three** rounding points · the energy and
+poplatky identities hold **separately** (they are two identities, not one) ·
+D158's parts sum exactly to the energy total · the hard block resolves without
+moving an earlier number · both-neighbours monotonicity · Karel's 12 counted
+months with `2026-06` absent · the `due_day = 31` clamp · D157's flip · D160's
+narrow 409 · `compute.go` pure and the **only** implementation of every number in
+the module — nothing else prices an interval, chunks a fee, counts a month or
+resolves a ceník version · **three** host maps updated and
+`platform/widgets/registry.tsx` **verified untouched in the diff** · every
+mutation audited in-tx with field diffs · `electricity.*` present in the Log
+filter and the admin trigger composer.
+
+### 11.10 Open items needing Karel
+
+1. ~~**R1 and R2** — the two `openapi.yaml` amendments.~~ **Closed 2026-08-20:**
+   approved and applied as **D161–D162**; the spec re-validates.
+2. **The záloha's `due_day`** — a number 1–31 for the 1 500 Kč záloha. There is
+   **no seed**, so do not guess a value into a migration; it is entered through
+   the UI. (The **15** in the fixture is the brief's worked example, not Karel's
+   answer.)
+3. **The supplier's real period end date**, when it arrives — one `PATCH` of
+   `ends_on` + `ends_on_confirmed`, and every number follows on the next read.
+4. ⚠ **When the first záloha is paid:** červen 2026 does **not** count toward the
+   period (the period does not contain 1. 6.). If a záloha was actually paid in
+   June for this supply it belongs to the period and D145 will miss it — record
+   it as a payment for **`2026-07`**. Do **not** "fix" it by changing the
+   counted-months rule.
+
+### 11.11 Known limitations, recorded deliberately
+
+**Výměna elektroměru is out of scope (D150), and there is no escape hatch.** The
+monotonicity guard is **global across all readings**, not per period, so the
+first reading on a new meter (starting near 0) is refused with a 422 naming the
+old meter's last reading and cannot be entered at all. **Do not work around it
+with a manual DB edit** — the audit trail would then not explain the jump, which
+is exactly what a future reader needs explained. The smallest honest fix,
+recorded so nobody re-derives it: add `meter_id` (or an `offset_dkwh`) to
+`electricity_readings`, scope the monotonicity guard and the interval walk to one
+meter, and make the walk **break** at a meter boundary rather than span it —
+roughly a day including tests, plus a migration.
+
+**The prediction has no seasonality.** D141 is a plain average since the opening
+reading, so a period starting in June and first predicted in August will
+**under-forecast the heating season**, with the mirror error in February. The
+mitigation is structural, not algorithmic — the average lengthens as readings are
+entered, and Přehled always names the window it averaged over. **Do not add a
+seasonal coefficient**; it would be a second source of truth with no data behind
+it.
+
+Smaller, all deliberate: no DPH arithmetic (D135 — a VAT change is just a new
+ceník version, the D136 mechanism) · Historie kWh columns are approximate (D138;
+the Kč columns are exact totals cut along an approximate line, D159) · the 30/70
+headroom mix is a stated guess · one odběrné místo, no FVE/přetoky/plyn/voda (a
+second would need `site_id` on four tables and a scope on every read) · no
+invoice PDF, so no blob storage · no back-fill importer — history is typed in as
+ordinary readings, and in Karel's case there is none.
+
+**Resist, in order:** adding a widget · adding a metric "since it's nearly free"
+· storing a computed total · interpolating kWh into a price · allocating a fee
+into an interval · adding a fourth rounding point.
 
 ---
 

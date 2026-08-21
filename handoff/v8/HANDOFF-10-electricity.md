@@ -1,10 +1,10 @@
 # Home — Module 10: `electricity` (Elektřina)
 
-> Build brief for Claude Code. Behaviour: `V8-electricity-brief.md` (**D133–D160**) → `PRD.md` §V8-1…§V8-9. Data shapes: `openapi.yaml` **0.10.0**, tag `electricity`. Read `HANDOFF.md` §3 (module registry) and `HANDOFF-1-logging.md` (the audit spine) first, then **`HANDOFF-8-finance.md`**: this module has finance's shape — a CRUD shell around one locked pure formula — and `fin`'s `split.go` discipline is what `compute.go` inherits.
+> Build brief for Claude Code. Behaviour: `V8-electricity-brief.md` (**D133–D162**) → `PRD.md` §V8-1…§V8-9. Data shapes: `openapi.yaml` **0.10.0**, tag `electricity`. Read `HANDOFF.md` §3 (module registry) and `HANDOFF-1-logging.md` (the audit spine) first, then **`HANDOFF-8-finance.md`**: this module has finance's shape — a CRUD shell around one locked pure formula — and `fin`'s `split.go` discipline is what `compute.go` inherits.
 >
 > **The leanest module Home has.** Five tables against garden's eleven; no widget, metric, list, push, scheduler job, blob, seed, outbound HTTP or derived storage (D147, D152). The difficulty is neither volume nor wiring; it is concentrated **entirely in `compute.go`**, in the boundary arithmetic, where an off-by-one day is invisible until the vyúčtování arrives a year later disagreeing by 300 Kč.
 >
-> **D157–D160 came out of this handoff pass** (brief §7a) and are cited inline. Where this document and the brief disagree, the brief wins.
+> **D157–D160 came out of this handoff pass** (brief §7a) and are cited inline. **D161–D162 came out of the implementation-planning pass** (brief §7b) and amended `openapi.yaml` in place: `summary.cost_total_haler` and `.balance_haler` are **nullable and null — never 0 — in `insufficient_data` and `blocked`**, and `summary.headroom` gained **`kwh_mix_dkwh`**. Both are cited inline too. Where this document and the brief disagree, the brief wins.
 
 ## The model in one paragraph
 
@@ -151,12 +151,14 @@ func BuildHistory(s Snapshot, from, to Month) []MonthPoint  // D159
 
 | Type | Fields |
 |---|---|
-| `Summary` | ids/dates, `EndsOnConfirmed` · `Blocking *Blocking` (set ⇒ everything below is partial) · `Actual, Forecast Side` · `Closed bool` (D157) · `EnergyTotalHaler`, `FeeTotalHaler`, `CostTotalHaler` · `LastReading`, `LastReadingAgeDays` (the D156 line) · `ElapsedDays`, `RemainingDays` · `AvgVT/NTMdkwhPerDay` (thousandths of dkWh/day, **display only, never priced**) · `Months []CountedMonth` · `AdvancesTotalHaler`, `AdvancesDueHaler`, `BalanceHaler` · `RecommendedKc *int64` (nil when no months remain) · `Headroom *Headroom` (only when the forecast is impossible) · `Invoiced *InvoiceComparison` |
+| `Summary` | ids/dates, `EndsOnConfirmed` · `Blocking []Blocking` (non-empty ⇒ everything below is partial; the **earliest** is the one that truncates `Actual`) · `Actual, Forecast Side` · `Closed bool` (D157) · `EnergyTotalHaler`, `FeeTotalHaler`, `CostTotalHaler *int64` · `LastReading`, `LastReadingAgeDays` (the D156 line) · `ElapsedDays`, `RemainingDays` · `AvgVT/NTMdkwhPerDay` (thousandths of dkWh/day, **display only, never priced**) · `Months []CountedMonth` · `AdvancesTotalHaler`, `AdvancesDueHaler`, `BalanceHaler *int64` · `RecommendedKc *int64` (nil when no months remain) · `Headroom *Headroom` (only when the forecast is impossible) · `Invoiced *InvoiceComparison` |
 | `Side` | `FromOn`, `ToOn` (half-open), `Days` · `VTDkwh`, `NTDkwh` · `EnergyHaler` (**authoritative**) · `EnergyVTHaler`, `EnergyNTHaler` (the D158 split) · `FeeHaler` · `CostHaler` |
 | `Interval` | window, `Days`, `VTDkwh`, `NTDkwh`, `TariffID`, `EnergyHaler` — **energy only; an interval carries no fee** (§2.4) |
 | `Blocking` | `Kind` · `MissingOn` (pre-fills the reading form — the date only, never the values, D137) · `IntervalFrom`, `IntervalTo` · `MessageCS` |
 | `CountedMonth` | `Month`, `AmountHaler`, `Source` (`payment`\|`schedule`\|`none`), `DueOn`, `Due bool`, `PaidOn *Date` |
-| `Headroom` | `AdvanceHaler`, `FeeHaler`, `ForEnergyHaler`, `KwhAllVT`, `KwhAllNT`, `KwhMix` (whole kWh) |
+| `Headroom` | `AdvanceHaler`, `FeeHaler`, `ForEnergyHaler`, `KwhAllVT`, `KwhAllNT`, `KwhMix` (whole kWh; all three go on the wire as `*_dkwh`, **D162**) |
+
+⚠ **`CostTotalHaler` and `BalanceHaler` are pointers, and nil — not 0 — whenever the totals are not produced (D161):** `insufficient_data` and `blocked` alike. The wire declares both nullable to match. Two consequences worth stating, because the compiler will not: the zero value of this struct is **not** a valid summary, and `Actual` stays populated when it is valid — the figures *before* a gap do not become unknown because the ones after it are.
 
 Two loading rules are easy to get subtly wrong. **Readings load through `ends_on + 1`, not `ends_on`** — the closing reading is dated the day *after* the period (D134); take the newest in `[starts_on, ends_on+1]` as "the last reading", and when it is dated exactly `ends_on + 1` set `Closed = true` (**D157**). And **all tariffs load**, not just those inside the period — the version governing `starts_on` normally starts well before it.
 
@@ -217,6 +219,8 @@ One ceil-div straight from haléře to Kč. Do **not** divide to haléře, round
 ### 2.7 Headroom (brief §4.6), history (D138/D159), purity
 
 **Headroom** is filled only when the real prediction is unavailable, so the first screen Karel ever sees carries a real number instead of an empty panel. `ForEnergyHaler = advance − monthly_fee` from the versions effective today; `KwhAllVT = divRound(ForEnergyHaler · 10000, price_vt_haler) / 10`; `KwhMix` blends at **30 % VT / 70 % NT**, a stated heuristic named as such in the Czech copy, never presented as measured. Against Karel's numbers this must give **857,65 Kč ≈ 176 kWh** (vše VT) · **213 kWh** (vše NT) · **~200 kWh** (30/70). Pin all four.
+
+⚠ **The mix is ONE division, not a blended price rounded and then divided into** (**D162**): `KwhMixDkwh = divRound(ForEnergyHaler · 100000, 3·price_vt_haler + 7·price_nt_haler)`. Rounding `(3·vt + 7·nt)/10` to a price first, then dividing, moves the answer by a whole kWh. Karel's numbers: `divRound(8 576 500 000, 4 276 278) = 2006` → **200 kWh** ✓. It is **served, not derived on the client** — the summary carries no prices, so a client reconstructing them from `KwhAllVT`/`KwhAllNT` would land somewhere else than this test. Note also that this is the fourth `divRound` call outside the money path: §2.1's "exactly three rounding points" governs **money**, and headroom kWh is a display figure that no Kč ever passes through.
 
 **`BuildHistory`** lives in this file so it cannot become a second interval walk. kWh per month spread each interval's kWh evenly across its days — display only, labelled *"přibližné"* (D138). Kč per month (**D159**) is the interval's already-exact cost divided across the months it spans in proportion to days, never a repricing of interpolated kWh; fee chunks are already per month and need no division. So the kWh columns are approximate and say so, the Kč columns are exact totals cut along an approximate line, and no price ever touches an invented meter value.
 
@@ -338,7 +342,7 @@ Every mutation writes an audit event in the same transaction; all five entities 
 
 ⚠ **`due_day` is load-bearing.** At `due_day ≤ 20` five months are due on 20. 8. 2026 and the answer is 1 795 Kč; at `due_day = 25` only four are and it is `ceil(1 436 049 / 800) =` **1 796 Kč**. Keep both as separate cases.
 
-**Brief §4.6 — Karel's opening state.** Ceník od 24. 6. 2026 (VT 485 865, NT 402 669, poplatky 64 235 h); záloha 150 000; období 24. 6. 2026 – 23. 6. 2027 unconfirmed; one reading 24. 6. 2026 = 320 / 700 dkWh. Assert `Blocking == nil`, `Forecast` zero, **no totals produced**, `Months` = exactly 12 entries `2026-07 … 2027-06` with **`2026-06` absent**, `AdvancesTotalHaler == 1 800 000`, `Headroom == {ForEnergyHaler: 85 765, KwhAllVT: 176, KwhAllNT: 213, KwhMix: 200}`.
+**Brief §4.6 — Karel's opening state.** Ceník od 24. 6. 2026 (VT 485 865, NT 402 669, poplatky 64 235 h); záloha 150 000; období 24. 6. 2026 – 23. 6. 2027 unconfirmed; one reading 24. 6. 2026 = 320 / 700 dkWh. Assert `Blocking` empty, `Forecast` zero, **`CostTotalHaler == nil` and `BalanceHaler == nil`** (D161 — assert nil, *not* 0, and assert it again on the serialized JSON, since a pointer that is nil in Go and `0` on the wire is exactly the bug this shape exists to prevent), `Months` = exactly 12 entries `2026-07 … 2027-06` with **`2026-06` absent**, `AdvancesTotalHaler == 1 800 000`, `Headroom == {ForEnergyHaler: 85 765, KwhAllVT: 176, KwhAllNT: 213, KwhMix: 200}`.
 
 **One-line assertions, one case each:**
 

@@ -21,6 +21,11 @@ export const routes = {
   // strip. The four thumb tabs stay untouched; the sub-routes hang off this
   // prefix (/zahrada/plodiny, /zahrada/plan/2027, …).
   zahrada: '/zahrada',
+  // v8: Elektřina joins the same overflow for everyone — four sub-routes behind
+  // one nav entry, reusing v7's tab-strip pattern rather than inventing a second.
+  // Note that /elektrina/cenik is SINGULAR: the PRD's spelling wins over the
+  // build brief's /ceniky, while the tab LABEL stays "Ceníky a poplatky".
+  elektrina: '/elektrina',
 } as const
 
 // There is deliberately no permalink helper here: /d/{id} (D42) is minted by the

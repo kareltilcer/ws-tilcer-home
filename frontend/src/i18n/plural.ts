@@ -50,4 +50,9 @@ export const PLURAL = {
   varieties: ['odrůda', 'odrůdy', 'odrůd'],
   years: ['rok', 'roky', 'let'],
   plantings: ['výsadba', 'výsadby', 'výsadeb'],
+  // v8 — Elektřina. The nudge line ("poslední odečet před 47 dny") and the
+  // prediction basis ("z průměru za posledních 122 dní") both count days, which
+  // `days` above already covers; these two are the module's own nouns.
+  readings: ['odečet', 'odečty', 'odečtů'],
+  tariffs: ['ceník', 'ceníky', 'ceníků'],
 } satisfies Record<string, PluralForms>

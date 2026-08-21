@@ -4006,7 +4006,11 @@ paths:
           schema: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
         - name: to
           in: query
-          description: Last month, YYYY-MM. Defaults to the current month.
+          description: >-
+            Last month, YYYY-MM. Defaults to the current month. An explicit range wider
+            than 1200 months (a century) is a 422, not a clamp — the defaults are bounded
+            by the data, but a hand-written `?from=0001-01&to=9999-12` would otherwise
+            materialise a month point per month for every period.
           schema: { type: string, pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$" }
       responses:
         "200":
@@ -6792,7 +6796,10 @@ components:
       type: object
       properties:
         starts_on: { type: string, format: date }
-        ends_on: { type: string, format: date }
+        ends_on:
+          type: [string, "null"]
+          format: date
+          description: Explicit null re-applies the starts_on + 1 year − 1 day default (PRD D153).
         ends_on_confirmed: { type: boolean }
         invoiced_total_haler: { type: [integer, "null"] }
         invoiced_balance_haler: { type: [integer, "null"] }
@@ -6889,20 +6896,40 @@ components:
         What the current záloha actually buys, computable with ZERO consumption data —
         which is why it is what Přehled shows while the prediction is still impossible.
         With a 1 500 Kč záloha and 642,35 Kč of poplatky, 857,65 Kč/měsíc is left for
-        energy: about 176 kWh if it were all VT, 213 kWh if all NT.
-      required: [advance_haler, monthly_fee_haler, energy_budget_haler, kwh_all_vt_dkwh, kwh_all_nt_dkwh]
+        energy: about 176 kWh if it were all VT, 213 kWh if all NT, and roughly 200 kWh
+        at a 30/70 mix.
+      required:
+        [advance_haler, monthly_fee_haler, energy_budget_haler, kwh_all_vt_dkwh,
+         kwh_all_nt_dkwh, kwh_mix_dkwh]
       properties:
         advance_haler: { type: integer }
         monthly_fee_haler: { type: integer }
         energy_budget_haler: { type: integer, description: "advance_haler minus monthly_fee_haler, floored at 0." }
         kwh_all_vt_dkwh: { type: integer, description: Tenths of kWh the budget buys at the VT price. }
         kwh_all_nt_dkwh: { type: integer, description: Tenths of kWh the budget buys at the NT price. }
+        kwh_mix_dkwh:
+          type: integer
+          description: >-
+            Tenths of kWh the budget buys at a 30 % VT / 70 % NT mix — the figure
+            Přehled leads with, since neither all-VT nor all-NT is a household. The mix
+            is a STATED HEURISTIC, never a measurement, and the Czech copy names it as
+            one. Computed with ONE division and no intermediate rounding —
+            `divRound(energy_budget_haler · 100000, 3·price_vt_haler + 7·price_nt_haler)`
+            — because rounding a blended price first moves the answer by a whole kWh.
+            It is served rather than derived on the client: the summary carries no
+            prices, so a client would have to reconstruct them from the two kWh figures
+            above and would land on a different number than the server's tests pin.
     ElectricitySummary:
       type: object
       description: >-
         Computed on read, never stored (PRD D152). `status` decides which of the
         optional blocks are present.
-      required: [period, status, blocking, cost_total_haler, advances, balance_haler]
+
+        `cost_total_haler` and `balance_haler` are NULLABLE and are absent — never 0 —
+        in the two states where the module has not earned them. "The module never shows
+        a number it hasn't earned, not a zero" is therefore carried by the type, rather
+        than by every screen remembering to gate on `status` first.
+      required: [period, status, blocking, advances]
       properties:
         period: { $ref: "#/components/schemas/ElectricityPeriod" }
         status:
@@ -6932,13 +6959,21 @@ components:
             - $ref: "#/components/schemas/ElectricitySpan"
             - type: "null"
           description: Null when `status` is `complete` or `insufficient_data`.
-        cost_total_haler: { type: integer, description: actual.total_haler plus forecast.total_haler. }
+        cost_total_haler:
+          type: [integer, "null"]
+          description: >-
+            actual.total_haler plus forecast.total_haler. NULL when `status` is
+            `insufficient_data` (there is no average to forecast from) or `blocked` (an
+            unresolved gap, PRD D137/D140) — the figures BEFORE the gap stay valid in
+            `actual`, but no period total exists. Never 0 in those states: a 0 Kč
+            nedoplatek is a lie that looks like good news.
         advances: { $ref: "#/components/schemas/ElectricityAdvancesSummary" }
         balance_haler:
-          type: integer
+          type: [integer, "null"]
           description: >-
             expected zálohy minus cost_total_haler. POSITIVE is a přeplatek, NEGATIVE a
-            nedoplatek (PRD D146).
+            nedoplatek (PRD D146). NULL exactly when `cost_total_haler` is null — the
+            zálohy are always known, but a balance against an unknown cost is not.
         recommended_advance_haler:
           type: [integer, "null"]
           description: >-
@@ -6954,8 +6989,18 @@ components:
     ElectricityInvoiceComparison:
       type: object
       description: Computed against invoiced (PRD D154). Storing the supplier's final readings is what lets a difference be attributed to kWh rather than only to Kč.
-      required: [computed_total_haler, invoiced_total_haler, diff_haler]
+      required: [computed_is_forecast, computed_total_haler, invoiced_total_haler, diff_haler]
       properties:
+        computed_is_forecast:
+          type: boolean
+          description: >-
+            True while `status` is anything but `complete` — the vyúčtování has arrived
+            but the closing odečet dated ends_on+1 has not, so the computed side is
+            still part prediction and the two sides are not measuring the same thing.
+            This is the ORDINARY sequence: the invoice comes in the post before anyone
+            walks to the meter cupboard. The UI hedges the whole panel on this flag,
+            because printing a forecast as "spočteno" would attribute the module's own
+            projection error to an odhadnutý odečet on the supplier's side.
         computed_total_haler: { type: integer }
         invoiced_total_haler: { type: integer }
         diff_haler: { type: integer, description: computed minus invoiced. }

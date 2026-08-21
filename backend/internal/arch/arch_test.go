@@ -94,6 +94,25 @@ var forbiddenImports = map[string][]struct{ pkg, why string }{
 			"and beds are explicitly out of scope, so there is no bucket, no mirror job and no " +
 			"reconciliation to get wrong"},
 	},
+	// v8 extends the garden precedent to its limit. `electricity` is the first
+	// module that contributes NOTHING (PRD D147, D156) — no widget, no metric, no
+	// list, no push, no scheduler job, no blob store — and all five of these are
+	// exactly what a later "small improvement" reaches for. The module's whole
+	// shape is the claim that it needs none of them, so the claim is a test.
+	"electricity": {
+		{"platform/metrics", "the electricity module publishes NO METRIC (PRD D147). Karel's answer was " +
+			"\"no chase\", and a metric exists to be a CONDITION in Administrace — the first step " +
+			"toward the scheduled summary this module deliberately does not have"},
+		{"platform/lists", "the electricity module publishes NO LIST (PRD D147). A list is the other half " +
+			"of a notification, and the one permitted nudge is a plain in-app line on Přehled: " +
+			"\"poslední odečet před 47 dny\". Text on a page you already opened is not a notification"},
+		{"platform/push", "the electricity module sends NOTHING (PRD D156). \"No chase\" was literal"},
+		{"platform/scheduler", "the electricity module has NO BACKGROUND JOB (PRD D152). Everything is " +
+			"computed on read, so there is no derived value for a job to keep fresh and nothing " +
+			"that can fall behind. A job here would also be the module's first `system` audit actor"},
+		{"platform/blobstore", "the electricity module holds NO BYTES. Invoice PDFs are out of scope, so " +
+			"there is no bucket, no mirror job and no reconciliation"},
+	},
 }
 
 // TestForbiddenPlatformImports enforces the per-module platform bans above.
