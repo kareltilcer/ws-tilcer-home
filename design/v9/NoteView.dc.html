@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="display:flex;flex-direction:column;min-height:0;height:100%">
+  <!-- header: path, pins, copy-link, actions -->
+  <div style="flex:none;padding:16px 20px 12px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:170px">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--subtle);margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ nv.folderLabel }}</div>
+        <div style="font-weight:800;font-size:20px;letter-spacing:-.02em;line-height:1.25;word-break:break-word;text-wrap:pretty">{{ nv.title }}</div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:8px">
+          <sc-if value="{{ nv.household }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:99px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent);font-size:11.5px;font-weight:700"><span style="width:9px;height:9px;border-radius:99px;background:var(--accent)"></span>Připnuto pro všechny</span></sc-if>
+          <sc-if value="{{ nv.personal }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:99px;background:var(--s3);color:var(--muted);font-size:11.5px;font-weight:700"><span style="width:9px;height:9px;border-radius:99px;border:1.5px solid var(--muted)"></span>Jen pro mě</span></sc-if>
+          <!-- v9: značka i slovo. Zámek nikdy nestojí sám a nikdy neznamená nic jiného. -->
+          <sc-if value="{{ nv.isPrivate }}" hint-placeholder-val="{{ false }}"><span style="{{ nv.privStyle }}">{{ nv.privLabel }}</span></sc-if>
+        </div>
+      </div>
+      <div style="flex:none;display:flex;align-items:center;gap:7px;position:relative">
+        <sc-if value="{{ nv.canWrite }}" hint-placeholder-val="{{ true }}"><button onClick="{{ nv.onRename }}" title="Přejmenovat" aria-label="Přejmenovat" style="width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--muted);cursor:pointer;font-size:13px">✎</button></sc-if>
+        <button onClick="{{ nv.onCopyLink }}" title="Zkopírovat odkaz — otevře se jen přihlášeným členům domácnosti" aria-label="Kopírovat odkaz" style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer"><span style="color:var(--accent)">⚯</span> Odkaz</button>
+        <button onClick="{{ nv.onTogglePinMenu }}" aria-haspopup="true" aria-expanded="{{ nv.pinMenuOpen }}" style="{{ nv.pinBtnStyle }}"><span style="font-size:13px">⚑</span> {{ nv.pinBtnLabel }}</button>
+        <sc-if value="{{ nv.pinMenuOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ nv.closePinMenu }}" style="position:fixed;inset:0;z-index:24"></div>
+          <div style="position:absolute;top:40px;right:0;z-index:25;width:236px;background:var(--s1);border:1px solid var(--border-strong);border-radius:12px;box-shadow:0 18px 46px oklch(0 0 0/.5);padding:6px">
+            <!-- v9: u soukromé položky je „pro všechny" NEDOSTUPNÉ A VYSVĚTLENÉ, ne skryté. -->
+            <sc-if value="{{ nv.houseBlocked }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px;border-radius:8px;background:var(--s2);border:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:10px;opacity:.55"><span style="flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border-strong)"></span><span style="font-size:13px;font-weight:600">Připnout pro všechny</span></div>
+                <div style="font-size:11px;color:var(--muted);margin-top:6px;text-wrap:pretty;line-height:1.45">{{ nv.houseBlockedNote }}</div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ nv.houseAllowed }}" hint-placeholder-val="{{ true }}"><button onClick="{{ nv.onPinHouse }}" style="width:100%;display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:8px;border:none;background:transparent;color:var(--text);font-family:var(--font);font-size:13px;cursor:pointer;text-align:left" style-hover="background:var(--s3)"><span style="flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border-strong);display:grid;place-items:center;font-size:11px;color:var(--accent-fg);{{ nv.houseBoxStyle }}">{{ nv.houseCheck }}</span><span style="flex:1"><span style="display:block;font-weight:600">Připnout pro všechny</span><span style="display:block;font-size:11px;color:var(--subtle)">Sdílené — vidí celá domácnost</span></span></button></sc-if>
+            <button onClick="{{ nv.onPinPersonal }}" style="width:100%;display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:8px;border:none;background:transparent;color:var(--text);font-family:var(--font);font-size:13px;cursor:pointer;text-align:left" style-hover="background:var(--s3)"><span style="flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border-strong);display:grid;place-items:center;font-size:11px;color:var(--accent-fg);{{ nv.personalBoxStyle }}">{{ nv.personalCheck }}</span><span style="flex:1"><span style="display:block;font-weight:600">Připnout jen pro mě</span><span style="display:block;font-size:11px;color:var(--subtle)">Osobní — jen tvoje zařízení</span></span></button>
+            <!-- v9: jediná nevratná akce v modulu žije ve vlastní nabídce položky, ne na liště. -->
+            <sc-if value="{{ nv.canPublish }}" hint-placeholder-val="{{ false }}">
+              <div style="margin:6px 2px 4px;padding-top:7px;border-top:1px solid var(--border)"><span style="font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle)">Viditelnost</span></div>
+              <button onClick="{{ nv.onPublish }}" style="width:100%;display:flex;align-items:center;gap:10px;min-height:44px;padding:8px 10px;border-radius:8px;border:1px solid var(--vis-private);background:var(--vis-private-soft);color:var(--text);font-family:var(--font);font-size:13px;cursor:pointer;text-align:left"><span style="flex:none;font-size:13px">↥</span><span style="flex:1"><span style="display:block;font-weight:700">{{ nv.publishLabel }}</span><span style="display:block;font-size:11px;color:var(--muted)">Uvidí to celá domácnost. Zpátky to nejde.</span></span></button>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+
+  <!-- "změněno jinde" banner -->
+  <sc-if value="{{ nv.changed }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;margin:12px 20px 0;display:flex;align-items:center;gap:11px;padding:10px 13px;border-radius:11px;background:color-mix(in oklch,var(--warn) 13%,var(--s2));border:1px solid color-mix(in oklch,var(--warn) 40%,transparent)">
+      <span style="color:var(--warn);font-size:15px;flex:none">↻</span>
+      <div style="flex:1;font-size:12.5px;line-height:1.45">Tuto poznámku mezitím <strong>upravil někdo jiný</strong>. Tvoje změny se uloží jako poslední (přepíší). <button onClick="{{ nv.onReload }}" style="border:none;background:transparent;color:var(--accent);font-family:var(--font);font-size:12.5px;font-weight:700;cursor:pointer;padding:0;text-decoration:underline">Načíst jejich verzi</button></div>
+      <button onClick="{{ nv.onDismissChanged }}" aria-label="Zavřít upozornění" style="flex:none;width:26px;height:26px;border-radius:7px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:13px">✕</button>
+    </div>
+  </sc-if>
+
+  <!-- mode toggle + toolbar -->
+  <div style="flex:none;padding:12px 20px 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <sc-if value="{{ nv.canWrite }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:3px;gap:2px">
+        <button onClick="{{ nv.onView }}" style="{{ nv.viewTabStyle }}">Číst</button>
+        <button onClick="{{ nv.onWysiwyg }}" style="{{ nv.wysiwygTabStyle }}">Vizuální</button>
+        <button onClick="{{ nv.onMarkdown }}" style="{{ nv.markdownTabStyle }}">Markdown</button>
+      </div>
+    </sc-if>
+    <sc-if value="{{ nv.isReader }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px;border-radius:99px;background:var(--s3);border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600">◔ Jen pro čtení</span></sc-if>
+    <sc-if value="{{ nv.canWrite }}" hint-placeholder-val="{{ true }}"><button onClick="{{ nv.onSimChange }}" title="Ukázat stav „změněno jinde"" style="height:28px;padding:0 10px;border-radius:7px;border:1px dashed var(--border-strong);background:transparent;color:var(--subtle);font-family:var(--font);font-size:11.5px;cursor:pointer">⟳ změna jinde</button></sc-if>
+    <div style="flex:1;min-width:8px"></div>
+    <sc-if value="{{ nv.canWrite }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:none;display:flex;gap:8px">
+        <button onClick="{{ nv.onMove }}" title="Přesunout do…" style="height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--text);font-family:var(--font);font-size:12.5px;font-weight:600;cursor:pointer">⇄ Přesunout</button>
+        <button onClick="{{ nv.onDelete }}" title="Smazat poznámku" aria-label="Smazat" style="width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--s2);color:var(--danger);cursor:pointer;font-size:13px">✕</button>
+      </div>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{ nv.isWysiwyg }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;margin:0 20px;display:flex;flex-wrap:wrap;gap:3px;padding:5px;background:var(--s2);border:1px solid var(--border);border-radius:9px">
+      <sc-for list="{{ nv.toolbar }}" as="tb" hint-placeholder-count="7"><button title="{{ tb.title }}" style="min-width:32px;height:30px;padding:0 8px;border-radius:6px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-family:var(--mono);font-size:12.5px;font-weight:600" style-hover="background:var(--s3);color:var(--text)">{{ tb.label }}</button></sc-for>
+    </div>
+  </sc-if>
+
+  <!-- body -->
+  <div class="om-scroll" style="flex:1;overflow-y:auto;padding:14px 20px 22px;min-height:0">
+    <sc-if value="{{ nv.isMarkdown }}" hint-placeholder-val="{{ false }}">
+      <textarea onChange="{{ nv.onBody }}" spellcheck="false" style="width:100%;min-height:300px;height:100%;resize:vertical;background:var(--s2);border:1px solid var(--border);border-radius:11px;padding:14px 16px;color:var(--text);font-family:var(--mono);font-size:14px;line-height:1.65;outline:none" style-focus="border-color:var(--accent)">{{ nv.bodyRaw }}</textarea>
+    </sc-if>
+    <sc-if value="{{ nv.isWysiwyg }}" hint-placeholder-val="{{ false }}">
+      <div style="border:1px solid var(--accent);border-radius:11px;background:var(--s1);padding:16px 18px;min-height:280px;font-size:15px;line-height:1.7">{{ nv.rendered }}</div>
+    </sc-if>
+    <sc-if value="{{ nv.isView }}" hint-placeholder-val="{{ true }}">
+      <div style="font-size:15px;line-height:1.7">{{ nv.rendered }}</div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:760,&quot;height&quot;:560},&quot;nv&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;any&quot;}}"></script>
+</body>
+</html>
