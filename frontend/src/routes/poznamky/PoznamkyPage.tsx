@@ -568,47 +568,54 @@ function DesktopView(p: ViewProps) {
 
   return (
     <>
-      <div className="flex flex-none flex-wrap items-center gap-3 border-b border-border px-5 py-4">
-        <div>
-          {/* Carrier 1 of 5: the HEADING names the root. See RootSwitcher for why
-              the current tree is carried by the page's shape rather than by a
-              warning — shape is read every time, a warning once. */}
-          <h1 className="text-lg font-extrabold tracking-tight">
-            {p.scope === 'private' ? cs.privacy.privateNotes : cs.notes.title}
-          </h1>
-          <p className="text-[12.5px] text-muted">
-            {p.scope === 'private' ? cs.privacy.subtitleNotes : cs.notes.subtitle}
-          </p>
+      {/* Title row and root strip share ONE block, and the strip draws the rule at
+          its foot (see RootSwitcher) — so the underline it carries always has that
+          rule to sit on, and the two can never drift apart. */}
+      <div className="flex-none">
+        <div className="flex flex-wrap items-center gap-3 px-5 pb-3 pt-4">
+          <div>
+            {/* Carrier 1 of 5: the HEADING names the root. See RootSwitcher for why
+                the current tree is carried by the page's shape rather than by a
+                warning — shape is read every time, a warning once. */}
+            <h1 className="text-lg font-extrabold tracking-tight">
+              {p.scope === 'private' ? cs.privacy.privateNotes : cs.notes.title}
+            </h1>
+            <p className="text-[12.5px] text-muted">
+              {p.scope === 'private' ? cs.privacy.subtitleNotes : cs.notes.subtitle}
+            </p>
+          </div>
+          <div className="flex-1" />
+          <SearchBox value={p.searchQ} onChange={p.setSearchQ} scope={p.scope} />
+          {p.canWrite && (
+            <>
+              <ToolbarBtn onClick={p.onCreateFolder} icon={<FolderPlus size={14} />}>
+                {cs.notes.newFolder}
+              </ToolbarBtn>
+              <button
+                type="button"
+                onClick={p.onCreateNote}
+                className="inline-flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[12.5px] font-bold text-accent-fg"
+              >
+                <FilePlus2 size={14} /> {cs.notes.newNote}
+              </button>
+            </>
+          )}
+          {!p.canWrite && (
+            <span className="inline-flex h-7 items-center rounded-full border border-border bg-s3 px-3 text-[12px] font-semibold text-muted">
+              {cs.notes.readOnly}
+            </span>
+          )}
         </div>
-        <div className="flex-1" />
-        {/* Carrier 2: the switcher itself. */}
+        {/* Carrier 2: the switcher itself — its OWN full-width row under the
+            title, because the two roots are this page's top-level navigation and
+            not one more control in a toolbar that wraps. */}
         <RootSwitcher
           scope={p.scope}
           base={routes.poznamky}
           sharedLabel={cs.notes.title}
           privateLabel={cs.privacy.privateNotes}
-          className="w-full sm:w-auto"
+          className="px-5"
         />
-        <SearchBox value={p.searchQ} onChange={p.setSearchQ} scope={p.scope} />
-        {p.canWrite && (
-          <>
-            <ToolbarBtn onClick={p.onCreateFolder} icon={<FolderPlus size={14} />}>
-              {cs.notes.newFolder}
-            </ToolbarBtn>
-            <button
-              type="button"
-              onClick={p.onCreateNote}
-              className="inline-flex h-[34px] items-center gap-1.5 rounded-md bg-accent px-3.5 text-[12.5px] font-bold text-accent-fg"
-            >
-              <FilePlus2 size={14} /> {cs.notes.newNote}
-            </button>
-          </>
-        )}
-        {!p.canWrite && (
-          <span className="inline-flex h-7 items-center rounded-full border border-border bg-s3 px-3 text-[12px] font-semibold text-muted">
-            {cs.notes.readOnly}
-          </span>
-        )}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -930,13 +937,14 @@ function MobileView(p: ViewProps) {
   // root is exactly the state a member meets on day one — the one screen where
   // being stranded is most likely.
   const switcher = (
-    <div className="flex-none px-1 pb-2 pt-1">
+    <div className="flex-none px-1 pt-1">
       <RootSwitcher
         scope={p.scope}
         base={routes.poznamky}
         sharedLabel={cs.notes.title}
         privateLabel={cs.privacy.privateNotes}
-        className="w-full"
+        mobile
+        className="mb-3"
       />
     </div>
   )
