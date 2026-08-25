@@ -684,42 +684,46 @@ function DesktopView(p: ViewProps) {
   const openFolder = p.sel.folderId ? findNode(p.idx, p.sel.folderId) : null
   return (
     <>
-      <div className="flex flex-none flex-wrap items-center gap-3 border-b border-border px-5 py-4">
-        <div>
-          {/* The five carriers of "which tree am I in" — see RootSwitcher. This
-              page mirrors Poznámky exactly (D40): one behaviour, two
-              implementations, and a change to one belongs in the other. */}
-          <h1 className="text-lg font-extrabold tracking-tight">
-            {p.scope === 'private' ? cs.privacy.privateDocuments : cs.documents.title}
-          </h1>
-          <p className="text-[12.5px] text-muted">
-            {p.scope === 'private' ? cs.privacy.subtitleDocuments : cs.documents.subtitle}
-          </p>
+      {/* Title row and root strip share ONE block, and the strip draws the rule at
+          its foot (see RootSwitcher) — the Poznámky twin (D40): one behaviour, two
+          implementations, kept identical. */}
+      <div className="flex-none">
+        <div className="flex flex-wrap items-center gap-3 px-5 pb-3 pt-4">
+          <div>
+            {/* The five carriers of "which tree am I in" — see RootSwitcher. */}
+            <h1 className="text-lg font-extrabold tracking-tight">
+              {p.scope === 'private' ? cs.privacy.privateDocuments : cs.documents.title}
+            </h1>
+            <p className="text-[12.5px] text-muted">
+              {p.scope === 'private' ? cs.privacy.subtitleDocuments : cs.documents.subtitle}
+            </p>
+          </div>
+          <div className="flex-1" />
+          <SearchBox value={p.searchQ} onChange={p.setSearchQ} scope={p.scope} />
+          <ViewToggle view={p.view} onChange={p.setViewMode} />
+          {p.canWrite ? (
+            <>
+              <Button size="sm" onClick={p.onCreateFolder}>
+                <FolderPlus size={14} aria-hidden /> {cs.documents.newFolder}
+              </Button>
+              <Button size="sm" variant="primary" onClick={p.onPickFiles}>
+                <Upload size={14} aria-hidden /> {cs.documents.upload}
+              </Button>
+            </>
+          ) : (
+            <span className="inline-flex h-7 items-center rounded-full border border-border bg-s3 px-2.5 text-[12px] font-semibold text-muted">
+              {cs.documents.readOnly}
+            </span>
+          )}
         </div>
-        <div className="flex-1" />
+        {/* Carrier 2: the switcher, on its own full-width row under the title. */}
         <RootSwitcher
           scope={p.scope}
           base={routes.dokumenty}
           sharedLabel={cs.documents.title}
           privateLabel={cs.privacy.privateDocuments}
-          className="w-full sm:w-auto"
+          className="px-5"
         />
-        <SearchBox value={p.searchQ} onChange={p.setSearchQ} scope={p.scope} />
-        <ViewToggle view={p.view} onChange={p.setViewMode} />
-        {p.canWrite ? (
-          <>
-            <Button size="sm" onClick={p.onCreateFolder}>
-              <FolderPlus size={14} aria-hidden /> {cs.documents.newFolder}
-            </Button>
-            <Button size="sm" variant="primary" onClick={p.onPickFiles}>
-              <Upload size={14} aria-hidden /> {cs.documents.upload}
-            </Button>
-          </>
-        ) : (
-          <span className="inline-flex h-7 items-center rounded-full border border-border bg-s3 px-2.5 text-[12px] font-semibold text-muted">
-            {cs.documents.readOnly}
-          </span>
-        )}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -1001,7 +1005,8 @@ function MobileView(p: ViewProps) {
         base={routes.dokumenty}
         sharedLabel={cs.documents.title}
         privateLabel={cs.privacy.privateDocuments}
-        className="mb-3 w-full"
+        mobile
+        className="mb-3"
       />
       <h1 className="flex items-center gap-2 text-xl font-extrabold tracking-tight">
         {node && <span className="flex-none leading-none" aria-hidden>{node.folder.icon || DEFAULT_FOLDER_ICON}</span>}
