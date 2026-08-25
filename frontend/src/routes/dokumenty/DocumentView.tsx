@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ArrowUpRight, Check, Download, Link2, Pencil, Pin, Trash2, MoveRight } from 'lucide-react'
+import { ArrowUpRight, Check, Download, Link2, Pencil, Pin, Trash2, MoveRight, Upload } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { ApiError } from '@/api/client'
 import * as api from '@/api/endpoints'
@@ -31,6 +31,7 @@ export function DocumentView({
   onRename,
   onMove,
   onDelete,
+  onPublish,
   onGone,
 }: {
   documentId: string
@@ -39,6 +40,8 @@ export function DocumentView({
   onRename?: (d: DocumentDetail) => void
   onMove?: (d: DocumentDetail) => void
   onDelete?: (d: DocumentDetail) => void
+  /** v9: owner-only publish of a private document (D182). Absent = no control. */
+  onPublish?: (d: DocumentDetail) => void
   onGone?: () => void
 }) {
   const { canWrite } = useAuth()
@@ -55,13 +58,15 @@ export function DocumentView({
     mutationFn: ({ scope, on }: { scope: PinScope; on: boolean }) =>
       on ? api.pinDocument(documentId, scope, via) : api.unpinDocument(documentId, scope, via),
     onSuccess: (_data, vars) => {
-      void qc.invalidateQueries({ queryKey: qk.documentDetail(documentId) })
-      void qc.invalidateQueries({ queryKey: qk.documentsTree })
-      // Search results carry the pin dot too and live under their own key, which the
-      // tree key is not a prefix of. For a PERSONAL pin this is the only thing that
-      // refreshes them: personal pins are deliberately not broadcast (D47), so the
-      // websocket's blanket ['documents'] invalidation never fires.
-      void qc.invalidateQueries({ queryKey: qk.documentsSearchAll })
+      // ONE call covers the detail, the tree and the search results: since v9 the
+      // module prefix is qk.documentsAll (['documents']), which every documents key
+      // hangs off. It used to be qk.documentsTree, a sibling of the search key —
+      // hence the two extra invalidations that stood here, and a comment explaining
+      // a prefix relationship that is now the opposite of the truth.
+      //
+      // Search results still matter for a PERSONAL pin specifically: personal pins
+      // are deliberately not broadcast (D47), so nothing else refreshes them.
+      void qc.invalidateQueries({ queryKey: qk.documentsAll })
       // A household pin changes what everyone sees, so the dashboard needs a refresh;
       // a personal pin only affects this user's widget, which the same key covers.
       void qc.invalidateQueries({ queryKey: qk.dashboard })
@@ -109,7 +114,14 @@ export function DocumentView({
   const d = doc.data
   const meta = kindMeta(d.content_type)
   const mode = viewerMode(d.content_type, d.preview_kind, d.preview_status)
-  const folderLabel = d.path?.length ? d.path.map((p) => p.name).join(' / ') : cs.documents.root
+  // Root-level fallback names the root the document actually lives in (carrier
+  // discipline — see rootLabel in DokumentyPage): the document's own visibility
+  // is the scope here, since this view has no page scope of its own.
+  const folderLabel = d.path?.length
+    ? d.path.map((p) => p.name).join(' / ')
+    : d.visibility === 'private'
+      ? cs.privacy.privateDocuments
+      : cs.documents.root
 
   const copyLink = async () => {
     // The PERMANENT link (D42) — id-based, so it survives renames and moves. Absolute
@@ -214,7 +226,15 @@ export function DocumentView({
                     <PinOption
                       checked={d.pinned.household}
                       label={cs.documents.pinHousehold}
-                      hint={cs.documents.pinHouseholdHint}
+                      // ⚠ On a private document "pro všechny" is UNAVAILABLE AND
+                      // EXPLAINED, never silently absent (D183). Hiding it leaves
+                      // the member wondering what they did wrong.
+                      hint={
+                        d.visibility === 'private'
+                          ? cs.privacy.householdPinUnavailable
+                          : cs.documents.pinHouseholdHint
+                      }
+                      disabled={d.visibility === 'private'}
                       onClick={() => pin.mutate({ scope: 'household', on: !d.pinned.household })}
                     />
                   )}
@@ -225,6 +245,24 @@ export function DocumentView({
                     hint={cs.documents.pinPersonalHint}
                     onClick={() => pin.mutate({ scope: 'personal', on: !d.pinned.personal })}
                   />
+                  {/* Publish, in the item's own menu beside the visibility
+                      controls it belongs with (HANDOFF-design §v9 §3). */}
+                  {onPublish && d.visibility === 'private' && editable && (
+                    <>
+                      <div className="my-1 h-px bg-border" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPinMenu(false)
+                          onPublish?.(d)
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-lg border border-vis-private bg-vis-private-soft px-2.5 py-2 text-left text-[13px] font-bold hover:brightness-110"
+                      >
+                        <Upload size={14} className="flex-none" aria-hidden />
+                        {cs.privacy.publish}
+                      </button>
+                    </>
+                  )}
                   <p className="mt-1.5 border-t border-border px-1.5 pt-2 text-[10.5px] leading-snug text-subtle">
                     {cs.documents.copyLinkNote}
                   </p>
@@ -284,18 +322,25 @@ function PinOption({
   label,
   hint,
   onClick,
+  disabled,
 }: {
   checked: boolean
   label: string
   hint: string
   onClick: () => void
+  /** v9: a household pin on a private document — disabled AND explained (D183). */
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={checked}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-fg hover:bg-s3"
+      disabled={disabled}
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-fg',
+        disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-s3',
+      )}
     >
       <span
         className={cn(

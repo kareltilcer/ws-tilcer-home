@@ -59,7 +59,12 @@ const strictSandbox = "sandbox"
 // object they open and how the disposition is chosen.
 func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode contentMode) {
 	id := chi.URLParam(r, "id")
-	sd, err := h.svc.Store().GetStoredDocument(r.Context(), h.svc.db, id)
+	// ⚠ Viewer-scoped (leak table row 5). All four content endpoints share this one
+	// handler and each is registered for GET *and* HEAD, so this single load is
+	// what makes a foreign private document 404 on eight routes — including the
+	// HEAD branch, which is live code and would otherwise be a HEAD-only existence
+	// oracle. A miss is indistinguishable from an unknown id (D180).
+	sd, err := h.svc.Store().GetStoredDocument(r.Context(), h.svc.db, id, actorID(r.Context()))
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -103,7 +108,11 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 	// A matching validator means the browser already has these exact bytes — and
 	// since they can never change, that answer is always correct.
 	if httpx.IfNoneMatch(r, etag) {
-		setImmutableCache(w, etag)
+		// Reached only after the viewer-scoped load above, which is the ordering that
+		// matters: were the check to run after this branch, a second member holding a
+		// stale ETag would get a 304 — "yes, and it hasn't changed" — for a document
+		// they may not see.
+		setContentCache(w, etag, sd.Visibility == visibilityPrivate)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -153,7 +162,7 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 	// carrying a one-year `immutable` lifetime on a URL whose content never changes
 	// means one transient storage blip breaks that document in that browser for a
 	// year.
-	setImmutableCache(w, etag)
+	setContentCache(w, etag, sd.Visibility == visibilityPrivate)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", mimeTypeHeader(contentType))
 	if isPDF(contentType) && mode == contentPreview {
@@ -183,12 +192,36 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 	}
 }
 
-// setImmutableCache stamps the cache validators. Only ever called on a response
-// that is certain to succeed (200/206/304): httpx.WriteError rewrites the body and
+// setContentCache stamps the cache validators. Only ever called on a response that
+// is certain to succeed (200/206/304): httpx.WriteError rewrites the body and
 // Content-Type but leaves the rest of the header alone, so an error emitted after
 // these were set would be cached as if it were the content.
-func setImmutableCache(w http.ResponseWriter, etag string) {
+//
+// ⚠ Since v9 the policy DEPENDS ON VISIBILITY (D208, leak table row 19), and this
+// is one of the few v9 changes that is invisible from inside the app — which is
+// why the test asserts the HEADER rather than a behaviour.
+//
+// The shipped header was `private, immutable, max-age=31536000` unconditionally,
+// and left alone it would have quietly defeated the whole feature: `private`
+// excludes shared PROXIES, not the second person using the same laptop, and
+// `immutable` suppresses revalidation for a year — so the new 404 would simply
+// never execute. A private document would stay readable from disk cache for twelve
+// months after the refusal shipped.
+//
+// `no-cache` for private items does NOT mean "do not cache". It means "revalidate
+// before every reuse": the ownership check runs on every view, a second member
+// gets 404, and the owner's repeat view of a 30 MB PDF is a 304 rather than a full
+// re-download. `no-store` was considered and rejected — marginally stricter, at
+// the cost of re-fetching every preview and thumbnail in the private tree on every
+// render, which is the sort of tax that gets a header quietly removed later.
+//
+// The ETag rides on BOTH paths; it is what makes the 304 possible at all.
+func setContentCache(w http.ResponseWriter, etag string, private bool) {
 	w.Header().Set("ETag", etag)
+	if private {
+		w.Header().Set("Cache-Control", httpx.RevalidatedContentCache)
+		return
+	}
 	w.Header().Set("Cache-Control", httpx.ImmutableContentCache)
 }
 

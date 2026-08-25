@@ -90,3 +90,16 @@ func (m *Module) AuditActions() []string {
 // absent from those catalogs by construction rather than by a registration it
 // forgot to make.
 func (m *Module) Widgets() []registry.WidgetProvider { return nil }
+
+// StorageTables declares this module's tables for the v9 storage catalog (D191).
+//
+// This is the one catalog `electricity` DOES join, and the exception proves the
+// rule: it publishes no widget, no metric, no list and no push (D147/D156), but it
+// still occupies disk, and a storage page that silently omitted a module would be
+// wrong rather than minimal.
+func (m *Module) StorageTables() []string {
+	return []string{
+		"electricity_readings", "electricity_tariffs", "electricity_advances",
+		"electricity_payments", "electricity_periods",
+	}
+}

@@ -1014,10 +1014,12 @@ func TestReconcile_FlagsOrphansAndDanglingRows(t *testing.T) {
 		t.Errorf("dangling = %d, want 0", report.Dangling)
 	}
 
-	// Past the grace window it is safe to reclaim.
+	// Past the grace window it is safe to reclaim. The object is AGED rather than the
+	// window shrunk to a nanosecond — see h.backdate for why that was a race.
+	x.backdate(time.Hour, "documents/019ffffff-orphan/original")
 	aged := documents.NewMirrorJob(x.svc.Store(), x.blob, documents.MirrorConfig{
 		Interval:    24 * time.Hour,
-		OrphanGrace: time.Nanosecond,
+		OrphanGrace: time.Minute,
 		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	})
 	report = aged.RunOnce(context.Background())
@@ -1100,9 +1102,14 @@ func TestReconcile_RefusesToDeleteWhenNoRowClaimsAnyObject(t *testing.T) {
 		}
 	}
 
+	// Every object is well past the grace window — aged explicitly, because asking
+	// whether a just-written file is more than a nanosecond old is a coin flip on a
+	// millisecond clock (see h.backdate).
+	x.backdate(time.Hour, keys...)
+
 	job := documents.NewMirrorJob(x.svc.Store(), x.blob, documents.MirrorConfig{
 		Interval:    24 * time.Hour,
-		OrphanGrace: time.Nanosecond, // every object is well past the grace window
+		OrphanGrace: time.Minute,
 		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	})
 	report := job.RunOnce(ctx)
@@ -1139,9 +1146,11 @@ func TestReconcile_RefusesWhenOrphansExceedTheShareLimit(t *testing.T) {
 		keys = append(keys, k)
 	}
 
+	x.backdate(time.Hour, keys...) // past the window, without racing the clock
+
 	cfg := documents.MirrorConfig{
 		Interval:    24 * time.Hour,
-		OrphanGrace: time.Nanosecond,
+		OrphanGrace: time.Minute,
 		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	report := documents.NewMirrorJob(x.svc.Store(), x.blob, cfg).RunOnce(ctx)
@@ -1181,9 +1190,11 @@ func TestReconcile_RefusesWhenOrphansOutnumberWhatTheRowsStillClaim(t *testing.T
 		keys = append(keys, k)
 	}
 
+	x.backdate(time.Hour, keys...) // every object is well past the grace window
+
 	report := documents.NewMirrorJob(x.svc.Store(), x.blob, documents.MirrorConfig{
 		Interval:    24 * time.Hour,
-		OrphanGrace: time.Nanosecond, // every object is well past the grace window
+		OrphanGrace: time.Minute,
 		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}).RunOnce(ctx)
 

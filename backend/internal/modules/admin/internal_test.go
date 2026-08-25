@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
@@ -262,5 +263,97 @@ func TestBudgetingLeavesAnOrdinaryListAlone(t *testing.T) {
 
 	if want := "Dnes: • Vynést koš\n• Zalít kytky\n• Umýt nádobí\n• Vyluxovat\n• Zaplatit nájem\n• …a další 2"; body != want {
 		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
+// ---- the storage snapshot's single-flight (v9) ----
+
+// TestSnapshotWaiterRejectsAPassThatProducedNothing pins the difference between
+// "a snapshot exists" and "the pass I waited on produced one".
+//
+// ⚠ IT HAS NO BLACK-BOX SURFACE, which is why it lives here. The bug it guards is
+// invisible from outside: a compute that FAILS leaves `cached` holding whatever
+// succeeded last, so a waiter checking only for nil returned figures from an
+// arbitrarily earlier time, marked Cached, with a 200 — the failure reported to
+// nobody but the one caller that ran the pass, and the admin's Obnovit silently
+// not obnovit-ing. Reproducing that needs a pass to fail WHILE another caller is
+// joined to it, which no public call can arrange.
+//
+// The goroutine below does exactly what a failed compute does: clear `computing`
+// under the lock, leave `cached` and `generation` untouched, then close the channel.
+func TestSnapshotWaiterRejectsAPassThatProducedNothing(t *testing.T) {
+	sqldb, err := sql.Open("sqlite", "file:snapshot-waiter?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = sqldb.Close() })
+
+	svc := NewStorageService(StorageDeps{DB: sqldb, CacheSeconds: 60})
+	stale := &StorageSnapshot{GeneratedAt: "2026-08-25T09:00:00Z"}
+	svc.cached, svc.cachedAt, svc.generation = stale, svc.now(), 1
+
+	done := make(chan struct{})
+	svc.computing = done
+	go func() {
+		// Long enough that the caller below is parked in the select.
+		time.Sleep(30 * time.Millisecond)
+		svc.mu.Lock()
+		svc.computing = nil // cached and generation deliberately NOT touched
+		svc.mu.Unlock()
+		close(done)
+	}()
+
+	got, err := svc.Snapshot(context.Background(), true)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if got.GeneratedAt == stale.GeneratedAt {
+		t.Fatalf("the waiter was handed the snapshot from %s — the pass it joined produced "+
+			"nothing, so `cached` being non-nil says only that something succeeded at some "+
+			"point, not that this request was answered", stale.GeneratedAt)
+	}
+	if svc.generation != 2 {
+		t.Errorf("generation = %d, want 2 — the waiter should have run its own pass", svc.generation)
+	}
+}
+
+// A pass that DOES produce a snapshot is still shared, which is the whole point of
+// coalescing: the waiter takes the answer it would have computed anyway.
+func TestSnapshotWaiterTakesAPassThatLanded(t *testing.T) {
+	sqldb, err := sql.Open("sqlite", "file:snapshot-waiter-ok?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = sqldb.Close() })
+
+	svc := NewStorageService(StorageDeps{DB: sqldb, CacheSeconds: 60})
+	landed := &StorageSnapshot{GeneratedAt: "2026-08-25T11:00:00Z"}
+
+	done := make(chan struct{})
+	svc.computing = done
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		svc.mu.Lock()
+		svc.cached, svc.cachedAt = landed, svc.now()
+		svc.generation++ // a successful pass moves the counter
+		svc.computing = nil
+		svc.mu.Unlock()
+		close(done)
+	}()
+
+	got, err := svc.Snapshot(context.Background(), true)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if got.GeneratedAt != landed.GeneratedAt {
+		t.Errorf("generated_at = %q, want %q — a waiter must take the answer of the pass it "+
+			"joined rather than starting a second identical one", got.GeneratedAt, landed.GeneratedAt)
+	}
+	if !got.Cached {
+		t.Error("a snapshot somebody else computed came back cached:false — a figure the " +
+			"caller did not compute is one it should see marked as shared")
+	}
+	if svc.generation != 1 {
+		t.Errorf("generation = %d, want 1 — the waiter ran a redundant pass", svc.generation)
 	}
 }

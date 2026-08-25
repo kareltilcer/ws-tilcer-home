@@ -128,7 +128,7 @@ func TestResolveAndNoRedirect(t *testing.T) {
 	recepty := x.folder(x.svc.CreateFolder(ctx, notes.FolderCreate{Name: "Recepty"}))
 	gulas := x.note(x.svc.CreateNote(ctx, notes.NoteCreate{Title: "Guláš", FolderID: &recepty.ID}))
 
-	res, err := x.svc.Resolve(ctx, "recepty/gulas")
+	res, err := x.svc.Resolve(ctx, "recepty/gulas", notes.Scope{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -137,10 +137,10 @@ func TestResolveAndNoRedirect(t *testing.T) {
 	}
 	newTitle := "Guláš segedínský"
 	x.note(x.svc.UpdateNote(ctx, gulas.ID, notes.NoteUpdate{Title: &newTitle}, ""))
-	if _, err := x.svc.Resolve(ctx, "recepty/gulas"); status(t, err) != 404 {
+	if _, err := x.svc.Resolve(ctx, "recepty/gulas", notes.Scope{}); status(t, err) != 404 {
 		t.Fatalf("old path should 404 after rename")
 	}
-	if _, err := x.svc.Resolve(ctx, "recepty/gulas-segedinsky/whatever"); status(t, err) != 404 {
+	if _, err := x.svc.Resolve(ctx, "recepty/gulas-segedinsky/whatever", notes.Scope{}); status(t, err) != 404 {
 		t.Fatalf("non-folder intermediate segment should 404")
 	}
 }
@@ -164,7 +164,7 @@ func TestMoveFolderDoesNotRewriteDescendants(t *testing.T) {
 	if after.FolderID == nil || *after.FolderID != sub.ID || after.Slug != note.Slug {
 		t.Fatalf("descendant note was rewritten: %+v", after.Note)
 	}
-	if _, err := x.svc.Resolve(ctx, "chata/"+moved.Slug+"/"+note.Slug); err != nil {
+	if _, err := x.svc.Resolve(ctx, "chata/"+moved.Slug+"/"+note.Slug, notes.Scope{}); err != nil {
 		t.Fatalf("descendant should resolve at new path: %v", err)
 	}
 }
@@ -228,7 +228,7 @@ func TestMovePreservesSearchIndex(t *testing.T) {
 
 	x.note(x.svc.MoveNote(ctx, n.ID, notes.NoteMoveRequest{FolderID: &dest.ID, Position: "z"}, ""))
 
-	page, err := x.svc.List(ctx, "zzunikaltoken", nil, false)
+	page, err := x.svc.List(ctx, "zzunikaltoken", nil, false, notes.Scope{})
 	if err != nil {
 		t.Fatalf("search after move: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestFolderDeleteCascade(t *testing.T) {
 	if err := x.svc.DeleteFolder(ctx, f.ID, true, false); err != nil {
 		t.Fatalf("cascade delete: %v", err)
 	}
-	tree, _ := x.svc.Tree(ctx, false)
+	tree, _ := x.svc.Tree(ctx, false, notes.Scope{})
 	if len(tree.Roots) != 0 {
 		t.Fatalf("folder should be gone from the tree, got %d roots", len(tree.Roots))
 	}
@@ -287,7 +287,7 @@ func TestUnarchiveNoteReFreesSlug(t *testing.T) {
 	if restored.Slug == b.Slug {
 		t.Fatalf("restored A must get a fresh slug, still collides on %q", restored.Slug)
 	}
-	if _, err := x.svc.Resolve(ctx, restored.Slug); err != nil {
+	if _, err := x.svc.Resolve(ctx, restored.Slug, notes.Scope{}); err != nil {
 		t.Fatalf("restored note should resolve at its fresh slug: %v", err)
 	}
 }
@@ -320,7 +320,7 @@ func TestArchiveNonEmptyFolderViaPatchRejected(t *testing.T) {
 	if _, err := x.svc.UpdateFolder(ctx, f.ID, notes.FolderUpdate{Archived: &arch}); status(t, err) != 409 {
 		t.Fatalf("archiving a non-empty folder via PATCH should 409")
 	}
-	tree, _ := x.svc.Tree(ctx, false)
+	tree, _ := x.svc.Tree(ctx, false, notes.Scope{})
 	if len(tree.Roots) != 1 || len(tree.Roots[0].Notes) != 1 {
 		t.Fatalf("folder + note must stay live and reachable, got %+v", tree.Roots)
 	}
@@ -471,7 +471,7 @@ func TestSearchDiacriticInsensitive(t *testing.T) {
 	x := newH(t)
 	ctx := editorCtx()
 	x.note(x.svc.CreateNote(ctx, notes.NoteCreate{Title: "Guláš", BodyMD: "hovězí, cibule"}))
-	page, err := x.svc.List(ctx, "gulas", nil, false)
+	page, err := x.svc.List(ctx, "gulas", nil, false, notes.Scope{})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestPunctuationOnlySearchReturnsEmpty(t *testing.T) {
 	ctx := editorCtx()
 	x.note(x.svc.CreateNote(ctx, notes.NoteCreate{Title: "Guláš", BodyMD: "hovězí"}))
 
-	page, err := x.svc.List(ctx, "### !!!", nil, false)
+	page, err := x.svc.List(ctx, "### !!!", nil, false, notes.Scope{})
 	if err != nil {
 		t.Fatalf("punctuation-only search should not error: %v", err)
 	}

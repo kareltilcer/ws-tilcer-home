@@ -39,7 +39,7 @@ func TestStore_BrowseFiltersAndPagination(t *testing.T) {
 	record(t, db, ctx, audit.Event{Module: "todo", Action: "board.create", EntityType: "board", EntityID: "b1", Summary: "vytvořena nástěnka"})
 
 	// Filter by module.
-	page, err := store.Browse(ctx, logging.Filter{Module: "todo"})
+	page, err := store.Browse(ctx, logging.Filter{Module: "todo"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,13 +52,13 @@ func TestStore_BrowseFiltersAndPagination(t *testing.T) {
 	}
 
 	// Filter by level.
-	page, _ = store.Browse(ctx, logging.Filter{Level: "warn"})
+	page, _ = store.Browse(ctx, logging.Filter{Level: "warn"}, "")
 	if len(page.Items) != 1 || page.Items[0].Action != "event.create" {
 		t.Errorf("level=warn returned %d items, want 1 event.create", len(page.Items))
 	}
 
 	// FTS free-text with diacritics.
-	page, _ = store.Browse(ctx, logging.Filter{Q: "kotlík"})
+	page, _ = store.Browse(ctx, logging.Filter{Q: "kotlík"}, "")
 	if len(page.Items) != 1 || page.Items[0].Action != "card.move" {
 		t.Errorf("q=kotlík returned %d, want 1 card.move", len(page.Items))
 	}
@@ -68,7 +68,7 @@ func TestStore_BrowseFiltersAndPagination(t *testing.T) {
 	cursor := ""
 	pages := 0
 	for {
-		p, err := store.Browse(ctx, logging.Filter{Limit: 2, Cursor: cursor})
+		p, err := store.Browse(ctx, logging.Filter{Limit: 2, Cursor: cursor}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +102,7 @@ func TestStore_GetWithChanges(t *testing.T) {
 		Changes: []audit.Change{{Field: "title", Old: audit.Ptr("A"), New: audit.Ptr("B")}},
 	})
 
-	detail, err := store.Get(ctx, id)
+	detail, err := store.Get(ctx, id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestStore_GetWithChanges(t *testing.T) {
 		t.Errorf("change_count = %d, want 1", detail.ChangeCount)
 	}
 
-	missing, err := store.Get(ctx, "does-not-exist")
+	missing, err := store.Get(ctx, "does-not-exist", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestStore_TimelineOldestFirstCrossModule(t *testing.T) {
 	// An unrelated entity that must not appear.
 	record(t, db, ctx, audit.Event{Module: "events", Action: "event.create", EntityType: "event", EntityID: "e1", Summary: "jiná entita"})
 
-	page, err := store.Timeline(ctx, "card", "c1", "", "", 0, "")
+	page, err := store.Timeline(ctx, "card", "c1", "", "", 0, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestStore_Stats(t *testing.T) {
 	record(t, db, ctx, audit.Event{Module: "todo", Action: "card.move", Summary: "b"})
 	record(t, db, ctx, audit.Event{Module: "events", Action: "event.create", Summary: "c"})
 
-	res, err := store.Stats(ctx, "module", "day", "", "")
+	res, err := store.Stats(ctx, "module", "day", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestStore_Stats(t *testing.T) {
 		t.Error("expected at least one time bucket")
 	}
 
-	if _, err := store.Stats(ctx, "bogus", "day", "", ""); err == nil {
+	if _, err := store.Stats(ctx, "bogus", "day", "", "", ""); err == nil {
 		t.Error("expected error for invalid dimension")
 	}
 }

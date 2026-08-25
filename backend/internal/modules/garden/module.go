@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 //go:embed migrations/*.sql
@@ -76,3 +77,21 @@ func (m *Module) AuditActions() []string {
 }
 
 func (m *Module) Widgets() []registry.WidgetProvider { return m.widgets }
+
+// StorageTables declares this module's tables for the v9 storage catalog (D191).
+//
+// The largest declaration in Home — thirteen tables plus an FTS5 index — which is
+// the point of measuring per module rather than guessing.
+//
+// ⚠ garden_plants_fts is EXTERNAL-CONTENT FTS5, so it materialises five
+// `type='table'` rows and FTSShadows expands them. Leaving the four shadows out
+// would under-report this module by more than the plants table itself weighs, and
+// the per-module totals would stop summing to the database total (D211).
+func (m *Module) StorageTables() []string {
+	tables := []string{
+		"garden_beds", "garden_plants", "garden_varieties", "garden_seasons",
+		"garden_plantings", "garden_tasks", "garden_harvests", "garden_storage_items",
+		"garden_rules", "garden_settings", "garden_weather_days", "garden_warning_dismissals",
+	}
+	return append(tables, storage.FTSShadows("garden_plants_fts")...)
+}

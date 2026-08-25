@@ -78,6 +78,16 @@ type Event struct {
 	Level      string         // "" defaults to info
 	Meta       map[string]any // optional; carries "via" for cross-module triggers
 	Changes    []Change       // field diffs (key entities only)
+
+	// Visibility and OwnerID are the typed form of the v9 redaction marker.
+	// When Visibility is set, the sink stamps it into Meta under MetaVisibility
+	// (and OwnerID under MetaOwnerID) — the only keys the read paths recognise —
+	// so a module recording scoped items cannot misspell or forget the marker.
+	// An event written without it has NULL visibility and is NEVER redacted,
+	// which is why modules with private data must set these rather than compose
+	// the meta keys by hand.
+	Visibility string // "" (unscoped), VisibilityShared, or VisibilityPrivate
+	OwnerID    string // owning member's user id; meaningful only for private
 }
 
 // Change is a single field's before/after. Old/New are pointers so a genuine

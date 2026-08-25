@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
@@ -28,14 +31,42 @@ type h struct {
 	svc     *documents.Service
 	db      *sql.DB
 	blob    blobstore.BlobStore
+	blobDir string    // the FS store's root, so a test can age an object (see backdate)
 	events  *[]string // ws pushes, in order
 	enqueue *[]string // document ids handed to the preview worker
+}
+
+// backdate sets the given objects' modification times to `age` ago.
+//
+// ⚠ IT EXISTS SO THE ORPHAN GRACE WINDOW IS NEVER A RACE AGAINST THE CLOCK. The
+// reconciliation pass deletes an orphan only when its ModTime is at or before
+// `now - OrphanGrace`, and the tests that want "past the window" used to get there
+// with `OrphanGrace: time.Nanosecond` — which asks whether an object written
+// microseconds ago is more than ONE NANOSECOND old. On a platform whose clock
+// advances in ~1 ms steps (Windows), a Put and the RunOnce that follows it can land
+// on the SAME tick, making ModTime exactly equal to the cutoff, and
+// `ModTime.After(cutoff)` false-negative: the object counts as in-flight and the
+// assertion fails. It reproduced roughly once in eight runs, only under parallel
+// load, which is the worst kind of flake to chase.
+//
+// Ageing the object instead states the intent the test actually has — "this object
+// is old" — and takes the clock out of the assertion entirely.
+func (x *h) backdate(age time.Duration, keys ...string) {
+	x.t.Helper()
+	when := time.Now().Add(-age)
+	for _, k := range keys {
+		p := filepath.Join(x.blobDir, filepath.FromSlash(k))
+		if err := os.Chtimes(p, when, when); err != nil {
+			x.t.Fatalf("backdate %s: %v", k, err)
+		}
+	}
 }
 
 func newH(t *testing.T, opts ...func(*documents.Options)) *h {
 	t.Helper()
 	db := testsupport.NewDB(t)
-	store, err := blobstore.NewFS(t.TempDir())
+	blobDir := t.TempDir()
+	store, err := blobstore.NewFS(blobDir)
 	if err != nil {
 		t.Fatalf("blob store: %v", err)
 	}
@@ -53,7 +84,7 @@ func newH(t *testing.T, opts ...func(*documents.Options)) *h {
 	svc := documents.NewService(db, audit.NewSink(), notify, store, o,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	svc.SetPreviewEnqueue(func(id string) { enqueued = append(enqueued, id) })
-	return &h{t: t, svc: svc, db: db, blob: store, events: &events, enqueue: &enqueued}
+	return &h{t: t, svc: svc, db: db, blob: store, blobDir: blobDir, events: &events, enqueue: &enqueued}
 }
 
 func (x *h) doc(d *documents.DocumentDetail, err error) *documents.DocumentDetail {
@@ -398,7 +429,7 @@ func TestResolve_404sAfterRenameWithNoRedirect(t *testing.T) {
 	f := x.folder(x.svc.CreateFolder(ctx, documents.DocFolderCreate{Name: "Návody"}))
 	d := x.upload(ctx, "Kotel.pdf", pdfBytes(), &f.ID)
 
-	res, err := x.svc.Resolve(ctx, "navody/kotel")
+	res, err := x.svc.Resolve(ctx, "navody/kotel", documents.Scope{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -410,10 +441,10 @@ func TestResolve_404sAfterRenameWithNoRedirect(t *testing.T) {
 	x.doc(x.svc.UpdateDocument(ctx, d.ID, documents.DocumentUpdate{Title: &title}, ""))
 
 	// The old slug path is gone — deliberately no redirect table (D32).
-	if _, err := x.svc.Resolve(ctx, "navody/kotel"); status(t, err) != 404 {
+	if _, err := x.svc.Resolve(ctx, "navody/kotel", documents.Scope{}); status(t, err) != 404 {
 		t.Error("the pre-rename path must 404")
 	}
-	if res, err := x.svc.Resolve(ctx, "navody/kotel-protherm"); err != nil || res.ID != d.ID {
+	if res, err := x.svc.Resolve(ctx, "navody/kotel-protherm", documents.Scope{}); err != nil || res.ID != d.ID {
 		t.Errorf("the new path should resolve to the same id: %+v %v", res, err)
 	}
 	// The permanent id-based address is unaffected by all of this.
@@ -893,7 +924,7 @@ func TestSearch_MatchesMetadataDiacriticInsensitivelyButNotFileContents(t *testi
 	x.upload(ctx, "jiny.txt", []byte("tajne slovo kotelna"), nil)
 
 	for _, q := range []string{"smlouva", "SMLOUVA", "cez", "čez", "zakaznicke", "Smlouva ČEZ.pdf"} {
-		page, err := x.svc.List(ctx, q, nil, false, 0, "")
+		page, err := x.svc.List(ctx, q, nil, false, 0, "", documents.Scope{})
 		if err != nil {
 			t.Fatalf("search %q: %v", q, err)
 		}
@@ -901,7 +932,7 @@ func TestSearch_MatchesMetadataDiacriticInsensitivelyButNotFileContents(t *testi
 			t.Errorf("search %q returned %d items, want 1", q, len(page.Items))
 		}
 	}
-	page, err := x.svc.List(ctx, "kotelna", nil, false, 0, "")
+	page, err := x.svc.List(ctx, "kotelna", nil, false, 0, "", documents.Scope{})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -917,10 +948,10 @@ func TestSearch_TriggersStaySyncedOnUpdateAndDelete(t *testing.T) {
 
 	title := "Přejmenováno"
 	x.doc(x.svc.UpdateDocument(ctx, d.ID, documents.DocumentUpdate{Title: &title}, ""))
-	if page, _ := x.svc.List(ctx, "prejmenovano", nil, false, 0, ""); len(page.Items) != 1 {
+	if page, _ := x.svc.List(ctx, "prejmenovano", nil, false, 0, "", documents.Scope{}); len(page.Items) != 1 {
 		t.Error("the FTS index did not follow the rename")
 	}
-	if page, _ := x.svc.List(ctx, "puvodni", nil, false, 0, ""); len(page.Items) != 1 {
+	if page, _ := x.svc.List(ctx, "puvodni", nil, false, 0, "", documents.Scope{}); len(page.Items) != 1 {
 		// The original FILENAME is still indexed — only the title changed.
 		t.Error("the original filename should still match")
 	}
@@ -928,7 +959,7 @@ func TestSearch_TriggersStaySyncedOnUpdateAndDelete(t *testing.T) {
 	if err := x.svc.DeleteDocument(adminCtx(), d.ID, true); err != nil {
 		t.Fatalf("hard delete: %v", err)
 	}
-	if page, _ := x.svc.List(ctx, "prejmenovano", nil, false, 0, ""); len(page.Items) != 0 {
+	if page, _ := x.svc.List(ctx, "prejmenovano", nil, false, 0, "", documents.Scope{}); len(page.Items) != 0 {
 		t.Error("the FTS index kept a purged document")
 	}
 }
@@ -942,7 +973,7 @@ func TestList_KeysetPagesWithoutRepeatingARow(t *testing.T) {
 	seen := map[string]bool{}
 	cursor := ""
 	for page := 0; page < 10; page++ {
-		p, err := x.svc.List(ctx, "", nil, false, 2, cursor)
+		p, err := x.svc.List(ctx, "", nil, false, 2, cursor, documents.Scope{})
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
@@ -979,7 +1010,7 @@ func TestTree_IsBoundedAndCarriesPinState(t *testing.T) {
 
 	// Shape and pin state here; the statement-count proof that this is bounded lives
 	// in TestTreeAndWidget_CostDoesNotGrowWithTheTree (nplusone_test.go).
-	tree, err := x.svc.Tree(ctx, false)
+	tree, err := x.svc.Tree(ctx, false, documents.Scope{})
 	if err != nil {
 		t.Fatalf("tree: %v", err)
 	}

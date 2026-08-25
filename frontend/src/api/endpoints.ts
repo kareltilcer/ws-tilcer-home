@@ -55,6 +55,11 @@ import type {
   PushSubscriptionInfo,
   PushTestResult,
   SendResult,
+  // v9
+  PrivateItemPage,
+  PublishRequest,
+  Scope,
+  StorageSnapshot,
 } from './types'
 
 function qs(params: Record<string, string | boolean | number | string[] | undefined>): string {
@@ -169,15 +174,31 @@ export const saveDashboardLayout = (items: LayoutItemInput[]) =>
 export const getWidget = (key: string) =>
   apiFetch<WidgetInstance>(`/api/dashboard/widgets/${encodeURIComponent(key)}`)
 
-// ---- Notes (Poznámky, v3) ----
-export const getNotesTree = (includeArchived = false) =>
-  apiFetch<NotesTree>(`/api/notes/tree${qs({ include_archived: includeArchived })}`)
-export const resolveNotePath = (path: string) =>
-  apiFetch<ResolveResult>(`/api/notes/resolve${qs({ path })}`)
-export const searchNotes = (q: string) => apiFetch<NotePage>(`/api/notes${qs({ q })}`)
+// ---- Notes (Poznámky, v3; scoped in v9) ----
+//
+// ⚠ Every notes read takes a SCOPE, and it is a REQUIRED argument rather than one
+// defaulting to `shared` here. The WIRE default is `shared` — that is what keeps a
+// pre-v9 client working untouched — but a caller inside this app always knows
+// which root the user is standing in, and letting it omit the scope is exactly how
+// a page ends up reading the household tree while the switcher says otherwise.
+export const getNotesTree = (scope: Scope, includeArchived = false) =>
+  apiFetch<NotesTree>(`/api/notes/tree${qs({ scope, include_archived: includeArchived })}`)
+export const resolveNotePath = (path: string, scope: Scope) =>
+  apiFetch<ResolveResult>(`/api/notes/resolve${qs({ path, scope })}`)
+export const searchNotes = (q: string, scope: Scope) =>
+  apiFetch<NotePage>(`/api/notes${qs({ q, scope })}`)
 export const getNote = (id: string) => apiFetch<NoteDetail>(`/api/notes/${encodeURIComponent(id)}`)
-export const createNote = (body: { title: string; folder_id?: string | null; body_md?: string }) =>
-  apiFetch<NoteDetail>('/api/notes', { method: 'POST', body })
+export const createNote = (body: {
+  title: string
+  folder_id?: string | null
+  body_md?: string
+  /**
+   * Selects the root when folder_id is null. With a parent folder the PARENT's
+   * scope governs and a disagreement is a 422 — a folder whose contents are half
+   * private is exactly the model D177 rejected.
+   */
+  scope?: Scope
+}) => apiFetch<NoteDetail>('/api/notes', { method: 'POST', body })
 export const updateNote = (
   id: string,
   body: Partial<{ title: string; body_md: string | null; archived: boolean }>,
@@ -192,8 +213,12 @@ export const pinNote = (id: string, scope: PinScope, via?: string) =>
 export const unpinNote = (id: string, scope: PinScope, via?: string) =>
   apiFetch<PinState>(`/api/notes/${encodeURIComponent(id)}/pin${qs({ scope, via })}`, { method: 'DELETE' })
 
-export const createFolder = (body: { name: string; parent_id?: string | null; icon?: string }) =>
-  apiFetch<FolderDetail>('/api/notes/folders', { method: 'POST', body })
+export const createFolder = (body: {
+  name: string
+  parent_id?: string | null
+  icon?: string
+  scope?: Scope
+}) => apiFetch<FolderDetail>('/api/notes/folders', { method: 'POST', body })
 export const updateFolder = (id: string, body: Partial<{ name: string; archived: boolean; icon: string }>) =>
   apiFetch<FolderDetail>(`/api/notes/folders/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 export const deleteFolder = (id: string, opts: { cascade?: boolean; hard?: boolean } = {}) =>
@@ -231,13 +256,23 @@ export const uploadNoteImage = (noteId: string, file: File | Blob, filename = 'i
 //   2. The permanent link to a document is the id-based `urls` block on the detail
 //      response, NOT the slug path. Copy `urls.permalink` ("/d/{id}"), which
 //      survives renames and moves; the slug path does not.
-export const getDocumentsTree = (includeArchived = false) =>
-  apiFetch<DocumentsTree>(`/api/documents/tree${qs({ include_archived: includeArchived })}`)
-export const resolveDocumentPath = (path: string) =>
-  apiFetch<DocResolveResult>(`/api/documents/resolve${qs({ path })}`)
-export const searchDocuments = (q: string) => apiFetch<DocumentPage>(`/api/documents${qs({ q })}`)
-export const listDocuments = (params: { folder_id?: string; include_archived?: boolean; limit?: number; cursor?: string } = {}) =>
-  apiFetch<DocumentPage>(`/api/documents${qs(params)}`)
+//   3. (v9) Every read takes a SCOPE — see the note above getNotesTree for why it
+//      is required here rather than defaulted.
+export const getDocumentsTree = (scope: Scope, includeArchived = false) =>
+  apiFetch<DocumentsTree>(`/api/documents/tree${qs({ scope, include_archived: includeArchived })}`)
+export const resolveDocumentPath = (path: string, scope: Scope) =>
+  apiFetch<DocResolveResult>(`/api/documents/resolve${qs({ path, scope })}`)
+export const searchDocuments = (q: string, scope: Scope) =>
+  apiFetch<DocumentPage>(`/api/documents${qs({ q, scope })}`)
+export const listDocuments = (
+  params: {
+    folder_id?: string
+    include_archived?: boolean
+    limit?: number
+    cursor?: string
+    scope?: Scope
+  } = {},
+) => apiFetch<DocumentPage>(`/api/documents${qs(params)}`)
 export const getDocument = (id: string) => apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`)
 
 /** uploadDocument streams one file to the documents bucket.
@@ -247,13 +282,20 @@ export const getDocument = (id: string) => apiFetch<DocumentDetail>(`/api/docume
  *  buffers a 50 MB body). So the metadata MUST be appended before the file. */
 export const uploadDocument = (
   file: File,
-  meta: { folder_id?: string | null; title?: string; description?: string } = {},
+  meta: {
+    folder_id?: string | null
+    title?: string
+    description?: string
+    /** v9: which root to upload into when folder_id is absent. */
+    scope?: Scope
+  } = {},
   onProgress?: (fraction: number) => void,
 ) => {
   const form = new FormData()
   if (meta.folder_id) form.append('folder_id', meta.folder_id)
   if (meta.title) form.append('title', meta.title)
   if (meta.description) form.append('description', meta.description)
+  if (meta.scope) form.append('scope', meta.scope)
   form.append('file', file, file.name) // last, on purpose — see above
   return apiUpload<DocumentDetail>('/api/documents', form, { onProgress })
 }
@@ -274,8 +316,12 @@ export const pinDocument = (id: string, scope: PinScope, via?: string) =>
 export const unpinDocument = (id: string, scope: PinScope, via?: string) =>
   apiFetch<PinState>(`/api/documents/${encodeURIComponent(id)}/pin${qs({ scope, via })}`, { method: 'DELETE' })
 
-export const createDocumentFolder = (body: { name: string; parent_id?: string | null; icon?: string }) =>
-  apiFetch<DocFolderDetail>('/api/documents/folders', { method: 'POST', body })
+export const createDocumentFolder = (body: {
+  name: string
+  parent_id?: string | null
+  icon?: string
+  scope?: Scope
+}) => apiFetch<DocFolderDetail>('/api/documents/folders', { method: 'POST', body })
 export const updateDocumentFolder = (id: string, body: Partial<{ name: string; archived: boolean; icon: string }>) =>
   apiFetch<DocFolderDetail>(`/api/documents/folders/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 export const deleteDocumentFolder = (id: string, opts: { cascade?: boolean; hard?: boolean } = {}) =>
@@ -288,6 +334,69 @@ export const moveDocumentFolder = (id: string, body: { parent_id?: string | null
  *  never presigned storage links. */
 export const documentContentUrl = (id: string, kind: 'raw' | 'download' | 'preview' | 'thumbnail') =>
   `/api/documents/${encodeURIComponent(id)}/${kind}`
+
+// ---- v9: publish (private → shared) ----
+//
+// ⚠ ONE-WAY AND OWNER-ONLY (D182). There is deliberately no `unpublishNote` below
+// and there is no route behind one: a note the household has relied on for months
+// must not be able to vanish into one member's tree. Somebody who wants it back
+// re-creates it privately and deletes the shared copy, which leaves both facts in
+// the audit log.
+//
+// ⚠ A non-owner — an ADMIN INCLUDED — gets 404, not 403 (D206). The UI must never
+// render "you may not publish this" for a foreign item: the ordinary nenalezeno
+// screen is the whole answer, because a permission message is itself the
+// disclosure.
+export const publishNote = (id: string, body: PublishRequest = {}) =>
+  apiFetch<NoteDetail>(`/api/notes/${encodeURIComponent(id)}/publish`, { method: 'POST', body })
+export const publishNoteFolder = (id: string, body: PublishRequest = {}) =>
+  apiFetch<FolderDetail>(`/api/notes/folders/${encodeURIComponent(id)}/publish`, {
+    method: 'POST',
+    body,
+  })
+export const publishDocument = (id: string, body: PublishRequest = {}) =>
+  apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/publish`, {
+    method: 'POST',
+    body,
+  })
+export const publishDocumentFolder = (id: string, body: PublishRequest = {}) =>
+  apiFetch<DocFolderDetail>(`/api/documents/folders/${encodeURIComponent(id)}/publish`, {
+    method: 'POST',
+    body,
+  })
+
+// ---- v9: Administrace → Úložiště and Soukromé položky (admin only) ----
+
+/**
+ * The storage snapshot. `refresh` bypasses the server's 60-second cache (D195).
+ *
+ * ⚠ A 200 does NOT mean everything was measurable: check `database.bytes_available`
+ * and `blobs.available` before rendering a figure, and render null as *nezměřeno*,
+ * never as 0.
+ */
+export const getStorageSnapshot = (refresh = false) =>
+  apiFetch<StorageSnapshot>(`/api/admin/storage${qs({ refresh: refresh || undefined })}`)
+
+/**
+ * The purge screen's listing (D198).
+ *
+ * ⚠ OPENING IT IS AUDITED server-side — `admin.private_items.view`, the only read
+ * in Home that writes an audit event. The screen says so out loud; calling this
+ * function speculatively (a prefetch, a poll) would put noise in that record.
+ *
+ * ⚠ `sort: 'size'` is SINGLE-PAGE by design: a keyset cursor is an id, and an id
+ * does not locate a position in a size ordering. `total_bytes` still covers every
+ * matching item, so the figure the screen acts on stays complete.
+ */
+export const listPrivateItems = (
+  params: {
+    owner_user_id?: string
+    module?: 'notes' | 'documents'
+    sort?: 'recent' | 'size'
+    limit?: number
+    cursor?: string
+  } = {},
+) => apiFetch<PrivateItemPage>(`/api/admin/storage/private-items${qs(params)}`)
 
 // ---- Logs (admin) ----
 export interface LogFilters {

@@ -1130,4 +1130,241 @@ export const cs = {
       retry: 'Zkusit znovu',
     },
   },
+
+  // ---- v9: Soukromé položky a Úložiště ----
+  //
+  // ⚠ The vocabulary below is FIXED by PRD §V9-7 (D201) and must be used verbatim.
+  // It is not translated, shortened, or replaced with a synonym: Poznámky ·
+  // Soukromé poznámky · Dokumenty · Soukromé dokumenty · Viditelnost · Sdílené ·
+  // Soukromé · Publikovat do sdílených · Vlastník · Úložiště · Databáze ·
+  // Objektové úložiště (R2) · Nezařazené · Zálohovací bucket · Varovný práh ·
+  // Soukromé položky · Trvale smazat.
+  //
+  // ⚠ AND NO STRING HERE MAY IMPLY ENCRYPTION. Private means access-controlled:
+  // an admin with the database file or the R2 credentials can read anything, and
+  // an admin can hard-delete a private item without being able to read it. Copy
+  // promising secrecy beyond that is a bug, not a flourish.
+  privacy: {
+    switcherLabel: 'Kořen',
+    sharedNotes: 'Poznámky',
+    privateNotes: 'Soukromé poznámky',
+    sharedDocuments: 'Dokumenty',
+    privateDocuments: 'Soukromé dokumenty',
+    visibility: 'Viditelnost',
+    shared: 'Sdílené',
+    private: 'Soukromé',
+    /** The row-level mark. Says whose, not just that it is locked. */
+    privateShort: 'Soukromé — jen ty',
+    owner: 'Vlastník',
+
+    // The empty private root is the ONLY place the feature gets to say what it is
+    // for, so it says it plainly and without overpromising.
+    /** Page subtitle in the private root — says who can see it, and no more. */
+    subtitleNotes: 'Jen pro tebe — nikdo jiný je nevidí',
+    subtitleDocuments: 'Jen pro tebe — nikdo jiný je nevidí',
+    emptyNotesTitle: 'Tvoje soukromé poznámky',
+    emptyNotesBody:
+      'Sem si můžeš psát, co nepatří celé domácnosti. Nikdo jiný to neuvidí — ani správce. Kdykoli později můžeš jednotlivou poznámku publikovat do sdílených.',
+    emptyDocumentsTitle: 'Tvoje soukromé dokumenty',
+    emptyDocumentsBody:
+      'Sem můžeš nahrát soubory, které nepatří celé domácnosti. Nikdo jiný je neuvidí — ani správce. Jednotlivý dokument můžeš kdykoli publikovat do sdílených.',
+
+    // Scoped search (D184). The tree being searched is named in the placeholder
+    // AND in the empty state, so nobody concludes a note has vanished because
+    // they searched from the wrong root.
+    searchSharedNotes: 'Hledat ve sdílených poznámkách…',
+    searchPrivateNotes: 'Hledat v soukromých poznámkách…',
+    searchSharedDocuments: 'Hledat ve sdílených dokumentech…',
+    searchPrivateDocuments: 'Hledat v soukromých dokumentech…',
+    searchedShared: 'Hledáno ve sdílených',
+    searchedPrivate: 'Hledáno v soukromých',
+
+    // Publish — the one irreversible action in either module (D182).
+    //
+    // ⚠ The weight is carried by the SENTENCE, not by colour or an icon: nothing
+    // is being deleted, so the confirm button is `accent`, not `danger`. And
+    // there is no undo toast, because there would be nothing to undo.
+    publish: 'Publikovat do sdílených',
+    publishNoteTitle: 'Publikovat poznámku do sdílených?',
+    publishDocumentTitle: 'Publikovat dokument do sdílených?',
+    publishFolderTitle: 'Publikovat složku do sdílených?',
+    publishBody:
+      'Uvidí to celá domácnost. Zpátky to nejde — kdybys to chtěl(a) zase jen pro sebe, musíš to nahrát znovu a sdílenou kopii smazat.',
+    /** Folder variant: "publikovat složku" reads much smaller than what it does. */
+    /**
+     * ⚠ BOTH counts arrive ALREADY PLURALISED ("3 položky", "1 podsložka").
+     * `folders` used to be a RAW number beside a hardcoded plural locative, so a
+     * folder holding exactly one subfolder read "ve 1 podsložkách". This is the
+     * one confirmation in the module that cannot be undone, so the copy is where
+     * the weight sits.
+     *
+     * The locative phrasing was dropped rather than pluralised: Czech picks "v"
+     * or "ve" from how the FOLLOWING NUMERAL is pronounced (v 1, ve 2, ve 3, v 5),
+     * which no plural triple can express. A coordinated nominative pair needs no
+     * preposition and reads the same.
+     */
+    publishFolderCount: (items: string, folders: string) =>
+      folders
+        ? `Zveřejní se celý obsah složky — ${items} a ${folders}.`
+        : `Zveřejní se celý obsah složky — ${items}.`,
+    /**
+     * The count above walks the LIVE tree (fetched without archived items), but
+     * the backend publishes archived descendants too — this sentence carries
+     * what the number cannot.
+     */
+    publishFolderArchivedNote: 'Zveřejní se i případné archivované položky ve složce.',
+    publishConfirm: 'Publikovat',
+    published: 'Publikováno do sdílených',
+    publishError: 'Publikování se nepodařilo',
+    /** After a publish, before the lock disappears — a beat of feedback (D183). */
+    nowShared: '✓ teď sdílené',
+
+    // Pins (D183). "pro všechny" is unavailable-and-EXPLAINED, never silently
+    // absent: hiding it would leave the member wondering what they did wrong.
+    householdPinUnavailable: 'Soukromou položku nelze připnout pro všechny — ostatní ji nevidí.',
+
+    // ⚠ THERE IS NO `crossScopeMove` STRING HERE, and the absence is the accurate
+    // state. The backend refuses a cross-scope move with a 422 (D186), but the move
+    // dialogs only ever offer targets from the tree the user is standing in, so
+    // nothing in the UI can produce one — the copy that was written for it sat
+    // unreferenced, reading to the next editor of this file like a wired feature.
+    // Wire it back the day a move dialog can span both roots. The same went for
+    // `publishSlugNote` and `publishing`, which no publish path ever rendered.
+  },
+
+  storage: {
+    title: 'Úložiště',
+    subtitle: 'Kolik místa co zabírá — v databázi a v objektovém úložišti.',
+
+    database: 'Databáze',
+    byModule: 'Podle modulu',
+    objectStorage: 'Objektové úložiště (R2)',
+    total: 'Celkem',
+    wal: 'WAL',
+    free: 'Volné místo v souboru',
+    freeHint: 'Kolik by uvolnil VACUUM. Není to ztracené místo.',
+    rows: 'Řádky',
+    size: 'Velikost',
+    indexes: 'Indexy',
+    // ⚠ Says out loud what the module figure is made of. It is rows PLUS indexes,
+    // and an FTS5 index routinely outweighs the table it indexes — so without this
+    // sentence the per-table column looks like it does not add up to the total
+    // beside it, which on this page reads as a measurement bug rather than as a
+    // column the reader had not been told about.
+    moduleTotalHint: 'Součet u modulu zahrnuje data i indexy.',
+    // A virtual (FTS5) table's own line. It owns no pages and is not counted:
+    // everything it costs sits in the four shadow tables listed beside it, so the
+    // row says WHY it is zero rather than showing a bare 0 B that reads as an empty
+    // index — or the *nezměřeno* it used to show, which read as a measurement that
+    // failed on a page where that is a signal to act on.
+    virtualTable: 'virtuální — data v tabulkách _data/_idx níže',
+
+    // The three usage buckets.
+    kindShared: 'Sdílené',
+    kindPrivate: 'Soukromé',
+    kindUnattributed: 'Nezařazené',
+    // ⚠ `Nezařazené` is an ORDINARY ROW, not an error and not padding. Without
+    // this sentence the number is meaningless and mildly alarming.
+    unattributedHint:
+      'Objekty, ke kterým už nepatří žádná živá položka — zbytky po nahrávání a mazání. Uklízí je průběžně zrcadlicí úloha; není to chyba.',
+
+    // Unmeasured ≠ zero (D193).
+    dbstatMissingTitle: 'Velikosti tabulek nejsou k dispozici',
+    dbstatMissingBody:
+      'Tahle verze SQLite neumí `dbstat`, takže se u tabulek zobrazují jen počty řádků. Celková velikost databáze je přesná. Nic se neodhaduje.',
+
+    blobsDownTitle: 'Objektové úložiště je nedostupné',
+    blobsDownBody: 'Čísla o databázi platí. Zkus to za chvíli znovu.',
+
+    // The two lines that belong to nobody. They sit OUTSIDE the per-module
+    // breakdown (D214/D205), or the page reads as if its own arithmetic were
+    // broken.
+    outsideBreakdown: 'Mimo rozpad podle modulů',
+    outsideBreakdownHint:
+      'Odvozené kopie celé databáze, ne data jednotlivých modulů. Do součtů výše se nezapočítávají.',
+    replica: 'Litestream replika',
+    // ⚠ Declined, not unimplemented (PRD §V9-12). The copy says what it is rather
+    // than pretending the feature is coming.
+    replicaOff: 'Nesleduje se',
+    replicaOffHint:
+      'Aplikace záměrně nemá přístupové údaje k záloze databáze, takže její velikost odsud nevidí. Stav replikace se zjišťuje na serveru.',
+    backup: 'Zálohovací bucket',
+    backupOff: 'Není nastavený',
+
+    // The threshold (D196).
+    overThreshold: 'Nad prahem',
+    thresholdLabel: (mb: number) => `varovný práh ${mb} MB`,
+    // ⚠ Says outright that nothing is blocked. Nobody has done anything wrong.
+    thresholdBody: 'Nic se tím neblokuje — žádná kvóta, žádné odmítnuté nahrávání.',
+    largestContributors: 'Největší podíl',
+
+    generatedAt: 'Spočítáno',
+    cached: 'z mezipaměti',
+    refresh: 'Přepočítat',
+    /** ⚠ Says the numbers on screen are the OLD ones — silence would let them be
+     *  read as freshly recomputed, which is the one mistake this page must not
+     *  invite. */
+    refreshError: 'Přepočet se nepodařil — čísla níže jsou stále ta předchozí',
+  },
+
+  privateItems: {
+    title: 'Soukromé položky',
+    // The screen states its own discomfort rather than smoothing it away.
+    subtitle:
+      'Soukromé položky všech členů — identifikátor, vlastník, druh a velikost. Nikdy název, jméno souboru ani náhled.',
+    audited: 'Otevření tohoto seznamu se zapisuje do Logu.',
+
+    // ⚠ The empty state is a DESIGNED SCREEN, not a dash (D215). The tab is
+    // present whether or not anything is listed, because hiding it would hide the
+    // SCREEN, not the CAPABILITY — an admin can permanently delete another
+    // member's private item either way, and a power that exists but is invisible
+    // is worse than one that is stated.
+    emptyTitle: 'Zatím tu nic není',
+    emptyBody:
+      'Nikdo nemá žádné soukromé položky. Až je mít bude, uvidíš tady jejich identifikátor, vlastníka, druh a velikost — nikdy obsah. Tahle stránka existuje proto, že správce může soukromou položku trvale smazat, aniž by ji směl otevřít.',
+
+    colId: 'Identifikátor',
+    colOwner: 'Vlastník',
+    colKind: 'Druh',
+    colSize: 'Velikost',
+    colCreated: 'Vytvořeno',
+
+    kindNote: 'Poznámka',
+    kindDocument: 'Dokument',
+    kindNoteFolder: 'Složka poznámek',
+    kindDocumentFolder: 'Složka dokumentů',
+    kindNoteImage: 'Obrázek v poznámce',
+    // ⚠ Images have no delete route and should not: an image belongs to its note
+    // and jde s ní (D204/D212). The screen says so rather than offering a button
+    // that 405s.
+    imageNotDeletable: 'Maže se s poznámkou, ke které patří.',
+
+    sortRecent: 'Nejnovější',
+    sortSize: 'Největší',
+    // ⚠ `size` is single-page by design — a keyset cursor is an id, and an id does
+    // not locate a position in a size ordering. The total below still covers
+    // everything, so the figure the screen acts on stays complete.
+    /** ⚠ Describes the MODE, not the list. It shows whenever `size` is selected —
+     *  including for a list that fits on one page — so it must not claim the rows
+     *  were cut short. What is always true: this ordering does not page, and the
+     *  total below covers every matching item either way. */
+    sortSizeTruncated: 'Řazení podle velikosti se nestránkuje. Celkový součet platí pro všechny položky.',
+    filterAll: 'Vše',
+    totalBytes: 'Celkem',
+    /** Prefixes the footer count while more pages exist: the byte total beside it
+     *  covers ALL matching items, so an unqualified loaded-rows count would read
+     *  as the complete inventory. */
+    shownCount: 'Zobrazeno',
+    /** `recent` IS pageable — the cursor is an id and ids sort chronologically. */
+    loadMore: 'Načíst další',
+
+    purge: 'Trvale smazat',
+    purgeTitle: 'Trvale smazat soukromou položku?',
+    purgeBody:
+      'Smaže se řádek i uložené soubory. Zpátky to nejde a obsah si nikdo nepřečte — ani ty.',
+    purgeConfirmPrompt: 'Pro potvrzení opiš celý identifikátor:',
+    purgeCascade: 'Smazat i celý obsah složky',
+    purged: 'Trvale smazáno',
+    purgeError: 'Smazání se nepodařilo',
+  },
 } as const

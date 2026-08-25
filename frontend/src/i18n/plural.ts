@@ -37,6 +37,16 @@ export const PLURAL = {
   rules: ['pravidlo', 'pravidla', 'pravidel'],
   summaries: ['souhrn', 'souhrny', 'souhrnů'],
   seconds: ['sekunda', 'sekundy', 'sekund'],
+  // v9 — Soukromé položky a Úložiště.
+  items: ['položka', 'položky', 'položek'],
+  objects: ['objekt', 'objekty', 'objektů'],
+  tables: ['tabulka', 'tabulky', 'tabulek'],
+  // ⚠ Distinct from `items` on purpose: Úložiště's database breakdown counts
+  // MODULES, and calling them položky on a screen one tab away from Soukromé
+  // položky — whose rows really are položky — tells the reader a module count is
+  // an item count.
+  modules: ['modul', 'moduly', 'modulů'],
+  subfolders: ['podsložka', 'podsložky', 'podsložek'],
   // v6 — Finance counts months, everywhere from the list header to the missing-
   // months prompt.
   months: ['měsíc', 'měsíce', 'měsíců'],

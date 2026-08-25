@@ -44,6 +44,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/scheduler"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
 
@@ -321,6 +322,36 @@ func run(logger *slog.Logger) error {
 	pushSvc.SetRecorder(adminSvc.Store())
 
 	modules := append(featureModules, adminMod)
+
+	// 5c. v9: the storage catalog — the FOURTH registered catalog, beside widgets,
+	// audit actions, and the metric/list pair. Modules declare the SQLite tables
+	// they own and (for the two that hold bytes) their attributed R2 usage; the
+	// Úložiště page reads the registry and `admin` still imports no feature module
+	// (D191). It is collected from the FULL module set, admin included, because
+	// admin owns tables too.
+	storageCatalog, err := storage.Collect(toAny(modules)...)
+	if err != nil {
+		return err
+	}
+	adminSvc.SetStorage(admin.NewStorageService(admin.StorageDeps{
+		DB:            sqldb,
+		DBPath:        cfg.DBPath,
+		Catalog:       storageCatalog,
+		Primary:       docsBlob,
+		PrimaryBucket: cfg.Docs.R2Bucket,
+		Backup:        docsBackup,
+		BackupBucket:  cfg.Docs.BackupBucket,
+		Members:       pushStore,
+		WarnTotalMB:   cfg.Storage.WarnTotalMB,
+		CacheSeconds:  cfg.Storage.CacheSeconds,
+		// ⚠ NO Litestream replica dependency, and its absence is a DECISION rather
+		// than an omission (PRD §V9-12, settled with Karel 2026-08-24). D214 asked
+		// for a replica line, which would mean handing the application process the
+		// credentials for the household's entire database backup — no NEW secret,
+		// but a real widening of what this binary can reach. Declined. See
+		// admin.StorageReplica for what that costs and what it does not.
+	}))
+
 	mountAPI := func(api chi.Router) {
 		// /api/push/** is platform, not a module: every member (reader included)
 		// manages their own device here, whether or not any module sends anything.
@@ -514,4 +545,16 @@ func openDocumentStores(cfg *config.Config, logger *slog.Logger) (primary, backu
 		backup = b
 	}
 	return primary, backup, nil
+}
+
+// toAny widens the module slice for the catalog collectors, which take `any`
+// because their interfaces are OPTIONAL — a module that owns no table simply does
+// not implement storage.Source, and the collector type-asserts rather than
+// forcing every module to satisfy a contract it has no use for (the D56 rule).
+func toAny(modules []registry.Module) []any {
+	out := make([]any, len(modules))
+	for i, m := range modules {
+		out[i] = m
+	}
+	return out
 }

@@ -24,6 +24,8 @@ import type {
   DocumentPage,
   DocumentSummary,
   DocumentsTree,
+  DocFolderDetail,
+  Scope,
 } from '@/api/types'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
@@ -35,6 +37,9 @@ import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { Button, Input, Spinner } from '@/components/ui/ui'
 import { DEFAULT_FOLDER_ICON } from '@/components/common/FolderIconPicker'
 import { routes } from '@/app/routes'
+import { parseScopedPath, resolvedKey, scopedRoute } from '@/lib/scope'
+import { PrivateMark, RootSwitcher } from '@/components/common/RootSwitcher'
+import { PublishDialog } from '@/components/common/PublishDialog'
 import { tail } from '@/lib/lexorank'
 import { DocumentView } from './DocumentView'
 import {
@@ -71,6 +76,38 @@ interface DocIndex {
   /** Ancestor chain per folder, for the move picker's descendant exclusion. */
   ancestorsById: Map<string, string[]>
   flatFolders: MoveTarget[]
+}
+
+/**
+ * subtreeCounts totals a folder's WHOLE SUBTREE — every descendant document and
+ * folder, at any depth. The Poznámky twin carries the full argument; short
+ * version: the publish walks the entire subtree in one transaction and there is no
+ * unpublish (D182), so a count of direct children reads smaller than what the
+ * confirmation is about to do.
+ */
+function subtreeCounts(idx: DocIndex, folderId: string): { items: number; folders: number } {
+  let items = (idx.childDocuments.get(folderId) ?? []).length
+  let folders = 0
+  for (const child of idx.childFolders.get(folderId) ?? []) {
+    const sub = subtreeCounts(idx, child.folder.id)
+    folders += 1 + sub.folders
+    items += sub.items
+  }
+  return { items, folders }
+}
+
+/**
+ * rootLabel names the root the user is standing in — carrier 4 of the five
+ * "which tree am I in" carriers (D177/D183).
+ *
+ * ⚠ Every place that names the root goes through this. They all said "Dokumenty"
+ * — the SHARED label — in the private tree, which left this page with four of the
+ * five carriers where Poznámky has five, and made a screenshot of the private
+ * documents root harder to tell from the shared one than its notes equivalent.
+ * The two pages are deliberate mirror images (D40).
+ */
+function rootLabel(scope: Scope): string {
+  return scope === 'private' ? cs.privacy.privateDocuments : cs.documents.root
 }
 
 function indexTree(tree: DocumentsTree): DocIndex {
@@ -158,10 +195,21 @@ export function DokumentyPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const splat = useParams()['*'] ?? ''
+  // ⚠ Holds a SCOPE-QUALIFIED key (resolvedKey), never a bare slug path — the same
+  // slug path names a different item in each root. See lib/scope.ts.
   const lastPath = useRef('')
   const filePicker = useRef<HTMLInputElement>(null)
 
-  const tree = useQuery({ queryKey: qk.documentsTree, queryFn: () => api.getDocumentsTree() })
+  // ⚠ THE ROOT SCOPE COMES FROM THE URL, not from component state (v9, D177/D185).
+  // /dokumenty/… is the household tree; /dokumenty/soukrome/… is this member's own.
+  // See PoznamkyPage for the full argument — the two pages are deliberately mirror
+  // images (D40), so a change to one belongs in the other.
+  const { scope, path: slugPath } = parseScopedPath(splat)
+
+  const tree = useQuery({
+    queryKey: qk.documentsTree(scope),
+    queryFn: () => api.getDocumentsTree(scope),
+  })
   const [sel, setSel] = useState<Selection>({ documentId: null, folderId: null })
   const [searchQ, setSearchQ] = useState('')
   const [view, setView] = useState<ViewMode>(() =>
@@ -173,6 +221,7 @@ export function DokumentyPage() {
   const [editDoc, setEditDoc] = useState<{ id: string; title: string; description: string } | null>(null)
   const [move, setMove] = useState<{ kind: 'document' | 'folder'; id: string; title: string } | null>(null)
   const [del, setDel] = useState<{ kind: 'document' | 'folder'; id: string; title: string } | null>(null)
+  const [publish, setPublish] = useState<{ kind: 'document' | 'folder'; id: string; title: string } | null>(null)
 
   const idx = useMemo(() => (tree.data ? indexTree(tree.data) : null), [tree.data])
 
@@ -194,41 +243,44 @@ export function DokumentyPage() {
     sel.documentId ? (idx?.folderIdByDocumentId.get(sel.documentId) ?? null) : sel.folderId
 
   const refresh = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: qk.documentsTree })
+    void qc.invalidateQueries({ queryKey: qk.documentsAll })
   }, [qc])
 
   const upload = useUploadQueue({
     folderId: currentFolderId(),
     onUploaded: refresh,
     maxUploadMB: tree.data?.max_upload_mb,
+    scope,
   })
   const drop = useFileDrop((files) => {
     if (canWrite) upload.enqueue(files)
   })
 
   const search = useQuery<DocumentPage>({
-    queryKey: qk.documentsSearch(searchQ),
-    queryFn: () => api.searchDocuments(searchQ),
+    queryKey: qk.documentsSearch(searchQ, scope),
+    queryFn: () => api.searchDocuments(searchQ, scope),
     enabled: searchQ.trim().length > 0,
   })
 
   // Deep-link: resolve a slug path to a selection (path→id, no redirects).
   useEffect(() => {
     if (!tree.data) return
-    if (splat === lastPath.current) return
-    if (!splat) {
+    // ⚠ Scope-qualified, or switching roots at the SAME slug path would look like
+    // "nothing changed" and leave the other tree's item selected. See resolvedKey.
+    if (resolvedKey(scope, slugPath) === lastPath.current) return
+    if (!slugPath) {
       setSel({ documentId: null, folderId: null })
-      lastPath.current = ''
+      lastPath.current = resolvedKey(scope, '')
       return
     }
     // Guard against out-of-order resolves: navigating a→b fires two requests, and if
     // a's lands last it would clobber b's selection.
     let cancelled = false
     api
-      .resolveDocumentPath(splat)
+      .resolveDocumentPath(slugPath, scope)
       .then((res) => {
         if (cancelled) return
-        lastPath.current = splat
+        lastPath.current = resolvedKey(scope, slugPath)
         if (res.type === 'document') setSel({ documentId: res.id, folderId: null })
         else setSel({ documentId: null, folderId: res.id })
       })
@@ -238,33 +290,33 @@ export function DokumentyPage() {
         // root. A transient 5xx leaves the URL and selection alone.
         if (err instanceof ApiError && err.status === 404) {
           setSel({ documentId: null, folderId: null })
-          lastPath.current = ''
-          navigate(routes.dokumenty)
+          lastPath.current = resolvedKey(scope, '')
+          navigate(scopedRoute(routes.dokumenty, scope))
         }
       })
     return () => {
       cancelled = true
     }
-  }, [splat, tree.data, navigate])
+  }, [slugPath, scope, tree.data, navigate])
 
   const go = (type: 'document' | 'folder', id: string | null, explicitPath?: string) => {
     if (type === 'document' && id) {
       setSel({ documentId: id, folderId: null })
       const path = explicitPath ?? idx?.slugPathById.get(id)
       if (path) {
-        lastPath.current = path
-        navigate(`${routes.dokumenty}/${path}`)
+        lastPath.current = resolvedKey(scope, path)
+        navigate(scopedRoute(routes.dokumenty, scope, path))
       } else {
         // Not in the tree index yet: select it now and drop the stale path so the
         // address bar stops pointing at the previously-open document.
-        lastPath.current = ''
-        navigate(routes.dokumenty)
+        lastPath.current = resolvedKey(scope, '')
+        navigate(scopedRoute(routes.dokumenty, scope))
       }
     } else {
       setSel({ documentId: null, folderId: id })
       const path = id ? idx?.slugPathById.get(id) : ''
-      lastPath.current = path ?? ''
-      navigate(path ? `${routes.dokumenty}/${path}` : routes.dokumenty)
+      lastPath.current = resolvedKey(scope, path ?? '')
+      navigate(scopedRoute(routes.dokumenty, scope, path ?? ''))
     }
   }
 
@@ -274,6 +326,10 @@ export function DokumentyPage() {
   // 404 on the stale path.
   useEffect(() => {
     if (!idx || tree.isFetching) return
+    // ⚠ And not while the current address is still UNRESOLVED — after a cross-root
+    // hop the selection describes the previous address, so "not in the tree" means
+    // "not looked up yet". See the Poznámky twin.
+    if (resolvedKey(scope, slugPath) !== lastPath.current) return
     if (sel.documentId && !idx.folderIdByDocumentId.has(sel.documentId)) {
       go('folder', null)
       return
@@ -285,17 +341,21 @@ export function DokumentyPage() {
     const openId = sel.documentId ?? sel.folderId
     if (openId) {
       const path = idx.slugPathById.get(openId)
-      if (path && path !== lastPath.current) {
-        lastPath.current = path
-        navigate(`${routes.dokumenty}/${path}`, { replace: true })
+      if (path && resolvedKey(scope, path) !== lastPath.current) {
+        lastPath.current = resolvedKey(scope, path)
+        navigate(scopedRoute(routes.dokumenty, scope, path), { replace: true })
       }
     }
+    // scope/slugPath are here so the new unresolved-address guard is re-evaluated
+    // when the address changes, not only when the selection does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, sel.documentId, sel.folderId, tree.isFetching])
+  }, [idx, sel.documentId, sel.folderId, tree.isFetching, scope, slugPath])
 
   const createFolderMut = useMutation({
     mutationFn: ({ name, icon }: { name: string; icon: string }) =>
-      api.createDocumentFolder({ name, parent_id: currentFolderId(), icon }),
+      // v9: honoured only at the root — with a parent the parent's scope governs
+      // and a disagreement is a 422 (D177).
+      api.createDocumentFolder({ name, parent_id: currentFolderId(), icon, scope }),
     onSuccess: () => {
       refresh()
       setCreateFolder(false)
@@ -357,6 +417,32 @@ export function DokumentyPage() {
     // 422 = the backend cycle guard refused the target.
     onError: (e) =>
       toast.error(e instanceof ApiError && e.code === 'unprocessable' ? 'Sem složku přesunout nelze.' : cs.documents.saveError),
+  })
+
+  // Publish (v9, D182). Owner-only and private-only.
+  //
+  // ⚠ Declared HERE, with the other mutations and above the loading/error early
+  // returns: hooks must run in the same order on every render, and putting this
+  // below them blanks the page with "rendered more hooks than during the previous
+  // render". That mistake was made once in PoznamkyPage and caught only by opening
+  // the app — no test would have seen it.
+  const publishMut = useMutation<DocumentDetail | DocFolderDetail, Error, void>({
+    mutationFn: () => {
+      if (!publish) throw new Error('no publish')
+      return publish.kind === 'folder'
+        ? api.publishDocumentFolder(publish.id)
+        : api.publishDocument(publish.id)
+    },
+    onSuccess: () => {
+      // The item has LEFT this tree: gone from the private root, new in the shared
+      // one. Both scopes are stale, so invalidate the module prefix.
+      void qc.invalidateQueries({ queryKey: qk.documentsAll })
+      void qc.invalidateQueries({ queryKey: qk.dashboard })
+      toast.success(cs.privacy.published)
+      setPublish(null)
+      go('folder', null)
+    },
+    onError: () => toast.error(cs.privacy.publishError),
   })
 
   const deleteMut = useMutation({
@@ -437,8 +523,12 @@ export function DokumentyPage() {
   }
 
   const searching = searchQ.trim().length > 0
+  // What the publish confirmation counts — the whole subtree, computed once. See
+  // subtreeCounts for why direct children are the wrong (and dangerous) number.
+  const publishCounts = publish?.kind === 'folder' ? subtreeCounts(idx, publish.id) : null
   const props: ViewProps = {
     idx,
+    scope,
     sel,
     view,
     setViewMode,
@@ -461,6 +551,7 @@ export function DokumentyPage() {
     onEditDocument: (id, title, description) => setEditDoc({ id, title, description }),
     onMove: (kind, id, title) => setMove({ kind, id, title }),
     onDelete: (kind, id, title) => setDel({ kind, id, title }),
+    onPublish: (kind, id, title) => setPublish({ kind, id, title }),
     dropping: drop.dragging,
   }
 
@@ -494,6 +585,18 @@ export function DokumentyPage() {
 
       {upload.open && (
         <UploadPanel items={upload.items} active={upload.active} onRemove={upload.remove} onClose={upload.close} />
+      )}
+
+      {publish && (
+        <PublishDialog
+          kind={publish.kind === 'folder' ? 'folder' : 'document'}
+          title={publish.title}
+          itemCount={publishCounts?.items}
+          folderCount={publishCounts?.folders}
+          pending={publishMut.isPending}
+          onConfirm={() => publishMut.mutate()}
+          onClose={() => setPublish(null)}
+        />
       )}
 
       {createFolder && (
@@ -551,6 +654,8 @@ export function DokumentyPage() {
 interface ViewProps {
   idx: DocIndex
   sel: Selection
+  /** Which root is on screen — see DokumentyPage for why it comes from the URL. */
+  scope: Scope
   view: ViewMode
   setViewMode: (v: ViewMode) => void
   searchQ: string
@@ -568,6 +673,8 @@ interface ViewProps {
   onEditDocument: (id: string, title: string, description: string) => void
   onMove: (kind: 'document' | 'folder', id: string, title: string) => void
   onDelete: (kind: 'document' | 'folder', id: string, title: string) => void
+  /** v9: owner-only publish of a private document or folder subtree (D182). */
+  onPublish: (kind: 'document' | 'folder', id: string, title: string) => void
   dropping: boolean
 }
 
@@ -579,11 +686,25 @@ function DesktopView(p: ViewProps) {
     <>
       <div className="flex flex-none flex-wrap items-center gap-3 border-b border-border px-5 py-4">
         <div>
-          <h1 className="text-lg font-extrabold tracking-tight">{cs.documents.title}</h1>
-          <p className="text-[12.5px] text-muted">{cs.documents.subtitle}</p>
+          {/* The five carriers of "which tree am I in" — see RootSwitcher. This
+              page mirrors Poznámky exactly (D40): one behaviour, two
+              implementations, and a change to one belongs in the other. */}
+          <h1 className="text-lg font-extrabold tracking-tight">
+            {p.scope === 'private' ? cs.privacy.privateDocuments : cs.documents.title}
+          </h1>
+          <p className="text-[12.5px] text-muted">
+            {p.scope === 'private' ? cs.privacy.subtitleDocuments : cs.documents.subtitle}
+          </p>
         </div>
         <div className="flex-1" />
-        <SearchBox value={p.searchQ} onChange={p.setSearchQ} />
+        <RootSwitcher
+          scope={p.scope}
+          base={routes.dokumenty}
+          sharedLabel={cs.documents.title}
+          privateLabel={cs.privacy.privateDocuments}
+          className="w-full sm:w-auto"
+        />
+        <SearchBox value={p.searchQ} onChange={p.setSearchQ} scope={p.scope} />
         <ViewToggle view={p.view} onChange={p.setViewMode} />
         {p.canWrite ? (
           <>
@@ -602,7 +723,14 @@ function DesktopView(p: ViewProps) {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="om-scroll w-[274px] flex-none overflow-y-auto border-r border-border bg-s1 p-2">
+        {/* Carrier 3: the tree container is tinted with a left rail in the
+            private root — always in peripheral vision, never read explicitly. */}
+        <aside
+          className={cn(
+            'om-scroll w-[274px] flex-none overflow-y-auto border-r border-border bg-s1 p-2',
+            p.scope === 'private' && 'border-l-[3px] border-l-vis-private bg-vis-private-soft/25',
+          )}
+        >
           <div className="px-2 pb-2 pt-1.5 font-mono text-[10px] uppercase tracking-wide text-subtle">{cs.documents.tree}</div>
           <button
             type="button"
@@ -615,7 +743,7 @@ function DesktopView(p: ViewProps) {
             <span className="w-4 text-center text-subtle" aria-hidden>
               ▦
             </span>
-            {cs.documents.root}
+            {rootLabel(p.scope)}
           </button>
           <TreeNodes nodes={p.idx.childFolders.get(null) ?? []} documents={p.idx.childDocuments.get(null) ?? []} depth={0} p={p} />
         </aside>
@@ -629,6 +757,7 @@ function DesktopView(p: ViewProps) {
               onRename={(d) => p.onEditDocument(d.id, d.title, d.description ?? '')}
               onMove={(d) => p.onMove('document', d.id, d.title)}
               onDelete={(d) => p.onDelete('document', d.id, d.title)}
+              onPublish={(d) => p.onPublish('document', d.id, d.title)}
               onGone={() => p.go('folder', null)}
             />
           ) : (
@@ -727,7 +856,7 @@ function TreeDocumentRow({
 
 function Breadcrumb({ p }: { p: ViewProps }) {
   const openId = p.sel.documentId ?? p.sel.folderId
-  const chain: { id: string | null; name: string }[] = [{ id: null, name: cs.documents.root }]
+  const chain: { id: string | null; name: string }[] = [{ id: null, name: rootLabel(p.scope) }]
   if (openId) {
     const folderId = p.sel.documentId ? (p.idx.folderIdByDocumentId.get(p.sel.documentId) ?? null) : p.sel.folderId
     if (folderId) {
@@ -787,6 +916,13 @@ function FolderPane({ p, node }: { p: ViewProps; node: DocFolderNode | null }) {
             <Button size="sm" onClick={() => p.onMove('folder', node.folder.id, node.folder.name)}>
               <MoveRight size={14} aria-hidden /> {cs.documents.move}
             </Button>
+            {/* Publish sits in the item's own controls, owner-only, and only in
+                the private tree — there is nothing to publish in the shared one. */}
+            {node.folder.visibility === 'private' && (
+              <Button size="sm" onClick={() => p.onPublish('folder', node.folder.id, node.folder.name)}>
+                <Upload size={14} aria-hidden /> {cs.privacy.publish}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="danger"
@@ -803,7 +939,7 @@ function FolderPane({ p, node }: { p: ViewProps; node: DocFolderNode | null }) {
 
       <div className="om-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {empty ? (
-          <EmptyState root={isRoot} canWrite={p.canWrite} onUpload={p.onPickFiles} />
+          <EmptyState root={isRoot} scope={p.scope} canWrite={p.canWrite} onUpload={p.onPickFiles} />
         ) : (
           <>
             {folders.length > 0 && (
@@ -834,7 +970,7 @@ function MobileView(p: ViewProps) {
           onClick={() => p.go('folder', p.idx.folderIdByDocumentId.get(p.sel.documentId!) ?? null)}
           className="flex h-11 items-center gap-1.5 px-4 text-[13px] font-semibold text-muted"
         >
-          <ChevronLeft size={16} aria-hidden /> {cs.documents.root}
+          <ChevronLeft size={16} aria-hidden /> {rootLabel(p.scope)}
         </button>
         <DocumentView
           key={p.sel.documentId}
@@ -842,6 +978,7 @@ function MobileView(p: ViewProps) {
           onRename={(d) => p.onEditDocument(d.id, d.title, d.description ?? '')}
           onMove={(d) => p.onMove('document', d.id, d.title)}
           onDelete={(d) => p.onDelete('document', d.id, d.title)}
+          onPublish={(d) => p.onPublish('document', d.id, d.title)}
           onGone={() => p.go('folder', null)}
         />
       </div>
@@ -854,14 +991,32 @@ function MobileView(p: ViewProps) {
 
   return (
     <div className="px-4 py-5">
+      {/* ⚠ Carrier 2 on MOBILE — see the Poznámky twin (D40). Rendered only in
+          DesktopView, /dokumenty/soukrome had no way in and no way out at 375 px,
+          which is the viewport RootSwitcher's own doc names as the design problem
+          it exists to solve. Above the heading, so it is present in the empty
+          private root a member meets on day one. */}
+      <RootSwitcher
+        scope={p.scope}
+        base={routes.dokumenty}
+        sharedLabel={cs.documents.title}
+        privateLabel={cs.privacy.privateDocuments}
+        className="mb-3 w-full"
+      />
       <h1 className="flex items-center gap-2 text-xl font-extrabold tracking-tight">
         {node && <span className="flex-none leading-none" aria-hidden>{node.folder.icon || DEFAULT_FOLDER_ICON}</span>}
-        <span className="min-w-0 truncate">{node ? node.folder.name : cs.documents.title}</span>
+        <span className="min-w-0 truncate">{node ? node.folder.name : rootLabel(p.scope)}</span>
       </h1>
-      <p className="mt-0.5 text-[13px] text-muted">{node ? folderCountLabel(node) : cs.documents.subtitle}</p>
+      <p className="mt-0.5 text-[13px] text-muted">
+        {node
+          ? folderCountLabel(node)
+          : p.scope === 'private'
+            ? cs.privacy.subtitleDocuments
+            : cs.documents.subtitle}
+      </p>
 
       <div className="mt-3 flex items-center gap-2">
-        <SearchBox value={p.searchQ} onChange={p.setSearchQ} full />
+        <SearchBox value={p.searchQ} onChange={p.setSearchQ} full scope={p.scope} />
         <ViewToggle view={p.view} onChange={p.setViewMode} />
       </div>
 
@@ -882,7 +1037,7 @@ function MobileView(p: ViewProps) {
           onClick={() => p.go('folder', p.idx.folderById.get(node.folder.id)?.parent_id ?? null)}
           className="mt-3 flex h-11 items-center gap-1.5 text-[13px] font-semibold text-muted"
         >
-          <ChevronLeft size={16} aria-hidden /> {cs.documents.root}
+          <ChevronLeft size={16} aria-hidden /> {rootLabel(p.scope)}
         </button>
       )}
 
@@ -890,7 +1045,7 @@ function MobileView(p: ViewProps) {
         {p.searching ? (
           <SearchResults p={p} />
         ) : empty ? (
-          <EmptyState root={!node} canWrite={p.canWrite} onUpload={p.onPickFiles} />
+          <EmptyState root={!node} scope={p.scope} canWrite={p.canWrite} onUpload={p.onPickFiles} />
         ) : (
           <>
             {folders.length > 0 && (
@@ -910,15 +1065,28 @@ function MobileView(p: ViewProps) {
 
 // ---- shared pieces ----
 
-function SearchBox({ value, onChange, full }: { value: string; onChange: (v: string) => void; full?: boolean }) {
+function SearchBox({
+  value,
+  onChange,
+  full,
+  scope,
+}: {
+  value: string
+  onChange: (v: string) => void
+  full?: boolean
+  scope: Scope
+}) {
+  // The scope is named in the placeholder (D184): search reaches one root only,
+  // so the field says which — otherwise "nothing found" reads as "it is gone".
+  const label = scope === 'private' ? cs.privacy.searchPrivateDocuments : cs.privacy.searchSharedDocuments
   return (
     <div className={cn('flex h-9 items-center gap-2 rounded-lg border border-border bg-s2 px-3', full ? 'flex-1' : 'min-w-[210px]')}>
       <Search size={14} className="flex-none text-subtle" aria-hidden />
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={cs.documents.search}
-        aria-label={cs.documents.search}
+        placeholder={label}
+        aria-label={label}
         className="h-auto border-0 bg-transparent px-0 text-[13px] focus-visible:outline-none"
       />
     </div>
@@ -1014,7 +1182,11 @@ function DocumentRow({ d, onOpen, folderLabel }: { d: DocumentSummary; onOpen: (
         {meta.icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-fg">{d.title}</span>
+        <span className="flex items-center gap-2">
+          <span className="min-w-0 truncate text-sm font-semibold text-fg">{d.title}</span>
+          {/* A private hit in a result list carries the lock AND the word (D183). */}
+          {d.visibility === 'private' && <PrivateMark />}
+        </span>
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-subtle">
           <span>{fmtBytes(d.byte_size)}</span>
           <span aria-hidden>·</span>
@@ -1104,22 +1276,51 @@ function SearchResults({ p }: { p: ViewProps }) {
           documents={items}
           view={p.view}
           onOpen={(id) => p.go('document', id)}
-          folderLabelOf={(d) => (d.folder_id ? p.idx.folderNamePathById.get(d.folder_id) : cs.documents.root)}
+          folderLabelOf={(d) => (d.folder_id ? p.idx.folderNamePathById.get(d.folder_id) : rootLabel(p.scope))}
         />
       )}
     </div>
   )
 }
 
-function EmptyState({ root, canWrite, onUpload }: { root: boolean; canWrite: boolean; onUpload: () => void }) {
+// EmptyState is THREE states, not two.
+//
+// ⚠ The EMPTY PRIVATE ROOT is the state every member meets on day one, and it is
+// the only place the feature ever gets to say what it is for — which is why the
+// copy for it was written. Falling back to the shared "Zatím žádné dokumenty"
+// there says nothing about who can see the tree, and leaves Dokumenty out of step
+// with Poznámky, whose EmptyRoot has done this since the branch started (D40: one
+// behaviour, two implementations).
+function EmptyState({
+  root,
+  scope,
+  canWrite,
+  onUpload,
+}: {
+  root: boolean
+  scope: Scope
+  canWrite: boolean
+  onUpload: () => void
+}) {
+  const priv = root && scope === 'private'
   return (
     <div className="grid place-items-center px-4 py-10 text-center">
       <div className="max-w-md">
-        <div className="mx-auto mb-4 grid h-13 w-13 place-items-center rounded-[13px] border border-dashed border-border-strong bg-s2 text-2xl text-subtle" aria-hidden>
-          ▦
+        <div
+          className={cn(
+            'mx-auto mb-4 grid h-13 w-13 place-items-center rounded-[13px] border border-dashed bg-s2 text-2xl',
+            priv ? 'border-vis-private text-vis-private' : 'border-border-strong text-subtle',
+          )}
+          aria-hidden
+        >
+          {priv ? '🔒' : '▦'}
         </div>
-        <div className="mb-1.5 text-lg font-bold">{root ? cs.documents.emptyRootTitle : cs.documents.emptyFolderTitle}</div>
-        <p className="mb-4 text-[13.5px] text-muted text-pretty">{root ? cs.documents.emptyRootBody : cs.documents.emptyFolderBody}</p>
+        <div className="mb-1.5 text-lg font-bold">
+          {priv ? cs.privacy.emptyDocumentsTitle : root ? cs.documents.emptyRootTitle : cs.documents.emptyFolderTitle}
+        </div>
+        <p className="mb-4 text-[13.5px] text-muted text-pretty">
+          {priv ? cs.privacy.emptyDocumentsBody : root ? cs.documents.emptyRootBody : cs.documents.emptyFolderBody}
+        </p>
         {canWrite && (
           <Button variant="primary" onClick={onUpload}>
             <Upload size={16} aria-hidden /> {cs.documents.upload}

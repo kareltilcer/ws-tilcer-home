@@ -43,12 +43,24 @@ export function useLiveSync(): void {
       }
       ws.onmessage = (e) => {
         try {
-          const msg = JSON.parse(e.data) as { type?: string; origin?: string }
+          const msg = JSON.parse(e.data) as {
+            type?: string
+            origin?: string
+            payload?: { private?: string }
+          }
           if (!msg.type) return
           // Classify the change once and thread the module through cache
           // invalidation, route matching, and the toast — no repeated prefix scans.
           const mod = classify(msg.type)
           applyChange(qc, mod)
+          // ⚠ A PRIVATE MUTATION INVALIDATES BUT NEVER TOASTS (v9, D180/D187). The
+          // frame carries no id and no owner — see notes.Service.notifyScoped — so
+          // this tab cannot tell whether the change was ours; the refetch is what
+          // keeps the OWNER's other tabs correct. For everybody else the row is in a
+          // tree they cannot see, and "Poznámky byly změněny jinde" over a change
+          // that never appears is both noise and a live activity indicator over
+          // another member's private tree.
+          const isPrivate = msg.payload?.private === '1'
           // Toast only when the change carries a known origin that isn't us,
           // affects the route on screen, and this tab is actually visible — a
           // hidden tab picks the change up via refetch-on-focus on return. A push
@@ -56,6 +68,7 @@ export function useLiveSync(): void {
           // stamp our client id) is never toasted: we can't tell whether this very
           // tab made it, so we don't risk falsely reporting it as "changed elsewhere".
           if (
+            !isPrivate &&
             msg.origin &&
             msg.origin !== clientId &&
             document.visibilityState === 'visible' &&

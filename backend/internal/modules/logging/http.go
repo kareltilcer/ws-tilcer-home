@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // HTTPHandler serves the admin log-browser endpoints (FR-L3–L6). All routes
@@ -40,7 +41,7 @@ func (h *HTTPHandler) list(w http.ResponseWriter, r *http.Request) {
 		Limit:      atoiOr(q.Get("limit"), 0),
 		Cursor:     q.Get("cursor"),
 	}
-	page, err := h.store.Browse(r.Context(), f)
+	page, err := h.store.Browse(r.Context(), f, viewerID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -49,7 +50,7 @@ func (h *HTTPHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) get(w http.ResponseWriter, r *http.Request) {
-	detail, err := h.store.Get(r.Context(), chi.URLParam(r, "id"))
+	detail, err := h.store.Get(r.Context(), chi.URLParam(r, "id"), viewerID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -65,7 +66,7 @@ func (h *HTTPHandler) timeline(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, err := h.store.Timeline(r.Context(),
 		chi.URLParam(r, "type"), chi.URLParam(r, "entityId"),
-		q.Get("from"), q.Get("to"), atoiOr(q.Get("limit"), 0), q.Get("cursor"))
+		q.Get("from"), q.Get("to"), atoiOr(q.Get("limit"), 0), q.Get("cursor"), viewerID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -79,12 +80,25 @@ func (h *HTTPHandler) stats(w http.ResponseWriter, r *http.Request) {
 	if bucket == "" {
 		bucket = "day"
 	}
-	res, err := h.store.Stats(r.Context(), q.Get("dimension"), bucket, q.Get("from"), q.Get("to"))
+	res, err := h.store.Stats(r.Context(), q.Get("dimension"), bucket, q.Get("from"), q.Get("to"), viewerID(r))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, res)
+}
+
+// viewerID is the signed-in member the redaction rules are evaluated against
+// (v9, D187). Every one of the four query doors takes it — that is deliberate, so
+// a fifth door added later cannot compile without answering the question.
+//
+// An absent actor resolves to "", which sees no private event at all: the
+// ambiguity fails CLOSED.
+func viewerID(r *http.Request) string {
+	if a, ok := reqctx.ActorFrom(r.Context()); ok {
+		return a.UserID
+	}
+	return ""
 }
 
 func writeErr(w http.ResponseWriter, err error) {

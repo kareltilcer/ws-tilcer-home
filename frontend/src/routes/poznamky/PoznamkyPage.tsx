@@ -6,7 +6,7 @@ import { ChevronDown, ChevronRight, FilePlus2, FolderPlus, Search } from 'lucide
 import { qk } from '@/api/keys'
 import { ApiError } from '@/api/client'
 import * as api from '@/api/endpoints'
-import type { Folder, FolderDetail, FolderNode, NoteDetail, NotePage, NoteSummary, NotesTree } from '@/api/types'
+import type { Folder, FolderDetail, FolderNode, NoteDetail, NotePage, NoteSummary, NotesTree, Scope } from '@/api/types'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { count, PLURAL } from '@/i18n/plural'
@@ -16,6 +16,9 @@ import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { Spinner } from '@/components/ui/ui'
 import { DEFAULT_FOLDER_ICON } from '@/components/common/FolderIconPicker'
 import { routes } from '@/app/routes'
+import { parseScopedPath, resolvedKey, scopedRoute } from '@/lib/scope'
+import { PrivateMark, RootSwitcher } from '@/components/common/RootSwitcher'
+import { PublishDialog } from '@/components/common/PublishDialog'
 import { tail } from '@/lib/lexorank'
 import { NoteView } from './NoteView'
 import { CreateDialog, DeleteDialog, MoveDialog, RenameDialog, type MoveTarget } from './NotesDialogs'
@@ -93,6 +96,21 @@ function folderCountLabel(node: FolderNode): string {
   return parts.join(' · ')
 }
 
+/**
+ * rootLabel names the root the user is standing in — carrier 1 of the five
+ * "which tree am I in" carriers (see RootSwitcher).
+ *
+ * ⚠ Every place that names the root goes through this. The mobile view said
+ * "Poznámky" — the SHARED label — while standing in the private root, so a
+ * screenshot of one root was indistinguishable from the other on the viewport the
+ * switcher was designed for. Mirrors the helper of the same name in DokumentyPage
+ * (D40: one behaviour, two implementations, and a change to one belongs in the
+ * other).
+ */
+function rootLabel(scope: Scope): string {
+  return scope === 'private' ? cs.privacy.privateNotes : cs.notes.root
+}
+
 // ---- page ----
 
 type Selection = { noteId: string | null; folderId: string | null }
@@ -104,13 +122,33 @@ export function PoznamkyPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const splat = useParams()['*'] ?? ''
+  // ⚠ Holds a SCOPE-QUALIFIED key (resolvedKey), never a bare slug path. The
+  // deep-link effect below skips work when this matches, and the same slug path
+  // means a different item in each root — see lib/scope.ts. `''` is the
+  // nothing-resolved-yet sentinel and can never equal a real key.
   const lastPath = useRef('')
 
-  const tree = useQuery({ queryKey: qk.notesTree, queryFn: () => api.getNotesTree() })
+  // ⚠ THE ROOT SCOPE COMES FROM THE URL, not from component state (v9, D177/D185).
+  //
+  // /poznamky/… is the household tree; /poznamky/soukrome/… is this member's own.
+  // Deriving it from the address is what makes the two trees survive a reload, the
+  // back button, a bookmark and a pasted link — and it is why the switcher below
+  // can be a pair of links with nothing to keep in sync.
+  //
+  // Everything downstream takes `scope`: the tree query, the search query, every
+  // create, and every navigation. The cache keys carry it too, because two scopes
+  // sharing one key is a leak that survives a logout.
+  const { scope, path: slugPath } = parseScopedPath(splat)
+
+  const tree = useQuery({
+    queryKey: qk.notesTree(scope),
+    queryFn: () => api.getNotesTree(scope),
+  })
   const [sel, setSel] = useState<Selection>({ noteId: null, folderId: null })
   const [searchQ, setSearchQ] = useState('')
   const [create, setCreate] = useState<CreateState>(null)
   const [move, setMove] = useState<{ kind: 'note' | 'folder'; id: string; title: string } | null>(null)
+  const [publish, setPublish] = useState<{ kind: 'note' | 'folder'; id: string; title: string } | null>(null)
   const [rename, setRename] = useState<{ id: string; name: string } | null>(null)
   const [del, setDel] = useState<
     { kind: 'note'; id: string; title: string } | { kind: 'folder'; id: string; title: string } | null
@@ -133,19 +171,30 @@ export function PoznamkyPage() {
   const createParentId = (): string | null =>
     sel.noteId ? idx?.folderIdByNoteId.get(sel.noteId) ?? null : sel.folderId
 
+  // Search is scoped to THE TREE YOU ARE STANDING IN (D184) — searching the shared
+  // root never reaches a private note, and searching a private root never reaches
+  // the household's. The scope is named in the placeholder and above the results,
+  // so nobody concludes their private note has vanished because they searched from
+  // the wrong root.
   const search = useQuery({
-    queryKey: qk.noteSearch(searchQ),
-    queryFn: () => api.searchNotes(searchQ),
+    queryKey: qk.noteSearch(searchQ, scope),
+    queryFn: () => api.searchNotes(searchQ, scope),
     enabled: searchQ.trim().length > 0,
   })
 
   // Deep-link: resolve a slug path to a selection (path→id, no redirects).
+  //
+  // v9: the path resolved is `slugPath` — the splat WITHOUT the `soukrome` prefix —
+  // and it resolves within the current scope. The same slug path names different
+  // items in different roots, so a path without a scope means nothing.
   useEffect(() => {
     if (!tree.data) return
-    if (splat === lastPath.current) return
-    if (!splat) {
+    // ⚠ Scope-qualified, or switching roots at the SAME slug path would look like
+    // "nothing changed" and leave the other tree's item selected. See resolvedKey.
+    if (resolvedKey(scope, slugPath) === lastPath.current) return
+    if (!slugPath) {
       setSel({ noteId: null, folderId: null })
-      lastPath.current = ''
+      lastPath.current = resolvedKey(scope, '')
       return
     }
     // Guard against out-of-order resolves: navigating a→b fires two requests, and
@@ -153,10 +202,10 @@ export function PoznamkyPage() {
     // superseded request stale so its result is ignored.
     let cancelled = false
     api
-      .resolveNotePath(splat)
+      .resolveNotePath(slugPath, scope)
       .then((res) => {
         if (cancelled) return
-        lastPath.current = splat
+        lastPath.current = resolvedKey(scope, slugPath)
         if (res.type === 'note') setSel({ noteId: res.id, folderId: null })
         else setSel({ noteId: null, folderId: res.id })
       })
@@ -169,14 +218,14 @@ export function PoznamkyPage() {
         // selection intact rather than dumping the user to root on a blip.
         if (err instanceof ApiError && err.status === 404) {
           setSel({ noteId: null, folderId: null })
-          lastPath.current = ''
-          navigate(routes.poznamky)
+          lastPath.current = resolvedKey(scope, '')
+          navigate(scopedRoute(routes.poznamky, scope))
         }
       })
     return () => {
       cancelled = true
     }
-  }, [splat, tree.data, navigate])
+  }, [slugPath, scope, tree.data, navigate])
 
   // `explicitPath` lets a caller supply the slug path directly (e.g. a freshly
   // created note whose row isn't in the tree index yet, so slugPathById can't
@@ -186,26 +235,27 @@ export function PoznamkyPage() {
       setSel({ noteId: id, folderId: null })
       const path = explicitPath ?? idx?.slugPathById.get(id)
       if (path) {
-        lastPath.current = path
-        navigate(`${routes.poznamky}/${path}`)
+        lastPath.current = resolvedKey(scope, path)
+        navigate(scopedRoute(routes.poznamky, scope, path))
       } else {
         // Slug path unknown (note not in the tree index yet and no explicit path):
         // select it now, but drop the stale path so the address bar doesn't keep
         // pointing at the previously-open note. The reconcile effect below pushes the
-        // real path once a tree refetch indexes it; clearing lastPath to '' matches
-        // the root URL so the deep-link effect doesn't re-resolve while we wait.
-        lastPath.current = ''
-        navigate(routes.poznamky)
+        // real path once a tree refetch indexes it; clearing lastPath to this
+        // scope's root key matches the root URL so the deep-link effect doesn't
+        // re-resolve while we wait.
+        lastPath.current = resolvedKey(scope, '')
+        navigate(scopedRoute(routes.poznamky, scope))
       }
     } else {
       setSel({ noteId: null, folderId: id })
       const path = id ? idx?.slugPathById.get(id) : ''
-      lastPath.current = path ?? ''
-      navigate(path ? `${routes.poznamky}/${path}` : routes.poznamky)
+      lastPath.current = resolvedKey(scope, path ?? '')
+      navigate(scopedRoute(routes.poznamky, scope, path ?? ''))
     }
   }
 
-  const refresh = () => void qc.invalidateQueries({ queryKey: qk.notesTree })
+  const refresh = () => void qc.invalidateQueries({ queryKey: qk.notesAll })
 
   // If the selected note/folder vanished from the tree — its ancestor folder was
   // cascade-deleted, or a background refetch/WS update removed it elsewhere — the
@@ -216,6 +266,12 @@ export function PoznamkyPage() {
   // during the in-flight window.
   useEffect(() => {
     if (!idx || tree.isFetching) return
+    // ⚠ And not while the current address is still UNRESOLVED. After a cross-root
+    // hop the selection describes the PREVIOUS address, so "this id is not in the
+    // tree" means "we have not looked the new path up yet", not "it is gone" —
+    // and racing the resolve here dumped the user at the root instead of opening
+    // what they navigated to. lastPath catches up in the deep-link effect above.
+    if (resolvedKey(scope, slugPath) !== lastPath.current) return
     if (sel.noteId && !idx.folderIdByNoteId.has(sel.noteId)) {
       go('folder', null)
       return
@@ -235,19 +291,25 @@ export function PoznamkyPage() {
     const openId = sel.noteId ?? sel.folderId
     if (openId) {
       const path = idx.slugPathById.get(openId)
-      if (path && path !== lastPath.current) {
-        lastPath.current = path
-        navigate(`${routes.poznamky}/${path}`, { replace: true })
+      if (path && resolvedKey(scope, path) !== lastPath.current) {
+        lastPath.current = resolvedKey(scope, path)
+        navigate(scopedRoute(routes.poznamky, scope, path), { replace: true })
       }
     }
+    // scope/slugPath are here so the new unresolved-address guard is re-evaluated
+    // when the address changes, not only when the selection does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, sel.noteId, sel.folderId, tree.isFetching])
+  }, [idx, sel.noteId, sel.folderId, tree.isFetching, scope, slugPath])
 
   const createMut = useMutation<NoteDetail | FolderDetail, Error, { name: string; icon: string }>({
     mutationFn: ({ name, icon }) =>
       create?.kind === 'folder'
-        ? api.createFolder({ name, parent_id: createParentId(), icon })
-        : api.createNote({ title: name, folder_id: createParentId() }),
+        ? // v9: `scope` is honoured only when parent_id is null — with a parent the
+          // parent's scope governs and a disagreement is a 422. Sending it always is
+          // still correct and is the safer habit: a create started in the private
+          // root lands there even if createParentId() resolves to null.
+          api.createFolder({ name, parent_id: createParentId(), icon, scope })
+        : api.createNote({ title: name, folder_id: createParentId(), scope }),
     onSuccess: (res) => {
       refresh()
       setCreate(null)
@@ -282,6 +344,34 @@ export function PoznamkyPage() {
       setRename(null)
     },
     onError: () => toast.error(cs.notes.saveError),
+  })
+
+  // Publish (v9, D182). Owner-only and private-only — the control never renders in
+  // the shared tree, and the backend refuses a non-owner with 404 regardless.
+  //
+  // ⚠ It lives HERE, with the other mutations and ABOVE the loading/error early
+  // returns, because hooks must run in the same order on every render. Declared
+  // below them it ran only once the tree had loaded, which React caught as
+  // "rendered more hooks than during the previous render" and which blanked the
+  // whole page. Every hook in this component has to stay above the first `return`.
+  const publishMut = useMutation<NoteDetail | FolderDetail, Error, void>({
+    mutationFn: () => {
+      if (!publish) throw new Error('no publish')
+      return publish.kind === 'folder' ? api.publishNoteFolder(publish.id) : api.publishNote(publish.id)
+    },
+    onSuccess: () => {
+      // The item has LEFT this tree, so BOTH scopes are stale: gone from the
+      // private one, new in the shared one. Invalidating the module prefix covers
+      // both — anything narrower leaves the shared tree missing an item until a
+      // refetch happens by chance.
+      void qc.invalidateQueries({ queryKey: qk.notesAll })
+      void qc.invalidateQueries({ queryKey: qk.dashboard })
+      toast.success(cs.privacy.published)
+      setPublish(null)
+      // The published item is no longer in this root, so hold nothing selected.
+      go('folder', null)
+    },
+    onError: () => toast.error(cs.privacy.publishError),
   })
 
   const deleteMut = useMutation({
@@ -335,8 +425,27 @@ export function PoznamkyPage() {
     return idx.flatFolders.filter((t) => t.id === null || !blocked.has(t.id))
   })()
 
+  // ⚠ THE WHOLE SUBTREE, not the direct children — the same count the delete
+  // cascade already asks subtreeCounts for. `POST /notes/folders/{id}/publish`
+  // walks every descendant in one transaction and there is no unpublish (D182), so
+  // a folder holding no notes directly but one subfolder of forty read as "0
+  // položek v 1 podsložkách": the confirmation understating exactly what the count
+  // exists to state.
+  const publishCounts = publish?.kind === 'folder' ? subtreeCounts(findNode(idx, publish.id)) : null
+
   const dialogs = (
     <>
+      {publish && (
+        <PublishDialog
+          kind={publish.kind === 'folder' ? 'folder' : 'note'}
+          title={publish.title}
+          itemCount={publishCounts?.notes}
+          folderCount={publishCounts?.folders}
+          pending={publishMut.isPending}
+          onConfirm={() => publishMut.mutate()}
+          onClose={() => setPublish(null)}
+        />
+      )}
       {create && (
         <CreateDialog
           kind={create.kind}
@@ -391,6 +500,7 @@ export function PoznamkyPage() {
       readOnly={!canWrite}
       onMove={(nt) => openMoveNote(nt.id, nt.title)}
       onDelete={(nt) => openDeleteNote(nt.id, nt.title)}
+      onPublish={(nt) => setPublish({ kind: 'note', id: nt.id, title: nt.title })}
     />
   )
 
@@ -398,6 +508,7 @@ export function PoznamkyPage() {
     idx,
     sel,
     canWrite,
+    scope,
     searchQ,
     setSearchQ,
     search,
@@ -408,6 +519,7 @@ export function PoznamkyPage() {
     onRenameFolder: (f: Folder) => setRename({ id: f.id, name: f.name }),
     onMoveFolder: (f: Folder) => setMove({ kind: 'folder', id: f.id, title: f.name }),
     onDeleteFolder: (f: Folder) => setDel({ kind: 'folder', id: f.id, title: f.name }),
+    onPublishFolder: (f: Folder) => setPublish({ kind: 'folder', id: f.id, title: f.name }),
     noteViewFor,
   }
 
@@ -425,6 +537,8 @@ interface ViewProps {
   idx: TreeIndex
   sel: Selection
   canWrite: boolean
+  /** Which root is on screen — see PoznamkyPage for why it comes from the URL. */
+  scope: Scope
   searchQ: string
   setSearchQ: (q: string) => void
   search: ReturnType<typeof useQuery<NotePage>>
@@ -435,6 +549,8 @@ interface ViewProps {
   onRenameFolder: (f: Folder) => void
   onMoveFolder: (f: Folder) => void
   onDeleteFolder: (f: Folder) => void
+  /** v9: owner-only publish of a private folder and its whole subtree (D182). */
+  onPublishFolder: (f: Folder) => void
   noteViewFor: (noteId: string) => React.ReactNode
 }
 
@@ -454,11 +570,26 @@ function DesktopView(p: ViewProps) {
     <>
       <div className="flex flex-none flex-wrap items-center gap-3 border-b border-border px-5 py-4">
         <div>
-          <h1 className="text-lg font-extrabold tracking-tight">{cs.notes.title}</h1>
-          <p className="text-[12.5px] text-muted">{cs.notes.subtitle}</p>
+          {/* Carrier 1 of 5: the HEADING names the root. See RootSwitcher for why
+              the current tree is carried by the page's shape rather than by a
+              warning — shape is read every time, a warning once. */}
+          <h1 className="text-lg font-extrabold tracking-tight">
+            {p.scope === 'private' ? cs.privacy.privateNotes : cs.notes.title}
+          </h1>
+          <p className="text-[12.5px] text-muted">
+            {p.scope === 'private' ? cs.privacy.subtitleNotes : cs.notes.subtitle}
+          </p>
         </div>
         <div className="flex-1" />
-        <SearchBox value={p.searchQ} onChange={p.setSearchQ} />
+        {/* Carrier 2: the switcher itself. */}
+        <RootSwitcher
+          scope={p.scope}
+          base={routes.poznamky}
+          sharedLabel={cs.notes.title}
+          privateLabel={cs.privacy.privateNotes}
+          className="w-full sm:w-auto"
+        />
+        <SearchBox value={p.searchQ} onChange={p.setSearchQ} scope={p.scope} />
         {p.canWrite && (
           <>
             <ToolbarBtn onClick={p.onCreateFolder} icon={<FolderPlus size={14} />}>
@@ -482,7 +613,15 @@ function DesktopView(p: ViewProps) {
 
       <div className="flex min-h-0 flex-1">
         {/* tree */}
-        <div className="w-[274px] flex-none overflow-y-auto border-r border-border bg-s1 p-2">
+        {/* Carrier 3: THE TREE CONTAINER IS TINTED and carries a left rail in the
+            private root. It is the quietest of the five carriers and the one that
+            is always in peripheral vision — you do not read it, you notice it. */}
+        <div
+          className={cn(
+            'w-[274px] flex-none overflow-y-auto border-r border-border bg-s1 p-2',
+            p.scope === 'private' && 'border-l-[3px] border-l-vis-private bg-vis-private-soft/25',
+          )}
+        >
           <p className="px-2 pb-2 pt-1.5 font-mono text-[10px] uppercase tracking-wide text-subtle">{cs.notes.tree}</p>
           <button
             type="button"
@@ -492,7 +631,8 @@ function DesktopView(p: ViewProps) {
               p.sel.folderId === null && p.sel.noteId === null ? 'bg-s2 text-fg' : 'text-fg hover:bg-s2',
             )}
           >
-            {cs.notes.root}
+            {/* Carrier 4: the ROOT SEGMENT of the breadcrumb names the tree. */}
+            {rootLabel(p.scope)}
           </button>
           <TreeNodes nodes={p.idx.childFolders.get(null) ?? []} rootNotes={p.idx.childNotes.get(null) ?? []} depth={0} expanded={expanded} toggle={toggle} sel={p.sel} go={p.go} />
         </div>
@@ -591,19 +731,26 @@ function FolderPane(p: ViewProps) {
   const childNotes = p.idx.childNotes.get(p.sel.folderId) ?? []
   const empty = childFolders.length === 0 && childNotes.length === 0
 
-  if (p.rootEmpty && !searching) return <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} />
+  if (p.rootEmpty && !searching) return <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} scope={p.scope} />
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-none items-center gap-2 border-b border-border px-5 py-3.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {folder && <span className="flex-none text-lg leading-none">{folder.icon || DEFAULT_FOLDER_ICON}</span>}
-          <div className="truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : cs.notes.root}</div>
+          <div className="truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : rootLabel(p.scope)}</div>
         </div>
         {folder && p.canWrite && (
           <div className="flex gap-1.5">
             <SmallBtn onClick={() => p.onRenameFolder(folder)}>{cs.notes.rename}</SmallBtn>
             <SmallBtn onClick={() => p.onMoveFolder(folder)}>{cs.notes.move}</SmallBtn>
+            {/* ⚠ Publish lives in the ITEM'S OWN MENU, not on a global toolbar
+                (HANDOFF-design §v9 §3): it is owner-only and irreversible, so it
+                must not sit where a bulk action would. It renders only in the
+                private tree — in the shared one there is nothing to publish. */}
+            {folder.visibility === 'private' && (
+              <SmallBtn onClick={() => p.onPublishFolder(folder)}>{cs.privacy.publish}</SmallBtn>
+            )}
             <SmallBtn onClick={() => p.onDeleteFolder(folder)} danger>
               {cs.notes.delete}
             </SmallBtn>
@@ -680,27 +827,34 @@ function SearchResults({ p }: { p: ViewProps }) {
       </div>
     )
   const items = p.search.data?.items ?? []
+  // ⚠ Both the empty state and the result list NAME THE TREE THAT WAS SEARCHED
+  // (D184). Search reaches one root only, so "nothing found" is ambiguous without
+  // it — and the wrong reading is "my private note is gone", which is alarming and
+  // false.
+  const searchedIn = p.scope === 'private' ? cs.privacy.searchedPrivate : cs.privacy.searchedShared
   if (items.length === 0)
     return (
       <div className="grid place-items-center py-12 text-center text-muted">
         <div>
           <div className="mb-1 font-bold text-fg">{cs.notes.noResultsTitle}</div>
           <div className="text-sm">{cs.notes.noResultsBody}</div>
+          <div className="mt-2 font-mono text-[11px] text-subtle">{searchedIn}</div>
         </div>
       </div>
     )
   return (
     <>
+      <div className="px-1 pb-1 font-mono text-[11px] text-subtle">{searchedIn}</div>
       {items.map((nt) => (
-        <BrowseNoteRow key={nt.id} nt={nt} onOpen={() => p.go('note', nt.id)} folderLabel={folderLabelOf(p.idx, nt)} />
+        <BrowseNoteRow key={nt.id} nt={nt} onOpen={() => p.go('note', nt.id)} folderLabel={folderLabelOf(p.idx, nt, p.scope)} />
       ))}
     </>
   )
 }
 
-function folderLabelOf(idx: TreeIndex, nt: NoteSummary): string {
-  if (!nt.folder_id) return cs.notes.root
-  return idx.folderNamePathById.get(nt.folder_id) ?? cs.notes.root
+function folderLabelOf(idx: TreeIndex, nt: NoteSummary, scope: Scope): string {
+  if (!nt.folder_id) return rootLabel(scope)
+  return idx.folderNamePathById.get(nt.folder_id) ?? rootLabel(scope)
 }
 
 function BrowseFolderRow({ node, onOpen }: { node: FolderNode; onOpen: () => void }) {
@@ -724,7 +878,14 @@ function BrowseNoteRow({ nt, onOpen, folderLabel }: { nt: NoteSummary; onOpen: (
     <button type="button" onClick={onOpen} className="flex w-full items-start gap-3 rounded-xl border border-border bg-s1 px-3 py-3 text-left hover:border-border-strong">
       <span className={cn('mt-1 h-2.5 w-2.5 flex-none rounded-full', pinned ? 'bg-accent' : 'bg-border-strong')} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold">{nt.title}</span>
+        <span className="flex items-center gap-2">
+          <span className="min-w-0 truncate text-sm font-semibold">{nt.title}</span>
+          {/* A private hit in a result list carries the lock AND the word (D183).
+              The label is not optional: the icon alone means nothing to somebody
+              meeting it for the first time, and it is the only carrier a screen
+              reader would otherwise get. */}
+          {nt.visibility === 'private' && <PrivateMark />}
+        </span>
         {folderLabel && <span className="block font-mono text-[10.5px] text-subtle">{folderLabel}</span>}
       </span>
     </button>
@@ -752,7 +913,7 @@ function MobileView(p: ViewProps) {
           </button>
           <div className="flex-1" />
           <button type="button" onClick={() => p.go('folder', null)} className="h-8 rounded-md border border-border bg-s2 px-3 text-[12px] font-semibold text-muted">
-            {cs.notes.root}
+            {rootLabel(p.scope)}
           </button>
         </div>
         {p.noteViewFor(p.sel.noteId)}
@@ -760,10 +921,37 @@ function MobileView(p: ViewProps) {
     )
   }
 
-  if (p.rootEmpty && !searching) return <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} />
+  // ⚠ Carrier 2 on MOBILE, and it is not optional here (see RootSwitcher, whose
+  // stated design problem is 375 px one-handed). Rendered only in DesktopView, the
+  // private tree had no way in and — worse — no way out: a member who reached
+  // /poznamky/soukrome could only leave by editing the address bar.
+  //
+  // It sits ABOVE the empty-root early return below, because the empty private
+  // root is exactly the state a member meets on day one — the one screen where
+  // being stranded is most likely.
+  const switcher = (
+    <div className="flex-none px-1 pb-2 pt-1">
+      <RootSwitcher
+        scope={p.scope}
+        base={routes.poznamky}
+        sharedLabel={cs.notes.title}
+        privateLabel={cs.privacy.privateNotes}
+        className="w-full"
+      />
+    </div>
+  )
+
+  if (p.rootEmpty && !searching)
+    return (
+      <>
+        {switcher}
+        <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} scope={p.scope} />
+      </>
+    )
 
   return (
     <>
+      {switcher}
       <div className="flex-none border-b border-border px-1 pb-3">
         <div className="mb-2.5 flex items-center gap-2">
           {folder && (
@@ -773,7 +961,7 @@ function MobileView(p: ViewProps) {
           )}
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {folder && <span className="flex-none text-lg leading-none">{folder.icon || DEFAULT_FOLDER_ICON}</span>}
-            <span className="truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : cs.notes.title}</span>
+            <span className="truncate text-lg font-extrabold tracking-tight">{folder ? folder.name : rootLabel(p.scope)}</span>
           </div>
           {p.canWrite && (
             <>
@@ -799,7 +987,7 @@ function MobileView(p: ViewProps) {
             </SmallBtn>
           </div>
         )}
-        <SearchBox value={p.searchQ} onChange={p.setSearchQ} full />
+        <SearchBox value={p.searchQ} onChange={p.setSearchQ} full scope={p.scope} />
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-1 py-3">
         {searching ? (
@@ -823,14 +1011,27 @@ function MobileView(p: ViewProps) {
 
 // ---- small shared bits ----
 
-function SearchBox({ value, onChange, full }: { value: string; onChange: (v: string) => void; full?: boolean }) {
+function SearchBox({
+  value,
+  onChange,
+  full,
+  scope,
+}: {
+  value: string
+  onChange: (v: string) => void
+  full?: boolean
+  scope: Scope
+}) {
   return (
     <div className={cn('flex h-[38px] items-center gap-2 rounded-md border border-border bg-s2 px-3', full ? 'w-full' : 'min-w-[220px]')}>
       <Search size={14} className="text-subtle" />
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={cs.notes.search}
+        // Carrier 5: the SCOPE IS NAMED IN THE PLACEHOLDER (D184). Search reaches
+        // one root only, so the field says which — otherwise somebody searching
+        // from the wrong tree concludes their note has vanished.
+        placeholder={scope === 'private' ? cs.privacy.searchPrivateNotes : cs.privacy.searchSharedNotes}
         className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-subtle"
       />
     </div>
@@ -861,13 +1062,28 @@ function SmallBtn({ onClick, children, danger, full }: { onClick: () => void; ch
   )
 }
 
-function EmptyRoot({ canWrite, onCreate }: { canWrite: boolean; onCreate: () => void }) {
+// EmptyRoot is two states, not one.
+//
+// ⚠ The EMPTY PRIVATE ROOT is the state every member sees on day one, and it is
+// the only place the whole feature ever gets to say what it is FOR. So it is
+// written copy rather than a shrug — and it is careful not to overpromise:
+// "nobody else, not even an admin" is true; anything implying encryption is not
+// (an admin with the database file reads everything).
+function EmptyRoot({ canWrite, onCreate, scope }: { canWrite: boolean; onCreate: () => void; scope: Scope }) {
+  const priv = scope === 'private'
   return (
     <div className="grid flex-1 place-items-center py-16 text-center">
       <div className="max-w-sm">
-        <div className="mx-auto mb-4 grid h-13 w-13 place-items-center rounded-xl border border-dashed border-border-strong bg-s2 text-2xl text-subtle">❏</div>
-        <p className="mb-1.5 text-lg font-bold">{cs.notes.emptyRootTitle}</p>
-        <p className="mb-4 text-sm text-muted text-pretty">{cs.notes.emptyRootBody}</p>
+        <div
+          className={cn(
+            'mx-auto mb-4 grid h-13 w-13 place-items-center rounded-xl border border-dashed bg-s2 text-2xl',
+            priv ? 'border-vis-private text-vis-private' : 'border-border-strong text-subtle',
+          )}
+        >
+          {priv ? '🔒' : '❏'}
+        </div>
+        <p className="mb-1.5 text-lg font-bold">{priv ? cs.privacy.emptyNotesTitle : cs.notes.emptyRootTitle}</p>
+        <p className="mb-4 text-sm text-muted text-pretty">{priv ? cs.privacy.emptyNotesBody : cs.notes.emptyRootBody}</p>
         {canWrite && (
           <button type="button" onClick={onCreate} className="h-10 rounded-md bg-accent px-4 text-sm font-bold text-accent-fg">
             {cs.notes.createNoteFull}

@@ -81,3 +81,77 @@ export function fmtBytes(n: number): string {
 export function compareCz(a: string, b: string): number {
   return czCollator.compare(a, b)
 }
+
+/**
+ * fmtStorageBytes renders a storage figure in Czech, up to GB (v9, §V9-7).
+ *
+ * Distinct from fmtBytes above, deliberately. fmtBytes describes ONE FILE and
+ * stops at MB, which is right for a document row — a 2 GB upload cannot exist,
+ * the cap is 50 MB. Úložiště describes a WHOLE BUCKET, where GB is the ordinary
+ * case and rounding a gigabyte down to "1024,0 MB" reads as a bug.
+ *
+ * Czech formatting throughout: space thousands separator, decimal comma, unit
+ * after a space. ⚠ B / kB / MB / GB DO NOT INFLECT — only the counted nouns
+ * beside them do (objekt/objekty/objektů).
+ *
+ * ⚠ AN UNUSABLE INPUT RENDERS AS *nezměřeno*, NOT AS AN EMPTY STRING. A blank cell
+ * is the one state a reader mistakes for a rendering glitch, on a page that
+ * otherwise goes to lengths to make a missing figure recognisable before it is
+ * read. A NaN or a negative means the same thing a null means — we do not have
+ * this number — so it says so.
+ */
+export function fmtStorageBytes(n: number | null | undefined): string {
+  if (!isMeasuredBytes(n)) return UNMEASURED
+  if (n < 1024) return `${fmtNumber(n)} B`
+  // ⚠ ROUND FIRST, THEN PICK THE BAND. Testing the raw value and printing the
+  // rounded one disagree exactly at the boundary: 1 048 065 B is 1023.5 kB, which
+  // is < 1024 and so took the kB branch, and then printed `1 024 kB`. Same one
+  // step up — 1 023,96 MB printed `1 024,0 MB`, the reading this function's doc
+  // above says is the whole reason it stops at GB rather than MB. Rounding before
+  // the comparison means a value that rounds up to a full unit is reported in that
+  // unit.
+  const round = (v: number, decimals: number): number => {
+    const f = 10 ** decimals
+    return Math.round(v * f) / f
+  }
+  const kb = round(n / 1024, 0)
+  if (kb < 1024) return `${fmtNumber(kb)} kB`
+  const mb = round(n / 1024 ** 2, 1)
+  if (mb < 1024) return `${fmtNumber(mb)} MB`
+  return `${fmtNumber(round(n / 1024 ** 3, 1))} GB`
+}
+
+/**
+ * UNMEASURED is what a null byte figure renders as — NEVER `0 B` (v9, D193).
+ *
+ * ⚠ This is the rule the Úložiště page exists to honour. A page whose whole job
+ * is reporting byte figures must not print a zero it did not measure: `0 B` on a
+ * table reads as good news, and the truth is that nobody looked. The absence gets
+ * its own word AND its own type family (proportional italic where a mono figure
+ * would otherwise sit), so it is recognisable before it is read rather than after.
+ */
+export const UNMEASURED = 'nezměřeno'
+
+/**
+ * isMeasuredBytes reports whether a byte figure is one we actually have.
+ *
+ * ⚠ It is the SINGLE predicate behind both the text and the styling, exported so
+ * the storage page's `Bytes` cell does not re-spell it and drift: a figure that
+ * prints as *nezměřeno* must also get the *nezměřeno* type family, or the absence
+ * is legible in one of the two channels the design uses to carry it.
+ */
+export function isMeasuredBytes(n: number | null | undefined): n is number {
+  return n !== null && n !== undefined && Number.isFinite(n) && n >= 0
+}
+
+/**
+ * fmtMeasuredBytes is the one place a nullable byte figure becomes text.
+ *
+ * Returns the formatted size, or UNMEASURED. Callers style the two differently —
+ * see the `unmeasured` treatment in the storage page — which is why this returns
+ * the string rather than a node: the decision about WHICH is here, the decision
+ * about how it looks belongs to the screen.
+ */
+export function fmtMeasuredBytes(n: number | null | undefined): string {
+  return fmtStorageBytes(n)
+}

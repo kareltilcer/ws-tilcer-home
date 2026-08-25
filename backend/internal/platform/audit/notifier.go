@@ -40,6 +40,11 @@ type Entry struct {
 	Level      string
 	RequestID  string
 	Meta       map[string]any
+	// Redacted is set by Redact when this copy has had a private item's details
+	// removed (v9, D187). It is never read from the database — it describes the
+	// COPY, not the row — and it exists so a consumer can render "podrobnosti
+	// skryty" as a state rather than by string-matching the summary.
+	Redacted bool
 }
 
 // Qualified returns the module-qualified action key ("todo" + "card.move" →

@@ -1,3 +1,4 @@
+import type { Scope } from '@/api/types'
 import { useCallback, useRef, useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { ApiError } from '@/api/client'
@@ -33,13 +34,30 @@ const nextId = () => `u${++seq}`
 
 /** useUploadQueue owns the multi-file upload queue: per-file progress, the
  *  client-side size pre-check, and the tree refresh once a file lands. */
-export function useUploadQueue(opts: { folderId: string | null; onUploaded: () => void; maxUploadMB?: number }) {
+export function useUploadQueue(opts: {
+  folderId: string | null
+  onUploaded: () => void
+  maxUploadMB?: number
+  /**
+   * ⚠ v9: which ROOT the upload lands in. It rides in a ref beside folderId for
+   * the same reason folderId does — the queue outlives the render that started it,
+   * and an upload begun in Soukromé dokumenty must not land in the household tree
+   * because the user navigated away mid-transfer. There is no way back (D182).
+   */
+  scope: Scope
+}) {
   const [items, setItems] = useState<UploadItem[]>([])
   const [open, setOpen] = useState(false)
   // Kept in a ref so a queue started in one folder keeps uploading there even if the
   // user navigates away mid-upload.
   const folderRef = useRef(opts.folderId)
   folderRef.current = opts.folderId
+  // ⚠ The scope rides in a ref for the same reason the folder does, and it matters
+  // more: an upload started in Soukromé dokumenty must land there even if the user
+  // switches to the shared tree mid-transfer. Getting this wrong publishes
+  // something private to the household, and D182 provides no way back.
+  const scopeRef = useRef(opts.scope)
+  scopeRef.current = opts.scope
   const capRef = useRef(opts.maxUploadMB ?? DEFAULT_MAX_UPLOAD_MB)
   capRef.current = opts.maxUploadMB ?? DEFAULT_MAX_UPLOAD_MB
 
@@ -52,6 +70,7 @@ export function useUploadQueue(opts: { folderId: string | null; onUploaded: () =
       if (files.length === 0) return
       setOpen(true)
       const targetFolder = folderRef.current
+      const targetScope = scopeRef.current
       const maxMB = capRef.current
       for (const file of files) {
         const id = nextId()
@@ -71,7 +90,9 @@ export function useUploadQueue(opts: { folderId: string | null; onUploaded: () =
         }
         setItems((prev) => [...prev, item])
         void api
-          .uploadDocument(file, { folder_id: targetFolder }, (fraction) => patch(id, { progress: fraction }))
+          .uploadDocument(file, { folder_id: targetFolder, scope: targetScope }, (fraction) =>
+            patch(id, { progress: fraction }),
+          )
           .then((doc) => {
             patch(id, { state: 'done', progress: 1, previewPending: doc.preview_status === 'pending' })
             opts.onUploaded()

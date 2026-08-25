@@ -19,6 +19,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/scheduler"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 // Service is the admin module's business logic: the configuration surface on top
@@ -39,6 +40,11 @@ type Service struct {
 
 	defaultCoalesce time.Duration
 	listener        *listener
+
+	// storage is the v9 Úložiště + Soukromé položky service. Nil when no storage
+	// catalog was wired (a test that does not need one); the two routes then answer
+	// 500 rather than panicking inside a page render.
+	storage *StorageService
 }
 
 // Registry is the metric registry the composer and scheduler read through.
@@ -1320,4 +1326,45 @@ func sampleChanges() []audit.Change {
 	return []audit.Change{
 		{Field: "title", Old: audit.Ptr("Vynést koš"), New: audit.Ptr("Vynést koš a papír")},
 	}
+}
+
+// SetStorage wires the Úložiště service in after construction, mirroring how the
+// push recorder is attached. It is separate from Options because the storage
+// catalog is assembled from the MODULE SET, which does not exist yet when the
+// admin service is built.
+func (s *Service) SetStorage(st *StorageService) { s.storage = st }
+
+// Storage exposes the snapshot service (tests and the handler).
+func (s *Service) Storage() *StorageService { return s.storage }
+
+// RecordPrivateItemsView writes `admin.private_items.view` — THE ONLY READ IN HOME
+// THAT WRITES AN AUDIT EVENT (v9, D198).
+//
+// It is not optional and it is not decoration. Soukromé položky is the one screen
+// where another member's private item is addressable at all, and it exists because
+// "an admin may hard-delete a foreign private item" (D181) is useless if nothing
+// can name the thing to delete. A power like that should leave a trace whether or
+// not it is used, and this is that trace: the answer to "who looked".
+//
+// The filter is recorded with it, because "who looked at WHOSE items" is a
+// meaningfully different question from "who opened the screen".
+func (s *Service) RecordPrivateItemsView(ctx context.Context, f storage.ItemFilter) error {
+	meta := map[string]any{}
+	if f.OwnerUserID != "" {
+		meta["owner_user_id"] = f.OwnerUserID
+	}
+	if f.Module != "" {
+		meta["module"] = f.Module
+	}
+	if len(meta) == 0 {
+		meta = nil
+	}
+	return appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		_, err := s.sink.Record(ctx, tx, audit.Event{
+			Module: audit.ModuleAdmin, Action: "private_items.view",
+			Summary: "Správce otevřel seznam soukromých položek",
+			Meta:    meta,
+		})
+		return err
+	})
 }

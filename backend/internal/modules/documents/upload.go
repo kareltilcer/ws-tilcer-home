@@ -27,6 +27,10 @@ type UploadInput struct {
 	FolderID    *string
 	Title       string
 	Description string
+	// Scope selects the root when FolderID is nil (v9): "" or "shared" for the
+	// household tree, "private" for the uploader's own. Resolved against the
+	// session, never trusted as an owner id.
+	Scope string
 }
 
 // Upload implements FR-DOC1. The ORDER of these steps is the contract:
@@ -132,21 +136,31 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*DocumentDetail, 
 	}
 
 	// 4. Row + audit in one transaction.
+	//
+	// v9: the requested root scope is resolved BEFORE the transaction so a bad
+	// `scope` field is a 422 rather than a rolled-back write. With a folder_id the
+	// parent's scope governs anyway; this only matters at the root.
+	requested, err := ParseCreateScope(ctx, in.Scope)
+	if err != nil {
+		s.purgeObjects(ctx, []string{storageKey})
+		return nil, err
+	}
 	var out *Document
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if err := s.assertFolder(ctx, tx, in.FolderID); err != nil {
-			return err
-		}
-		sl, err := s.freeSlug(ctx, tx, in.FolderID, slug.Make(title), "", "")
+		sc, err := s.assertFolder(ctx, tx, in.FolderID, requested)
 		if err != nil {
 			return err
 		}
-		pos, err := s.store.lastDocumentPosition(ctx, tx, in.FolderID)
+		sl, err := s.freeSlug(ctx, tx, in.FolderID, sc, slug.Make(title), "", "")
+		if err != nil {
+			return err
+		}
+		pos, err := s.store.lastDocumentPosition(ctx, tx, in.FolderID, sc)
 		if err != nil {
 			return err
 		}
 		out, err = s.store.InsertDocument(ctx, tx, id, in.FolderID, title, sl,
-			strings.TrimSpace(in.Description), file, pos, actorID(ctx))
+			strings.TrimSpace(in.Description), file, pos, actorID(ctx), sc)
 		if err != nil {
 			return err
 		}
@@ -167,7 +181,7 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*DocumentDetail, 
 			changes = append(changes, audit.Change{Field: "description", New: ap(d)})
 		}
 		return s.record(ctx, tx, "document.create", "document", id,
-			fmt.Sprintf("Nahrán dokument „%s“", title), changes, nil)
+			fmt.Sprintf("Nahrán dokument „%s“", title), changes, nil, sc)
 	})
 	if err != nil {
 		// The row never landed, so the object is an orphan: delete it now rather than
@@ -180,6 +194,6 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*DocumentDetail, 
 	if s.enqueuePreview != nil && s.opts.PreviewEnabled && needsDerivedObject(contentType) {
 		s.enqueuePreview(id)
 	}
-	s.notify(ctx, "document.changed", map[string]string{"id": id})
+	s.notifyScoped(ctx, "document.changed", id, scopeOfDocument(out).Private)
 	return s.documentDetail(ctx, s.db, out)
 }

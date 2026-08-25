@@ -18,6 +18,7 @@ const getLogStats = vi.hoisted(() => vi.fn())
 vi.mock('@/api/endpoints', () => ({ listLogs, getLog, getEntityTimeline, getLogStats }))
 
 const event = (): AuditEvent => ({
+  redacted: false,
   id: 'ev1',
   ts: '2026-08-20T10:00:00Z',
   actor_user_id: 'marie',

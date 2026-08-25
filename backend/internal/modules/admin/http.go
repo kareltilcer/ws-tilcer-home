@@ -2,10 +2,13 @@ package admin
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 const (
@@ -47,6 +50,7 @@ func (h *Handler) Mount(r chi.Router) {
 		ar.Delete("/schedules/{id}", h.deleteSchedule)
 		ar.Post("/schedules/{id}/test", h.testSchedule)
 	})
+	h.mountStorage(r)
 }
 
 // ---- rules ----
@@ -267,4 +271,97 @@ func asAPIError(err error, target **httpx.APIError) bool {
 		return true
 	}
 	return false
+}
+
+// ---- Úložiště + Soukromé položky (v9) ----
+
+// mountStorage registers the two v9 admin-only storage routes.
+//
+// They live on their own /admin/storage prefix rather than under
+// /admin/notifications because they are not notifications — and because the SPA's
+// second-level tab strip ("Správa úložiště") maps onto them one-to-one.
+func (h *Handler) mountStorage(r chi.Router) {
+	r.Route("/admin/storage", func(ar chi.Router) {
+		ar.Use(httpx.RequireAdmin)
+		ar.Get("/", h.storageSnapshot)
+		ar.Get("/private-items", h.privateItems)
+	})
+}
+
+func (h *Handler) storageSnapshot(w http.ResponseWriter, r *http.Request) {
+	if h.svc.storage == nil {
+		httpx.WriteError(w, httpx.ErrInternal("the storage snapshot is not configured"))
+		return
+	}
+	snap, err := h.svc.storage.Snapshot(r.Context(), boolQueryValue(r, "refresh"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, snap)
+}
+
+// privateItems serves the purge screen's listing.
+//
+// ⚠ OPENING IT WRITES AN AUDIT EVENT — `admin.private_items.view`, the only READ in
+// Home that does (D198). It is the answer to "who looked", and it is not optional:
+// the screen exists because an admin may hard-delete something they may not read,
+// and a power like that should leave a trace whether or not it is used.
+//
+// The event is written BEFORE the listing is assembled, so a read that fails
+// half-way is still recorded — somebody opened the screen either way.
+func (h *Handler) privateItems(w http.ResponseWriter, r *http.Request) {
+	if h.svc.storage == nil {
+		httpx.WriteError(w, httpx.ErrInternal("the storage snapshot is not configured"))
+		return
+	}
+	f := storage.ItemFilter{
+		OwnerUserID: r.URL.Query().Get("owner_user_id"),
+		Module:      r.URL.Query().Get("module"),
+		Sort:        r.URL.Query().Get("sort"),
+		Limit:       limitOf(r),
+		Cursor:      r.URL.Query().Get("cursor"),
+	}
+	// ⚠ THE ALLOW-LIST COMES FROM THE CATALOG, never from a literal here. Which
+	// modules hold private items is a fact the registry already has — it is exactly
+	// the set that implements storage.PrivateInventory — and a hand-written
+	// `"notes" | "documents"` here is a fifth registration surface that fails
+	// SILENTLY: a third module could declare an inventory, be served correctly by
+	// the registry and listed correctly by the snapshot, and still 422 on this one
+	// line with nothing failing to compile (D191).
+	if modules := h.svc.storage.InventoryModules(); f.Module != "" && !slices.Contains(modules, f.Module) {
+		httpx.WriteError(w, httpx.ErrUnprocessable(
+			"module must be one of: "+strings.Join(modules, ", ")))
+		return
+	}
+	switch f.Sort {
+	case "", storage.SortRecent, storage.SortSize:
+	default:
+		httpx.WriteError(w, httpx.ErrUnprocessable("sort must be recent or size"))
+		return
+	}
+	// Size ordering is single-page by design (a keyset cursor is an id, and an id
+	// does not locate a position in a size ordering — see the registry). A cursor
+	// combined with it would otherwise be SILENTLY ignored, returning page one
+	// again as duplicates; refusing it tells the client the combination is
+	// unsupported rather than letting it accumulate the same rows twice.
+	if f.Sort == storage.SortSize && f.Cursor != "" {
+		httpx.WriteError(w, httpx.ErrUnprocessable("cursor cannot be combined with sort=size"))
+		return
+	}
+	if err := h.svc.RecordPrivateItemsView(r.Context(), f); err != nil {
+		writeErr(w, err)
+		return
+	}
+	page, err := h.svc.storage.PrivateItems(r.Context(), f)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, page)
+}
+
+func boolQueryValue(r *http.Request, name string) bool {
+	v := r.URL.Query().Get(name)
+	return v == "true" || v == "1"
 }

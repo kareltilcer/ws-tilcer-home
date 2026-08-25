@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import * as Tabs from '@radix-ui/react-tabs'
-import { ChevronDown, ChevronRight, History, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronRight, History, Lock, SlidersHorizontal } from 'lucide-react'
 import { qk } from '@/api/keys'
 import * as api from '@/api/endpoints'
 import type { LogFilters } from '@/api/endpoints'
@@ -22,6 +22,31 @@ const LEVELS = ['', 'info', 'warn', 'error']
 
 const selectCls =
   'h-10 rounded-md border border-border bg-s1 px-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-focus'
+
+/**
+ * EventSummary renders one event's summary, and a REDACTED one as a STATE rather
+ * than as text (v9, D187).
+ *
+ * ⚠ The redaction phrase arrives in `summary` like any other summary, so without
+ * this the browser shows "Soukromá poznámka — podrobnosti skryty" in exactly the
+ * type an authored summary uses and nothing distinguishes a hidden row from a dull
+ * one. That is the whole reason the backend ships the `redacted` flag — never
+ * string-match the phrase.
+ *
+ * A different register (muted italic) plus the lock, in the informational
+ * `--vis-private` family: private is not a warning, and the row is not an error.
+ * The word is already carried by the phrase itself, so the icon adds no meaning it
+ * has to carry alone.
+ */
+function EventSummary({ event, className }: { event: Pick<AuditEvent, 'summary' | 'redacted'>; className?: string }) {
+  if (!event.redacted) return <span className={className}>{event.summary}</span>
+  return (
+    <span className={cn(className, 'italic text-muted')}>
+      <Lock size={12} className="mr-1.5 inline-block align-[-1px] text-vis-private" aria-hidden />
+      {event.summary}
+    </span>
+  )
+}
 
 export function LogPage() {
   useDocumentTitle(cs.nav.log)
@@ -183,7 +208,7 @@ function LogRow({ event, onOpenTimeline }: { event: AuditEvent; onOpenTimeline: 
             <span className="text-[12px] text-subtle">{event.actor_label ?? event.actor_user_id ?? event.actor_type}</span>
             {event.change_count > 0 && <span className="text-[11px] text-subtle">· {event.change_count}×Δ</span>}
           </span>
-          <span className="mt-0.5 block text-sm text-fg">{event.summary}</span>
+          <EventSummary event={event} className="mt-0.5 block text-sm text-fg" />
         </span>
         <span className="flex-none text-[11.5px] text-subtle">{fmtDateTime(event.ts)}</span>
       </button>
@@ -200,7 +225,16 @@ function LogRow({ event, onOpenTimeline }: { event: AuditEvent; onOpenTimeline: 
             </div>
           ) : (
             <>
-              {changes.length > 0 ? (
+              {/* ⚠ A REDACTED ROW IS ITS OWN STATE, checked BEFORE the empty one
+                  (v9, D187). The server drops the diffs and zeroes change_count for
+                  a private item somebody else owns, so falling through to "Bez změn
+                  polí." asserted that the edit touched nothing — the opposite of the
+                  truth, on the one screen whose job is an honest record. */}
+              {event.redacted ? (
+                <p className="text-[13px] italic text-subtle">
+                  Změny polí jsou skryté — položka patří někomu jinému.
+                </p>
+              ) : changes.length > 0 ? (
                 <div className="space-y-1.5">
                   {changes.map((c, i) => (
                     <DiffLine key={i} change={c} />
@@ -290,7 +324,7 @@ function EntityTimeline({ type, id, open, onOpenChange }: { type: string; id: st
                 <span className="font-mono text-accent">{e.module}.{e.action}</span>
                 <span>{fmtDateTime(e.ts)}</span>
               </div>
-              <div className="text-sm text-fg">{e.summary}</div>
+              <EventSummary event={e} className="block text-sm text-fg" />
               {(e.changes?.length ?? 0) > 0 && (
                 <div className="mt-1 space-y-1">
                   {e.changes.map((c, i) => (

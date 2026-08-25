@@ -353,6 +353,36 @@ func (l *listener) send(ctx context.Context, r Rule, e audit.Entry, changes []au
 		l.svc.logger.Info("admin: trigger skipped, outside active window", "rule", r.ID, "count", count)
 		return
 	}
+	// ⚠ REDACTION HAPPENS HERE, BEFORE ANYTHING IS RENDERED (v9, D189/D207).
+	//
+	// A coalescing window builds ONE envelope per rule, not one per recipient, and
+	// this render runs once — BEFORE ResolveAudience below even knows who is
+	// getting it. So the copy that is rendered has to be safe for the widest
+	// possible audience, which means rendering from the ANONYMOUS view.
+	//
+	// The owner is not exempt, and that is the deliberate part (D189). A second,
+	// owner-only rendering would exist solely to carry the real title, and it would
+	// be one audience-resolution bug away from being delivered to the household.
+	// The owner loses a lock-screen title and gains a guarantee; the detail is one
+	// tap away in the app.
+	//
+	// ⚠ AND REDACTING THE SUMMARY IS NOT ENOUGH — this is the half a first draft
+	// missed (D207). The render context is built from the RAW entry, so:
+	//
+	//   * {{change.<field>.new}} tokens are whitelisted BY SHAPE, not by field
+	//     name, so an existing rule bodied `{{change.original_filename.new}}`
+	//     delivers a private filename to every lock screen with `summary`
+	//     spotless. You cannot fix that by enumerating fields. Hence: EMPTY
+	//     Changes.
+	//   * inAppURL(e) returns /d/{entity_id}, naming the private document even
+	//     when the text is clean. Redact blanks EntityID, so the URL falls back to
+	//     the module route — see the envelope below.
+	//
+	// The acceptance test asserts the RENDERED ENVELOPE, not the summary.
+	private := audit.IsPrivate(e)
+	if private {
+		e, changes = audit.RedactRendered(e, changes, "")
+	}
 	// The render context exists BEFORE the condition check so condition values
 	// seed it: a key both gated on and printed costs one read, and the text can
 	// never contradict the gate that let it through.
@@ -575,6 +605,17 @@ func withoutUser(ids []string, exclude string) []string {
 // inAppURL maps an audited entity to the SPA route a click should open. A
 // notification that lands on the right screen is the difference between useful
 // and annoying; anything unmapped falls back to the dashboard.
+//
+// ⚠ v9 changes this in the OPPOSITE direction from every previous version: not a
+// new case, but a fallback (D207). For a private event the caller passes an entry
+// whose EntityID audit.Redact has already blanked, so the documents branch below
+// cannot build /d/{id} and falls through to /dokumenty. That matters because the
+// URL is the one part of a push that survives even a perfectly clean body — a
+// lock-screen notification naming a private document's id, tapped by another
+// member, is a 404 that has already said too much.
+//
+// Nothing here inspects visibility, deliberately: the blanking happens once, in
+// Redact, and this function stays a pure mapping.
 func inAppURL(e audit.Entry) string {
 	switch e.Module {
 	case audit.ModuleTodo:

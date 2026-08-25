@@ -1,3 +1,5 @@
+import type { Scope } from './types'
+
 // TanStack Query key factory (PRD §7). Centralized so invalidation is consistent.
 
 export const qk = {
@@ -11,18 +13,37 @@ export const qk = {
   logs: (filters?: unknown) => ['logs', filters ?? {}] as const,
   logsEntity: (type: string, id: string) => ['logs', 'entity', type, id] as const,
   logsStats: (params?: unknown) => ['logs', 'stats', params ?? {}] as const,
-  notesTree: ['notes', 'tree'] as const,
+  // ⚠ v9: THE SCOPE IS PART OF THE KEY, on every notes/documents read.
+  //
+  // This is the single most likely bug in the whole version, and the reason is
+  // that the wrong version still works: two scopes sharing one cache key look
+  // fine until the moment somebody switches roots and TanStack serves the other
+  // tree from cache. The persisted cache then writes it to disk, where it
+  // outlives the session — a private title cached under a key that says nothing
+  // about privacy.
+  //
+  // A scope-less key would also survive review, because nothing about it reads as
+  // wrong. Hence: no notes/documents key below takes fewer arguments than it did
+  // before v9, and the compiler enforces it.
+  notesTree: (scope: Scope) => ['notes', 'tree', scope] as const,
   noteDetail: (id: string) => ['notes', 'detail', id] as const,
-  noteSearch: (q: string) => ['notes', 'search', q] as const,
+  noteSearch: (q: string, scope: Scope) => ['notes', 'search', q, scope] as const,
+  // No `notesResolve`/`documentsResolve` key: slug-path resolution is a bare
+  // api.resolveNotePath call inside an effect, not a query, so a key for it would
+  // describe a cache that does not exist — and invite somebody to reason about
+  // invalidating one.
+  /** The prefix a notes mutation invalidates: both scopes hang off it. */
+  notesAll: ['notes'] as const,
   // Documents (v4). The content endpoints (raw/preview/thumbnail) are addressed as
   // URLs by <img>/<iframe>/anchors and deliberately not query-cached.
-  documentsTree: ['documents', 'tree'] as const,
+  documentsTree: (scope: Scope) => ['documents', 'tree', scope] as const,
   documentDetail: (id: string) => ['documents', 'detail', id] as const,
-  documentsSearch: (q: string) => ['documents', 'search', q] as const,
-  // Every search result, whatever the query — the prefix to invalidate when a change
-  // affects rows the user may be looking at through search rather than the tree.
-  documentsSearchAll: ['documents', 'search'] as const,
-  documentsResolve: (path: string) => ['documents', 'resolve', path] as const,
+  documentsSearch: (q: string, scope: Scope) => ['documents', 'search', q, scope] as const,
+  // No `documentsSearchAll`: it existed because the old `documentsTree` key was a
+  // SIBLING of the search key, so refreshing the tree left search results stale.
+  // documentsAll below is a prefix of both, so one invalidation now covers them.
+  /** The prefix a documents mutation invalidates: both scopes hang off it. */
+  documentsAll: ['documents'] as const,
   // Widget payloads arrive inside the dashboard response, so there is no per-widget
   // query to key — invalidate `dashboard` (a prefix of everything under it) instead.
 
@@ -33,6 +54,13 @@ export const qk = {
   adminSchedules: ['admin', 'schedules'] as const,
   adminCatalog: ['admin', 'catalog'] as const,
   adminDeliveries: (filters?: unknown) => ['admin', 'deliveries', filters ?? {}] as const,
+  // v9 — Administrace's two storage screens. The snapshot is a PROJECTION with a
+  // 60-second server-side cache, so the client keeps no long staleTime of its own:
+  // two caches over one number is how a page ends up disagreeing with itself.
+  adminStorage: ['admin', 'storage'] as const,
+  adminPrivateItems: (filters?: unknown) => ['admin', 'private-items', filters ?? {}] as const,
+  /** The prefix a purge invalidates: every filter combination hangs off it. */
+  adminPrivateItemsAll: ['admin', 'private-items'] as const,
 
   // v6 — finance. A few dozen rows fetched in one page, so there is no per-month
   // query: the list IS the cache, and a mutation invalidates it plus `dashboard`
