@@ -240,6 +240,17 @@ export interface AuditEvent {
   request_id: string | null
   site: string
   meta: Record<string, unknown> | null
+  /**
+   * True when this event concerns a PRIVATE note or document and the caller is
+   * not its owner (v9, D187). The row is still returned — the spine records
+   * everything — but `summary` carries the fixed phrase *"Soukromá položka —
+   * podrobnosti skryty"*, `entity_id` is dropped and `changes` comes back empty.
+   *
+   * ⚠ Render it as a STATE, not by string-matching the summary. Without it the
+   * browser shows the phrase as though somebody had written it, and there is no
+   * way to tell a redacted row from a row about something dull.
+   */
+  redacted: boolean
   change_count: number
 }
 
@@ -274,6 +285,25 @@ export interface PinState {
 
 export type PinScope = 'household' | 'personal'
 
+/**
+ * Which root an item lives in (v9, PRD D177).
+ *
+ * ⚠ REQUIRED on every item, never optional. An item whose visibility a client
+ * has to INFER is an item some client will get wrong, and the cost of getting it
+ * wrong is rendering a private title with no lock on it.
+ */
+export type Visibility = 'shared' | 'private'
+
+/**
+ * The root scope a read addresses (v9, D184). `private` always means THE
+ * CALLER'S OWN root — there is no value that names another member's, and no
+ * parameter that could express one.
+ *
+ * Defaults to `shared` everywhere, which is why nothing that predates v9 had to
+ * change to keep working.
+ */
+export type Scope = 'shared' | 'private'
+
 export interface Folder {
   id: string
   parent_id: string | null
@@ -283,6 +313,9 @@ export interface Folder {
   icon: string
   position: string
   archived: boolean
+  visibility: Visibility
+  /** The owning member when private; null when shared. */
+  owner_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -296,6 +329,8 @@ export interface Note {
   body_md: string | null
   position: string
   archived: boolean
+  visibility: Visibility
+  owner_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -316,6 +351,9 @@ export interface NoteSummary {
   slug: string
   position: string
   archived: boolean
+  /** Drives the lock mark on tree rows, search hits and widget rows (D183). */
+  visibility: Visibility
+  owner_id: string | null
   updated_at: string
   pinned: PinState
 }
@@ -372,6 +410,12 @@ export interface PinnedNote {
   title: string
   slug_path: string
   scope: 'household' | 'personal' | 'both'
+  /**
+   * Drives the widget row's lock mark (v9, D183). Only ever `private` for the
+   * member looking at it — a private note takes personal pins only, and those are
+   * filtered to the caller.
+   */
+  visibility: Visibility
   excerpt: string | null
   updated_at: string
   position: string
@@ -399,6 +443,8 @@ export interface DocFolder {
   icon: string
   position: string
   archived: boolean
+  visibility: Visibility
+  owner_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -433,9 +479,16 @@ export interface DocumentItem {
   preview_status: PreviewStatus
   position: string
   archived: boolean
+  visibility: Visibility
+  owner_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
+  /**
+   * ⚠ UNCHANGED BY A PUBLISH (D42/D182). The R2 keys are id-based and independent
+   * of folder, slug and scope, so a document keeps the exact URL it was shared
+   * with when it moves from a private root into the household tree.
+   */
   urls: DocumentUrls
 }
 
@@ -451,6 +504,8 @@ export interface DocumentSummary {
   preview_status: PreviewStatus
   position: string
   archived: boolean
+  visibility: Visibility
+  owner_id: string | null
   updated_at: string
   thumbnail_url: string | null
   pinned: PinState
@@ -500,6 +555,12 @@ export interface PinnedDocument {
   title: string
   slug_path: string
   scope: 'household' | 'personal' | 'both'
+  /**
+   * Drives the widget row's lock mark (v9, D183). Only ever `private` for the
+   * member looking at it — a private document takes personal pins only, and those
+   * are filtered to the caller.
+   */
+  visibility: Visibility
   content_type: string
   byte_size: number
   preview_kind: PreviewKind
@@ -776,4 +837,192 @@ export interface RozpocetWidget {
   personal_andy?: number
   needs?: number
   savings?: number
+}
+
+// ---- v9: publishing, and the two Administrace storage screens ----
+
+/**
+ * Destination for `POST /api/{notes,documents}/{id}/publish` (D182).
+ *
+ * Both fields optional: an empty body publishes to the shared ROOT, which is the
+ * common case — somebody publishing a thing usually wants it visible, not filed.
+ *
+ * ⚠ There is NO unpublish request type because there is no unpublish route, and
+ * the absence is a decision rather than a gap. A document the household has
+ * relied on for months must not be able to vanish into one member's tree.
+ */
+export interface PublishRequest {
+  folder_id?: string | null
+  position?: string
+}
+
+/** The whole Úložiště payload, computed on read (D195). */
+export interface StorageSnapshot {
+  generated_at: string
+  /** True when served from the in-process cache — a stale figure must LOOK stale. */
+  cached: boolean
+  cache_seconds: number
+  database: StorageDatabase
+  blobs: StorageBlobs
+  replica: StorageReplica
+  backup: StorageBackup
+  warning: StorageWarning
+}
+
+export interface StorageDatabase {
+  /** Exact: page_count × page_size. The only figure checkable against `ls`. */
+  total_bytes: number
+  wal_bytes: number
+  free_bytes: number | null
+  /**
+   * Whether PER-TABLE bytes could be measured at all — i.e. whether the SQLite
+   * build exposes `dbstat` (D193). When false every `bytes` below is null and
+   * only `row_count` is populated. `total_bytes` stays exact either way.
+   *
+   * ⚠ Render null as *nezměřeno*, NEVER as `0 B`. A zero somebody did not measure
+   * is a lie that looks like good news.
+   */
+  bytes_available: boolean
+  modules: StorageModuleDb[]
+}
+
+export interface StorageModuleDb {
+  module: string
+  bytes: number | null
+  tables: StorageTable[]
+}
+
+export interface StorageTable {
+  name: string
+  /** Always populated — a COUNT(*) needs no dbstat. Except on a `virtual` row: see below. */
+  row_count: number
+  /**
+   * A VIRTUAL table — Home's four external-content FTS5 indexes.
+   *
+   * It owns no b-tree, so `bytes`/`index_bytes` are a measured ZERO (the four shadow
+   * tables listed beside it carry every page) and `row_count` is 0 and meaningless:
+   * counting one is a full traversal of the index for a figure the content table
+   * already states. Render it as a virtual row, not as an empty one.
+   */
+  virtual: boolean
+  bytes: number | null
+  /** Reported apart from the rows because an FTS5 index can outweigh what it indexes. */
+  index_bytes: number | null
+}
+
+export interface StorageBlobs {
+  /**
+   * False when object storage could not be reached. The endpoint still returns
+   * 200 with the database figures intact — a bucket outage must not blank the
+   * page, and losing the half that WAS measurable helps nobody.
+   */
+  available: boolean
+  error: string | null
+  bucket: string | null
+  total_bytes: number | null
+  total_objects: number | null
+  modules: StorageModuleBlobs[]
+}
+
+export interface StorageModuleBlobs {
+  module: string
+  prefix: string
+  bytes: number | null
+  objects: number | null
+  owners: StorageOwnerUsage[]
+}
+
+export interface StorageOwnerUsage {
+  /**
+   * `unattributed` (**Nezařazené**) is objects that resolve to no live row — the
+   * orphan backlog the mirror job reconciles, surfaced for the first time (D194).
+   *
+   * ⚠ It is an ordinary row, NOT an error: not red, not a warning. It needs one
+   * line of copy explaining what it is, because the number is meaningless and
+   * mildly alarming without one.
+   */
+  kind: 'shared' | 'private' | 'unattributed'
+  owner_user_id: string | null
+  owner_label: string | null
+  bytes: number
+  objects: number
+  /**
+   * Present only on `warning.largest_contributors` rows, where every module's
+   * usage is flattened into one list and two same-kind rows are otherwise
+   * indistinguishable. Inside a module's `owners` block the parent names it.
+   */
+  module?: string
+}
+
+/**
+ * The Litestream replica line.
+ *
+ * ⚠ AS BUILT `configured` IS ALWAYS FALSE, and that is a DECISION, not an
+ * unfinished feature (PRD §V9-12). Reading the replica would require the backend
+ * to hold the credentials for the household's entire database backup; Karel
+ * declined that. The type stays so the shape is stable and so this screen has a
+ * state to render — the design covers it ("no backup bucket and no replica
+ * configured").
+ */
+export interface StorageReplica {
+  configured: boolean
+  prefix: string | null
+  bytes: number | null
+  objects: number | null
+  generations: number | null
+  newest_at: string | null
+}
+
+/** The mirror bucket as one line (D205) — half the R2 bill, never shown before. */
+export interface StorageBackup {
+  configured: boolean
+  bucket: string | null
+  bytes: number | null
+  objects: number | null
+}
+
+/**
+ * One threshold on the MODULES' R2 total (D196).
+ *
+ * ⚠ NOTHING IS EVER BLOCKED BY IT: no upload fails, there is no quota, there is no
+ * new 413. The register is informational — `--attention`, never the destructive
+ * red — and the copy says so outright. Nobody has done anything wrong; the bucket
+ * is simply larger than a number somebody chose.
+ */
+export interface StorageWarning {
+  threshold_mb: number
+  measured_bytes: number | null
+  exceeded: boolean
+  largest_contributors: StorageOwnerUsage[]
+}
+
+/**
+ * One row of Soukromé položky (D198).
+ *
+ * ⚠ THE FIELDS THAT ARE ABSENT ARE THE SPECIFICATION. No title, no filename, no
+ * description, no content type, no preview, no download. An admin can name the
+ * thing well enough to delete it and not well enough to know what it is — and if
+ * browsing this screen ever starts to feel pleasant, something has gone wrong.
+ */
+export interface PrivateItem {
+  id: string
+  module: 'notes' | 'documents'
+  /**
+   * `note_image` rows are INFORMATIONAL and not deletable: an image belongs to
+   * its note and goes when the note does (D204/D212). The screen says so rather
+   * than offering a control that 405s.
+   */
+  kind: 'note' | 'document' | 'note_folder' | 'document_folder' | 'note_image'
+  owner_user_id: string
+  owner_label: string | null
+  byte_size: number
+  created_at: string
+  updated_at: string | null
+}
+
+export interface PrivateItemPage {
+  items: PrivateItem[]
+  next_cursor: string | null
+  /** Covers ALL matching items, not just this page — the figure the screen acts on. */
+  total_bytes: number | null
 }

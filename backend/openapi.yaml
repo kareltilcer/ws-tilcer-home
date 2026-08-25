@@ -1,9 +1,49 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.10.1
+  version: 0.11.0
   description: >-
-    API for the `home` household-management service. **0.10.1 = v8 AS BUILT, and is what is
+    API for the `home` household-management service. **0.11.0 IS THE SERVED CONTRACT: v9 as
+    built.**
+
+    ⚠ Two places where this document differs from the v9 SPEC copy in
+    `handoff/v9/openapi.yaml`, both recorded in `PRD.md` §V9-12:
+
+    1. `POST /api/{notes,documents}/{id}/publish` — the spec's prose said "an admin gets a
+    403" while its own response block, D206 and the PRD all said 404. **404 governs**, and
+    the prose here has been corrected. A 403-for-private / 404-for-unknown pair on a route
+    open to every `editor` answers *"does this id exist, and is it private?"* for any id.
+
+    2. `StorageReplica.configured` is **always false**. D214 specified a Litestream replica
+    line; reading it requires handing the application process the credentials for the
+    household's entire database backup, and that was **declined** (settled 2026-08-24). The
+    field remains in the payload so the shape is stable and the SPA has a designed state to
+    render. Anyone who populates it has reversed a decision, not fixed an oversight.
+
+    v9 is the first version of Home that adds NO MODULE. It changes three that exist —
+    `notes`, `documents`, `admin` — and adds one platform strand, `platform/storage`.
+    Poznámky and Dokumenty each gain a SECOND ROOT: a per-member private tree
+    (`visibility` + `owner_id`) that nobody else can read, ADMINS INCLUDED. The refusal is
+    ALWAYS 404, never 403 — a 403 confirms an id exists and turns /d/{id} into an existence
+    oracle over the private tree (PRD D180). One asymmetry exists and only one: an admin may
+    HARD-DELETE a foreign private item and may never read one (D181). Publishing is one-way
+    and owner-only (D182); there is deliberately no unpublish route. Every tree, list, search
+    and resolve endpoint takes the shared `Scope` parameter, default `shared` (D184).
+    Publishing refuses a non-owner with 404 — never 403 — byte-identically to an unknown id
+    (D206), because the route is open to every `editor` and a 403 would answer "does this id
+    exist, and is it private?".
+    Audit events for private items are written IN FULL and redacted at READ time (D187):
+    non-owners see a fixed phrase, `redacted: true`, no `entity_id` and an empty `changes`,
+    and private events are excluded from the log's `?q=` FTS matching entirely, because a
+    redacted hit still reveals that the term occurs in a private title (D188). Administrace
+    gains `GET /api/admin/storage` (a computed-on-read snapshot: database per module per
+    table, R2 per module split shared/per-member, unattributed objects, the mirror bucket,
+    one warning threshold — no history, no job, no quota) and
+    `GET /api/admin/storage/private-items` (the purge screen's listing: id, module, kind,
+    owner, size, dates — NEVER a title, filename or content type; deletion goes through the
+    owning module's existing hard-delete route, D198).
+
+    **0.10.1 = v8 AS BUILT, and is what is
     deployed** — 0.10.0 was the v8 spec, and this is its reconciliation against the shipped code
     (2026-08-21): the `electricity` and `garden` sections now describe the server rather than the
     intention, and `AuditEventDetail.changes` is required because empty collections serialise as
@@ -89,6 +129,8 @@ tags:
     description: Zahrada — crop knowledge base (druh → odrůda), beds, season plan with on-read compatibility/rotation checks, a work calendar, harvest and storage (new in v7)
   - name: electricity
     description: "Elektřina — VT/NT meter readings, a ceník versioned by effective date, zálohy, user-set settlement periods and an on-read nedoplatek/přeplatek prediction (new in v8). Publishes no widget, metric, list or push."
+  - name: admin-storage
+    description: "Admin-only storage statistics and the private-items purge listing (new in v9). Owns no state: the snapshot is computed on read behind a short cache, and deletion happens through the owning module's hard-delete route."
 paths:
   # ---------------- Auth (Mode B, home-hosted) ----------------
   /api/auth/login:
@@ -895,9 +937,14 @@ paths:
           in: query
           description: Free-text search over title + body_md (FTS5).
           schema: { type: string }
+        - $ref: "#/components/parameters/Scope"
         - name: folder_id
           in: query
-          description: Restrict to a folder (omit for all; use `root` for unfiled).
+          description: >-
+            Restrict to a folder (omit for all; use `root` for unfiled). ⚠ v9: the `root`
+            sentinel is SCOPE-RELATIVE (PRD D203) — it selects the root of the requested
+            `scope`, so the same value names two different folders depending on one other
+            parameter. Documented, not inferred.
           schema: { type: string }
         - name: include_archived
           in: query
@@ -940,6 +987,7 @@ paths:
         The whole folder tree with each folder's child folders and notes as
         lightweight nodes for the sidebar/browser. One bounded query set (no N+1).
       parameters:
+        - $ref: "#/components/parameters/Scope"
         - name: include_archived
           in: query
           schema: { type: boolean, default: false }
@@ -959,10 +1007,14 @@ paths:
         addresses. Renamed/moved items are NOT redirected — a stale path returns 404
         (PRD D32). Session-required like every route (sharing is household-only, D33).
       parameters:
+        - $ref: "#/components/parameters/Scope"
         - name: path
           in: query
           required: true
-          description: Slug path without the `/poznamky/` prefix, e.g. `recepty/gulas`.
+          description: >-
+            Slug path without the `/poznamky/` prefix, e.g. `recepty/gulas`. ⚠ v9: a path is
+            meaningless without a scope — the same slug path can address a note in the shared
+            tree and a different note in the caller's private tree.
           schema: { type: string }
       responses:
         "200":
@@ -1204,9 +1256,14 @@ paths:
           in: query
           description: Free-text search over title + original_filename + description (FTS5).
           schema: { type: string }
+        - $ref: "#/components/parameters/Scope"
         - name: folder_id
           in: query
-          description: Restrict to a folder (omit for all; use `root` for unfiled).
+          description: >-
+            Restrict to a folder (omit for all; use `root` for unfiled). ⚠ v9: the `root`
+            sentinel is SCOPE-RELATIVE (PRD D203) — it selects the root of the requested
+            `scope`, so the same value names two different folders depending on one other
+            parameter. Documented, not inferred.
           schema: { type: string }
         - name: include_archived
           in: query
@@ -1273,6 +1330,7 @@ paths:
         lightweight nodes for the sidebar/grid. One bounded query set (no N+1).
         Its own tree, isolated from Poznámky (PRD D40).
       parameters:
+        - $ref: "#/components/parameters/Scope"
         - name: include_archived
           in: query
           schema: { type: boolean, default: false }
@@ -1293,10 +1351,14 @@ paths:
         (PRD D32). The slug path is NOT the permanent URL; the permanent content URL is
         id-based (/api/documents/{id}/raw, PRD D42). Session-required (household-only, D33).
       parameters:
+        - $ref: "#/components/parameters/Scope"
         - name: path
           in: query
           required: true
-          description: Slug path without the `/dokumenty/` prefix, e.g. `smlouvy/najem-2026`.
+          description: >-
+            Slug path without the `/dokumenty/` prefix, e.g. `smlouvy/najem-2026`. ⚠ v9: a
+            path is meaningless without a scope — the same slug path can address a document in
+            the shared tree and a different document in the caller's private tree.
           schema: { type: string }
       responses:
         "200":
@@ -1433,10 +1495,20 @@ paths:
       summary: Stream the original bytes (the permanent, household-only content URL)
       description: >-
         Streams the original from R2 through the backend (R2 stays private). Inline
-        Content-Disposition for safe types, else attachment. Sets ETag=checksum and
-        `Cache-Control: private, immutable, max-age=31536000` (bytes never change, D41),
+        Content-Disposition for safe types, else attachment. Sets ETag=checksum,
         `X-Content-Type-Options: nosniff`, and a sandboxed CSP (D48). Supports HTTP Range.
         Stable for the document's life (PRD D42). Session-required.
+
+        ⚠ CACHE-CONTROL DEPENDS ON VISIBILITY (v9, PRD D208). A SHARED document keeps
+        `private, immutable, max-age=31536000` — the bytes never change (D41), so the
+        caching is free and worth having. A PRIVATE document is served
+        `private, no-cache, must-revalidate`: the browser may keep the bytes, but it MUST
+        revalidate before reusing them, so the ownership check — and therefore the 404 —
+        runs on every view, while a repeat view of a 30 MB PDF stays a fast 304 rather
+        than a full re-download. `immutable` on a private document would suppress
+        revalidation for a year, and `private` excludes shared PROXIES, not the second
+        person using the same laptop; the 404 would simply never execute. The same split
+        applies to /download, /preview, /thumbnail and /api/notes/images/{id}.
       parameters:
         - name: Range
           in: header
@@ -4117,6 +4189,274 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  # ---------------- Publish: private → shared (v9, PRD D182) ----------------
+  # One-way and owner-only. There is deliberately NO unpublish route: a document the
+  # household has relied on for months must not be able to vanish into one member's
+  # private tree. A member who wants it back re-uploads it privately and deletes the
+  # shared copy, which leaves both facts in the audit log.
+  /api/notes/{id}/publish:
+    post:
+      tags: [notes]
+      summary: Publish a private note into the shared tree (v9)
+      description: >-
+        Moves a PRIVATE note into the household tree in one transaction: sets
+        `visibility` to `shared`, clears `owner_id`, reparents to `folder_id` (null = the
+        shared root), and RE-DERIVES the slug if it now collides in its new scope. A
+        personal pin SURVIVES the publish (PRD D183).
+
+        Owner-only — and a non-owner gets **404, NOT 403**, an admin included (D206). It is
+        true that publishing what you cannot read is not a power that should exist (D182);
+        it simply must not be OBSERVABLE that way, or the refusal becomes an existence
+        oracle. See the 404 response below.
+
+        Audited as `notes.note.publish` with the `visibility` field diff: "this became
+        visible to the household" is the most consequential thing that can happen to a
+        private item.
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublishRequest" }
+      responses:
+        "200":
+          description: Published; the note now lives in the shared tree.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NoteDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Unknown id — OR the caller is not the owner, which is BYTE-IDENTICAL on purpose
+            (PRD D206). An `admin` lands here too: this is the one place in v9 where an
+            admin has LESS power than the role usually implies (D182).
+
+            ⚠ NOT 403. This route is open to every `editor`, so a 403-for-private /
+            404-for-unknown pair would answer "does this id exist, and is it private?" for
+            any id a caller cares to try — the /d/{id} existence oracle D180 closes,
+            reopened with a different verb. Anything that "improves" this to a 403 has
+            reintroduced the hole.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: >-
+            The note is already shared, or `folder_id` names a folder outside the shared
+            tree.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/notes/folders/{id}/publish:
+    post:
+      tags: [notes]
+      summary: Publish a private folder and EVERY descendant into the shared tree (v9)
+      description: >-
+        As `/api/notes/{id}/publish`, applied to a folder and its whole subtree in ONE
+        transaction — a partial publish is the one outcome this endpoint must never
+        produce, because half a published folder is a folder whose contents nobody can
+        explain. Audited as `notes.folder.publish`, and every descendant is audited
+        separately (`notes.note.publish` / `notes.folder.publish` with `meta.via:
+        cascade`), so a rule subscribed to the action fires for each row that became
+        household-visible.
+
+        ⚠ ONLY THE SUBTREE'S ROOT GETS A NEW SLUG, and only if its own re-derived one
+        collides among its new siblings. DESCENDANTS KEEP THEIRS: their parent has not
+        changed, so their siblings have not changed either, and nothing they could
+        collide with has moved. A client must therefore expect exactly one segment of a
+        descendant's slug path to change across a publish — the root's — rather than
+        re-resolving every level.
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublishRequest" }
+      responses:
+        "200":
+          description: Published, with every descendant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FolderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Unknown id, or not the caller's — identical responses on purpose, an `admin`
+            included (PRD D206). NOT 403; see /api/notes/{id}/publish for why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/documents/{id}/publish:
+    post:
+      tags: [documents]
+      summary: Publish a private document into the shared tree (v9)
+      description: >-
+        As the notes equivalent. ⚠ The PERMANENT content URL is UNCHANGED by a publish —
+        `/api/documents/{id}/raw` and the SPA's `/d/{id}` are id-based and independent of
+        folder, slug and scope (PRD D42), so a document keeps the URL it was shared with.
+        Only the slug path moves. Audited as `documents.document.publish`.
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublishRequest" }
+      responses:
+        "200":
+          description: Published; the document now lives in the shared tree.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Unknown id, or not the caller's — identical responses on purpose, an `admin`
+            included (PRD D206). NOT 403; see /api/notes/{id}/publish for why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/documents/folders/{id}/publish:
+    post:
+      tags: [documents]
+      summary: Publish a private document folder and EVERY descendant into the shared tree (v9)
+      description: >-
+        One transaction for the whole subtree, as with notes folders. No R2 object is
+        touched: keys are id-based and independent of folder, slug and scope.
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublishRequest" }
+      responses:
+        "200":
+          description: Published, with every descendant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFolderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Unknown id, or not the caller's — identical responses on purpose, an `admin`
+            included (PRD D206). NOT 403; see /api/notes/{id}/publish for why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  # ---------------- Úložiště — storage statistics (v9, admin only) ----------------
+  /api/admin/storage:
+    get:
+      tags: [admin-storage]
+      summary: Storage snapshot — database per module, object storage per module and member
+      description: >-
+        A PROJECTION, not a resource: it owns no state, is never written, and is
+        recomputed on read behind a short in-process cache (PRD D195). No sample table, no
+        scheduler job, no history — `?refresh=true` bypasses the cache.
+
+        The database total is EXACT (`page_count × page_size` plus the WAL file on disk) —
+        the only figure on this page checkable against `ls`. Per-table bytes come from
+        `dbstat`; whether the driver exposes it is PROBED ON FIRST USE — a positive answer
+        is cached for the process lifetime, a negative one is re-probed on the next
+        uncached snapshot, so `bytes_available: false` can recover without a restart —
+        and where it is absent
+        the tables carry row counts with `bytes: null` and `bytes_available: false`. It
+        NEVER estimates: a guessed byte figure on a page whose whole job is reporting byte
+        figures is worse than an honest gap (D193).
+
+        Object-storage figures come from listing the bucket and joining back to SQLite for
+        attribution, NOT from summing `documents.byte_size` — listing counts the DERIVED
+        objects (`preview.pdf`, `thumb.webp`) whose sizes are in no table, and it makes
+        objects that resolve to no live row visible as `unattributed` instead of silently
+        missing. That number is the orphan backlog the mirror job already reconciles,
+        surfaced for the first time (D194).
+
+        Per-member usage is bytes and object counts ONLY — never a title, a filename or a
+        content type. An admin may see that space is used and by whom, never what it is
+        (D197).
+      parameters:
+        - name: refresh
+          in: query
+          description: Bypass the in-process cache and recompute now.
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: >-
+            The snapshot. ⚠ A 200 does NOT mean everything was measurable: check
+            `database.bytes_available` and `blobs.available` before rendering a figure, and
+            render `null` as "nezměřeno", never as 0.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageSnapshot" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/admin/storage/private-items:
+    get:
+      tags: [admin-storage]
+      summary: Private items across all members — id, owner, kind, size (v9)
+      description: >-
+        The purge screen's listing, and the ONLY place in the app where another member's
+        private item is addressable at all. It carries `id`, `module`, `kind`,
+        `owner_user_id`, `owner_label`, `byte_size` and the two timestamps — and NOTHING
+        else. No title, no filename, no description, no content type, no preview, no
+        download, no free-text search (PRD D198).
+
+        It exists because "an admin may hard-delete a foreign private item" (D181) is
+        useless if nothing in the app can name the thing to delete. It is deliberately
+        uncomfortable to look at, and that discomfort is the design constraint rather than
+        an objection to it.
+
+        DELETION IS NOT HERE. The screen calls the owning module's existing hard-delete
+        route — `DELETE /api/documents/{id}?hard=true`, `DELETE /api/notes/{id}?hard=true`
+        — so the audit action stays the module's and `admin` gains no delete path of its
+        own. The listing is assembled through the storage catalog, so `admin` still imports
+        no module (D191).
+
+        ⚠ OPENING THIS LISTING IS AUDITED — `admin.private_items.view`, the only READ in
+        Home that writes an audit event. It is the answer to "who looked".
+      parameters:
+        - name: owner_user_id
+          in: query
+          description: Restrict to one member.
+          schema: { type: string }
+        - name: module
+          in: query
+          schema: { type: string, enum: [notes, documents] }
+        - name: sort
+          in: query
+          description: >-
+            `recent` is newest-first by id and is the only ordering the UUIDv7 `cursor`
+            below can resume — a keyset cursor is an id, and an id does not locate a
+            position in a size ordering.
+
+            ⚠ `size` (largest-first, which is how a space problem is actually read) is
+            therefore SINGLE-PAGE: it honours `limit`, ignores `cursor`, and returns
+            `next_cursor: null` even when more rows match. `total_bytes` still covers ALL
+            matching items, so the figure the screen acts on is complete even when the list
+            is truncated. Paging a size ordering would need a composite cursor
+            (`bytes|id`); this collection is not big enough to earn one.
+          schema: { type: string, enum: [recent, size], default: recent }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: OK — always an array, never null, even when nothing is private (D174).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivateItemPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -4153,6 +4493,23 @@ components:
       in: query
       description: UUIDv7 keyset cursor from the previous page.
       schema: { type: string }
+    Scope:
+      name: scope
+      in: query
+      description: >-
+        Which ROOT SCOPE to read (PRD D184, new in v9). `shared` is the household tree;
+        `private` is THE CALLER'S OWN private tree. There is no value that names another
+        member's private root, and there is no parameter that would express one — a member's
+        private tree is reachable only from their own session.
+
+        DEFAULT `shared`, on every endpoint that takes it. That default is the reason a
+        pre-v9 client keeps working unchanged: it asks for nothing and gets exactly the tree
+        it always got.
+
+        The visibility predicate is applied INSIDE the query — for `?q=` it is part of the
+        FTS join, not a filter over the result set — because a post-filter leaks through
+        result counts and paging even when it removes the rows themselves.
+      schema: { type: string, enum: [shared, private], default: shared }
     GardenYear:
       name: year
       in: path
@@ -4545,10 +4902,24 @@ components:
     # ----- Notes (Poznámky) -----
     Folder:
       type: object
-      required: [id, name, slug, position, created_at]
+      required: [id, name, slug, position, created_at, visibility]
       properties:
         id: { type: string }
-        parent_id: { type: [string, "null"], description: NULL = root. }
+        parent_id: { type: [string, "null"], description: "NULL = root — of the scope named by `visibility`/`owner_id` (v9)." }
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root scope this item lives in (v9, PRD D177). REQUIRED, not optional: an
+            item whose visibility a client has to infer is an item some client will get wrong.
+        owner_id:
+          type: [string, "null"]
+          description: >-
+            The auth user id of the owner when `visibility` is `private`; NULL when `shared`.
+            The pairing is an invariant — shared ⇒ null, private ⇒ non-null — checked in the
+            write transaction rather than by a table CHECK (PRD D179). NEVER accepted from a
+            request body: it is taken from the session at creation.
         name: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling folders+notes." }
         position: { type: string, description: Lexorank order key among siblings. }
@@ -4562,6 +4933,13 @@ components:
       properties:
         name: { type: string, minLength: 1 }
         parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
+        scope:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root to create in (v9). Honoured ONLY when `parent_id` is null; otherwise
+            the parent's scope governs and a disagreement is a 422.
     FolderUpdate:
       type: object
       properties:
@@ -4599,10 +4977,24 @@ components:
 
     Note:
       type: object
-      required: [id, title, slug, position, created_at]
+      required: [id, title, slug, position, created_at, visibility]
       properties:
         id: { type: string }
-        folder_id: { type: [string, "null"], description: NULL = root (unfiled). }
+        folder_id: { type: [string, "null"], description: "NULL = root (unfiled) — of the scope named by `visibility`/`owner_id` (v9)." }
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root scope this item lives in (v9, PRD D177). REQUIRED, not optional: an
+            item whose visibility a client has to infer is an item some client will get wrong.
+        owner_id:
+          type: [string, "null"]
+          description: >-
+            The auth user id of the owner when `visibility` is `private`; NULL when `shared`.
+            The pairing is an invariant — shared ⇒ null, private ⇒ non-null — checked in the
+            write transaction rather than by a table CHECK (PRD D179). NEVER accepted from a
+            request body: it is taken from the session at creation.
         title: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling folders+notes." }
         body_md: { type: [string, "null"], description: The single canonical Markdown body (PRD D30). }
@@ -4613,11 +5005,25 @@ components:
         updated_at: { type: string, format: date-time }
     NoteSummary:
       type: object
-      required: [id, title, slug, position]
+      required: [id, title, slug, position, visibility]
       description: Lightweight note node for the tree/list (no body).
       properties:
         id: { type: string }
         folder_id: { type: [string, "null"] }
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root scope this item lives in (v9, PRD D177). REQUIRED, not optional: an
+            item whose visibility a client has to infer is an item some client will get wrong.
+        owner_id:
+          type: [string, "null"]
+          description: >-
+            The auth user id of the owner when `visibility` is `private`; NULL when `shared`.
+            The pairing is an invariant — shared ⇒ null, private ⇒ non-null — checked in the
+            write transaction rather than by a table CHECK (PRD D179). NEVER accepted from a
+            request body: it is taken from the session at creation.
         title: { type: string }
         slug: { type: string }
         position: { type: string }
@@ -4641,6 +5047,14 @@ components:
       properties:
         title: { type: string, minLength: 1 }
         folder_id: { type: [string, "null"], description: Omit/null for a root note. }
+        scope:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root to create in (v9). Honoured ONLY when `folder_id` is null; otherwise
+            the parent folder's scope governs and a disagreement is a 422. `owner_id` is
+            never accepted here — it is taken from the session.
         body_md: { type: string, description: Markdown. }
     NoteUpdate:
       type: object
@@ -4718,11 +5132,25 @@ components:
     # ----- Documents (Dokumenty) -----
     DocFolder:
       type: object
-      required: [id, name, slug, position, created_at]
+      required: [id, name, slug, position, created_at, visibility]
       description: A folder in the documents tree (own tree, isolated from Poznámky — PRD D40).
       properties:
         id: { type: string }
-        parent_id: { type: [string, "null"], description: NULL = root. }
+        parent_id: { type: [string, "null"], description: "NULL = root — of the scope named by `visibility`/`owner_id` (v9)." }
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root scope this item lives in (v9, PRD D177). REQUIRED, not optional: an
+            item whose visibility a client has to infer is an item some client will get wrong.
+        owner_id:
+          type: [string, "null"]
+          description: >-
+            The auth user id of the owner when `visibility` is `private`; NULL when `shared`.
+            The pairing is an invariant — shared ⇒ null, private ⇒ non-null — checked in the
+            write transaction rather than by a table CHECK (PRD D179). NEVER accepted from a
+            request body: it is taken from the session at creation.
         name: { type: string }
         slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
         position: { type: string, description: Lexorank order key among siblings. }
@@ -4735,6 +5163,15 @@ components:
       required: [name]
       properties:
         name: { type: string, minLength: 1 }
+        scope:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root to create in (v9). Honoured ONLY when `parent_id` is null; otherwise
+            the parent's scope governs and a disagreement is a 422. Without this field the
+            private DOCUMENTS root could hold no folder at all, which is why it is here and
+            not left to `FolderCreate`'s twin (PRD §V9-6).
         parent_id: { type: [string, "null"], description: Omit/null for a root folder. }
     DocFolderUpdate:
       type: object
@@ -4778,10 +5215,24 @@ components:
         thumbnail: { type: string, description: "/api/documents/{id}/thumbnail" }
     Document:
       type: object
-      required: [id, title, slug, original_filename, content_type, byte_size, checksum, preview_kind, preview_status, position, created_at, urls]
+      required: [id, title, slug, original_filename, content_type, byte_size, checksum, preview_kind, preview_status, position, created_at, urls, visibility]
       properties:
         id: { type: string }
-        folder_id: { type: [string, "null"], description: NULL = root (unfiled). }
+        folder_id: { type: [string, "null"], description: "NULL = root (unfiled) — of the scope named by `visibility`/`owner_id` (v9)." }
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root scope this item lives in (v9, PRD D177). REQUIRED, not optional: an
+            item whose visibility a client has to infer is an item some client will get wrong.
+        owner_id:
+          type: [string, "null"]
+          description: >-
+            The auth user id of the owner when `visibility` is `private`; NULL when `shared`.
+            The pairing is an invariant — shared ⇒ null, private ⇒ non-null — checked in the
+            write transaction rather than by a table CHECK (PRD D179). NEVER accepted from a
+            request body: it is taken from the session at creation.
         title: { type: string, description: Display title (editable); defaults to the filename sans extension. }
         slug: { type: string, description: "URL segment; unique among sibling document-folders+documents." }
         description: { type: [string, "null"], description: "Optional free text, indexed for search." }
@@ -4807,11 +5258,25 @@ components:
         urls: { $ref: "#/components/schemas/DocumentUrls" }
     DocumentSummary:
       type: object
-      required: [id, title, slug, content_type, byte_size, preview_kind, preview_status, position]
+      required: [id, title, slug, content_type, byte_size, preview_kind, preview_status, position, visibility]
       description: Lightweight document node for the tree/list/grid (no description).
       properties:
         id: { type: string }
         folder_id: { type: [string, "null"] }
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root scope this item lives in (v9, PRD D177). REQUIRED, not optional: an
+            item whose visibility a client has to infer is an item some client will get wrong.
+        owner_id:
+          type: [string, "null"]
+          description: >-
+            The auth user id of the owner when `visibility` is `private`; NULL when `shared`.
+            The pairing is an invariant — shared ⇒ null, private ⇒ non-null — checked in the
+            write transaction rather than by a table CHECK (PRD D179). NEVER accepted from a
+            request body: it is taken from the session at creation.
         title: { type: string }
         slug: { type: string }
         content_type: { type: string }
@@ -4841,6 +5306,13 @@ components:
       properties:
         file: { type: string, format: binary }
         folder_id: { type: string, description: Target folder; omit for a root document. }
+        scope:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Which root to upload into (v9). Honoured ONLY when `folder_id` is omitted;
+            otherwise the folder's scope governs and a disagreement is a 422.
         title: { type: string, description: Defaults to the filename sans extension. }
         description: { type: string }
     DocumentUpdate:
@@ -5019,7 +5491,7 @@ components:
           items: { $ref: "#/components/schemas/PinnedNote" }
     PinnedNote:
       type: object
-      required: [note_id, title, slug_path, scope]
+      required: [note_id, title, slug_path, scope, visibility]
       properties:
         note_id: { type: string }
         title: { type: string }
@@ -5028,6 +5500,14 @@ components:
           type: string
           enum: [household, personal, both]
           description: How this note is pinned for the caller.
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Drives the widget row's lock mark (v9, D183). Only ever `private` for the
+            member looking at it: a private note takes personal pins only, and those are
+            filtered to the caller.
         excerpt: { type: [string, "null"], description: Short plain-text preview of the body. }
         updated_at: { type: string, format: date-time }
         position: { type: string, description: Pin order key within its block. }
@@ -5043,7 +5523,7 @@ components:
           items: { $ref: "#/components/schemas/PinnedDocument" }
     PinnedDocument:
       type: object
-      required: [document_id, title, slug_path, scope, content_type, preview_kind, preview_status]
+      required: [document_id, title, slug_path, scope, visibility, content_type, preview_kind, preview_status]
       properties:
         document_id: { type: string }
         title: { type: string }
@@ -5052,6 +5532,14 @@ components:
           type: string
           enum: [household, personal, both]
           description: How this document is pinned for the caller.
+        visibility:
+          type: string
+          enum: [shared, private]
+          default: shared
+          description: >-
+            Drives the widget row's lock mark (v9, D183). Only ever `private` for the
+            member looking at it: a private document takes personal pins only, and those
+            are filtered to the caller.
         content_type: { type: string }
         byte_size: { type: integer }
         preview_kind: { type: string, enum: [native, pdf, none] }
@@ -5096,7 +5584,7 @@ components:
     # ----- Logs -----
     AuditEvent:
       type: object
-      required: [id, ts, actor_type, module, action, summary, level, site]
+      required: [id, ts, actor_type, module, action, summary, level, site, redacted]
       properties:
         id: { type: string }
         ts: { type: string, format: date-time }
@@ -5114,6 +5602,33 @@ components:
         user_agent: { type: [string, "null"] }
         site: { type: string }
         meta: { type: [object, "null"], additionalProperties: true }
+        redacted:
+          type: boolean
+          default: false
+          description: >-
+            True when this event concerns a PRIVATE note or document and the CALLER IS NOT
+            ITS OWNER (v9, PRD D187). The row is still returned — the spine records
+            everything — but `summary` carries the fixed phrase "Soukromá položka —
+            podrobnosti skryty", `entity_id` is dropped, and `changes` comes back empty.
+            REQUIRED so a client can tell a redacted row from a row about something dull;
+            without it the log browser renders the phrase as if it were a summary somebody
+            wrote.
+
+            Redaction is applied at READ time by one function, `audit.Redact` — never at
+            write time, which would redact the record for the person it belongs to,
+            permanently. The log's `?q=` obeys a SECOND rule (D188): for a non-owner, private
+            events are excluded from FTS matching altogether, because a redacted hit still
+            reveals that the search term occurs in a private title.
+
+            ⚠ THE QUERY LAYER HAS MORE THAN TWO DOORS (D209). The same rules bind
+            GET /api/logs/entity/{type}/{id} — which returns full `changes` for any id, and
+            the purge screen hands admins ids by design — the `?entity_id=` filter, whose
+            exact match confirms an id exists even when every row comes back redacted, and
+            /api/logs/stats, whose dimension and bucket totals otherwise count private
+            events. And redaction does not stop at this schema: the trigger template's
+            `change.<field>` tokens and the push URL are redacted too (D207), or a rule
+            whose body is `{{change.original_filename.new}}` delivers a private filename to
+            every lock screen with `summary` untouched.
         change_count: { type: integer, description: Number of field changes on this event. }
     AuditChange:
       type: object
@@ -7385,6 +7900,241 @@ components:
         months:
           type: array
           items: { $ref: "#/components/schemas/ElectricityHistoryMonth" }
+
+    # ---------------- v9: publish, storage, private items ----------------
+    PublishRequest:
+      type: object
+      description: >-
+        Destination for a publish (v9, PRD D182). Both fields are optional: an empty body
+        publishes to the shared ROOT, which is the common case — a member publishing
+        something usually wants it visible, not filed.
+      properties:
+        folder_id:
+          type: [string, "null"]
+          description: >-
+            Target folder in the SHARED tree; omit or null for the shared root. A folder in
+            any private tree is a 422 — publishing crosses scopes, and this parameter names
+            a destination, not a second scope.
+        position: { type: string, description: Lexorank order key among the target siblings; server-assigned when omitted. }
+
+    StorageSnapshot:
+      type: object
+      required: [generated_at, cached, database, blobs, warning]
+      description: >-
+        Everything the Úložiště page renders, computed on read (PRD D195). ⚠ EVERY byte
+        figure in this tree is NULLABLE, and null — never 0 — when it could not be
+        measured. That is the D161 principle generalised: a `0 B` table on a page whose
+        whole job is reporting bytes is a lie that looks like good news.
+      properties:
+        generated_at: { type: string, format: date-time, description: When this snapshot was computed — NOT when it was requested. }
+        cached: { type: boolean, description: True when served from the in-process cache rather than recomputed. A stale figure must be visibly stale. }
+        cache_seconds: { type: integer, description: "The TTL in effect (HOME_STORAGE_CACHE_SECONDS; 0 = caching disabled)." }
+        database: { $ref: "#/components/schemas/StorageDatabase" }
+        blobs: { $ref: "#/components/schemas/StorageBlobs" }
+        replica: { $ref: "#/components/schemas/StorageReplica" }
+        backup: { $ref: "#/components/schemas/StorageBackup" }
+        warning: { $ref: "#/components/schemas/StorageWarning" }
+    StorageDatabase:
+      type: object
+      required: [total_bytes, wal_bytes, bytes_available, modules]
+      properties:
+        total_bytes: { type: integer, description: "EXACT: page_count × page_size. The only figure here checkable against `ls`." }
+        wal_bytes: { type: integer, description: "The write-ahead log's size on disk, reported separately because it fluctuates and is not lost space." }
+        free_bytes: { type: [integer, "null"], description: "freelist_count × page_size — pages the file holds but is not using; what a VACUUM would reclaim." }
+        bytes_available:
+          type: boolean
+          description: >-
+            Whether PER-TABLE bytes could be measured at all — i.e. whether the SQLite build
+            exposes the `dbstat` virtual table (`SQLITE_ENABLE_DBSTAT_VTAB`). PROBED AT
+            BOOT, never assumed. When false, every table's `bytes` is null and only
+            `row_count` is populated; `total_bytes` above stays exact either way (PRD D193).
+        modules:
+          type: array
+          items: { $ref: "#/components/schemas/StorageModuleDb" }
+    StorageModuleDb:
+      type: object
+      required: [module, tables]
+      properties:
+        module: { type: string, description: "The declaring module, from the storage catalog. `platform` covers the tables no feature module owns." }
+        bytes: { type: [integer, "null"], description: Sum of this module's tables; null when dbstat is unavailable. }
+        tables:
+          type: array
+          items: { $ref: "#/components/schemas/StorageTable" }
+    StorageTable:
+      type: object
+      required: [name, row_count, virtual]
+      properties:
+        name: { type: string }
+        row_count: { type: integer, description: "Always populated — a COUNT(*) needs no dbstat — EXCEPT on a `virtual` row, where it is 0 and meaningless." }
+        virtual:
+          type: boolean
+          description: >-
+            A VIRTUAL table — Home's four external-content FTS5 indexes. It owns no b-tree,
+            so `bytes` and `index_bytes` are a MEASURED ZERO (the four shadow tables listed
+            beside it carry every page) rather than the null they would otherwise be, and
+            `row_count` is 0 and not counted: counting one is a full traversal of the index
+            for a figure the content table already states. Clients should render it as a
+            virtual row, never as an empty or an unmeasured one.
+        bytes: { type: [integer, "null"], description: Real page usage for this b-tree; null when dbstat is unavailable. NEVER an estimate. }
+        index_bytes: { type: [integer, "null"], description: "Pages used by this table's indexes, reported apart from the rows because an FTS5 index can outweigh what it indexes." }
+    StorageBlobs:
+      type: object
+      required: [available, modules]
+      description: Object storage (Cloudflare R2), from listing the bucket and joining back to SQLite for attribution (PRD D194).
+      properties:
+        available:
+          type: boolean
+          description: >-
+            False when object storage could not be reached. The endpoint still returns 200
+            with the database figures intact — a bucket outage must not blank the page
+            (PRD FR-V9-11).
+        error: { type: [string, "null"], description: "Why the bucket could not be read, when `available` is false." }
+        bucket: { type: [string, "null"] }
+        total_bytes: { type: [integer, "null"] }
+        total_objects: { type: [integer, "null"] }
+        modules:
+          type: array
+          items: { $ref: "#/components/schemas/StorageModuleBlobs"}
+    StorageModuleBlobs:
+      type: object
+      required: [module, prefix, owners]
+      properties:
+        module: { type: string, enum: [notes, documents], description: The only two modules that hold bytes. Every other module declares tables and no blobs. }
+        prefix: { type: string, description: "The bucket prefix this module owns, e.g. `documents/` or `note-images/`." }
+        bytes: { type: [integer, "null"] }
+        objects: { type: [integer, "null"] }
+        owners:
+          type: array
+          description: >-
+            One row per bucket of usage: the household's shared content, then each member's
+            private content, then whatever resolved to no live row.
+          items: { $ref: "#/components/schemas/StorageOwnerUsage" }
+    StorageOwnerUsage:
+      type: object
+      required: [kind, bytes, objects]
+      properties:
+        kind:
+          type: string
+          enum: [shared, private, unattributed]
+          description: >-
+            `shared` = the household tree · `private` = one member's own tree ·
+            `unattributed` = objects in the prefix that resolve to NO live row. The third is
+            not an error state and not padding: it is the orphan backlog the mirror job
+            reconciles, and this is the first screen in Home that has ever shown it (D194).
+        owner_user_id: { type: [string, "null"], description: Set only when `kind` is `private`. }
+        owner_label: { type: [string, "null"], description: "Display name from the member directory, for the same rows." }
+        bytes: { type: integer }
+        objects: { type: integer }
+        module:
+          type: string
+          description: >-
+            Present only on `warning.largest_contributors` rows, where every module's usage
+            is flattened into one list and two same-kind rows would otherwise be
+            indistinguishable. Inside a module's `owners` block the parent already names
+            the module, so it is omitted there.
+    StorageReplica:
+      type: object
+      required: [configured]
+      description: >-
+        ⚠ AS BUILT, `configured` IS ALWAYS FALSE AND EVERY OTHER FIELD IS NULL. D214
+        specified this line, and it was DECLINED (settled with Karel 2026-08-24, recorded in
+        `PRD.md` §V9-12): reading the replica requires the application process to hold the
+        credentials for the household's entire database backup, which introduces no new
+        secret but meaningfully widens what this binary can reach.
+
+        The cost is precise and small: the app cannot report replica size, and cannot answer
+        *"is replication actually running?"* from inside itself — that returns to being an
+        ops question (`litestream snapshots` on the droplet). Nothing else on the page is
+        affected: the database figures come from PRAGMA/dbstat, the per-module R2 figures
+        use the DOCS bucket the app already holds, the backup mirror line (D205) likewise,
+        the warning threshold measures the per-module total only, and D214 had already
+        excluded the replica from the per-module sums — so no total changes.
+
+        The schema is kept so the shape is stable and the SPA has a designed state to render
+        (`HANDOFF-design.md` §v9 lists "no backup bucket and no replica configured").
+
+        The original specification follows.
+
+        The Litestream replica of the SQLite database under the `home/` R2 prefix (v9,
+        PRD D214). ⚠ It is NOT per module and never will be — it replicates the whole
+        file — so it is a TOTAL beside the per-module breakdown, not part of it. It is
+        here because it is R2 space the household is billed for and no screen has ever
+        shown it; its size is also the honest counterweight to the database figure above,
+        which reports one generation while the replica holds many.
+      properties:
+        configured: { type: boolean, description: False when Litestream is not replicating — then nothing else here is populated. }
+        prefix: { type: [string, "null"], description: "The R2 prefix, `home/` in production." }
+        bytes: { type: [integer, "null"], description: "Total across every generation and snapshot under the prefix, which is why it can exceed the live database file several times over." }
+        objects: { type: [integer, "null"] }
+        generations: { type: [integer, "null"], description: "How many Litestream generations are present. More than one usually means a restore or a restart, not a fault." }
+        newest_at: { type: [string, "null"], format: date-time, description: "Timestamp of the newest object under the prefix — the practical answer to: is replication actually running?" }
+    StorageBackup:
+      type: object
+      required: [configured]
+      description: >-
+        The mirror bucket, as ONE line (PRD D205). It is half the R2 bill and no screen has
+        ever shown it.
+      properties:
+        configured: { type: boolean, description: False when HOME_DOCS_R2_BACKUP_BUCKET is unset — then nothing else here is populated. }
+        bucket: { type: [string, "null"] }
+        bytes: { type: [integer, "null"] }
+        objects: { type: [integer, "null"] }
+    StorageWarning:
+      type: object
+      required: [threshold_mb, measured_bytes, exceeded]
+      description: >-
+        One threshold on total PRIMARY-bucket bytes (PRD D196). ⚠ Nothing is ever blocked by
+        it: no upload fails, there is no per-user quota and no new 413. It exists so an R2
+        bill is a decision rather than a surprise.
+      properties:
+        threshold_mb: { type: integer, description: "HOME_STORAGE_WARN_TOTAL_MB. Default 1024 (1 GB) — a CHANGE detector, not a bill detector: household usage is expected to sit well under a gigabyte, so a threshold at R2's 10 GB billing cliff would stay silent for years. At 1 GB it fires when something has changed, with nine-tenths of the free allowance still in hand. 0 disables the warning. Nothing is ever blocked either way." }
+        measured_bytes: { type: [integer, "null"] }
+        exceeded: { type: boolean }
+        largest_contributors:
+          type: array
+          description: The rows to mark on screen when `exceeded` — module + owner bucket, largest first. Sizes only, as everywhere on this page.
+          items: { $ref: "#/components/schemas/StorageOwnerUsage" }
+
+    PrivateItem:
+      type: object
+      required: [id, module, kind, owner_user_id, byte_size, created_at]
+      description: >-
+        One private item as the purge screen sees it (PRD D198). ⚠ THE FIELDS THAT ARE
+        ABSENT ARE THE SPECIFICATION: no title, no filename, no description, no content
+        type, no preview, no download URL. An admin can name the thing well enough to
+        delete it and not well enough to know what it is. Anything added here has to be
+        justified against that sentence.
+      properties:
+        id: { type: string, description: "The owning module's id — what the module's hard-delete route takes, except for `note_image`, which has none." }
+        module: { type: string, enum: [notes, documents] }
+        kind:
+          type: string
+          enum: [note, document, note_folder, document_folder, note_image]
+          description: >-
+            FOLDERS ARE LISTED (PRD D212):
+            `DELETE /api/{notes,documents}/folders/{id}?hard=true&cascade=true` is what
+            actually reclaims a private subtree, and a screen that cannot name a folder
+            cannot do the job it exists for.
+
+            `note_image` rows are listed for accounting and are NOT deletable — there is no
+            delete route for an image and there should not be, since an image belongs to its
+            note and goes when the note does (D204, D212). The screen says so rather than
+            offering a control that 405s.
+        owner_user_id: { type: string }
+        owner_label: { type: [string, "null"], description: Display name from the member directory. }
+        byte_size: { type: integer, description: "For a note, the Markdown body's length; for a document or image, the object's size." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    PrivateItemPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/PrivateItem" }
+        next_cursor: { type: [string, "null"] }
+        total_bytes: { type: [integer, "null"], description: "Sum across ALL matching items, not only this page — the figure the screen exists to act on." }
 
 security:
   - sessionCookie: []

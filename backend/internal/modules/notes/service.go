@@ -86,6 +86,37 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, blob blobstore.Blo
 // Store exposes the read store (used by the widget provider).
 func (s *Service) Store() *Store { return s.store }
 
+// notifyScoped publishes a live-change signal, WITHOUT the item id when the item
+// is private (v9, D180/D187).
+//
+// ⚠ ws.Hub.Publish fans out to EVERY connected client, not to an audience — so a
+// raw id in the payload of a private mutation is a real-time existence-and-activity
+// oracle over another member's tree, handed to every browser in the household. It
+// is the same disclosure audit.Redact blanks EntityID to prevent ("an id in a log
+// row is an id that can be fed back into the entity timeline"), and the id is a
+// usable capability rather than mere metadata.
+//
+// The TYPE still goes out, because that is what the household is meant to be able
+// to learn (D187: that something private happened is not the secret) — and it is
+// all the client needs: api/ws.ts's classify() switches on the type and
+// invalidates by module prefix, never reading the payload id.
+//
+// ⚠ THE `private` MARKER IS WHAT KEEPS THE TOAST HONEST. The frame still fans out,
+// because the OWNER's other tabs and devices have to refetch — but for everybody
+// else it announces a change they will never be able to see, and api/ws.ts turned
+// that into "Poznámky byly změněny jinde" on their screen. The marker lets the
+// client invalidate silently instead: a wasted refetch is cheap, a toast about an
+// invisible change is both noise and a live activity indicator over another
+// member's tree. It names nothing — no id, no owner — so it discloses no more than
+// the missing id already does.
+func (s *Service) notifyScoped(ctx context.Context, typ, id string, private bool) {
+	if private {
+		s.notify(ctx, typ, map[string]string{"private": "1"})
+		return
+	}
+	s.notify(ctx, typ, map[string]string{"id": id})
+}
+
 func actorID(ctx context.Context) string {
 	if a, ok := reqctx.ActorFrom(ctx); ok {
 		return a.UserID
@@ -115,7 +146,25 @@ func diff(changes *[]audit.Change, field string, old, newVal *string) {
 	}
 }
 
-func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, entityID, summary string, changes []audit.Change, meta map[string]any) error {
+// record writes one audit event in the caller's transaction.
+//
+// ⚠ v9 made the Scope a REQUIRED parameter rather than something a caller can add
+// to `meta` when they remember (leak table row 11). Every notes.* event now
+// carries `meta.visibility`, and a private one also carries `meta.owner_id`; those
+// two keys are the ONLY thing that lets a read path tell a private event apart, so
+// an event written without them is an event that can never be redacted. Making it
+// a parameter means the compiler asks the question at every one of the ~20 call
+// sites instead of a reviewer having to.
+//
+// The summary and the field diffs are written IN FULL, deliberately (D187).
+// Redaction happens at READ time, in exactly one function, because a summary
+// redacted at write time is redacted forever — including for the person it belongs
+// to, whose own history it is.
+func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, entityID, summary string, changes []audit.Change, meta map[string]any, sc Scope) error {
+	owner := ""
+	if sc.Private {
+		owner = sc.OwnerID
+	}
 	_, err := s.sink.Record(ctx, tx, audit.Event{
 		Module:     audit.ModuleNotes,
 		Action:     action,
@@ -124,6 +173,10 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 		Summary:    summary,
 		Meta:       meta,
 		Changes:    changes,
+		// Typed, not hand-stamped meta keys: the sink owns the spelling of the
+		// redaction marker (audit.Event's field comment).
+		Visibility: sc.Visibility(),
+		OwnerID:    owner,
 	})
 	return err
 }
@@ -141,24 +194,60 @@ func metaVia(base map[string]any, via string) map[string]any {
 	return base
 }
 
-// freeSlug returns base, or base-2/base-3/… until free in the parent scope across
-// BOTH tables (the cross-table check + the two COALESCE indexes together are the
-// addressing invariant, D32). Runs inside the mutation's tx.
-func (s *Service) freeSlug(ctx context.Context, tx DBTX, parentScope *string, base, excludeFolderID, excludeNoteID string) (string, error) {
+// freeSlug returns base, or base-2/base-3/… until free among the siblings of one
+// parent IN ONE ROOT SCOPE, across BOTH tables (the cross-table check plus the two
+// sibling indexes together are the addressing invariant, D32).
+//
+// ⚠ This loop is why an un-scoped collision query is a SILENT leak rather than a
+// 409 (D210). It does not surface a conflict — it walks around one. So if
+// SiblingSlugTaken ever stops carrying the scope, the second member to create a
+// private note called "Recepty" is quietly handed `recepty-2`, which discloses a
+// sibling they cannot see, and nothing anywhere reports an error.
+//
+// It also enforces D185 in passing: `soukrome` is a RESERVED slug at both shared
+// roots, because the SPA routes /poznamky/soukrome/… as a literal. A shared folder
+// named "Soukromé" therefore takes `soukrome-2`.
+//
+// ⚠ The reservation marks the BARE CANDIDATE as taken; it does not rewrite `base`.
+// Rewriting base to base+"-2" up front made the loop count from an already-suffixed
+// stem, so a second "Soukromé" got `soukrome-2-2`, then `soukrome-2-3` — a ladder
+// that appears nowhere else in the module. Feeding the reservation into the same
+// taken/not-taken question the loop already asks gives the ordinary
+// `soukrome-2`/`soukrome-3` sequence with no second rule. Mirrors documents.
+func (s *Service) freeSlug(ctx context.Context, tx DBTX, parentID *string, sc Scope, base, excludeFolderID, excludeNoteID string) (string, error) {
 	if base == "" {
 		base = shortID()
 	}
+	reserved := isReservedRootSlug(base, parentID, sc)
 	candidate := base
 	for i := 2; ; i++ {
-		taken, err := s.store.SiblingSlugTaken(ctx, tx, parentScope, candidate, excludeFolderID, excludeNoteID)
-		if err != nil {
-			return "", err
+		// The reserved literal is only ever the bare base — `soukrome-2` is a fine
+		// slug, it is `soukrome` alone that the SPA route would swallow.
+		taken := reserved && candidate == base
+		if !taken {
+			var err error
+			taken, err = s.store.SiblingSlugTaken(ctx, tx, parentID, sc, candidate, excludeFolderID, excludeNoteID)
+			if err != nil {
+				return "", err
+			}
 		}
 		if !taken {
 			return candidate, nil
 		}
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
+}
+
+// reservedRootSlug is the SPA's route literal for the private tree
+// (/poznamky/soukrome/…). A shared item at the root may not take it, or the route
+// would be ambiguous between "the private tree" and "a folder called Soukromé"
+// (D185). Only at the ROOT and only in the SHARED scope: deeper paths are
+// unambiguous, and the private tree's own root is behind the literal already.
+const reservedRootSlug = "soukrome"
+
+func isReservedRootSlug(base string, parentID *string, sc Scope) bool {
+	atRoot := parentID == nil || *parentID == ""
+	return base == reservedRootSlug && atRoot && !sc.Private
 }
 
 // ---- Notes ----
@@ -171,20 +260,25 @@ func (s *Service) CreateNote(ctx context.Context, in NoteCreate) (*NoteDetail, e
 	if hasInlineImageData(in.BodyMD) {
 		return nil, errInlineImageData
 	}
+	requested, err := ParseCreateScope(ctx, in.Scope)
+	if err != nil {
+		return nil, err
+	}
 	var out *Note
-	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if err := s.assertFolder(ctx, tx, in.FolderID); err != nil {
-			return err
-		}
-		sl, err := s.freeSlug(ctx, tx, in.FolderID, slug.Make(title), "", "")
+	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		sc, err := s.assertFolder(ctx, tx, in.FolderID, requested)
 		if err != nil {
 			return err
 		}
-		pos, err := s.store.lastNotePosition(ctx, tx, in.FolderID)
+		sl, err := s.freeSlug(ctx, tx, in.FolderID, sc, slug.Make(title), "", "")
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertNote(ctx, tx, in.FolderID, title, sl, in.BodyMD, pos, actorID(ctx))
+		pos, err := s.store.lastNotePosition(ctx, tx, in.FolderID, sc)
+		if err != nil {
+			return err
+		}
+		out, err = s.store.InsertNote(ctx, tx, in.FolderID, title, sl, in.BodyMD, pos, actorID(ctx), sc)
 		if err != nil {
 			return err
 		}
@@ -193,17 +287,20 @@ func (s *Service) CreateNote(ctx context.Context, in NoteCreate) (*NoteDetail, e
 			changes = append(changes, audit.Change{Field: "body_md", New: ap(in.BodyMD)})
 		}
 		return s.record(ctx, tx, "note.create", "note", out.ID,
-			fmt.Sprintf("Vytvořena poznámka „%s“", title), changes, nil)
+			fmt.Sprintf("Vytvořena poznámka „%s“", title), changes, nil, sc)
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.notify(ctx, "note.changed", map[string]string{"id": out.ID})
+	s.notifyScoped(ctx, "note.changed", out.ID, scopeOfNote(out).Private)
 	return s.noteDetail(ctx, s.db, out)
 }
 
+// GetNoteDetail is the by-id read. Another member's private note is NOT FOUND —
+// never forbidden (D180). A 403 would confirm the id exists, which is all an
+// existence oracle over the private tree needs.
 func (s *Service) GetNoteDetail(ctx context.Context, id string) (*NoteDetail, error) {
-	n, err := s.store.GetNote(ctx, s.db, id)
+	n, err := s.store.GetNote(ctx, s.db, id, actorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -221,17 +318,20 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 		return nil, errInlineImageData
 	}
 	var out *Note
-	var changed bool
+	var changed, private bool
 	var bodyChanged bool
 	var oldBody string // captured for image GC: refs present before this edit but not after
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetNote(ctx, tx, id)
+		// Viewer-scoped: another member's private note is simply not here (D180).
+		before, err := s.store.GetNote(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
 		if before == nil {
 			return httpx.ErrNotFound("note not found")
 		}
+		sc := scopeOfNote(before)
+		private = sc.Private
 		var patch notePatch
 		unarchiving := in.Archived != nil && !*in.Archived && before.Archived
 		// A soft-deleted (archived) note is hidden from the tree and unreachable by
@@ -268,7 +368,7 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 				titleChanged = true
 				patch.Title = &title
 				// re-derive the slug from the new title, unique in the current parent
-				sl, err := s.freeSlug(ctx, tx, before.FolderID, slug.Make(title), "", before.ID)
+				sl, err := s.freeSlug(ctx, tx, before.FolderID, sc, slug.Make(title), "", before.ID)
 				if err != nil {
 					return err
 				}
@@ -279,7 +379,7 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 			// Its slug left the live sibling scope while archived and a sibling may
 			// have reused it — re-free it (keeps the current slug when still free) so
 			// re-entering the partial unique index doesn't fail (would otherwise 500).
-			sl, err := s.freeSlug(ctx, tx, before.FolderID, before.Slug, "", before.ID)
+			sl, err := s.freeSlug(ctx, tx, before.FolderID, sc, before.Slug, "", before.ID)
 			if err != nil {
 				return err
 			}
@@ -288,7 +388,7 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 		if err := s.store.UpdateNote(ctx, tx, id, patch); err != nil {
 			return err
 		}
-		out, err = s.store.GetNote(ctx, tx, id)
+		out, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -305,13 +405,13 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 		}
 		changed = true
 		return s.record(ctx, tx, "note.update", "note", id,
-			fmt.Sprintf("Upravena poznámka „%s“", out.Title), changes, metaVia(nil, via))
+			fmt.Sprintf("Upravena poznámka „%s“", out.Title), changes, metaVia(nil, via), sc)
 	})
 	if err != nil {
 		return nil, err
 	}
 	if changed {
-		s.notify(ctx, "note.changed", map[string]string{"id": id})
+		s.notifyScoped(ctx, "note.changed", id, private)
 	}
 	// GC after the commit: an edit that removed an `![](/api/notes/images/{id})`
 	// reference orphans that image. Best-effort — never blocks or fails the save.
@@ -326,9 +426,9 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		return nil, httpx.ErrUnprocessable("position is required")
 	}
 	var out *Note
-	var changed bool
+	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetNote(ctx, tx, id)
+		before, err := s.store.GetNote(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -339,11 +439,27 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		if err := assertLiveForMutation(before.Archived, "note not found"); err != nil {
 			return err
 		}
-		if err := s.assertFolder(ctx, tx, in.FolderID); err != nil {
-			return err
+		sc := scopeOfNote(before)
+		private = sc.Private
+		// nil requested: a move body carries no `scope` field, so the destination
+		// folder's own scope comes back and a cross-scope target reaches the D186
+		// refusal below — not assertFolder's create-body message about a field the
+		// request doesn't have. An empty folder_id is this item's own root.
+		dest := sc
+		if in.FolderID != nil && *in.FolderID != "" {
+			if dest, err = s.assertFolder(ctx, tx, in.FolderID, nil); err != nil {
+				return err
+			}
+		}
+		// ⚠ A move whose destination sits in the OTHER root scope is a 422, never a
+		// silent publish (D186). Publishing is the only crossing there is, it is
+		// one-way, and it is a different verb on purpose: an irreversible change of
+		// audience must not be reachable by dragging something into a folder.
+		if dest != sc {
+			return errCrossScopeMove(sc)
 		}
 		// keep the current slug if it's free in the target parent, else re-derive
-		sl, err := s.freeSlug(ctx, tx, in.FolderID, before.Slug, "", before.ID)
+		sl, err := s.freeSlug(ctx, tx, in.FolderID, sc, before.Slug, "", before.ID)
 		if err != nil {
 			return err
 		}
@@ -359,7 +475,7 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		if err := s.store.MoveNoteRow(ctx, tx, id, in.FolderID, in.Position, sl); err != nil {
 			return err
 		}
-		out, err = s.store.GetNote(ctx, tx, id)
+		out, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -369,28 +485,56 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		diff(&changes, "position", ap(before.Position), ap(out.Position))
 		changed = true
 		return s.record(ctx, tx, "note.move", "note", id,
-			fmt.Sprintf("Přesunuta poznámka „%s“", out.Title), changes, metaVia(nil, via))
+			fmt.Sprintf("Přesunuta poznámka „%s“", out.Title), changes, metaVia(nil, via), sc)
 	})
 	if err != nil {
 		return nil, err
 	}
 	if changed {
-		s.notify(ctx, "note.changed", map[string]string{"id": id})
+		s.notifyScoped(ctx, "note.changed", id, private)
 	}
 	return s.noteDetail(ctx, s.db, out)
 }
 
+// DeleteNote soft-deletes (archives) a note, or purges it with hard=true.
+//
+// ⚠ THE TWO BRANCHES BELOW DELIBERATELY LOAD THE NOTE DIFFERENTLY, and it reads
+// like a bug unless you know why (D181). This is v9's ONE asymmetry:
+//
+//	read  — requires OWNERSHIP. Every read path 404s a foreign private item.
+//	hard  — requires ADMIN, exactly as it did before v9, and nothing else.
+//
+// So an `admin` may permanently delete another member's private note while every
+// GET of that same id still 404s for them. Somebody has to be able to reclaim
+// space and remove a departed member's files, and that power was never coupled to
+// being able to read the content. Ownership, conversely, grants NO hard delete —
+// that is unchanged from v3 and v9 does not widen it.
+//
+// Do not "simplify" these two loads into one. The admin branch cannot use the
+// viewer-scoped load (it would 404 on exactly the rows it exists to purge), and
+// the soft branch must not use the unscoped one (it would let any editor archive a
+// note they cannot see).
 func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
-	var changed bool
+	var changed, private bool
 	var imagesToPurge []string // keys to drop from storage after a hard delete commits
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetNote(ctx, tx, id)
+		var before *Note
+		var err error
+		if hard {
+			// The handler has already refused a non-admin, so this branch is
+			// admin-only. It reads across scopes ON PURPOSE — see the D181 note above.
+			before, err = s.store.GetNoteAnyScope(ctx, tx, id)
+		} else {
+			before, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
+		}
 		if err != nil {
 			return err
 		}
 		if before == nil {
 			return httpx.ErrNotFound("note not found")
 		}
+		sc := scopeOfNote(before)
+		private = sc.Private
 		if hard {
 			// Capture the owned image ids BEFORE the delete: notes' ON DELETE CASCADE
 			// removes the note_images rows, so afterwards there is nothing left to derive
@@ -446,8 +590,13 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 			}
 			imagesToPurge = purge
 			changed = true
+			// The audit event records the owner and, when an admin purged someone
+			// else's private note, that it was an admin who did it. It is the only
+			// trace of the one power v9 grants across the privacy boundary, so it has
+			// to name both parties.
 			return s.record(ctx, tx, "note.delete", "note", id,
-				fmt.Sprintf("Smazána poznámka „%s“", before.Title), nil, metaHard(true))
+				fmt.Sprintf("Smazána poznámka „%s“", before.Title), nil,
+				metaByAdmin(ctx, metaHard(true), sc), sc)
 		}
 		// Soft delete is idempotent: archiving an already-archived note is a no-op —
 		// don't rewrite the row, don't emit a bogus false→true audit change, and
@@ -461,13 +610,13 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 		changed = true
 		return s.record(ctx, tx, "note.delete", "note", id,
 			fmt.Sprintf("Smazána poznámka „%s“", before.Title),
-			[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, metaHard(false))
+			[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, metaHard(false), sc)
 	})
 	if err != nil {
 		return err
 	}
 	if changed {
-		s.notify(ctx, "note.changed", map[string]string{"id": id})
+		s.notifyScoped(ctx, "note.changed", id, private)
 	}
 	// The rows are gone (cascade); drop their objects. Best-effort — a failure just
 	// leaves orphans for the reconciliation pass.
@@ -482,21 +631,26 @@ func (s *Service) CreateFolder(ctx context.Context, in FolderCreate) (*FolderDet
 	if name == "" {
 		return nil, httpx.ErrUnprocessable("name is required")
 	}
+	requested, err := ParseCreateScope(ctx, in.Scope)
+	if err != nil {
+		return nil, err
+	}
 	var out *Folder
-	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if err := s.assertFolder(ctx, tx, in.ParentID); err != nil {
-			return err
-		}
-		sl, err := s.freeSlug(ctx, tx, in.ParentID, slug.Make(name), "", "")
+	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		sc, err := s.assertFolder(ctx, tx, in.ParentID, requested)
 		if err != nil {
 			return err
 		}
-		pos, err := s.store.lastFolderPosition(ctx, tx, in.ParentID)
+		sl, err := s.freeSlug(ctx, tx, in.ParentID, sc, slug.Make(name), "", "")
+		if err != nil {
+			return err
+		}
+		pos, err := s.store.lastFolderPosition(ctx, tx, in.ParentID, sc)
 		if err != nil {
 			return err
 		}
 		icon := foldericon.Normalize(in.Icon)
-		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx), icon)
+		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx), icon, sc)
 		if err != nil {
 			return err
 		}
@@ -505,17 +659,17 @@ func (s *Service) CreateFolder(ctx context.Context, in FolderCreate) (*FolderDet
 			changes = append(changes, audit.Change{Field: "icon", New: ap(icon)})
 		}
 		return s.record(ctx, tx, "folder.create", "folder", out.ID,
-			fmt.Sprintf("Vytvořena složka „%s“", name), changes, nil)
+			fmt.Sprintf("Vytvořena složka „%s“", name), changes, nil, sc)
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.notify(ctx, "folder.changed", map[string]string{"id": out.ID})
+	s.notifyScoped(ctx, "folder.changed", out.ID, scopeOfFolder(out).Private)
 	return s.folderDetail(ctx, s.db, out)
 }
 
 func (s *Service) GetFolderDetail(ctx context.Context, id string) (*FolderDetail, error) {
-	f, err := s.store.GetFolder(ctx, s.db, id)
+	f, err := s.store.GetFolder(ctx, s.db, id, actorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -530,15 +684,17 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 		return nil, httpx.ErrUnprocessable("name cannot be empty")
 	}
 	var out *Folder
-	var changed bool
+	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetFolder(ctx, tx, id)
+		before, err := s.store.GetFolder(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
 		if before == nil {
 			return httpx.ErrNotFound("folder not found")
 		}
+		sc := scopeOfFolder(before)
+		private = sc.Private
 		archiving := in.Archived != nil && *in.Archived && !before.Archived
 		unarchiving := in.Archived != nil && !*in.Archived && before.Archived
 		// An archived (soft-deleted) folder is out of the tree and unreachable by slug;
@@ -569,7 +725,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 		}
 		if in.Name != nil {
 			name := strings.TrimSpace(*in.Name)
-			sl, err := s.freeSlug(ctx, tx, before.ParentID, slug.Make(name), before.ID, "")
+			sl, err := s.freeSlug(ctx, tx, before.ParentID, sc, slug.Make(name), before.ID, "")
 			if err != nil {
 				return err
 			}
@@ -579,7 +735,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 		} else if unarchiving {
 			// Re-free its slug against live siblings before it re-enters the live
 			// index (a sibling may have reused it while archived — see UpdateNote).
-			sl, err := s.freeSlug(ctx, tx, before.ParentID, before.Slug, before.ID, "")
+			sl, err := s.freeSlug(ctx, tx, before.ParentID, sc, before.Slug, before.ID, "")
 			if err != nil {
 				return err
 			}
@@ -597,7 +753,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 				return err
 			}
 		}
-		out, err = s.store.GetFolder(ctx, tx, id)
+		out, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -613,13 +769,13 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 		}
 		changed = true
 		return s.record(ctx, tx, "folder.update", "folder", id,
-			fmt.Sprintf("Upravena složka „%s“", out.Name), changes, nil)
+			fmt.Sprintf("Upravena složka „%s“", out.Name), changes, nil, sc)
 	})
 	if err != nil {
 		return nil, err
 	}
 	if changed {
-		s.notify(ctx, "folder.changed", map[string]string{"id": id})
+		s.notifyScoped(ctx, "folder.changed", id, private)
 	}
 	return s.folderDetail(ctx, s.db, out)
 }
@@ -629,9 +785,9 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		return nil, httpx.ErrUnprocessable("position is required")
 	}
 	var out *Folder
-	var changed bool
+	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetFolder(ctx, tx, id)
+		before, err := s.store.GetFolder(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -642,8 +798,20 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		if err := assertLiveForMutation(before.Archived, "folder not found"); err != nil {
 			return err
 		}
-		if err := s.assertFolder(ctx, tx, in.ParentID); err != nil {
-			return err
+		sc := scopeOfFolder(before)
+		private = sc.Private
+		// nil requested — see MoveNote: the destination's own scope must come back
+		// so a crossing reaches the D186 refusal below.
+		dest := sc
+		if in.ParentID != nil && *in.ParentID != "" {
+			if dest, err = s.assertFolder(ctx, tx, in.ParentID, nil); err != nil {
+				return err
+			}
+		}
+		// Cross-scope moves are 422, as for notes — publishing is the only crossing
+		// and it is a different verb on purpose (D186).
+		if dest != sc {
+			return errCrossScopeMove(sc)
 		}
 		// Cycle guard: a folder may not move into itself or a descendant (D31).
 		cycles, err := s.wouldCycle(ctx, tx, id, in.ParentID)
@@ -653,7 +821,7 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		if cycles {
 			return httpx.ErrUnprocessable("a folder cannot be moved into itself or one of its descendants")
 		}
-		sl, err := s.freeSlug(ctx, tx, in.ParentID, before.Slug, before.ID, "")
+		sl, err := s.freeSlug(ctx, tx, in.ParentID, sc, before.Slug, before.ID, "")
 		if err != nil {
 			return err
 		}
@@ -667,7 +835,7 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		if err := s.store.MoveFolderRow(ctx, tx, id, in.ParentID, in.Position, sl); err != nil {
 			return err
 		}
-		out, err = s.store.GetFolder(ctx, tx, id)
+		out, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -677,13 +845,13 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		diff(&changes, "position", ap(before.Position), ap(out.Position))
 		changed = true
 		return s.record(ctx, tx, "folder.move", "folder", id,
-			fmt.Sprintf("Přesunuta složka „%s“", out.Name), changes, nil)
+			fmt.Sprintf("Přesunuta složka „%s“", out.Name), changes, nil, sc)
 	})
 	if err != nil {
 		return nil, err
 	}
 	if changed {
-		s.notify(ctx, "folder.changed", map[string]string{"id": id})
+		s.notifyScoped(ctx, "folder.changed", id, private)
 	}
 	return s.folderDetail(ctx, s.db, out)
 }
@@ -691,16 +859,30 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 // DeleteFolder soft-deletes by default. A non-empty folder needs cascade=true
 // (which soft-deletes the subtree, logging each child); hard=true purges (admin,
 // enforced at the route).
+//
+// ⚠ Same two-branch load as DeleteNote, for the same reason (D181), and it matters
+// MORE here: `DELETE …/folders/{id}?hard=true&cascade=true` is what actually
+// reclaims a whole private subtree, so it is the route the purge screen leans on
+// (D212). Reads require ownership; the hard purge requires admin and reads across
+// scopes deliberately.
 func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard bool) error {
-	var changed bool
+	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetFolder(ctx, tx, id)
+		var before *Folder
+		var err error
+		if hard {
+			before, err = s.store.GetFolderAnyScope(ctx, tx, id)
+		} else {
+			before, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		}
 		if err != nil {
 			return err
 		}
 		if before == nil {
 			return httpx.ErrNotFound("folder not found")
 		}
+		sc := scopeOfFolder(before)
+		private = sc.Private
 		sub, noteCount, err := s.store.FolderChildCounts(ctx, tx, id)
 		if err != nil {
 			return err
@@ -734,7 +916,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			for _, n := range childNotes {
 				if err := s.record(ctx, tx, "note.delete", "note", n.ID,
 					fmt.Sprintf("Smazána poznámka „%s“ (kaskádou)", n.Title), nil,
-					map[string]any{"hard": true, "via": "cascade"}); err != nil {
+					metaByAdmin(ctx, map[string]any{"hard": true, "via": "cascade"}, sc), sc); err != nil {
 					return err
 				}
 			}
@@ -747,7 +929,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 					m["via"] = "cascade"
 				}
 				if err := s.record(ctx, tx, "folder.delete", "folder", fID,
-					fmt.Sprintf("Smazána složka „%s“", metas[fID].Name), nil, m); err != nil {
+					fmt.Sprintf("Smazána složka „%s“", metas[fID].Name), nil, metaByAdmin(ctx, m, sc), sc); err != nil {
 					return err
 				}
 			}
@@ -775,7 +957,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			if err := s.record(ctx, tx, "note.delete", "note", n.ID,
 				fmt.Sprintf("Smazána poznámka „%s“ (kaskádou)", n.Title),
 				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}},
-				map[string]any{"via": "cascade"}); err != nil {
+				map[string]any{"via": "cascade"}, sc); err != nil {
 				return err
 			}
 		}
@@ -806,7 +988,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			}
 			if err := s.record(ctx, tx, "folder.delete", "folder", fID,
 				fmt.Sprintf("Smazána složka „%s“", meta.Name),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, m); err != nil {
+				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, m, sc); err != nil {
 				return err
 			}
 		}
@@ -820,7 +1002,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 	// folder.changed makes every other client refetch and can raise a bogus
 	// "changed elsewhere" toast.
 	if changed {
-		s.notify(ctx, "folder.changed", map[string]string{"id": id})
+		s.notifyScoped(ctx, "folder.changed", id, private)
 	}
 	return nil
 }
@@ -833,7 +1015,7 @@ func (s *Service) wouldCycle(ctx context.Context, tx DBTX, movingID string, newP
 		if *cur == movingID {
 			return true, nil
 		}
-		f, err := s.store.GetFolder(ctx, tx, *cur)
+		f, err := s.store.GetFolder(ctx, tx, *cur, actorID(ctx))
 		if err != nil {
 			return false, err
 		}
@@ -845,19 +1027,46 @@ func (s *Service) wouldCycle(ctx context.Context, tx DBTX, movingID string, newP
 	return false, nil
 }
 
-// assertFolder verifies a referenced parent/folder exists and is live.
-func (s *Service) assertFolder(ctx context.Context, q DBTX, folderID *string) error {
-	if folderID == nil {
-		return nil
+// assertFolder verifies a referenced parent/folder exists, is live, and is one the
+// caller may see — and returns THE SCOPE THE FOLDER LIVES IN, which is the scope
+// anything created under it must take (v9).
+//
+// requested is the caller's `scope` field, honoured ONLY at the root: with a
+// parent folder the PARENT'S scope governs, and a disagreement is a 422 rather
+// than a silent correction. A folder whose contents are half private is exactly
+// the model D177 rejected, so it must be impossible to build one by accident.
+//
+// ⚠ requested is a POINTER because "the caller said shared" and "the caller said
+// nothing" are different questions here, and the zero Scope cannot tell them
+// apart. nil defers to the parent; a non-nil value that disagrees with the parent
+// is the 422. Passing Scope{} for "unspecified" is what made `scope:"shared"`
+// into a private folder a silent correction rather than a refusal — the one
+// direction of the check that never fired.
+//
+// A folder in another member's private tree reads back as nil here — the store's
+// viewer predicate saw to that — so it is reported as a nonexistent folder_id,
+// never as a permission problem (D180).
+func (s *Service) assertFolder(ctx context.Context, q DBTX, folderID *string, requested *Scope) (Scope, error) {
+	if folderID == nil || *folderID == "" {
+		root := Scope{}
+		if requested != nil {
+			root = *requested
+		}
+		return root, assertPairing(root)
 	}
-	f, err := s.store.GetFolder(ctx, q, *folderID)
+	f, err := s.store.GetFolder(ctx, q, *folderID, actorID(ctx))
 	if err != nil {
-		return err
+		return Scope{}, err
 	}
 	if f == nil || f.Archived {
-		return httpx.ErrUnprocessable("folder_id does not reference an existing folder")
+		return Scope{}, httpx.ErrUnprocessable("folder_id does not reference an existing folder")
 	}
-	return nil
+	parent := callerScopeFor(f.Visibility, f.OwnerID)
+	if requested != nil && *requested != parent {
+		return Scope{}, httpx.ErrUnprocessable(
+			"scope disagrees with the parent folder — an item takes the scope of the folder it is filed in")
+	}
+	return parent, nil
 }
 
 // assertParentLive rejects restoring an item under a missing or archived parent:
@@ -867,7 +1076,7 @@ func (s *Service) assertParentLive(ctx context.Context, q DBTX, parentID *string
 	if parentID == nil {
 		return nil
 	}
-	f, err := s.store.GetFolder(ctx, q, *parentID)
+	f, err := s.store.GetFolder(ctx, q, *parentID, actorID(ctx))
 	if err != nil {
 		return err
 	}
@@ -876,6 +1085,12 @@ func (s *Service) assertParentLive(ctx context.Context, q DBTX, parentID *string
 	}
 	return nil
 }
+
+// scopeOfNote / scopeOfFolder read an item's own root scope off its stored columns.
+// Used wherever a mutation has already loaded the row and needs to name the scope
+// for a sibling query or an audit event.
+func scopeOfNote(n *Note) Scope     { return callerScopeFor(n.Visibility, n.OwnerID) }
+func scopeOfFolder(f *Folder) Scope { return callerScopeFor(f.Visibility, f.OwnerID) }
 
 // assertLiveForMutation rejects a structural mutation (move/reorder/reparent) of an
 // archived (soft-deleted) item: it's out of the live tree and unreachable by slug,
@@ -891,12 +1106,17 @@ func assertLiveForMutation(archived bool, notFoundMsg string) error {
 
 // ---- Tree, list, search, resolve ----
 
-func (s *Service) Tree(ctx context.Context, includeArchived bool) (*NotesTree, error) {
-	folders, err := s.store.AllFolders(ctx, includeArchived)
+// Tree returns ONE root scope — never both (leak table row 1). A response that
+// carried the shared tree and a private one together would be a response the
+// frontend has to filter, and the frontend is the wrong place for that: the
+// switcher chooses a root, the API returns that root, and there is no state in
+// which both are on the wire at once.
+func (s *Service) Tree(ctx context.Context, includeArchived bool, sc Scope) (*NotesTree, error) {
+	folders, err := s.store.AllFolders(ctx, includeArchived, sc)
 	if err != nil {
 		return nil, err
 	}
-	summaries, err := s.store.AllNoteSummaries(ctx, includeArchived)
+	summaries, err := s.store.AllNoteSummaries(ctx, includeArchived, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -940,12 +1160,24 @@ func (s *Service) Tree(ctx context.Context, includeArchived bool) (*NotesTree, e
 }
 
 // List returns note summaries (with the caller's pin state) for a folder, or the
-// FTS5 search results when q is set (FR-P6).
-func (s *Service) List(ctx context.Context, q string, folderID *string, includeArchived bool) (NotePage, error) {
+// FTS5 search results when q is set (FR-P6) — always within ONE root scope.
+//
+// ⚠ Search is scoped to the tree you are standing in (D184), and the predicate
+// lives in the SQL rather than out here. Filtering the returned slice would still
+// leak: the cap is applied in the query, so a post-filtered page tells the caller
+// how many rows matched before filtering just by being short.
+//
+// folderID semantics (D203, a bug that predates v9): nil means "every note in this
+// scope"; the root sentinel (an empty string, from ?folder_id=root) means "the
+// notes directly at this scope's root". Before v9 `notes` had no sentinel at all —
+// a nil pointer dereferenced to the empty string and quietly meant "root only", which is not
+// what the 0.10.1 contract said.
+func (s *Service) List(ctx context.Context, q string, folderID *string, includeArchived bool, sc Scope) (NotePage, error) {
 	q = strings.TrimSpace(q)
 	var items []NoteSummary
 	var err error
-	if q != "" {
+	switch {
+	case q != "":
 		match := ftsQuery(q)
 		if match == "" {
 			// A punctuation-only query has no searchable tokens. Return an empty result
@@ -953,9 +1185,11 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 			// unspecified and varies across SQLite/FTS5 builds.
 			return NotePage{Items: []NoteSummary{}}, nil
 		}
-		items, err = s.store.SearchNotes(ctx, match, folderID, includeArchived, 100)
-	} else {
-		items, err = s.store.NoteSummariesInFolder(ctx, s.db, folderID, includeArchived)
+		items, err = s.store.SearchNotes(ctx, match, folderID, includeArchived, 100, sc)
+	case folderID == nil:
+		items, err = s.store.ScopedNoteSummaries(ctx, s.db, includeArchived, sc)
+	default:
+		items, err = s.store.NoteSummariesInFolder(ctx, s.db, folderID, includeArchived, sc)
 	}
 	if err != nil {
 		return NotePage{}, err
@@ -975,7 +1209,11 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 
 // Resolve maps a slug path to a stable id (FR-P4). No redirects: a renamed/moved
 // item's old path just 404s.
-func (s *Service) Resolve(ctx context.Context, path string) (*ResolveResult, error) {
+//
+// v9: a slug path is MEANINGLESS without a scope (leak table row 3). The same path
+// names a different item in the shared tree and in each member's private one, so
+// the walk starts from the named root and never leaves it.
+func (s *Service) Resolve(ctx context.Context, path string, sc Scope) (*ResolveResult, error) {
 	segs := splitPath(path)
 	if len(segs) == 0 {
 		return nil, httpx.ErrNotFound("empty path")
@@ -983,7 +1221,7 @@ func (s *Service) Resolve(ctx context.Context, path string) (*ResolveResult, err
 	var parent *string
 	for i, seg := range segs {
 		last := i == len(segs)-1
-		f, err := s.store.ChildFolderBySlug(ctx, s.db, parent, seg)
+		f, err := s.store.ChildFolderBySlug(ctx, s.db, parent, seg, sc)
 		if err != nil {
 			return nil, err
 		}
@@ -998,7 +1236,7 @@ func (s *Service) Resolve(ctx context.Context, path string) (*ResolveResult, err
 		if f != nil {
 			return &ResolveResult{Type: "folder", ID: f.ID, SlugPath: strings.Join(segs, "/")}, nil
 		}
-		n, err := s.store.ChildNoteBySlug(ctx, s.db, parent, seg)
+		n, err := s.store.ChildNoteBySlug(ctx, s.db, parent, seg, sc)
 		if err != nil {
 			return nil, err
 		}
@@ -1010,21 +1248,289 @@ func (s *Service) Resolve(ctx context.Context, path string) (*ResolveResult, err
 	return nil, httpx.ErrNotFound("path not found")
 }
 
+// ---- Publish: private → shared (v9, D182) ----
+
+// PublishNote moves one private note into the shared tree.
+//
+// ⚠ A NON-OWNER GETS 404, NOT 403 — AN ADMIN INCLUDED (D206), byte-identical to
+// the response for an id that was never issued. This route is RequireWrite, so
+// every editor can call it; a 403-for-private / 404-for-unknown pair would answer
+// "does this id exist, and is it private?" for any id a caller cares to try. That
+// is the permalink oracle D180 closes, reopened with a different verb, and it was
+// specified as 403 in five documents before a review pass caught it. It is true
+// that this leaves an admin with less power than the role implies — publishing
+// something you cannot read is not a power that should exist — but it must not be
+// OBSERVABLE that way.
+//
+// Everything happens in one transaction: flip visibility, clear the owner,
+// reparent, and re-derive the slug, because the destination's siblings are
+// different siblings.
+//
+// Two things deliberately do NOT change. The PERSONAL PIN survives (D183) — it is
+// keyed on the item id and the id does not move. And for documents the permanent
+// /d/{id} URL survives too, because the R2 key is id-based and independent of
+// folder, slug and scope (D42); that is the whole reason it was specified as
+// permanent.
+//
+// There is no unpublish, and the absence is a decision (D182): a note the
+// household has relied on for months must not be able to vanish into one member's
+// tree. Someone who wants it back re-creates it privately and deletes the shared
+// copy, leaving both facts in the log.
+func (s *Service) PublishNote(ctx context.Context, id string, in PublishRequest) (*NoteDetail, error) {
+	var out *Note
+	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		before, err := s.store.GetNote(ctx, tx, id, actorID(ctx))
+		if err != nil {
+			return err
+		}
+		// Not found, not mine, or archived — all the same answer (D206).
+		if before == nil || before.Archived {
+			return errPublishNotFound
+		}
+		if before.Visibility != visibilityPrivate {
+			return httpx.ErrUnprocessable("poznámka už je sdílená")
+		}
+		// Ownership, restated: the viewer-scoped load above already refuses another
+		// member's private note, so reaching here with a foreign owner is impossible.
+		// The check stays as a guard against a future load that forgets.
+		if deref(before.OwnerID) != actorID(ctx) {
+			return errPublishNotFound
+		}
+		dest, err := s.assertFolder(ctx, tx, in.FolderID, nil)
+		if err != nil {
+			return err
+		}
+		if dest.Private {
+			return httpx.ErrUnprocessable("cílová složka musí být ve sdíleném stromu")
+		}
+		sl, err := s.freeSlug(ctx, tx, in.FolderID, dest, before.Slug, "", before.ID)
+		if err != nil {
+			return err
+		}
+		pos := strings.TrimSpace(in.Position)
+		if pos == "" {
+			if pos, err = s.store.lastNotePosition(ctx, tx, in.FolderID, dest); err != nil {
+				return err
+			}
+		}
+		if err := s.store.PublishNoteRow(ctx, tx, id, in.FolderID, pos, sl); err != nil {
+			return err
+		}
+		out, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
+		if err != nil {
+			return err
+		}
+		changes := []audit.Change{
+			{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+			{Field: "owner_id", Old: before.OwnerID, New: nil},
+		}
+		diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		// Audited against the item's NEW scope (shared): the event describes a note
+		// the household can now see, so there is nothing left to redact — and
+		// redacting the one event that says "this became visible to everyone" would
+		// hide the single most consequential thing that can happen to a private item.
+		return s.record(ctx, tx, "note.publish", "note", id,
+			fmt.Sprintf("Publikována poznámka „%s“ do sdílených", out.Title), changes,
+			map[string]any{"published_from_owner": deref(before.OwnerID)}, Scope{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.notify(ctx, "note.changed", map[string]string{"id": id})
+	return s.noteDetail(ctx, s.db, out)
+}
+
+// PublishFolder publishes a private folder AND EVERY DESCENDANT in one
+// transaction. A partial publish — half a folder visible to the household — is the
+// one outcome this endpoint must never produce, because half a published folder is
+// a folder whose contents nobody can explain.
+func (s *Service) PublishFolder(ctx context.Context, id string, in PublishRequest) (*FolderDetail, error) {
+	var out *Folder
+	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		before, err := s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		if err != nil {
+			return err
+		}
+		if before == nil || before.Archived {
+			return errPublishFolderNotFound
+		}
+		if before.Visibility != visibilityPrivate {
+			return httpx.ErrUnprocessable("složka už je sdílená")
+		}
+		if deref(before.OwnerID) != actorID(ctx) {
+			return errPublishFolderNotFound
+		}
+		dest, err := s.assertFolder(ctx, tx, in.FolderID, nil)
+		if err != nil {
+			return err
+		}
+		if dest.Private {
+			return httpx.ErrUnprocessable("cílová složka musí být ve sdíleném stromu")
+		}
+		// ⚠ NO CYCLE GUARD HERE, and its absence is the point rather than an omission.
+		// An ordinary move needs one (D31); a publish cannot: the refusal above has
+		// already established that the destination is SHARED, while this folder is
+		// private and a subtree never straddles two scopes (see DescendantFolderIDs),
+		// so the destination can never be inside the subtree being published. The
+		// guard that stood here always returned false, and paid for it with one
+		// viewer-scoped GetFolder per ancestor level inside the irreversible path's
+		// transaction.
+		//
+		// Restore it the day a subtree CAN straddle scopes — which is the same day
+		// DescendantFolderIDs' own comment says to revisit that walk.
+		//
+		// Enumerate the subtree BEFORE the root moves, so the walk still sees the
+		// private tree it belongs to. Includes id itself.
+		folderIDs, err := s.store.DescendantFolderIDs(ctx, tx, id, true)
+		if err != nil {
+			return err
+		}
+		// ⚠ AND ENUMERATE ITS CONTENTS, because EVERY ONE OF THEM IS AUDITED
+		// SEPARATELY. A folder publish is a cascade like a cascade delete, and it is
+		// the irreversible one (D182) — so it follows the same rule the delete path
+		// follows: every row the cascade touches gets its own event, or the subtree
+		// becomes household-visible with a single log line naming only its parent.
+		//
+		// Two things break without this. A rule subscribed to `notes.note.publish`
+		// — an action this module declares and admin/labels.go labels — never fires
+		// for any of the forty notes that just became visible to everyone. And each
+		// published note's entity timeline shows nothing at all for the single most
+		// consequential change that can happen to it.
+		//
+		// Archived descendants are included because PublishDescendants publishes
+		// them too; what is audited has to be what was written.
+		childNotes, err := s.store.NotesInFolders(ctx, tx, folderIDs, true)
+		if err != nil {
+			return err
+		}
+		metas, err := s.store.FolderMetaByIDs(ctx, tx, folderIDs)
+		if err != nil {
+			return err
+		}
+		sl, err := s.freeSlug(ctx, tx, in.FolderID, dest, before.Slug, before.ID, "")
+		if err != nil {
+			return err
+		}
+		pos := strings.TrimSpace(in.Position)
+		if pos == "" {
+			if pos, err = s.store.lastFolderPosition(ctx, tx, in.FolderID, dest); err != nil {
+				return err
+			}
+		}
+		if err := s.store.PublishFolderRow(ctx, tx, id, in.FolderID, pos, sl); err != nil {
+			return err
+		}
+		// Descendants keep their slugs: their siblings are the same siblings they
+		// had. Only the subtree's ROOT lands among strangers, which is why only it
+		// re-derives one above.
+		if err := s.store.PublishDescendants(ctx, tx, folderIDs); err != nil {
+			return err
+		}
+		out, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		if err != nil {
+			return err
+		}
+		// The cascade's own events, children first and the target folder last —
+		// the same order the cascade delete records in, so the two read alike.
+		// Everything here is audited against the NEW scope (shared): there is
+		// nothing left to redact once the household can see it, and redacting the
+		// event that says "this became visible to everyone" would hide the one
+		// thing the log is for.
+		owner := deref(before.OwnerID)
+		for _, n := range childNotes {
+			if err := s.record(ctx, tx, "note.publish", "note", n.ID,
+				fmt.Sprintf("Publikována poznámka „%s“ do sdílených (kaskádou)", n.Title),
+				publishChanges(before.OwnerID), publishMeta(owner, true), Scope{}); err != nil {
+				return err
+			}
+		}
+		for _, fID := range folderIDs {
+			if fID == id {
+				continue // the target folder records below, without the cascade via
+			}
+			if err := s.record(ctx, tx, "folder.publish", "folder", fID,
+				fmt.Sprintf("Publikována složka „%s“ do sdílených (kaskádou)", metas[fID].Name),
+				publishChanges(before.OwnerID), publishMeta(owner, true), Scope{}); err != nil {
+				return err
+			}
+		}
+		changes := publishChanges(before.OwnerID)
+		diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		meta := publishMeta(owner, false)
+		meta["folders"] = len(folderIDs)
+		meta["notes"] = len(childNotes)
+		return s.record(ctx, tx, "folder.publish", "folder", id,
+			fmt.Sprintf("Publikována složka „%s“ do sdílených", out.Name), changes, meta, Scope{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.notify(ctx, "folder.changed", map[string]string{"id": id})
+	return s.folderDetail(ctx, s.db, out)
+}
+
+// publishChanges is the field diff every publish event carries: the two columns
+// that define the root scope, moving in the only direction they ever move.
+// Shared by the note, the folder and the whole cascade so a reader of the log sees
+// one shape rather than three.
+func publishChanges(oldOwner *string) []audit.Change {
+	return []audit.Change{
+		{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+		{Field: "owner_id", Old: oldOwner, New: nil},
+	}
+}
+
+// publishMeta stamps who it belonged to, and whether this row is the one the
+// caller asked for or something the folder cascade swept up with it.
+func publishMeta(owner string, viaCascade bool) map[string]any {
+	m := map[string]any{"published_from_owner": owner}
+	if viaCascade {
+		m["via"] = "cascade"
+	}
+	return m
+}
+
+// errPublishNotFound is the single refusal every publish failure that is not a
+// validation problem maps to. Deliberately ONE value per route: an unknown id, a
+// foreign private item and an admin's attempt must be indistinguishable, and the
+// surest way to keep them so is to make them literally the same error (D206).
+//
+// ⚠ D206 asks for one message per ROUTE, not one message across entity types —
+// the folder route gets its own, because telling a client "note not found" for a
+// folder id buys no indistinguishability and misnames the thing that was not
+// found. `GET /api/notes/folders/{id}` already answers "folder not found".
+var (
+	errPublishNotFound       = httpx.ErrNotFound("note not found")
+	errPublishFolderNotFound = httpx.ErrNotFound("folder not found")
+)
+
 // ---- Pinning (two scopes, D35) ----
 
 // Pin adds a pin. household requires editor/admin and is audited + broadcast;
 // personal is allowed for any member (incl. reader), not audited, not broadcast.
+//
+// v9 adds one rule: a HOUSEHOLD pin on a PRIVATE note is a 422 (D183). Note the
+// status carefully — 422, not 403. The caller has the role; the operation is
+// meaningless, because a household pin means "put this on everyone's Nástěnka"
+// and nobody else can open it. A personal pin by a non-owner never reaches that
+// check: the note 404s first.
 func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinState, error) {
-	scope, err := parseScope(scopeStr)
+	scope, err := parsePinScope(scopeStr)
 	if err != nil {
 		return nil, err
 	}
-	n, err := s.store.GetNote(ctx, s.db, noteID)
+	n, err := s.store.GetNote(ctx, s.db, noteID, actorID(ctx))
 	if err != nil {
 		return nil, err
 	}
 	if n == nil || n.Archived {
 		return nil, httpx.ErrNotFound("note not found")
+	}
+	if scope == scopeHousehold && n.Visibility == visibilityPrivate {
+		return nil, httpx.ErrUnprocessable(
+			"soukromou poznámku nelze připnout pro všechny — ostatní ji nevidí")
 	}
 	uid := actorID(ctx)
 
@@ -1080,7 +1586,7 @@ func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinSt
 		if inserted { // idempotent: only audit a real change
 			return s.record(ctx, tx, "note.pin", "note", noteID,
 				fmt.Sprintf("Připnuta poznámka „%s“ pro všechny", n.Title), nil,
-				metaVia(map[string]any{"scope": scopeHousehold}, via))
+				metaVia(map[string]any{"scope": scopeHousehold}, via), scopeOfNote(n))
 		}
 		return nil
 	})
@@ -1095,11 +1601,11 @@ func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinSt
 
 // Unpin removes a pin, mirroring Pin's audit/broadcast rules.
 func (s *Service) Unpin(ctx context.Context, noteID, scopeStr, via string) (*PinState, error) {
-	scope, err := parseScope(scopeStr)
+	scope, err := parsePinScope(scopeStr)
 	if err != nil {
 		return nil, err
 	}
-	n, err := s.store.GetNote(ctx, s.db, noteID)
+	n, err := s.store.GetNote(ctx, s.db, noteID, actorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1128,7 +1634,7 @@ func (s *Service) Unpin(ctx context.Context, noteID, scopeStr, via string) (*Pin
 		if removed {
 			return s.record(ctx, tx, "note.unpin", "note", noteID,
 				fmt.Sprintf("Odepnuta poznámka „%s“ (pro všechny)", n.Title), nil,
-				metaVia(map[string]any{"scope": scopeHousehold}, via))
+				metaVia(map[string]any{"scope": scopeHousehold}, via), scopeOfNote(n))
 		}
 		return nil
 	})
@@ -1173,11 +1679,12 @@ func (s *Service) folderDetail(ctx context.Context, q DBTX, f *Folder) (*FolderD
 	if err != nil {
 		return nil, err
 	}
-	subs, err := s.store.ChildFolders(ctx, q, &f.ID, false)
+	sc := scopeOfFolder(f)
+	subs, err := s.store.ChildFolders(ctx, q, &f.ID, false, sc)
 	if err != nil {
 		return nil, err
 	}
-	notes, err := s.store.NoteSummariesInFolder(ctx, q, &f.ID, false)
+	notes, err := s.store.NoteSummariesInFolder(ctx, q, &f.ID, false, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -1204,7 +1711,7 @@ func (s *Service) ancestors(ctx context.Context, q DBTX, folderID *string) ([]Pa
 	chain := []PathSegment{}
 	cur := folderID
 	for depth := 0; cur != nil && depth < 1000; depth++ {
-		f, err := s.store.GetFolder(ctx, q, *cur)
+		f, err := s.store.GetFolder(ctx, q, *cur, actorID(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -1231,7 +1738,26 @@ func metaHard(hard bool) map[string]any {
 	return nil
 }
 
-func parseScope(s string) (string, error) {
+// metaByAdmin stamps `by_admin` when an admin purges a PRIVATE item that is not
+// theirs — v9's one asymmetry, and the only place in Home where somebody acts on
+// something they are not allowed to read (D181). Nothing else sets it: an admin
+// deleting a shared item is doing an ordinary admin thing, and marking that would
+// dilute the flag until it stopped meaning anything.
+func metaByAdmin(ctx context.Context, base map[string]any, sc Scope) map[string]any {
+	if !sc.Private || sc.OwnerID == actorID(ctx) || !isAdminCtx(ctx) {
+		return base
+	}
+	if base == nil {
+		base = map[string]any{}
+	}
+	base[audit.MetaByAdmin] = true
+	return base
+}
+
+// parsePinScope parses the PIN scope ("household" | "personal"), which is a
+// different axis from the v9 root scope that ParseScope in scope.go handles.
+// Renamed in v9 so the two cannot be confused at a call site.
+func parsePinScope(s string) (string, error) {
 	switch s {
 	case scopeHousehold, scopePersonal:
 		return s, nil
@@ -1415,7 +1941,14 @@ func (s *Service) gcNoteImages(ctx context.Context, noteID, oldBody, newBody str
 		// still points at — a permanent 404, since the bucket has no versioning. oldBody
 		// stays the pre-edit set: it is what the undo window and the dropped-cross-note-
 		// reference scan below are defined against.
-		current, err := s.store.GetNote(ctx, tx, noteID)
+		//
+		// v9: deliberately the UNSCOPED load (leak table row 17). Image GC is
+		// visibility-blind by design — it reasons about keys and bytes, and it runs
+		// after a commit that may have been an admin purging a foreign private note,
+		// where the actor is not the owner. A viewer-scoped read here would silently
+		// stop reclaiming private images. Nothing it reads reaches a response, and
+		// nothing it logs may grow a title.
+		current, err := s.store.GetNoteAnyScope(ctx, tx, noteID)
 		if err != nil {
 			return err
 		}

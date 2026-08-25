@@ -59,6 +59,32 @@ func (w *Writer) Record(ctx context.Context, tx *sql.Tx, e Event) (string, error
 		site = "home"
 	}
 
+	// The typed redaction marker becomes the meta keys every read path keys off
+	// (redact.go). Stamped HERE, not in each module, so the platform owns the
+	// spelling — see the Event field comment.
+	//
+	// ⚠ INTO A FRESH MAP, never into the caller's. Event is passed by value but its
+	// Meta is a shared reference, so stamping in place writes the marker into a map
+	// the caller still holds — the discipline Redact states one file away ("A fresh
+	// map, not a delete on the old one: Entry is a value but its map is shared with
+	// the caller's copy"). A caller that records two events from one base map (a
+	// cascade loop hoisting `m := map[string]any{"via":"cascade"}`, or any helper
+	// returning a reused map) would get the FIRST event's visibility and owner_id
+	// stamped permanently into it, so the second — a shared item — is written with
+	// the private marker and then redacted for the whole household. The copy costs
+	// a handful of keys on a path that is about to marshal them to JSON anyway.
+	if e.Visibility != "" {
+		meta := make(map[string]any, len(e.Meta)+2)
+		for k, v := range e.Meta {
+			meta[k] = v
+		}
+		meta[MetaVisibility] = e.Visibility
+		if e.OwnerID != "" {
+			meta[MetaOwnerID] = e.OwnerID
+		}
+		e.Meta = meta
+	}
+
 	var metaJSON any
 	if len(e.Meta) > 0 {
 		b, err := json.Marshal(e.Meta)

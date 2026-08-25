@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 // migrationsFS holds this module's audit-spine tables (created first in the
@@ -45,3 +46,13 @@ func (m *Module) Migrations() fs.FS { return MigrationsFS }
 func (m *Module) AuditActions() []string { return []string{"prune"} }
 
 func (m *Module) Widgets() []registry.WidgetProvider { return nil }
+
+// StorageTables declares this module's tables for the v9 storage catalog (D191).
+//
+// ⚠ audit_events_fts is EXTERNAL-CONTENT FTS5 — five `type='table'` rows, of which
+// only one appears in the migration (D211). The audit spine is usually the largest
+// thing in the file, and its shadow tables are most of that.
+func (m *Module) StorageTables() []string {
+	return append([]string{"audit_events", "audit_changes"},
+		storage.FTSShadows("audit_events_fts")...)
+}

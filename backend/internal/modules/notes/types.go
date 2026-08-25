@@ -8,15 +8,23 @@ package notes
 
 // ---- Wire types (match openapi.yaml 0.4.0 schemas) ----
 
-// Folder is a node in the single-parent tree. parent_id NULL = root.
+// Folder is a node in the single-parent tree. parent_id NULL = root — of the root
+// scope named by visibility/owner_id (v9).
 type Folder struct {
-	ID        string  `json:"id"`
-	ParentID  *string `json:"parent_id"`
-	Name      string  `json:"name"`
-	Slug      string  `json:"slug"`
-	Icon      string  `json:"icon"` // optional emoji; "" = client shows the 📁 default
-	Position  string  `json:"position"`
-	Archived  bool    `json:"archived"`
+	ID       string  `json:"id"`
+	ParentID *string `json:"parent_id"`
+	Name     string  `json:"name"`
+	Slug     string  `json:"slug"`
+	Icon     string  `json:"icon"` // optional emoji; "" = client shows the 📁 default
+	Position string  `json:"position"`
+	Archived bool    `json:"archived"`
+	// Visibility is "shared" | "private" (v9, D177). REQUIRED on the wire, not
+	// optional: an item whose visibility a client has to INFER is an item some
+	// client will get wrong, and the cost of getting it wrong is showing a private
+	// title without a lock.
+	Visibility string `json:"visibility"`
+	// OwnerID is the auth user id when private, NULL when shared.
+	OwnerID   *string `json:"owner_id"`
 	CreatedBy *string `json:"created_by"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
@@ -24,16 +32,18 @@ type Folder struct {
 
 // Note carries the single canonical Markdown body (body_md, D30).
 type Note struct {
-	ID        string  `json:"id"`
-	FolderID  *string `json:"folder_id"`
-	Title     string  `json:"title"`
-	Slug      string  `json:"slug"`
-	BodyMD    *string `json:"body_md"`
-	Position  string  `json:"position"`
-	Archived  bool    `json:"archived"`
-	CreatedBy *string `json:"created_by"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID         string  `json:"id"`
+	FolderID   *string `json:"folder_id"`
+	Title      string  `json:"title"`
+	Slug       string  `json:"slug"`
+	BodyMD     *string `json:"body_md"`
+	Position   string  `json:"position"`
+	Archived   bool    `json:"archived"`
+	Visibility string  `json:"visibility"` // "shared" | "private" (v9, D177)
+	OwnerID    *string `json:"owner_id"`
+	CreatedBy  *string `json:"created_by"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 // PinState is the caller's view of a note's pin state.
@@ -44,14 +54,16 @@ type PinState struct {
 
 // NoteSummary is the lightweight note node for the tree/list (no body).
 type NoteSummary struct {
-	ID        string   `json:"id"`
-	FolderID  *string  `json:"folder_id"`
-	Title     string   `json:"title"`
-	Slug      string   `json:"slug"`
-	Position  string   `json:"position"`
-	Archived  bool     `json:"archived"`
-	UpdatedAt string   `json:"updated_at"`
-	Pinned    PinState `json:"pinned"`
+	ID         string   `json:"id"`
+	FolderID   *string  `json:"folder_id"`
+	Title      string   `json:"title"`
+	Slug       string   `json:"slug"`
+	Position   string   `json:"position"`
+	Archived   bool     `json:"archived"`
+	Visibility string   `json:"visibility"` // "shared" | "private" (v9) — drives the lock mark
+	OwnerID    *string  `json:"owner_id"`
+	UpdatedAt  string   `json:"updated_at"`
+	Pinned     PinState `json:"pinned"`
 }
 
 // PathSegment is one ancestor folder in a breadcrumb.
@@ -112,6 +124,14 @@ type NoteCreate struct {
 	Title    string  `json:"title"`
 	FolderID *string `json:"folder_id"`
 	BodyMD   string  `json:"body_md"`
+	// Scope selects the root when FolderID is null: "shared" (default) | "private".
+	// It is honoured ONLY at the root — with a parent folder the parent's scope
+	// governs and a disagreement is a 422, because a tree with mixed visibility
+	// inside one folder is exactly what D177 rejected.
+	//
+	// ⚠ There is no owner_id field here and there must never be one: an owner comes
+	// from the session, never from the body (§V9-3).
+	Scope string `json:"scope"`
 }
 
 type NoteUpdate struct {
@@ -129,6 +149,9 @@ type FolderCreate struct {
 	Name     string  `json:"name"`
 	ParentID *string `json:"parent_id"`
 	Icon     string  `json:"icon"`
+	// Scope selects the root when ParentID is null — see NoteCreate.Scope. Missing
+	// it here would mean the private root could not hold a folder at all.
+	Scope string `json:"scope"`
 }
 
 type FolderUpdate struct {
@@ -142,21 +165,36 @@ type FolderMoveRequest struct {
 	Position string  `json:"position"`
 }
 
+// PinRequest's Scope is the PIN scope ("household" | "personal"), which is a
+// different axis from the v9 root scope on NoteCreate/FolderCreate. The two
+// interact in exactly one place: a household pin on a private note is a 422 (D183).
 type PinRequest struct {
 	Scope string `json:"scope"`
+}
+
+// PublishRequest is the destination of POST /api/notes/{id}/publish (v9, D182).
+// Both fields optional: an empty body publishes to the shared ROOT, which is the
+// common case — a member publishing something usually wants it visible, not filed.
+type PublishRequest struct {
+	FolderID *string `json:"folder_id"`
+	Position string  `json:"position"`
 }
 
 // ---- Widget payload (notes.pripnute — matches openapi PinnedNote / PripnutePoznamkyWidget) ----
 
 // PinnedNote is one row of the Připnuté poznámky widget.
 type PinnedNote struct {
-	NoteID    string  `json:"note_id"`
-	Title     string  `json:"title"`
-	SlugPath  string  `json:"slug_path"`
-	Scope     string  `json:"scope"` // "household" | "personal" | "both"
-	Excerpt   *string `json:"excerpt"`
-	UpdatedAt string  `json:"updated_at"`
-	Position  string  `json:"position"`
+	NoteID   string `json:"note_id"`
+	Title    string `json:"title"`
+	SlugPath string `json:"slug_path"`
+	Scope    string `json:"scope"` // "household" | "personal" | "both"
+	// Visibility drives the widget row's lock mark (v9, D183). A private note can
+	// only carry a PERSONAL pin, and only its owner's — so a row is only ever
+	// "private" for the member looking at it.
+	Visibility string  `json:"visibility"`
+	Excerpt    *string `json:"excerpt"`
+	UpdatedAt  string  `json:"updated_at"`
+	Position   string  `json:"position"`
 }
 
 // PripnutePoznamkyWidget is the notes.pripnute payload.

@@ -92,6 +92,12 @@ type Config struct {
 	// documents R2 bucket (a distinct note-images/ prefix) and its backup mirror.
 	NotesImageMaxUploadMB int
 
+	// Storage is the v9 Úložiště page's configuration: two plain vars, neither a
+	// secret, and NOTHING for privacy itself. A privacy feature with a kill switch
+	// is a privacy feature whose guarantee depends on an environment variable
+	// nobody re-reads (§V9-9).
+	Storage StorageConfig
+
 	// DevAuthBypass, when true (and only outside production), skips real JWT
 	// introspection and injects a fake actor so the app runs offline. It is a
 	// development-only convenience and a security hole if ever enabled in prod.
@@ -401,6 +407,18 @@ const (
 	// notes (v4.1) inline images
 	defaultNotesImageMaxUploadMB = 10
 
+	// defaultStorageWarnTotalMB is a CHANGE detector, not a bill detector (D196).
+	// R2's free allowance is 10 GB and household usage is expected to sit well
+	// under a gigabyte, so a threshold parked at the billing cliff would stay
+	// silent for years and teach nobody anything. At 1 GB the line fires when
+	// something has CHANGED — a runaway preview job, an unusually large upload, a
+	// private tree growing faster than anyone expected — with nine-tenths of the
+	// allowance still in hand. A smoke alarm, not an invoice.
+	defaultStorageWarnTotalMB = 1024
+	// defaultStorageCacheSeconds keeps the snapshot cheap without making it state:
+	// nothing survives a restart, and nothing can be stale for longer than a minute.
+	defaultStorageCacheSeconds = 60
+
 	// notifications + scheduler (v5)
 	defaultNotifCoalesce         = 60 * time.Second
 	defaultNotifRetentionDays    = 30
@@ -474,6 +492,10 @@ func Load(getenv Getenv) (*Config, error) {
 	c.RRuleMaxWindowMonths = l.intDefault("HOME_RRULE_MAX_WINDOW_MONTHS", defaultRRuleMaxWindowMonths)
 	c.LogRetentionDays = l.intDefault("HOME_LOG_RETENTION_DAYS", defaultLogRetentionDays)
 	c.NotesImageMaxUploadMB = l.intDefault("HOME_NOTES_IMAGE_MAX_UPLOAD_MB", defaultNotesImageMaxUploadMB)
+	c.Storage = StorageConfig{
+		WarnTotalMB:  l.intDefault("HOME_STORAGE_WARN_TOTAL_MB", defaultStorageWarnTotalMB),
+		CacheSeconds: l.intDefault("HOME_STORAGE_CACHE_SECONDS", defaultStorageCacheSeconds),
+	}
 
 	// Range sanity — these bound server work, so a nonsensical value is a bug.
 	if c.DashboardLookbackDays < 0 {
@@ -821,4 +843,30 @@ func (l *loader) garden() GardenConfig {
 		g.WeatherPollHours = defaultGardenWeatherPoll
 	}
 	return g
+}
+
+// StorageConfig is the Úložiště page's whole configuration (v9, §V9-9).
+//
+// Two plain integers, both defaulted, neither a secret — no new bucket credential,
+// no feature flag, and deliberately NO CONFIGURATION FOR PRIVACY AT ALL.
+type StorageConfig struct {
+	// WarnTotalMB is the warning threshold on the MODULES' primary-bucket total.
+	// 0 disables the warning.
+	//
+	// ⚠ Nothing is ever blocked by it (D196): no upload fails, there is no per-user
+	// quota and no new 413. It exists so an R2 bill is a decision rather than a
+	// surprise.
+	//
+	// ⚠ And it is compared against the per-module R2 total ONLY — not the whole
+	// bucket. The Litestream replica and the backup mirror are derived copies and
+	// sit outside the breakdown (D214/D205); folding them in would make the
+	// default fire permanently and the register would stop meaning anything.
+	WarnTotalMB int
+	// CacheSeconds is the snapshot's in-process TTL; 0 disables caching and
+	// ?refresh=true bypasses it either way.
+	//
+	// A one-minute TTL is not state: nothing survives a restart, nothing needs a
+	// migration, and nothing can be wrong for longer than a minute — which is what
+	// lets the whole page be computed on read with no table and no job (D195).
+	CacheSeconds int
 }

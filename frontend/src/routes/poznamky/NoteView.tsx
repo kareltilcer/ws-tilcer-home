@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ArrowRightLeft, Check, Link2, Pencil, Pin, RotateCcw, Trash2, X } from 'lucide-react'
+import { ArrowRightLeft, Check, Link2, Pencil, Pin, RotateCcw, Trash2, Upload, X } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { ApiError } from '@/api/client'
 import * as api from '@/api/endpoints'
@@ -146,12 +146,15 @@ export function NoteView({
   via,
   onMove,
   onDelete,
+  onPublish,
 }: {
   noteId: string
   readOnly?: boolean
   via?: string
   onMove?: (note: NoteDetail) => void
   onDelete?: (note: NoteDetail) => void
+  /** v9: owner-only publish of a private note (D182). Absent = no control. */
+  onPublish?: (note: NoteDetail) => void
 }) {
   const { canWrite } = useAuth()
   const editable = canWrite && !readOnly
@@ -189,7 +192,7 @@ export function NoteView({
   const applyDetail = (d: NoteDetail, structural: boolean) => {
     qc.setQueryData(qk.noteDetail(noteId), d)
     if (structural) {
-      void qc.invalidateQueries({ queryKey: qk.notesTree })
+      void qc.invalidateQueries({ queryKey: qk.notesAll })
       void qc.invalidateQueries({ queryKey: qk.dashboard })
     }
   }
@@ -301,7 +304,7 @@ export function NoteView({
       on ? api.pinNote(noteId, scope, via) : api.unpinNote(noteId, scope, via),
     onSuccess: (pinned) => {
       qc.setQueryData<NoteDetail>(qk.noteDetail(noteId), (d) => (d ? { ...d, pinned } : d))
-      void qc.invalidateQueries({ queryKey: qk.notesTree })
+      void qc.invalidateQueries({ queryKey: qk.notesAll })
       void qc.invalidateQueries({ queryKey: qk.dashboard })
     },
     onError: () => toast.error(cs.notes.saveError),
@@ -491,7 +494,14 @@ export function NoteView({
   if (note.data.archived) return <NoteGone />
 
   const n = note.data
-  const folderLabel = n.path?.length ? n.path.map((p) => p.name).join(' / ') : cs.notes.root
+  // Root-level fallback names the root the note actually lives in (carrier
+  // discipline — see rootLabel in PoznamkyPage): the note's own visibility is
+  // the scope here, since this view has no page scope of its own.
+  const folderLabel = n.path?.length
+    ? n.path.map((p) => p.name).join(' / ')
+    : n.visibility === 'private'
+      ? cs.privacy.privateNotes
+      : cs.notes.root
   const body = draft ?? n.body_md ?? ''
 
   const enterEdit = (m: Exclude<Mode, 'read'>) => {
@@ -733,12 +743,21 @@ export function NoteView({
             {pinMenu && (
               <>
                 <div className="fixed inset-0 z-20" onClick={() => setPinMenu(false)} />
-                <div className="absolute right-0 top-10 z-30 w-60 rounded-xl border border-border-strong bg-s1 p-1.5 shadow-[var(--shadow)]">
+                <div className="absolute right-0 top-10 z-30 w-64 rounded-xl border border-border-strong bg-s1 p-1.5 shadow-[var(--shadow)]">
                   {editable && (
                     <PinOption
                       checked={n.pinned.household}
                       title={cs.notes.pinHousehold}
-                      hint={cs.notes.pinHouseholdHint}
+                      // ⚠ On a private note "pro všechny" is UNAVAILABLE AND
+                      // EXPLAINED, never silently absent (D183). Hiding it leaves
+                      // the member wondering what they did wrong; Home's standing
+                      // discipline is that disabled controls stay visible.
+                      hint={
+                        n.visibility === 'private'
+                          ? cs.privacy.householdPinUnavailable
+                          : cs.notes.pinHouseholdHint
+                      }
+                      disabled={n.visibility === 'private'}
                       onClick={() => togglePin('household')}
                     />
                   )}
@@ -748,6 +767,27 @@ export function NoteView({
                     hint={cs.notes.pinPersonalHint}
                     onClick={() => togglePin('personal')}
                   />
+                  {/* Publish lives in the item's OWN menu (HANDOFF-design §v9 §3),
+                      beside the visibility controls it belongs with — not on a
+                      toolbar where a bulk action would sit. Owner-only: a private
+                      note is only ever loaded by its owner, so rendering it here
+                      cannot expose it to anyone else. */}
+                  {onPublish && n.visibility === 'private' && editable && (
+                    <>
+                      <div className="my-1 h-px bg-border" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPinMenu(false)
+                          onPublish?.(n)
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-md border border-vis-private bg-vis-private-soft px-2.5 py-2 text-left text-[13px] font-bold hover:brightness-110"
+                      >
+                        <Upload size={14} className="flex-none" />
+                        {cs.privacy.publish}
+                      </button>
+                    </>
+                  )}
                 </div>
               </>
             )}
@@ -904,17 +944,31 @@ function PinOption({
   title,
   hint,
   onClick,
+  disabled,
 }: {
   checked: boolean
   title: string
   hint: string
   onClick: () => void
+  /**
+   * v9: a HOUSEHOLD pin on a PRIVATE note (D183).
+   *
+   * ⚠ Disabled AND EXPLAINED, never hidden. The hint carries the reason —
+   * "ostatní ji nevidí" — because a control that silently vanishes leaves the
+   * member wondering what they did wrong, and Home's standing discipline is that
+   * disabled controls stay visible.
+   */
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left hover:bg-s3"
+      disabled={disabled}
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left',
+        disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-s3',
+      )}
     >
       <span
         className={cn(

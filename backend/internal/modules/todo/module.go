@@ -50,3 +50,15 @@ func (m *Module) AuditActions() []string {
 func (m *Module) Widgets() []registry.WidgetProvider {
 	return []registry.WidgetProvider{m.widget}
 }
+
+// StorageTables declares the SQLite tables this module owns, for the v9 storage
+// catalog (platform/storage, D191). The platform sizes them; it needs no idea what
+// they mean, which is why this is a plain []string and not a richer descriptor.
+//
+// ⚠ A table added to this module's migrations and NOT added here fails
+// TestEveryTableIsDeclared. That is deliberate: v9 opened a fifth registration
+// surface, and unlike the four host maps before it, this one is closable by
+// machine (D192).
+func (m *Module) StorageTables() []string {
+	return []string{"boards", "columns", "cards", "labels", "card_labels", "card_links", "checklist_items"}
+}

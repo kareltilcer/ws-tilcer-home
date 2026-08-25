@@ -2778,3 +2778,76 @@ These eight were surfaced by an adversarial read of this spec against the shippe
 - [ ] The persisted TanStack Query cache is **verified** to be per-user namespaced and cleared on logout — it is now the one place a private title can outlive a session (v5 D71/D73).
 - [ ] Offline: both trees render read-only from cache; write controls disabled with the standard **"Změny nelze uložit offline"**.
 - [ ] Accessibility pass at 375/1440 in both themes: the lock mark is not the only carrier of "private" (a text label accompanies it), the warning register passes AA, and the purge confirmation is keyboard-operable.
+
+---
+
+## V9-12. As built — the v9 build (started 2026-08-24, OpenAPI 0.10.1 → **0.11.0**)
+
+*Findings recorded during the build, as §V7-12 and §V8-12 were. The sections above are the spec; this one is what the code turned out to be.*
+
+### `dbstat` is available (D193 — settled 2026-08-24)
+
+**`modernc.org/sqlite` v1.54.0 exposes the `dbstat` virtual table.** Probed as D193 requires rather than assumed, against an in-memory database with one table, one explicit index and 500 rows:
+
+```
+dbstat: name=ix_t                 pgsize=28672  payload=21372
+dbstat: name=sqlite_autoindex_t_1 pgsize=12288  payload=4372
+dbstat: name=sqlite_schema        pgsize=4096   payload=139
+dbstat: name=t                    pgsize=32768  payload=22500
+page_count=19 page_size=4096 freelist=0 total=77824
+```
+
+`SELECT name, SUM(pgsize), SUM(payload) FROM dbstat GROUP BY name` works, and **the pgsize column sums to exactly `page_count × page_size`** (28672 + 12288 + 4096 + 32768 = 77824). That arithmetic is the storage page's premise, and it holds. The inferred evidence in D193 (`DBSTAT_PAGE_PADDING_BYTES` sitting inside the `SQLITE_ENABLE_DBSTAT_VTAB` guard) was right.
+
+**The boot probe ships anyway** — the driver could be swapped or rebuilt — and the `bytes_available:false` fallback branch is exercised by a test rather than merely written.
+
+**Two consequences the spec did not name, both of which the implementation has to handle:**
+
+1. **`dbstat` reports every b-tree separately, and an index is its own b-tree** — `ix_t` and `sqlite_autoindex_t_1` above are rows in their own right, not part of `t`. So `StorageTable.index_bytes` is not a column of `dbstat`: it is the sum of the b-trees whose names `sqlite_master` maps back to that table (`type='index' AND tbl_name = ?`), implicit `sqlite_autoindex_*` entries included. A per-table figure that ignores this loses every index in the file — and for `notes`/`documents` the FTS5 b-trees are typically the largest thing there is.
+2. **`sqlite_schema` is a b-tree with real pages** and belongs to no module. It joins `goose_db_version` in the platform's own allow-list (D211), or the per-module totals do not sum to the database total.
+
+### There are FOUR external-content FTS5 tables, not three (D211 — corrected 2026-08-24)
+
+§V9-4a, D211 and `HANDOFF-11` §6.2 all say Home has three FTS5 indexes accounting for fifteen shadow rows. **It has four, accounting for twenty.** `garden_plants_fts` arrived with v7 and the count was never revised.
+
+Enumerated from the migrated schema during the v9 build:
+
+| FTS5 index | Owning module | Shadow rows |
+|---|---|---|
+| `notes_fts` | `notes` | `_config` `_data` `_docsize` `_idx` |
+| `documents_fts` | `documents` | `_config` `_data` `_docsize` `_idx` |
+| `audit_events_fts` | `logging` | `_config` `_data` `_docsize` `_idx` |
+| **`garden_plants_fts`** | **`garden`** | `_config` `_data` `_docsize` `_idx` |
+
+Each is declared through `storage.FTSShadows("x_fts")` rather than by hand, so a fifth index is one call rather than four chances to mistype a suffix. The completeness test asserts the attribution of all twenty rows to their parents' modules, which is what would have caught the miscount on day one had it existed at v7.
+
+### Two tables belong to nobody and are created by no migration
+
+`goose_db_version` (the migration ledger) and `sqlite_sequence` (SQLite's own `AUTOINCREMENT` bookkeeping) are in the schema and in `dbstat`, and no `CREATE TABLE` for either appears anywhere in the repo. Both are in `storage.PlatformTables`. D211 names the first; the second was found by running the guard.
+
+**The completeness guard was verified the way D192 asks:** a throwaway `zz_scratch` table was added to a migration, the build went red naming it, and the table was removed. A guard nobody has seen fail is a guard nobody knows works.
+
+### D214 is DECLINED: the app does not hold Litestream's credentials (settled with Karel 2026-08-24)
+
+D214 put the **Litestream replica** on the Úložiště page as its own line — objects, bytes, generations, and `newest_at`, the last being the practical answer to *"is replication actually running?"*, a question Home has never been able to answer about itself.
+
+Reading it requires `blobstore.List` against the replica prefix, which requires the replica's bucket and keys. Those exist — `LITESTREAM_R2_BUCKET`, `LITESTREAM_R2_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` — but they are consumed **only by `docker-entrypoint.sh` and the litestream process**, never by the Go binary. Wiring them into `platform/config` would have introduced no NEW secret while meaningfully widening what the application process can reach: the credentials for the household's entire database backup.
+
+**Karel declined it.** `StorageReplica.configured` is therefore `false` in every environment, and the other fields stay null.
+
+**What this costs, precisely:** the app cannot report replica size or confirm replication liveness from inside itself. That returns to being an ops question answered on the droplet (`litestream snapshots`).
+
+**What it does not cost** — worth stating, because the line reads more central than it is:
+
+- Database figures are unaffected (they come from `PRAGMA`/`dbstat`, not from R2).
+- **Per-module R2 figures are unaffected**: `documents/` and `note-images/` live in the DOCS bucket, whose credentials the app already holds and already uses on every upload.
+- **The backup mirror bucket line (D205) is unaffected** — `HOME_DOCS_R2_BACKUP_*` is likewise already in the app's configuration. Half of "the page accounts for the whole R2 bill" survives.
+- **The warning threshold is unaffected.** It compares the MODULES' R2 total only; the replica and the mirror were already outside it, deliberately (design bundle, `design/v9/github.md`). Had it compared the whole bucket, this decision would have silently changed what the threshold means.
+- **The page's arithmetic is unaffected.** D214 already excluded the replica from the per-module sums, so contributing nothing changes no total.
+- **The design already covers it**: `HANDOFF-design.md` §v9 lists *"no backup bucket and no replica configured"* among the states to draw.
+
+⚠ **This is a DECISION, not a gap, and the distinction matters because D214 reads persuasively.** Anyone who finds `configured: false`, reads D214, and wires the credentials in as a bug fix has reversed a decision rather than fixed an oversight. The code says so at the site.
+
+**If the liveness answer is ever wanted back without credentials,** the route is Litestream's own metrics endpoint bound to localhost — the backend scrapes `127.0.0.1`, no secret and no bucket access, yielding *"replication is running"* but not *"the replica is 4.2 GB"*. Unverified against Litestream's documentation and out of scope for v9; noted so the option is not rediscovered from scratch.
+
+**Two acceptance criteria are consequently unticked by design:** §V9-11's *"the snapshot carries the Litestream replica line"* and the matching line in `HANDOFF-11` §10.

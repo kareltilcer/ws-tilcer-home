@@ -60,3 +60,8 @@ func (m *Module) AuditActions() []string {
 }
 
 func (m *Module) Widgets() []registry.WidgetProvider { return m.widgets }
+
+// StorageTables declares this module's tables for the v9 storage catalog (D191).
+func (m *Module) StorageTables() []string {
+	return []string{"events", "event_links", "event_reminder_completions"}
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 // DBTX is satisfied by *sql.DB and *sql.Tx. Reads use the store's *sql.DB;
@@ -62,24 +63,53 @@ func deref(p *string) string {
 
 // ---- Folders ----
 
-// icon is appended last so the existing scan positions are untouched.
-const folderCols = `id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon`
+// icon is appended after the v1 columns and the v9 pair after that, so existing
+// scan positions stay untouched.
+const folderCols = `id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon, visibility, owner_id`
 
 func scanFolder(r interface{ Scan(...any) error }) (Folder, error) {
 	var f Folder
-	var parent, createdBy, icon sql.NullString
+	var parent, createdBy, icon, owner sql.NullString
 	var archived int
-	if err := r.Scan(&f.ID, &parent, &f.Name, &f.Slug, &f.Position, &archived, &createdBy, &f.CreatedAt, &f.UpdatedAt, &icon); err != nil {
+	if err := r.Scan(&f.ID, &parent, &f.Name, &f.Slug, &f.Position, &archived, &createdBy,
+		&f.CreatedAt, &f.UpdatedAt, &icon, &f.Visibility, &owner); err != nil {
 		return Folder{}, err
 	}
 	f.ParentID = ptr(parent)
 	f.CreatedBy = ptr(createdBy)
 	f.Archived = archived != 0
 	f.Icon = icon.String
+	f.OwnerID = ptr(owner)
 	return f, nil
 }
 
-func (s *Store) GetFolder(ctx context.Context, q DBTX, id string) (*Folder, error) {
+// GetFolder loads a folder BY ID, subject to what viewerID may see: the whole
+// shared tree plus that member's own private one (v9). A folder in someone else's
+// private tree reads back as (nil, nil) — indistinguishable from an id that was
+// never issued, which is what makes the handler's 404 leak nothing (D180).
+func (s *Store) GetFolder(ctx context.Context, q DBTX, id, viewerID string) (*Folder, error) {
+	cond, args := viewerCond("", viewerID)
+	row := q.QueryRowContext(ctx,
+		`SELECT `+folderCols+` FROM folders WHERE id = ? AND `+cond,
+		append([]any{id}, args...)...)
+	f, err := scanFolder(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// GetFolderAnyScope loads a folder ignoring visibility.
+//
+// ⚠ It exists for exactly two callers and must not grow a third without an
+// argument: the admin HARD DELETE (D181 — the one asymmetry: an admin may purge a
+// foreign private item and may never read one) and the storage/purge inventory,
+// which reports sizes and ids and never a name. Anything that puts the returned
+// Name on a response has reintroduced the leak this version closes.
+func (s *Store) GetFolderAnyScope(ctx context.Context, q DBTX, id string) (*Folder, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+folderCols+` FROM folders WHERE id = ?`, id)
 	f, err := scanFolder(row)
 	if err == sql.ErrNoRows {
@@ -91,16 +121,17 @@ func (s *Store) GetFolder(ctx context.Context, q DBTX, id string) (*Folder, erro
 	return &f, nil
 }
 
-func (s *Store) InsertFolder(ctx context.Context, tx DBTX, parentID *string, name, slug, position, createdBy, icon string) (*Folder, error) {
+func (s *Store) InsertFolder(ctx context.Context, tx DBTX, parentID *string, name, slug, position, createdBy, icon string, sc Scope) (*Folder, error) {
 	id := idgen.New()
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO folders (id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon)
-		 VALUES (?,?,?,?,?,0,?,?,?,?)`,
-		id, nullable(deref(parentID)), name, slug, position, nullable(createdBy), now, now, nullable(icon)); err != nil {
+		`INSERT INTO folders (id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon, visibility, owner_id)
+		 VALUES (?,?,?,?,?,0,?,?,?,?,?,?)`,
+		id, nullable(deref(parentID)), name, slug, position, nullable(createdBy), now, now, nullable(icon),
+		sc.Visibility(), sc.ownerColumn()); err != nil {
 		return nil, err
 	}
-	return s.GetFolder(ctx, tx, id)
+	return s.GetFolderAnyScope(ctx, tx, id)
 }
 
 // RenameFolder updates name+slug.
@@ -138,10 +169,14 @@ func (s *Store) DeleteFolder(ctx context.Context, tx DBTX, id string) error {
 	return err
 }
 
-func (s *Store) ChildFolderBySlug(ctx context.Context, q DBTX, parentID *string, slug string) (*Folder, error) {
+// ChildFolderBySlug resolves one slug segment under a parent — or under the ROOT
+// OF ONE SCOPE when parentID is nil (v9). Before v9 the root was addressed by the
+// bare unscoped root sentinel, which after v9 would collapse every
+// member's private root and the household's into one bucket (D178).
+func (s *Store) ChildFolderBySlug(ctx context.Context, q DBTX, parentID *string, slug string, sc Scope) (*Folder, error) {
 	row := q.QueryRowContext(ctx,
-		`SELECT `+folderCols+` FROM folders WHERE COALESCE(parent_id,'') = ? AND slug = ? AND archived = 0`,
-		deref(parentID), slug)
+		`SELECT `+folderCols+` FROM folders WHERE `+siblingKeyExpr("", "parent_id")+` = ? AND slug = ? AND archived = 0`,
+		sc.parentKey(parentID), slug)
 	f, err := scanFolder(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -152,11 +187,11 @@ func (s *Store) ChildFolderBySlug(ctx context.Context, q DBTX, parentID *string,
 	return &f, nil
 }
 
-func (s *Store) lastFolderPosition(ctx context.Context, tx DBTX, parentID *string) (string, error) {
+func (s *Store) lastFolderPosition(ctx context.Context, tx DBTX, parentID *string, sc Scope) (string, error) {
 	var pos sql.NullString
 	if err := tx.QueryRowContext(ctx,
-		`SELECT MAX(position) FROM folders WHERE COALESCE(parent_id,'') = ? AND archived = 0`,
-		deref(parentID)).Scan(&pos); err != nil {
+		`SELECT MAX(position) FROM folders WHERE `+siblingKeyExpr("", "parent_id")+` = ? AND archived = 0`,
+		sc.parentKey(parentID)).Scan(&pos); err != nil {
 		return "", err
 	}
 	if !pos.Valid {
@@ -210,6 +245,13 @@ func (s *Store) FolderMetaByIDs(ctx context.Context, q DBTX, ids []string) (map[
 // parent_id) — used to cascade a folder delete without an N+1 walk per level
 // beyond the tree depth. includeArchived=false limits the walk to live folders
 // (soft cascade); true covers the whole physical subtree (hard delete audit).
+//
+// v9: it takes NO scope, and that is a property of the tree rather than an
+// oversight. Every descendant of a folder is in the SAME root scope as the folder
+// — a move across scopes is a 422 (D186) and a publish moves the whole subtree in
+// one transaction (D182) — so once the root has been access-checked, the walk
+// cannot escape into another member's tree. If a future change ever lets a subtree
+// straddle two scopes, this walk is the first thing that has to be revisited.
 func (s *Store) DescendantFolderIDs(ctx context.Context, q DBTX, rootID string, includeArchived bool) ([]string, error) {
 	filter := " AND archived = 0"
 	if includeArchived {
@@ -283,23 +325,46 @@ func (s *Store) NotesInFolders(ctx context.Context, q DBTX, folderIDs []string, 
 
 // ---- Notes ----
 
-const noteCols = `id, folder_id, title, slug, body_md, position, archived, created_by, created_at, updated_at`
+const noteCols = `id, folder_id, title, slug, body_md, position, archived, created_by, created_at, updated_at, visibility, owner_id`
 
 func scanNote(r interface{ Scan(...any) error }) (Note, error) {
 	var n Note
-	var folder, body, createdBy sql.NullString
+	var folder, body, createdBy, owner sql.NullString
 	var archived int
-	if err := r.Scan(&n.ID, &folder, &n.Title, &n.Slug, &body, &n.Position, &archived, &createdBy, &n.CreatedAt, &n.UpdatedAt); err != nil {
+	if err := r.Scan(&n.ID, &folder, &n.Title, &n.Slug, &body, &n.Position, &archived, &createdBy,
+		&n.CreatedAt, &n.UpdatedAt, &n.Visibility, &owner); err != nil {
 		return Note{}, err
 	}
 	n.FolderID = ptr(folder)
 	n.BodyMD = ptr(body)
 	n.CreatedBy = ptr(createdBy)
 	n.Archived = archived != 0
+	n.OwnerID = ptr(owner)
 	return n, nil
 }
 
-func (s *Store) GetNote(ctx context.Context, q DBTX, id string) (*Note, error) {
+// GetNote loads a note BY ID, subject to what viewerID may see (v9). Another
+// member's private note reads back as (nil, nil) — byte-identical to an id that
+// does not exist, which is the whole point (D180).
+func (s *Store) GetNote(ctx context.Context, q DBTX, id, viewerID string) (*Note, error) {
+	cond, args := viewerCond("", viewerID)
+	row := q.QueryRowContext(ctx,
+		`SELECT `+noteCols+` FROM notes WHERE id = ? AND `+cond,
+		append([]any{id}, args...)...)
+	n, err := scanNote(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+// GetNoteAnyScope loads a note ignoring visibility. See GetFolderAnyScope: two
+// callers only — the admin hard delete (D181) and the storage inventory, which
+// never puts a title on a response.
+func (s *Store) GetNoteAnyScope(ctx context.Context, q DBTX, id string) (*Note, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+noteCols+` FROM notes WHERE id = ?`, id)
 	n, err := scanNote(row)
 	if err == sql.ErrNoRows {
@@ -311,16 +376,17 @@ func (s *Store) GetNote(ctx context.Context, q DBTX, id string) (*Note, error) {
 	return &n, nil
 }
 
-func (s *Store) InsertNote(ctx context.Context, tx DBTX, folderID *string, title, slug, body, position, createdBy string) (*Note, error) {
+func (s *Store) InsertNote(ctx context.Context, tx DBTX, folderID *string, title, slug, body, position, createdBy string, sc Scope) (*Note, error) {
 	id := idgen.New()
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO notes (id, folder_id, title, slug, body_md, position, archived, created_by, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,0,?,?,?)`,
-		id, nullable(deref(folderID)), title, slug, nullable(body), position, nullable(createdBy), now, now); err != nil {
+		`INSERT INTO notes (id, folder_id, title, slug, body_md, position, archived, created_by, created_at, updated_at, visibility, owner_id)
+		 VALUES (?,?,?,?,?,?,0,?,?,?,?,?)`,
+		id, nullable(deref(folderID)), title, slug, nullable(body), position, nullable(createdBy), now, now,
+		sc.Visibility(), sc.ownerColumn()); err != nil {
 		return nil, err
 	}
-	return s.GetNote(ctx, tx, id)
+	return s.GetNoteAnyScope(ctx, tx, id)
 }
 
 // notePatch carries the fields a PATCH may change. A nil pointer means "leave as
@@ -378,10 +444,63 @@ func (s *Store) DeleteNote(ctx context.Context, tx DBTX, id string) error {
 	return err
 }
 
-func (s *Store) ChildNoteBySlug(ctx context.Context, q DBTX, folderID *string, slug string) (*Note, error) {
+// PublishNoteRow moves one note from a private root into the shared tree: sets
+// visibility, clears owner_id, reparents and re-slugs, all in the caller's
+// transaction (v9, D182).
+//
+// It is a SEPARATE method from MoveNoteRow on purpose. A move that crosses scopes
+// is a 422 (D186) and publishing is the only crossing there is; folding the two
+// together would make the one irreversible operation in the module reachable from
+// the ordinary drag-and-drop path.
+func (s *Store) PublishNoteRow(ctx context.Context, tx DBTX, id string, folderID *string, position, slug string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE notes SET folder_id = ?, position = ?, slug = ?, visibility = 'shared', owner_id = NULL, updated_at = ?
+		 WHERE id = ?`,
+		nullable(deref(folderID)), position, slug, nowUTC(), id)
+	return err
+}
+
+// PublishFolderRow is the folder equivalent. A folder publish cascades to every
+// descendant through PublishDescendants below; this writes the root of the subtree.
+func (s *Store) PublishFolderRow(ctx context.Context, tx DBTX, id string, parentID *string, position, slug string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE folders SET parent_id = ?, position = ?, slug = ?, visibility = 'shared', owner_id = NULL, updated_at = ?
+		 WHERE id = ?`,
+		nullable(deref(parentID)), position, slug, nowUTC(), id)
+	return err
+}
+
+// PublishDescendants flips visibility on every folder and note in a subtree whose
+// root has already been reparented. Slugs are NOT re-derived here and do not need
+// to be: a descendant's siblings are the same siblings they were before the
+// publish — only the subtree's ROOT lands among strangers.
+//
+// ⚠ Both statements run in the caller's transaction. A partial publish — half a
+// folder visible to the household — is the one outcome this endpoint must never
+// produce, and the transaction is what guarantees it.
+func (s *Store) PublishDescendants(ctx context.Context, tx DBTX, folderIDs []string) error {
+	if len(folderIDs) == 0 {
+		return nil
+	}
+	ph := placeholders(len(folderIDs))
+	now := nowUTC()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE folders SET visibility = 'shared', owner_id = NULL, updated_at = ? WHERE id IN (`+ph+`)`,
+		append([]any{now}, toArgs(folderIDs)...)...); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE notes SET visibility = 'shared', owner_id = NULL, updated_at = ? WHERE folder_id IN (`+ph+`)`,
+		append([]any{now}, toArgs(folderIDs)...)...)
+	return err
+}
+
+// ChildNoteBySlug resolves one slug segment under a folder, or under the root of
+// one scope when folderID is nil (v9). See ChildFolderBySlug.
+func (s *Store) ChildNoteBySlug(ctx context.Context, q DBTX, folderID *string, slug string, sc Scope) (*Note, error) {
 	row := q.QueryRowContext(ctx,
-		`SELECT `+noteCols+` FROM notes WHERE COALESCE(folder_id,'') = ? AND slug = ? AND archived = 0`,
-		deref(folderID), slug)
+		`SELECT `+noteCols+` FROM notes WHERE `+siblingKeyExpr("", "folder_id")+` = ? AND slug = ? AND archived = 0`,
+		sc.parentKey(folderID), slug)
 	n, err := scanNote(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -392,11 +511,11 @@ func (s *Store) ChildNoteBySlug(ctx context.Context, q DBTX, folderID *string, s
 	return &n, nil
 }
 
-func (s *Store) lastNotePosition(ctx context.Context, tx DBTX, folderID *string) (string, error) {
+func (s *Store) lastNotePosition(ctx context.Context, tx DBTX, folderID *string, sc Scope) (string, error) {
 	var pos sql.NullString
 	if err := tx.QueryRowContext(ctx,
-		`SELECT MAX(position) FROM notes WHERE COALESCE(folder_id,'') = ? AND archived = 0`,
-		deref(folderID)).Scan(&pos); err != nil {
+		`SELECT MAX(position) FROM notes WHERE `+siblingKeyExpr("", "folder_id")+` = ? AND archived = 0`,
+		sc.parentKey(folderID)).Scan(&pos); err != nil {
 		return "", err
 	}
 	if !pos.Valid {
@@ -405,24 +524,39 @@ func (s *Store) lastNotePosition(ctx context.Context, tx DBTX, folderID *string)
 	return lexorank.Tail(pos.String), nil
 }
 
-// SiblingSlugTaken reports whether a live folder or note under parentScope already
-// uses slug, excluding the given ids (the item being renamed/moved). This is the
-// in-transaction cross-table half of the addressing invariant (D32) that no single
-// index can express.
-func (s *Store) SiblingSlugTaken(ctx context.Context, q DBTX, parentScope *string, slug, excludeFolderID, excludeNoteID string) (bool, error) {
-	scope := deref(parentScope)
+// SiblingSlugTaken reports whether a live folder or note under the same parent
+// already uses slug, excluding the given ids (the item being renamed/moved). This
+// is the in-transaction cross-table half of the addressing invariant (D32) that no
+// single index can express.
+//
+// ⚠ THE SCOPE ARGUMENT IS NOT OPTIONAL POLISH — it is the other half of D178, and
+// scoping the four indexes without scoping this query fixes nothing visible.
+//
+// The failure mode if it is dropped is quiet rather than loud, which is why it is
+// worth spelling out (D210). Service.freeSlug LOOPS on this predicate, appending
+// -2, -3… until it reports free. So when two members each create a private note
+// called "Recepty" at their own root, an un-scoped query does NOT raise a 409: it
+// tells the second caller that `recepty` is taken, freeSlug quietly hands them
+// `recepty-2`, and both requests succeed. The result is a slug that discloses the
+// existence of a sibling they are not allowed to see, with no error anywhere and
+// nothing in the logs. Assert on the resulting SLUG, never on an error.
+//
+// The predicate mirrors the sibling-slug index expression exactly, so root-level
+// siblings compare per root scope rather than collapsing into one bucket.
+func (s *Store) SiblingSlugTaken(ctx context.Context, q DBTX, parentID *string, sc Scope, slug, excludeFolderID, excludeNoteID string) (bool, error) {
+	key := sc.parentKey(parentID)
 	var n int
 	if err := q.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM folders WHERE COALESCE(parent_id,'') = ? AND slug = ? AND archived = 0 AND id != ?`,
-		scope, slug, excludeFolderID).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM folders WHERE `+siblingKeyExpr("", "parent_id")+` = ? AND slug = ? AND archived = 0 AND id != ?`,
+		key, slug, excludeFolderID).Scan(&n); err != nil {
 		return false, err
 	}
 	if n > 0 {
 		return true, nil
 	}
 	if err := q.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM notes WHERE COALESCE(folder_id,'') = ? AND slug = ? AND archived = 0 AND id != ?`,
-		scope, slug, excludeNoteID).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM notes WHERE `+siblingKeyExpr("", "folder_id")+` = ? AND slug = ? AND archived = 0 AND id != ?`,
+		key, slug, excludeNoteID).Scan(&n); err != nil {
 		return false, err
 	}
 	return n > 0, nil
@@ -430,21 +564,30 @@ func (s *Store) SiblingSlugTaken(ctx context.Context, q DBTX, parentScope *strin
 
 // SearchNotes runs an FTS5 MATCH over title+body, newest-updated first, capped.
 // It honors the same folder/archived scoping as the folder listing: nil folderID
-// searches all folders, and archived rows are excluded unless includeArchived.
-// Reads only.
-func (s *Store) SearchNotes(ctx context.Context, query string, folderID *string, includeArchived bool, limit int) ([]NoteSummary, error) {
-	conds := []string{"notes_fts MATCH ?"}
+// searches every folder IN ONE ROOT SCOPE, and archived rows are excluded unless
+// includeArchived. Reads only.
+//
+// ⚠ v9: the scope predicate rides INSIDE this query, in the same WHERE as the
+// MATCH, and never as a filter over the returned slice (D184). A post-filter still
+// leaks: the caller learns how many rows matched BEFORE filtering, through short
+// pages and the behaviour of the cap, even when every offending row is gone from
+// the response. The join to the base table is what makes this possible, which is
+// why the two must not be separated.
+func (s *Store) SearchNotes(ctx context.Context, query string, folderID *string, includeArchived bool, limit int, sc Scope) ([]NoteSummary, error) {
+	scopeSQL, scopeArgs := scopeCond("n.", sc)
+	conds := []string{"notes_fts MATCH ?", scopeSQL}
 	args := []any{query}
+	args = append(args, scopeArgs...)
 	if !includeArchived {
 		conds = append(conds, "n.archived = 0")
 	}
 	if folderID != nil {
-		conds = append(conds, "COALESCE(n.folder_id,'') = ?")
-		args = append(args, *folderID)
+		conds = append(conds, siblingKeyExpr("n.", "folder_id")+" = ?")
+		args = append(args, sc.parentKey(folderID))
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT n.id, n.folder_id, n.title, n.slug, n.position, n.archived, n.updated_at
+		`SELECT n.id, n.folder_id, n.title, n.slug, n.position, n.archived, n.updated_at, n.visibility, n.owner_id
 		 FROM notes_fts f JOIN notes n ON n.rowid = f.rowid
 		 WHERE `+strings.Join(conds, " AND ")+`
 		 ORDER BY n.updated_at DESC LIMIT ?`, args...)
@@ -465,30 +608,68 @@ func (s *Store) SearchNotes(ctx context.Context, query string, folderID *string,
 
 // ---- Tree data ----
 
-const noteSummaryCols = `id, folder_id, title, slug, position, archived, updated_at`
+const noteSummaryCols = `id, folder_id, title, slug, position, archived, updated_at, visibility, owner_id`
 
 func scanNoteSummary(r interface{ Scan(...any) error }) (NoteSummary, error) {
 	var sm NoteSummary
-	var folder sql.NullString
+	var folder, owner sql.NullString
 	var archived int
-	if err := r.Scan(&sm.ID, &folder, &sm.Title, &sm.Slug, &sm.Position, &archived, &sm.UpdatedAt); err != nil {
+	if err := r.Scan(&sm.ID, &folder, &sm.Title, &sm.Slug, &sm.Position, &archived, &sm.UpdatedAt,
+		&sm.Visibility, &owner); err != nil {
 		return NoteSummary{}, err
 	}
 	sm.FolderID = ptr(folder)
 	sm.Archived = archived != 0
+	sm.OwnerID = ptr(owner)
 	return sm, nil
 }
 
-// AllFolders returns every folder (optionally including archived), ordered.
-func (s *Store) AllFolders(ctx context.Context, includeArchived bool) ([]Folder, error) {
-	where := ""
+// AllFolders returns every folder IN ONE ROOT SCOPE (optionally including
+// archived), ordered.
+//
+// ⚠ v9: the scope is required even where the caller "obviously" means shared —
+// notably both `pripnute` widget providers, which call this to build breadcrumbs.
+// The pins those widgets render are already per-caller, so nothing leaked today,
+// but an un-scoped call loads every member's private folder NAMES into memory
+// beside a response. The next person to put a folder name on a widget row would
+// have no way to know (leak table row 9).
+func (s *Store) AllFolders(ctx context.Context, includeArchived bool, sc Scope) ([]Folder, error) {
+	scopeSQL, args := scopeCond("", sc)
+	where := " WHERE " + scopeSQL
 	if !includeArchived {
-		where = " WHERE archived = 0"
+		where += " AND archived = 0"
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+folderCols+` FROM folders`+where+` ORDER BY position, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+folderCols+` FROM folders`+where+` ORDER BY position, id`, args...)
 	if err != nil {
 		return nil, err
 	}
+	return scanFolders(rows)
+}
+
+// AllFoldersForViewer returns every live folder viewerID may see — the whole
+// shared tree plus that member's own private one — in ONE query.
+//
+// ⚠ It is the VIEWER predicate, not the scope one, and that is the point. The
+// `pripnute` widget needs a breadcrumb map spanning both roots the caller can
+// reach, which is precisely the question viewerCond answers ("may I see this
+// ROW?"); expressing it as two scoped reads made a per-render full folder scan
+// into two, on the dashboard, for every member. It is not a tree read and must
+// never be used as one — a tree route mixing both roots into one response is
+// exactly what D177 rejected (see scope.go's note on the two predicates).
+func (s *Store) AllFoldersForViewer(ctx context.Context, includeArchived bool, viewerID string) ([]Folder, error) {
+	cond, args := viewerCond("", viewerID)
+	where := " WHERE " + cond
+	if !includeArchived {
+		where += " AND archived = 0"
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+folderCols+` FROM folders`+where+` ORDER BY position, id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanFolders(rows)
+}
+
+func scanFolders(rows *sql.Rows) ([]Folder, error) {
 	defer rows.Close()
 	var out []Folder
 	for rows.Next() {
@@ -501,13 +682,15 @@ func (s *Store) AllFolders(ctx context.Context, includeArchived bool) ([]Folder,
 	return out, rows.Err()
 }
 
-// AllNoteSummaries returns every note as a lightweight summary (no body), ordered.
-func (s *Store) AllNoteSummaries(ctx context.Context, includeArchived bool) ([]NoteSummary, error) {
-	where := ""
+// AllNoteSummaries returns every note in one root scope as a lightweight summary
+// (no body), ordered.
+func (s *Store) AllNoteSummaries(ctx context.Context, includeArchived bool, sc Scope) ([]NoteSummary, error) {
+	scopeSQL, args := scopeCond("", sc)
+	where := " WHERE " + scopeSQL
 	if !includeArchived {
-		where = " WHERE archived = 0"
+		where += " AND archived = 0"
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+noteSummaryCols+` FROM notes`+where+` ORDER BY position, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+noteSummaryCols+` FROM notes`+where+` ORDER BY position, id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -523,16 +706,35 @@ func (s *Store) AllNoteSummaries(ctx context.Context, includeArchived bool) ([]N
 	return out, rows.Err()
 }
 
-// NoteSummariesInFolder returns the non-archived note summaries directly under a
-// folder (or root), ordered — for FolderDetail.
-func (s *Store) NoteSummariesInFolder(ctx context.Context, q DBTX, folderID *string, includeArchived bool) ([]NoteSummary, error) {
+// NoteSummariesInFolder returns the note summaries directly under a folder — or
+// under the ROOT OF ONE SCOPE when folderID is the root sentinel — ordered.
+//
+// ⚠ This predicate is the second half of the unscoped-COALESCE family, and it had
+// a bug before v9 even existed (D203). `notes` has no ?folder_id=root sentinel:
+// the handler passed the parameter straight through and a nil pointer dereferenced
+// to the empty string, so OMITTING folder_id already meant "root notes only" rather than the
+// "all notes" the 0.10.1 contract advertised. After v9 the same expression would
+// collapse EVERY scope's root into one bucket, so `GET /api/notes` would return
+// other members' private root notes. Both halves are fixed here: the scope rides
+// in the key, and the handler now understands the `root` sentinel documents
+// already had.
+// ⚠ AND THE SCOPE RIDES IN THE WHERE CLAUSE TOO, not only inside the sibling key.
+// The key pins the scope ONLY at the root, where the sentinel carries it; under a
+// named folder it degenerates to `folder_id = ?` and says nothing about
+// visibility. `GET /api/notes?folder_id=` passes an id straight from the request,
+// so without the term below any member could hand it another member's private
+// folder id — one the purge screen hands admins by design (D198) — and read back
+// every title in it.
+func (s *Store) NoteSummariesInFolder(ctx context.Context, q DBTX, folderID *string, includeArchived bool, sc Scope) ([]NoteSummary, error) {
 	cond := "archived = 0"
 	if includeArchived {
 		cond = "1=1"
 	}
+	scopeSQL, scopeArgs := scopeCond("", sc)
+	args := append([]any{sc.parentKey(folderID)}, scopeArgs...)
 	rows, err := q.QueryContext(ctx,
-		`SELECT `+noteSummaryCols+` FROM notes WHERE COALESCE(folder_id,'') = ? AND `+cond+` ORDER BY position, id`,
-		deref(folderID))
+		`SELECT `+noteSummaryCols+` FROM notes WHERE `+siblingKeyExpr("", "folder_id")+` = ? AND `+scopeSQL+` AND `+cond+` ORDER BY position, id`,
+		args...)
 	if err != nil {
 		return nil, err
 	}
@@ -548,16 +750,47 @@ func (s *Store) NoteSummariesInFolder(ctx context.Context, q DBTX, folderID *str
 	return out, rows.Err()
 }
 
-// ChildFolders returns the non-archived child folders of parentID (or root),
-// ordered — for FolderDetail.
-func (s *Store) ChildFolders(ctx context.Context, q DBTX, parentID *string, includeArchived bool) ([]Folder, error) {
+// ScopedNoteSummaries returns every live note in one root scope, ordered — what
+// `GET /api/notes` returns when no folder_id narrows it. Split from
+// NoteSummariesInFolder because "all notes in this tree" and "the notes directly
+// at its root" are different questions that the pre-v9 code conflated (D203).
+func (s *Store) ScopedNoteSummaries(ctx context.Context, q DBTX, includeArchived bool, sc Scope) ([]NoteSummary, error) {
+	scopeSQL, args := scopeCond("", sc)
+	where := " WHERE " + scopeSQL
+	if !includeArchived {
+		where += " AND archived = 0"
+	}
+	rows, err := q.QueryContext(ctx,
+		`SELECT `+noteSummaryCols+` FROM notes`+where+` ORDER BY position, id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []NoteSummary{}
+	for rows.Next() {
+		sm, err := scanNoteSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sm)
+	}
+	return out, rows.Err()
+}
+
+// ChildFolders returns the child folders of parentID — or of the root of one scope
+// — ordered, for FolderDetail.
+func (s *Store) ChildFolders(ctx context.Context, q DBTX, parentID *string, includeArchived bool, sc Scope) ([]Folder, error) {
 	cond := "archived = 0"
 	if includeArchived {
 		cond = "1=1"
 	}
+	// Scope in the WHERE clause too — same fail-closed reasoning as
+	// NoteSummariesInFolder above: under a named parent the sibling key
+	// degenerates to `parent_id = ?` and says nothing about visibility.
+	scopeSQL, scopeArgs := scopeCond("", sc)
 	rows, err := q.QueryContext(ctx,
-		`SELECT `+folderCols+` FROM folders WHERE COALESCE(parent_id,'') = ? AND `+cond+` ORDER BY position, id`,
-		deref(parentID))
+		`SELECT `+folderCols+` FROM folders WHERE `+siblingKeyExpr("", "parent_id")+` = ? AND `+scopeSQL+` AND `+cond+` ORDER BY position, id`,
+		append([]any{sc.parentKey(parentID)}, scopeArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -700,22 +933,34 @@ func (s *Store) DeletePin(ctx context.Context, tx DBTX, noteID, scope string, us
 
 // pinRow is one row from the widget query (join note_pins → notes).
 type pinRow struct {
-	NoteID    string
-	FolderID  *string
-	Title     string
-	Slug      string
-	BodyMD    *string
-	UpdatedAt string
-	Scope     string
-	Position  string
+	NoteID     string
+	FolderID   *string
+	Title      string
+	Slug       string
+	BodyMD     *string
+	UpdatedAt  string
+	Scope      string
+	Position   string
+	Visibility string // v9: drives the widget row's lock mark (D183)
 }
 
 // PinnedRowsFor returns the household pins and this user's personal pins joined to
 // their (non-archived) notes, ordered by pin position within each scope. One
 // bounded query, no N+1.
+//
+// v9: it needs no visibility predicate, and the reason is worth stating rather
+// than trusting. A private note can carry only a PERSONAL pin (a household pin on
+// one is a 422, D183), and the personal branch below is already filtered to
+// `p.user_id = ?`. So the only private rows this can return are the caller's own.
+// The `visibility` column comes back so the widget can draw the lock — it is not
+// what enforces anything.
+//
+// ⚠ That reasoning holds only while the household-pin refusal holds. If a future
+// change ever admits a household pin on a private note, this query starts serving
+// other members' titles to the widget with no other symptom.
 func (s *Store) PinnedRowsFor(ctx context.Context, userID string) ([]pinRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT p.note_id, n.folder_id, n.title, n.slug, n.body_md, n.updated_at, p.scope, p.position
+		`SELECT p.note_id, n.folder_id, n.title, n.slug, n.body_md, n.updated_at, p.scope, p.position, n.visibility
 		 FROM note_pins p JOIN notes n ON n.id = p.note_id
 		 WHERE n.archived = 0 AND (p.scope = 'household' OR (p.scope = 'personal' AND p.user_id = ?))
 		 ORDER BY p.position, n.title`, userID)
@@ -727,7 +972,7 @@ func (s *Store) PinnedRowsFor(ctx context.Context, userID string) ([]pinRow, err
 	for rows.Next() {
 		var r pinRow
 		var folder, body sql.NullString
-		if err := rows.Scan(&r.NoteID, &folder, &r.Title, &r.Slug, &body, &r.UpdatedAt, &r.Scope, &r.Position); err != nil {
+		if err := rows.Scan(&r.NoteID, &folder, &r.Title, &r.Slug, &body, &r.UpdatedAt, &r.Scope, &r.Position, &r.Visibility); err != nil {
 			return nil, err
 		}
 		r.FolderID = ptr(folder)
@@ -781,6 +1026,12 @@ type noteImage struct {
 	Checksum    string
 	CreatedBy   *string
 	CreatedAt   string
+	// NoteVisibility is the OWNING NOTE's visibility, carried along by
+	// GetNoteImageForViewer's join and empty on the unscoped loader. It is not a
+	// column of note_images and must never become one (D204) — it rides here only
+	// so the handler can pick a cache policy without a second round trip for a row
+	// the join already read.
+	NoteVisibility string
 }
 
 // ImageObjectRef is one object the note_images table claims — the mirror pass
@@ -791,6 +1042,10 @@ type ImageObjectRef struct {
 }
 
 const noteImageCols = `id, note_id, content_type, byte_size, checksum, created_by, created_at`
+
+// noteImageColsPrefixed is the same list qualified for the join in
+// GetNoteImageForViewer, where `notes` is also in scope and `id` would be ambiguous.
+const noteImageColsPrefixed = `i.id, i.note_id, i.content_type, i.byte_size, i.checksum, i.created_by, i.created_at`
 
 func scanNoteImage(r interface{ Scan(...any) error }) (noteImage, error) {
 	var im noteImage
@@ -819,6 +1074,79 @@ func (s *Store) GetNoteImage(ctx context.Context, q DBTX, id string) (*noteImage
 	if err != nil {
 		return nil, err
 	}
+	return &im, nil
+}
+
+// GetNoteImageForViewer loads an image only if viewerID may see the note that owns
+// it (v9, D204, leak table rows 7 and 21) — OR some note the viewer may see whose
+// body references it.
+//
+// The OR term exists because ownership and liveness deliberately diverge:
+// liveness is by REFERENCE, not ownership (see Service.gcNoteImages), and content
+// copied between notes is a supported path. Without it, an image uploaded into a
+// private note and then embedded in a shared note stays owned by the private note
+// (ReassignNoteImage runs only on hard delete of the owner) and 404s for every
+// member except the uploader — a permanently broken image inside a note they can
+// fully read, invisible to the one person who could fix it. instr on the fixed
+// URL prefix matches how the reference scans in NotesReferencingAnyImage work.
+//
+// `note_images` gains NO visibility column of its own: an image inherits its
+// note's, and a second copy of the same fact is a second thing to keep in step.
+// The join below is what enforces it, and idx_note_images_note already supports it.
+//
+// A miss reads back as (nil, nil) — the same value an unknown image id produces —
+// so the handler's 404 is identical either way.
+// The join also returns `n.visibility`, which is why this has its own scan rather
+// than reusing scanNoteImage: the cache policy for the response depends on the
+// owning note's visibility (D208), and the row that decides access is the same row
+// that answers it — asking a second time would be two round trips for one fact.
+// (An image reached via the OR term keeps its OWNING note's visibility for cache
+// policy — private, hence the stricter policy — which errs safe.)
+//
+// ⚠ THE REFERENCE TERM REQUIRES THE OWNER'S OWN ACT, not merely a shared
+// reference. "Any live shared note references it" was NOT enough, and the gap was
+// reachable rather than theoretical: the purge screen hands admins the raw ids of
+// foreign `note_image` rows BY DESIGN (D198), and writing a reference is an
+// unprivileged act — so any member with write access who learned an id could paste
+// `/api/notes/images/{id}` as plain text into a shared note (an ARCHIVED one even,
+// since liveness was not checked either) and read a foreign private image. That
+// turns "an admin can name the thing well enough to delete it" (D197) into "well
+// enough to open it".
+//
+// So the referencing note must be SHARED, LIVE, and AUTHORED BY THE OWNER of the
+// private note that holds the image (`r.created_by = n.owner_id`). This term is
+// only ever consulted when `cond` has already failed — i.e. the owning note is
+// private and the viewer is not its owner — so owner_id is non-null there and the
+// comparison is exactly "the owner put this into household-visible content they
+// wrote". The legitimate divergence case the term exists for (an image uploaded
+// into a private note, then copied by its owner into a shared note, where
+// ReassignNoteImage does not run) is precisely that shape; the owner's own reads
+// are already granted by `cond` on n.
+func (s *Store) GetNoteImageForViewer(ctx context.Context, q DBTX, id, viewerID string) (*noteImage, error) {
+	cond, args := viewerCond("n.", viewerID)
+	allArgs := append([]any{id}, args...)
+	allArgs = append(allArgs, noteImageURL(id))
+	row := q.QueryRowContext(ctx,
+		`SELECT `+noteImageColsPrefixed+`, n.visibility
+		 FROM note_images i JOIN notes n ON n.id = i.note_id
+		 WHERE i.id = ? AND (`+cond+` OR EXISTS (
+		   SELECT 1 FROM notes r
+		   WHERE r.body_md IS NOT NULL AND instr(r.body_md, ?) > 0
+		     AND r.visibility = '`+visibilityShared+`'
+		     AND r.archived = 0
+		     AND r.created_by IS NOT NULL AND r.created_by = n.owner_id))`,
+		allArgs...)
+	var im noteImage
+	var createdBy sql.NullString
+	err := row.Scan(&im.ID, &im.NoteID, &im.ContentType, &im.ByteSize, &im.Checksum,
+		&createdBy, &im.CreatedAt, &im.NoteVisibility)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	im.CreatedBy = ptr(createdBy)
 	return &im, nil
 }
 
@@ -993,4 +1321,119 @@ func (s *Store) ExpectedImageObjects(ctx context.Context) ([]ImageObjectRef, err
 		out = append(out, ImageObjectRef{ImageID: id, Key: NoteImageKey(id)})
 	}
 	return out, rows.Err()
+}
+
+// ---- v9 storage catalog (D191/D194/D198) ----
+
+// NoteImageOwners returns image id → owner: "" when the owning note is shared, the
+// member's id when it is private. One query with the join, feeding the blob
+// attribution — an N+1 over a few thousand objects would make the storage page slow
+// enough that nobody opens it.
+//
+// Archived notes are INCLUDED: a soft-deleted note still holds its images (the
+// delete is reversible, so the objects survive), and a page that omitted them would
+// report less than the bucket holds.
+func (s *Store) NoteImageOwners(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT i.id, COALESCE(n.owner_id, '')
+		   FROM note_images i JOIN notes n ON n.id = i.note_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, owner string
+		if err := rows.Scan(&id, &owner); err != nil {
+			return nil, err
+		}
+		out[id] = owner
+	}
+	return out, rows.Err()
+}
+
+// PrivateInventory lists private notes, private folders and the images hanging off
+// private notes, plus the total bytes across ALL matching items.
+//
+// ⚠ The SELECT lists are the specification (D198): id, owner, size, dates. No
+// title, no name, no body. A note's `byte_size` is the length of its Markdown body
+// — the only size a note has — and a folder's is 0, because a folder holds no bytes
+// of its own.
+func (s *Store) PrivateInventory(ctx context.Context, ownerID string) ([]storage.Item, int64, error) {
+	args := []any{}
+	ownerCond := ""
+	if ownerID != "" {
+		ownerCond = " AND owner_id = ?"
+		args = append(args, ownerID)
+	}
+
+	out := []storage.Item{}
+	var total int64
+
+	noteRows, err := s.db.QueryContext(ctx,
+		`SELECT id, COALESCE(owner_id,''), LENGTH(COALESCE(body_md,'')), created_at, updated_at
+		   FROM notes WHERE visibility = 'private'`+ownerCond+` ORDER BY id DESC`, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer noteRows.Close()
+	for noteRows.Next() {
+		var it storage.Item
+		if err := noteRows.Scan(&it.ID, &it.OwnerID, &it.ByteSize, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		it.Module, it.Kind = "notes", storage.ItemNote
+		total += it.ByteSize
+		out = append(out, it)
+	}
+	if err := noteRows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	folderRows, err := s.db.QueryContext(ctx,
+		`SELECT id, COALESCE(owner_id,''), created_at, updated_at
+		   FROM folders WHERE visibility = 'private'`+ownerCond+` ORDER BY id DESC`, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer folderRows.Close()
+	for folderRows.Next() {
+		var it storage.Item
+		if err := folderRows.Scan(&it.ID, &it.OwnerID, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		it.Module, it.Kind = "notes", storage.ItemNoteFolder
+		out = append(out, it)
+	}
+	if err := folderRows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// Images inherit their note's visibility (D204), so the filter is on the JOINED
+	// note rather than on a column of their own. Listed for accounting and marked
+	// non-deletable by their kind (D212).
+	imgArgs := []any{}
+	imgCond := ""
+	if ownerID != "" {
+		imgCond = " AND n.owner_id = ?"
+		imgArgs = append(imgArgs, ownerID)
+	}
+	imgRows, err := s.db.QueryContext(ctx,
+		`SELECT i.id, COALESCE(n.owner_id,''), i.byte_size, i.created_at
+		   FROM note_images i JOIN notes n ON n.id = i.note_id
+		  WHERE n.visibility = 'private'`+imgCond+` ORDER BY i.id DESC`, imgArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer imgRows.Close()
+	for imgRows.Next() {
+		var it storage.Item
+		if err := imgRows.Scan(&it.ID, &it.OwnerID, &it.ByteSize, &it.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		it.Module, it.Kind = "notes", storage.ItemNoteImage
+		total += it.ByteSize
+		out = append(out, it)
+	}
+	return out, total, imgRows.Err()
 }

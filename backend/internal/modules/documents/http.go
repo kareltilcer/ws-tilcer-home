@@ -40,12 +40,17 @@ func (h *Handler) Mount(r chi.Router) {
 	r.With(httpx.RequireWrite).Delete("/documents/folders/{id}", h.deleteFolder) // hard=true additionally requires admin (in handler)
 	r.With(httpx.RequireWrite).Post("/documents/folders/{id}/move", h.moveFolder)
 
+	// Publish: private → shared, one-way (v9, D182). There is deliberately NO
+	// unpublish route, and its absence is a decision rather than a gap.
+	r.With(httpx.RequireWrite).Post("/documents/folders/{id}/publish", h.publishFolder)
+
 	// Documents by id. PATCH is metadata only — there is no route that replaces the
 	// bytes, by design (D41).
 	r.Get("/documents/{id}", h.getDocument)
 	r.With(httpx.RequireWrite).Patch("/documents/{id}", h.updateDocument)
 	r.With(httpx.RequireWrite).Delete("/documents/{id}", h.deleteDocument) // hard=true additionally requires admin (in handler)
 	r.With(httpx.RequireWrite).Post("/documents/{id}/move", h.moveDocument)
+	r.With(httpx.RequireWrite).Post("/documents/{id}/publish", h.publishDocument)
 
 	// Content: the permanent, household-only streams (D42/D33). Reads, so no CSRF —
 	// they are used as <img>/<iframe>/anchor targets and authorise from the session
@@ -101,9 +106,21 @@ func isAdmin(r *http.Request) bool {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	sc, err := scopeParam(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	page, err := h.svc.List(r.Context(), q.Get("q"), folderParam(r), boolParam(r, "include_archived"), limit, q.Get("cursor"))
+	page, err := h.svc.List(r.Context(), q.Get("q"), folderParam(r), boolParam(r, "include_archived"), limit, q.Get("cursor"), sc)
 	respond(w, http.StatusOK, page, err)
+}
+
+// scopeParam resolves ?scope= against the CALLER's identity. Default `shared`,
+// which is why every pre-v9 client keeps working untouched; `private` always means
+// the caller's own root, and there is no value that names anybody else's.
+func scopeParam(r *http.Request) (Scope, error) {
+	return ParseScope(r.Context(), r.URL.Query().Get("scope"))
 }
 
 // upload streams a multipart/form-data upload (FR-DOC1).
@@ -162,6 +179,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 			FolderID:    meta.FolderID,
 			Title:       meta.Title,
 			Description: meta.Description,
+			Scope:       meta.Scope,
 		})
 		_ = part.Close()
 		respond(w, http.StatusCreated, doc, err)
@@ -196,6 +214,10 @@ func readMetaField(part *multipart.Part, meta *UploadMeta) error {
 		meta.Title = v
 	case "description":
 		meta.Description = v
+	case "scope":
+		// v9: which root to upload into when folder_id is absent. The value names a
+		// scope, never an owner — ParseScope resolves "private" against the SESSION.
+		meta.Scope = v
 	}
 	return nil
 }
@@ -301,13 +323,67 @@ func (h *Handler) moveFolder(w http.ResponseWriter, r *http.Request) {
 // ---- Tree / resolve ----
 
 func (h *Handler) tree(w http.ResponseWriter, r *http.Request) {
-	t, err := h.svc.Tree(r.Context(), boolParam(r, "include_archived"))
+	sc, err := scopeParam(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	t, err := h.svc.Tree(r.Context(), boolParam(r, "include_archived"), sc)
 	respond(w, http.StatusOK, t, err)
 }
 
 func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
-	res, err := h.svc.Resolve(r.Context(), r.URL.Query().Get("path"))
+	sc, err := scopeParam(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	res, err := h.svc.Resolve(r.Context(), r.URL.Query().Get("path"), sc)
 	respond(w, http.StatusOK, res, err)
+}
+
+// ---- Publish (v9) ----
+
+func (h *Handler) publishDocument(w http.ResponseWriter, r *http.Request) {
+	in, err := decodePublish(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	d, err := h.svc.PublishDocument(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, http.StatusOK, d, err)
+}
+
+func (h *Handler) publishFolder(w http.ResponseWriter, r *http.Request) {
+	in, err := decodePublish(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	f, err := h.svc.PublishFolder(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, http.StatusOK, f, err)
+}
+
+// decodePublish accepts an absent or empty body: publishing to the shared ROOT is
+// the common case, so `POST …/publish` with no body has to work.
+//
+// ⚠ `ContentLength == 0` does not catch every empty body. A chunked request
+// carries ContentLength -1 whether or not it has content, so an empty chunked
+// publish reached DecodeJSON and 422'd with "EOF" against a contract that says an
+// absent body publishes to the shared root. io.EOF from the decoder IS the empty
+// body. See the notes twin.
+func decodePublish(r *http.Request) (PublishRequest, error) {
+	var in PublishRequest
+	if r.ContentLength == 0 {
+		return in, nil
+	}
+	if err := httpx.DecodeJSON(r, &in); err != nil {
+		if errors.Is(err, io.EOF) {
+			return PublishRequest{}, nil
+		}
+		return in, httpx.ErrUnprocessable(err.Error())
+	}
+	return in, nil
 }
 
 // ---- Content endpoints (FR-DOC8) ----

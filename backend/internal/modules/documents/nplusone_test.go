@@ -133,7 +133,7 @@ func measure(t *testing.T, svc *documents.Service, ctx context.Context, n int) c
 	provider := documents.NewModule(svc).Widgets()[0]
 
 	before := statements.Load()
-	if _, err := svc.Tree(ctx, false); err != nil {
+	if _, err := svc.Tree(ctx, false, documents.Scope{}); err != nil {
 		t.Fatalf("tree: %v", err)
 	}
 	treeCost := statements.Load() - before

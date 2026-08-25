@@ -53,9 +53,13 @@ func (s *Service) UploadImage(ctx context.Context, noteID string, file io.Reader
 	if s.blob == nil {
 		return nil, httpx.ErrInternal("image storage is not configured")
 	}
-	// The owning note must exist and be live — an image can't belong to a phantom
-	// (archived) or missing note. GetNote does not filter archived, so check it here.
-	n, err := s.store.GetNote(ctx, s.db, noteID)
+	// The owning note must exist, be live, and be one the CALLER MAY SEE — an image
+	// can't belong to a phantom (archived) or missing note, and uploading INTO
+	// another member's private note is the write side of the same leak as reading
+	// one (leak table row 21, D204). GetNote is viewer-scoped, so a foreign private
+	// note reads back nil and gets the ordinary 404. GetNote does not filter
+	// archived, so that stays an explicit check here.
+	n, err := s.store.GetNote(ctx, s.db, noteID, actorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +209,12 @@ func (h *Handler) getImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "imageId")
-	im, err := h.svc.store.GetNoteImage(r.Context(), h.svc.db, id)
+	// ⚠ Viewer-scoped, and it MUST come before the conditional-request branch below
+	// (leak table row 7). An image inherits its note's visibility (D204), so this
+	// join is the whole check — and if it ran after the If-None-Match short-circuit,
+	// a second member holding a stale ETag would get a 304 instead of a 404, which
+	// is a "yes, and it hasn't changed" for a document they may not see.
+	im, err := h.svc.store.GetNoteImageForViewer(r.Context(), h.svc.db, id, actorID(r.Context()))
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -214,10 +223,14 @@ func (h *Handler) getImage(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.ErrNotFound("image not found"))
 		return
 	}
+	// The owning note's visibility decides the cache policy — see setImageCache. It
+	// rides along on the load above, whose join already read the note: the row that
+	// settles access is the row that answers this, so it costs no second query.
+	private := im.NoteVisibility == visibilityPrivate
 
 	etag := `"` + im.Checksum + `"`
 	if httpx.IfNoneMatch(r, etag) {
-		setImageCache(w, etag)
+		setImageCache(w, etag, private)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -237,7 +250,7 @@ func (h *Handler) getImage(w http.ResponseWriter, r *http.Request) {
 
 	// Headers only now the bytes are in hand — set earlier they would ride along on a
 	// 404/502 and cache a one-year `immutable` lifetime onto an error.
-	setImageCache(w, etag)
+	setImageCache(w, etag, private)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.Header().Set("Content-Type", im.ContentType)
@@ -252,7 +265,28 @@ func (h *Handler) getImage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func setImageCache(w http.ResponseWriter, etag string) {
+// setImageCache stamps the cache validators, and since v9 the policy DEPENDS ON
+// VISIBILITY (D208, leak table row 19).
+//
+// The shipped header was `private, immutable, max-age=31536000` unconditionally,
+// and it would have quietly defeated the whole feature. `private` excludes shared
+// PROXIES — not the second person using the same laptop — and `immutable`
+// suppresses revalidation for a year, so the browser would keep serving a private
+// image from disk cache and the new 404 would simply never run. The repo already
+// names this threat model in frontend/src/platform/pwa/persist.ts; it had just
+// never reached the HTTP layer.
+//
+// `no-cache` for private items does NOT mean "do not cache" — it means "revalidate
+// before every reuse". That is exactly what is wanted: the ownership check runs on
+// every view, a second member gets 404, and the owner's repeat view is a 304
+// rather than a full re-download. `no-store` was considered and rejected as the
+// kind of tax that gets a header quietly deleted six months later. The ETag stays
+// on BOTH paths — it is what makes the 304 possible.
+func setImageCache(w http.ResponseWriter, etag string, private bool) {
 	w.Header().Set("ETag", etag)
+	if private {
+		w.Header().Set("Cache-Control", httpx.RevalidatedContentCache)
+		return
+	}
 	w.Header().Set("Cache-Control", httpx.ImmutableContentCache)
 }

@@ -37,3 +37,10 @@ func (m *Module) Migrations() fs.FS { return MigrationsFS }
 func (m *Module) AuditActions() []string { return nil }
 
 func (m *Module) Widgets() []registry.WidgetProvider { return nil }
+
+// StorageTables declares this module's tables for the v9 storage catalog (D191).
+// The widget HOST owns exactly one table — the per-user layout — because it holds
+// no feature data of its own (D28).
+func (m *Module) StorageTables() []string {
+	return []string{"user_dashboard_layout"}
+}

@@ -46,6 +46,9 @@ var actionLabels = map[string]string{
 	"notes.folder.update": "Když někdo přejmenuje složku poznámek",
 	"notes.folder.move":   "Když někdo přesune složku poznámek",
 	"notes.folder.delete": "Když někdo smaže složku poznámek",
+	// v9 — publishing a private item into the shared tree.
+	"notes.note.publish":   "Když někdo zveřejní soukromou poznámku pro celou domácnost",
+	"notes.folder.publish": "Když někdo zveřejní soukromou složku poznámek pro celou domácnost",
 
 	// documents (Dokumenty)
 	"documents.document.create":        "Když někdo nahraje dokument",
@@ -58,11 +61,64 @@ var actionLabels = map[string]string{
 	"documents.document_folder.update": "Když někdo přejmenuje složku dokumentů",
 	"documents.document_folder.move":   "Když někdo přesune složku dokumentů",
 	"documents.document_folder.delete": "Když někdo smaže složku dokumentů",
+	// v9 — publishing a private item into the shared tree.
+	"documents.document.publish":        "Když někdo zveřejní soukromý dokument pro celou domácnost",
+	"documents.document_folder.publish": "Když někdo zveřejní soukromou složku dokumentů pro celou domácnost",
 
 	// finance (Finance)
 	"finance.month.create": "Když někdo zadá měsíc do Financí",
 	"finance.month.update": "Když někdo upraví měsíc ve Financích",
 	"finance.month.delete": "Když někdo trvale smaže měsíc z Financí",
+
+	// garden (Zahrada)
+	"garden.plant.create":    "Když někdo přidá rostlinu",
+	"garden.plant.update":    "Když někdo upraví rostlinu",
+	"garden.plant.delete":    "Když někdo smaže rostlinu",
+	"garden.variety.create":  "Když někdo přidá odrůdu",
+	"garden.variety.update":  "Když někdo upraví odrůdu",
+	"garden.variety.delete":  "Když někdo smaže odrůdu",
+	"garden.bed.create":      "Když někdo přidá záhon",
+	"garden.bed.update":      "Když někdo upraví záhon",
+	"garden.bed.delete":      "Když někdo smaže záhon",
+	"garden.bed.move":        "Když někdo přesune záhon",
+	"garden.season.create":   "Když někdo založí sezónu",
+	"garden.season.update":   "Když někdo upraví sezónu",
+	"garden.season.close":    "Když někdo uzavře sezónu",
+	"garden.season.reopen":   "Když někdo znovu otevře sezónu",
+	"garden.planting.create": "Když někdo přidá výsadbu",
+	"garden.planting.update": "Když někdo upraví výsadbu",
+	"garden.planting.delete": "Když někdo smaže výsadbu",
+	"garden.task.create":     "Když někdo přidá zahradní úkol",
+	"garden.task.update":     "Když někdo upraví zahradní úkol",
+	"garden.task.delete":     "Když někdo smaže zahradní úkol",
+	"garden.harvest.create":  "Když někdo zapíše sklizeň",
+	"garden.harvest.update":  "Když někdo upraví sklizeň",
+	"garden.harvest.delete":  "Když někdo smaže sklizeň",
+	"garden.storage.create":  "Když někdo přidá uskladnění úrody",
+	"garden.storage.update":  "Když někdo upraví uskladnění úrody",
+	"garden.storage.delete":  "Když někdo smaže uskladnění úrody",
+	"garden.rule.create":     "Když někdo vytvoří zahradní pravidlo",
+	"garden.rule.update":     "Když někdo upraví zahradní pravidlo",
+	"garden.rule.delete":     "Když někdo smaže zahradní pravidlo",
+	"garden.settings.update": "Když někdo změní nastavení zahrady",
+	"garden.frost_warning":   "Když se vydá výstraha před mrazem",
+
+	// electricity (Elektřina)
+	"electricity.reading.create": "Když někdo přidá odečet elektřiny",
+	"electricity.reading.update": "Když někdo upraví odečet elektřiny",
+	"electricity.reading.delete": "Když někdo smaže odečet elektřiny",
+	"electricity.tariff.create":  "Když někdo vytvoří tarif",
+	"electricity.tariff.update":  "Když někdo upraví tarif",
+	"electricity.tariff.delete":  "Když někdo smaže tarif",
+	"electricity.advance.create": "Když někdo přidá zálohu na elektřinu",
+	"electricity.advance.update": "Když někdo upraví zálohu na elektřinu",
+	"electricity.advance.delete": "Když někdo smaže zálohu na elektřinu",
+	"electricity.payment.create": "Když někdo přidá platbu za elektřinu",
+	"electricity.payment.update": "Když někdo upraví platbu za elektřinu",
+	"electricity.payment.delete": "Když někdo smaže platbu za elektřinu",
+	"electricity.period.create":  "Když někdo vytvoří zúčtovací období",
+	"electricity.period.update":  "Když někdo upraví zúčtovací období",
+	"electricity.period.delete":  "Když někdo smaže zúčtovací období",
 
 	// platform
 	"platform.login":            "Když se někdo přihlásí",
@@ -85,6 +141,10 @@ var actionLabels = map[string]string{
 	"admin.schedule.update":   "Když správce upraví souhrn",
 	"admin.schedule.delete":   "Když správce smaže souhrn",
 	"admin.notification.test": "Když správce pošle zkušební oznámení",
+	// v9 — the only READ in Home that writes an audit event. Opening the list of
+	// other members' private items is recorded, because "who looked" is the answer
+	// the household is owed for a screen that exists at all (D198).
+	"admin.private_items.view": "Když správce otevře seznam soukromých položek",
 }
 
 // ActionLabel returns the human Czech phrase for an action, falling back to the

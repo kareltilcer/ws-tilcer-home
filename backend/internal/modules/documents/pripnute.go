@@ -34,7 +34,18 @@ func (p *pripnuteProvider) Data(ctx context.Context, u registry.User) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	folders, err := p.store.AllFolders(ctx, false)
+	// The folder map has to span BOTH roots the caller can reach — a private pinned
+	// document's breadcrumb lives in their private tree — which is the VIEWER
+	// question, not the scope one, so it is one viewer-scoped read
+	// (AllFoldersForViewer) rather than a scan per root.
+	//
+	// ⚠ Before v9 this was a single `AllFolders(ctx, false)` and it would have kept
+	// compiling and kept working: the PINS are per-caller, so nothing leaked into
+	// the response. What it did was load every member's private folder NAMES into
+	// memory next to a payload, invisibly (leak table row 9). The next person to
+	// put a folder name on a widget row would have inherited a leak with no way to
+	// notice it.
+	folders, err := p.store.AllFoldersForViewer(ctx, false, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +76,10 @@ func (p *pripnuteProvider) Data(ctx context.Context, u registry.User) (any, erro
 			PreviewStatus: r.PreviewStatus,
 			UpdatedAt:     r.UpdatedAt,
 			Position:      r.Position,
+			// v9: the widget row carries a lock mark for a private document (D183).
+			// It can only ever be the caller's own — a private document takes personal
+			// pins only, and PinnedRowsFor filters personal pins to this user.
+			Visibility: r.Visibility,
 		}
 		if r.ThumbnailKey != nil && *r.ThumbnailKey != "" {
 			u := thumbnailURL(r.DocumentID)

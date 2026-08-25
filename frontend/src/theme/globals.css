@@ -59,6 +59,15 @@
   --color-el-blocked: var(--el-blocked);
   --color-el-blocked-soft: var(--el-blocked-soft);
   --color-el-approx: var(--el-approx);
+  /* v9 platform tokens (see :root for why these exist and what they must not be
+     borrowed for). */
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-unmeasured: var(--unmeasured);
+  --color-attention: var(--attention);
+  --color-attention-soft: var(--attention-soft);
+  --color-vis-private: var(--vis-private);
+  --color-vis-private-soft: var(--vis-private-soft);
 
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 4px);
@@ -139,8 +148,8 @@
      NOT --danger (which means delete). Nobody has done anything wrong; the
      forecast is simply running above the zálohy. Red/green also never carries
      the meaning alone — the UI always prints the word and the sign. */
-  --el-over: oklch(0.800 0.105 42);
-  --el-over-soft: oklch(0.330 0.055 42);
+  --el-over: var(--attention);
+  --el-over-soft: var(--attention-soft);
   --el-under: var(--good);
   /* NOTE: --el-under resolves to the same green as --el-nt, since both alias the
      c2/good step. They never encode each other — one is a semantic balance, the
@@ -151,8 +160,8 @@
   /* BLOCKED IS NOT ERROR (D137). When a ceník change falls inside a reading
      interval the numbers around it are still correct, so the treatment is
      informational — distinctly not the destructive palette. */
-  --el-blocked: oklch(0.760 0.045 256);
-  --el-blocked-soft: oklch(0.300 0.028 256);
+  --el-blocked: var(--info);
+  --el-blocked-soft: var(--info-soft);
   /* An APPROXIMATE figure (interpolated kWh, D138) gets its own vocabulary, and
      the rule is that Kč NEVER receives it: a month's cost is an allocation of
      exact interval costs (D159), not a repricing of invented kWh. This is the
@@ -161,7 +170,45 @@
      treatment carries the interpolation FOOTNOTE — a full sentence, not a
      decorative tint — and at 0.560 it measured 3.91:1 against --s1, under the
      4.5 bar. Measured 5.4:1 here. */
-  --el-approx: oklch(0.635 0.018 264);
+  --el-approx: var(--unmeasured);
+
+  /* ---- v9: three platform names for what v8 built for one module ----
+
+     v9 introduces NO NEW COLOUR. It gives platform-level names to three
+     treatments Elektřina already carried, because a second module now needs each
+     of them and a per-module token used by two modules is how a design system
+     quietly grows a synonym.
+
+     The values below are the SHIPPED ones — v8's AA corrections, not the
+     design's original figures — so promoting them changes nothing on screen.
+     The --el-* tokens above are now aliases and re-step for free.
+
+       --info        blocked ≠ error. Informational, distinctly not destructive.
+       --unmeasured  a figure that could not be measured (v8: interpolated kWh;
+                     v9: a table with no dbstat).
+       --attention   a warning that BLOCKS NOTHING (v8: nedoplatek; v9: the
+                     storage threshold). Never --danger, which means delete. */
+  --info: oklch(0.760 0.045 256);
+  --info-soft: oklch(0.300 0.028 256);
+  --unmeasured: oklch(0.635 0.018 264);
+  --attention: oklch(0.800 0.105 42);
+  --attention-soft: oklch(0.330 0.055 42);
+
+  /* PRIVATE IS NOT A WARNING (v9, D177). A private tree is the normal state of a
+     private tree, not an alarm about one, so --vis-private aliases the
+     INFORMATIONAL pair rather than anything in the attention or danger family.
+
+     ⚠ The lock mark is NEVER the sole carrier of meaning: a word accompanies it
+     everywhere ("Soukromé", "Soukromé — jen ty"). That is an accessibility
+     requirement and also a plain-comprehension one — somebody seeing the icon for
+     the first time should not have to guess.
+
+     ⚠ And it means ONE thing. It is never borrowed for a disabled control, an
+     admin-only route, or a locked settlement period. Home already renders
+     disabled controls visibly; a lock that sometimes means "not yours" and
+     sometimes "not visible to others" destroys both meanings. */
+  --vis-private: var(--info);
+  --vis-private-soft: var(--info-soft);
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;
   --font: 'Hanken Grotesk', system-ui, sans-serif;
@@ -220,12 +267,15 @@
      --el-over-soft, which is body text by WCAG's reckoning (not "large"), and at
      0.545 it measured 4.33:1 — under the 4.5 bar. The chip, not the headline
      figure, was the failing pair. Measured 5.1:1 here. */
-  --el-over: oklch(0.505 0.150 42);
-  --el-over-soft: oklch(0.955 0.040 42);
-  --el-blocked: oklch(0.470 0.040 256);
-  --el-blocked-soft: oklch(0.955 0.014 256);
+  /* v9: the three el-* tokens are aliases now (see :root), so only the platform
+     names are restated for the light theme. The values are v8's shipped AA
+     corrections, unchanged — promoting a token must not move a pixel. */
+  --attention: oklch(0.505 0.150 42);
+  --attention-soft: oklch(0.955 0.040 42);
+  --info: oklch(0.470 0.040 256);
+  --info-soft: oklch(0.955 0.014 256);
   /* Darkened from the design's 0.640 for the same reason as its dark twin. */
-  --el-approx: oklch(0.545 0.018 264);
+  --unmeasured: oklch(0.545 0.018 264);
   --shadow: 0 1px 2px oklch(0.2 0.02 264 / 0.10), 0 2px 8px oklch(0.2 0.02 264 / 0.06);
 }
 

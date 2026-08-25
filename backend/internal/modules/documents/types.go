@@ -22,16 +22,22 @@ package documents
 // DocFolder is a node in the documents tree. parent_id NULL = root. This is the
 // module's OWN tree, isolated from Poznámky's folders (D40).
 type DocFolder struct {
-	ID        string  `json:"id"`
-	ParentID  *string `json:"parent_id"`
-	Name      string  `json:"name"`
-	Slug      string  `json:"slug"`
-	Icon      string  `json:"icon"` // optional emoji; "" = client shows the 📁 default
-	Position  string  `json:"position"`
-	Archived  bool    `json:"archived"`
-	CreatedBy *string `json:"created_by"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID       string  `json:"id"`
+	ParentID *string `json:"parent_id"`
+	Name     string  `json:"name"`
+	Slug     string  `json:"slug"`
+	Icon     string  `json:"icon"` // optional emoji; "" = client shows the 📁 default
+	Position string  `json:"position"`
+	Archived bool    `json:"archived"`
+	// Visibility is "shared" | "private" (v9, D177). REQUIRED on the wire, not
+	// optional: an item whose visibility a client has to INFER is an item some
+	// client will get wrong, and the cost of getting it wrong is showing a private
+	// name without a lock.
+	Visibility string  `json:"visibility"`
+	OwnerID    *string `json:"owner_id"`
+	CreatedBy  *string `json:"created_by"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 // DocumentUrls are the permanent, household-only, id-based content URLs (D42).
@@ -62,6 +68,8 @@ type Document struct {
 	PreviewStatus    string       `json:"preview_status"`
 	Position         string       `json:"position"`
 	Archived         bool         `json:"archived"`
+	Visibility       string       `json:"visibility"` // "shared" | "private" (v9, D177)
+	OwnerID          *string      `json:"owner_id"`
 	CreatedBy        *string      `json:"created_by"`
 	CreatedAt        string       `json:"created_at"`
 	UpdatedAt        string       `json:"updated_at"`
@@ -87,6 +95,8 @@ type DocumentSummary struct {
 	PreviewStatus string   `json:"preview_status"`
 	Position      string   `json:"position"`
 	Archived      bool     `json:"archived"`
+	Visibility    string   `json:"visibility"` // "shared" | "private" (v9) — drives the lock mark
+	OwnerID       *string  `json:"owner_id"`
 	UpdatedAt     string   `json:"updated_at"`
 	ThumbnailURL  *string  `json:"thumbnail_url"`
 	Pinned        PinState `json:"pinned"`
@@ -170,6 +180,14 @@ type DocFolderCreate struct {
 	Name     string  `json:"name"`
 	ParentID *string `json:"parent_id"`
 	Icon     string  `json:"icon"`
+	// Scope selects the root when ParentID is null: "shared" (default) | "private".
+	// Honoured ONLY at the root — with a parent the parent's scope governs and a
+	// disagreement is a 422. Missing it here would mean the private root could not
+	// hold a folder at all.
+	//
+	// ⚠ There is no owner_id field and there must never be one: an owner comes from
+	// the session, never from the body (§V9-3).
+	Scope string `json:"scope"`
 }
 
 type DocFolderUpdate struct {
@@ -183,8 +201,18 @@ type DocFolderMoveRequest struct {
 	Position string  `json:"position"`
 }
 
+// PinRequest's Scope is the PIN scope ("household" | "personal"), a different axis
+// from the v9 root scope. They meet in one place: a household pin on a private
+// document is a 422 (D183).
 type PinRequest struct {
 	Scope string `json:"scope"`
+}
+
+// PublishRequest is the destination of POST /api/documents/{id}/publish (v9,
+// D182). Both fields optional: an empty body publishes to the shared ROOT.
+type PublishRequest struct {
+	FolderID *string `json:"folder_id"`
+	Position string  `json:"position"`
 }
 
 // UploadMeta carries the multipart form's text fields (everything except the file
@@ -193,6 +221,11 @@ type UploadMeta struct {
 	FolderID    *string
 	Title       string
 	Description string
+	// Scope selects the root when FolderID is null (v9) — "shared" (default) |
+	// "private". This is the field that makes "upload into Soukromé dokumenty"
+	// possible at all, and it is honoured only at the root, exactly as on
+	// DocFolderCreate.
+	Scope string
 }
 
 // UploadedFile describes the bytes the handler has already streamed to storage,
@@ -224,6 +257,10 @@ type PinnedDocument struct {
 	ThumbnailURL  *string `json:"thumbnail_url"`
 	UpdatedAt     string  `json:"updated_at"`
 	Position      string  `json:"position"`
+	// Visibility drives the widget row's lock mark (v9, D183). A private document
+	// can only carry a PERSONAL pin, and only its owner's — so a row is only ever
+	// "private" for the member looking at it.
+	Visibility string `json:"visibility"`
 }
 
 // PripnuteDokumentyWidget is the documents.pripnute payload.

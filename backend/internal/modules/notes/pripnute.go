@@ -34,7 +34,18 @@ func (p *pripnuteProvider) Data(ctx context.Context, u registry.User) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	folders, err := p.store.AllFolders(ctx, false)
+	// Breadcrumbs for the rows above. The folder map has to span BOTH roots the
+	// caller can reach — a private pinned note's breadcrumb lives in their private
+	// tree — which is the VIEWER question, not the scope one, so it is one
+	// viewer-scoped read (AllFoldersForViewer) rather than a scan per root.
+	//
+	// ⚠ Before v9 this was a single `AllFolders(ctx, false)` and it would have kept
+	// compiling and kept working: the PINS are per-caller, so nothing leaked into
+	// the response. What it did was load every member's private folder NAMES into
+	// memory next to a payload, and leave no sign of it (leak table row 9). The
+	// next person to put a folder name on a widget row would have inherited a leak
+	// they had no way to notice. Bounded to the caller here so that day never comes.
+	folders, err := p.store.AllFoldersForViewer(ctx, false, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -55,13 +66,17 @@ func (p *pripnuteProvider) Data(ctx context.Context, u registry.User) (any, erro
 
 	toRow := func(r pinRow, scope string) PinnedNote {
 		return PinnedNote{
-			NoteID:    r.NoteID,
-			Title:     r.Title,
-			SlugPath:  slugPathInMap(fmap, r.FolderID, r.Slug),
-			Scope:     scope,
-			Excerpt:   excerpt(deref(r.BodyMD), excerptLen),
-			UpdatedAt: r.UpdatedAt,
-			Position:  r.Position,
+			NoteID:   r.NoteID,
+			Title:    r.Title,
+			SlugPath: slugPathInMap(fmap, r.FolderID, r.Slug),
+			Scope:    scope,
+			// v9: the widget row carries a lock mark for a private note (D183). It
+			// can only ever be the caller's own — a private note takes personal pins
+			// only, and PinnedRowsFor filters personal pins to this user.
+			Visibility: r.Visibility,
+			Excerpt:    excerpt(deref(r.BodyMD), excerptLen),
+			UpdatedAt:  r.UpdatedAt,
+			Position:   r.Position,
 		}
 	}
 

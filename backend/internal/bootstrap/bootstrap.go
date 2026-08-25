@@ -98,3 +98,25 @@ func MigrationFS() (fs.FS, error) {
 func MigrationFSWithSeed() (fs.FS, error) {
 	return registry.MergeMigrations(MigrationSourcesWithSeed())
 }
+
+// StorageSourcesForTest returns one instance of every module, for the storage
+// catalog's completeness guard (internal/arch, v9 D192).
+//
+// It exists because that guard has to enumerate the SAME module set the server
+// composes, and cmd/home builds its modules with live services — a database, an
+// object store, a push channel. The declarations it needs are static: a module's
+// StorageTables() is a literal list and does not touch anything it was constructed
+// with, so a zero-valued module answers it correctly.
+//
+// ⚠ A NEW MODULE MUST BE ADDED HERE TOO. That is one more hand-maintained list,
+// which is exactly the shape of thing v9 set out to close — but this one fails
+// LOUDLY: a module missing from this slice makes its tables undeclared, and the
+// completeness test names every one of them. The four host maps it replaces failed
+// silently.
+func StorageSourcesForTest() []any {
+	return []any{
+		&logging.Module{}, &todo.Module{}, &events.Module{}, &dashboard.Module{},
+		&notes.Module{}, &documents.Module{}, &admin.Module{}, &finance.Module{},
+		&garden.Module{}, &electricity.Module{},
+	}
+}

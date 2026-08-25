@@ -14,6 +14,7 @@ import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persi
 import { persistQueryClient } from '@tanstack/react-query-persist-client'
 import { del, get, keys, set } from 'idb-keyval'
 import type { QueryClient } from '@tanstack/react-query'
+import { qk } from '@/api/keys'
 
 const STORE_PREFIX = 'home-query-cache'
 /** Bump when a cached shape changes incompatibly; old buckets are discarded. */
@@ -22,6 +23,13 @@ const MAX_AGE = 7 * 24 * 60 * 60 * 1000 // a week of staleness is plenty for rea
 
 function keyFor(userID: string): string {
   return `${STORE_PREFIX}:${userID}`
+}
+
+/** isPrivateItemsKey matches every filter combination of the purge listing, through
+ *  the key factory rather than a literal — see shouldDehydrateQuery for why it must
+ *  never reach disk. */
+function isPrivateItemsKey(queryKey: readonly unknown[]): boolean {
+  return qk.adminPrivateItemsAll.every((segment, i) => queryKey[i] === segment)
 }
 
 let activeUser: string | null = null
@@ -75,6 +83,15 @@ export async function startPersisting(client: QueryClient, userID: string): Prom
         // Never persist auth/session state or push registration: both are
         // online-only by design, and a stale "you are logged in" is a bug.
         if (key === 'session' || key === 'auth' || key === 'push') return false
+        // ⚠ NOR the purge listing (v9, D198). Opening Soukromé položky writes
+        // `admin.private_items.view` — the only READ in Home that is audited — and
+        // PrivateItemsTab suppresses every automatic refetch precisely so that "a
+        // page load is a person choosing to look". Persisting it defeats both: the
+        // list rehydrates from IndexedDB days later with no request and therefore
+        // no audit event, and other members' private item ids sit on a shared
+        // laptop's disk between sessions. It is the one query whose value is
+        // strictly worse offline than absent.
+        if (isPrivateItemsKey(query.queryKey)) return false
         return query.state.status === 'success'
       },
     },

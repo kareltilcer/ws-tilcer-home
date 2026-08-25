@@ -44,8 +44,27 @@ import { Composer } from './Composer'
 import { AudiencePicker, audienceValid } from './AudiencePicker'
 import { ScheduleBuilder } from './ScheduleBuilder'
 import { ConditionsBuilder, conditionsForSave, conditionsPhrase, conditionsValid } from './ConditionsBuilder'
+import { StorageTab } from './StorageTab'
+import { PrivateItemsTab } from './PrivateItemsTab'
 
-type Tab = 'send' | 'rules' | 'summaries' | 'deliveries'
+type Tab = 'send' | 'rules' | 'summaries' | 'deliveries' | 'storage' | 'private'
+
+/**
+ * Administrace's navigation, at six tabs (v9).
+ *
+ * ⚠ TWO LEVELS, NOT ONE FLAT ROW. Six pills overflow horizontally at 375 px, and
+ * the six are not peers anyway: four configure NOTIFICATIONS and two are storage
+ * MAINTENANCE. Grouping them says which is which before anything is read.
+ *
+ * PRD §V9-7 asked for a single six-tab strip; the delivered design (2026-08-23,
+ * later document) uses these two levels, and that is what is built. Level 1 reuses
+ * v7's module tab-strip pattern rather than inventing a second pattern for the
+ * same job (D202) — v9 adds no nav entry, no widget, and no route to the shell.
+ */
+const TAB_GROUPS = [
+  { key: 'notif', label: 'Notifikace', tabs: ['send', 'rules', 'summaries', 'deliveries'] },
+  { key: 'store', label: 'Správa úložiště', tabs: ['storage', 'private'] },
+] as const satisfies readonly { key: string; label: string; tabs: readonly Tab[] }[]
 
 /** Mirrors maxCoalesceWindowSeconds in admin/service.go — the editor must not be
  *  able to compose a rule the server will refuse. */
@@ -56,24 +75,67 @@ function clampCoalesce(n: number): number {
   return Math.min(MAX_COALESCE_SECONDS, Math.max(0, Math.trunc(n)))
 }
 
+const TAB_LABELS: Record<Tab, string> = {
+  send: cs.admin.tabSend,
+  rules: cs.admin.tabRules,
+  summaries: cs.admin.tabSummaries,
+  deliveries: cs.admin.tabDeliveries,
+  storage: cs.storage.title,
+  private: cs.privateItems.title,
+}
+
 export function AdministracePage() {
   const [tab, setTab] = useState<Tab>('send')
   const catalogQuery = useQuery({ queryKey: qk.adminCatalog, queryFn: getNotificationCatalog })
   const catalog = catalogQuery.data
+  const currentGroup = TAB_GROUPS.find((g) => (g.tabs as readonly Tab[]).includes(tab)) ?? TAB_GROUPS[0]
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       <ScreenHeader title={cs.admin.title} subtitle={cs.admin.subtitle} />
 
-      <div role="tablist" aria-label={cs.admin.title} className="flex flex-wrap gap-1.5">
-        {(
-          [
-            ['send', cs.admin.tabSend],
-            ['rules', cs.admin.tabRules],
-            ['summaries', cs.admin.tabSummaries],
-            ['deliveries', cs.admin.tabDeliveries],
-          ] as const
-        ).map(([key, label]) => (
+      {/* Level 1 — the group. v7's tab-strip pattern: underline, scroll-snap, no
+          wrap, so it degrades to a horizontal scroll at 375 px instead of
+          reflowing into two ragged rows. */}
+      <div
+        role="tablist"
+        aria-label={cs.admin.title}
+        className="om-scroll flex gap-1 overflow-x-auto border-b border-border"
+        style={{ scrollSnapType: 'x proximity' }}
+      >
+        {TAB_GROUPS.map((g) => {
+          const active = (g.tabs as readonly Tab[]).includes(tab)
+          return (
+            <button
+              key={g.key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              // Selecting a group lands on its FIRST tab rather than remembering
+              // a per-group position: one less piece of state, and the first tab
+              // of each group is the one somebody opening it wants.
+              onClick={() => setTab(g.tabs[0])}
+              className={cn(
+                'min-h-[38px] flex-none scroll-ms-1 whitespace-nowrap border-b-2 px-3.5 text-[13.5px]',
+                active ? 'border-accent font-bold text-fg' : 'border-transparent font-semibold text-muted',
+              )}
+              style={{ scrollSnapAlign: 'start' }}
+            >
+              {g.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Level 2 — the tab within the group. Deliberately lighter than level 1 so
+          the two rows do not read as one confused strip. */}
+      <div
+        role="tablist"
+        aria-label={currentGroup.label}
+        className="om-scroll -mt-2 flex gap-1 overflow-x-auto"
+        style={{ scrollSnapType: 'x proximity' }}
+      >
+        {(currentGroup.tabs as readonly Tab[]).map((key) => (
           <button
             key={key}
             type="button"
@@ -81,11 +143,12 @@ export function AdministracePage() {
             aria-selected={tab === key}
             onClick={() => setTab(key)}
             className={cn(
-              'inline-flex min-h-[40px] items-center rounded-lg border px-3.5 text-[13.5px] font-semibold',
-              tab === key ? 'border-accent bg-accent-soft text-accent' : 'border-border bg-s2 text-muted',
+              'min-h-[34px] flex-none scroll-ms-1 whitespace-nowrap rounded-lg border px-3 text-[12.5px] font-semibold',
+              tab === key ? 'border-accent bg-accent-soft text-accent' : 'border-transparent text-muted',
             )}
+            style={{ scrollSnapAlign: 'start' }}
           >
-            {label}
+            {TAB_LABELS[key]}
           </button>
         ))}
       </div>
@@ -94,6 +157,8 @@ export function AdministracePage() {
       {tab === 'rules' && <RulesTab catalog={catalog} />}
       {tab === 'summaries' && <SummariesTab catalog={catalog} />}
       {tab === 'deliveries' && <DeliveriesTab />}
+      {tab === 'storage' && <StorageTab />}
+      {tab === 'private' && <PrivateItemsTab />}
     </div>
   )
 }

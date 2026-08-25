@@ -1,6 +1,8 @@
 package notes
 
 import (
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -38,11 +40,17 @@ func (h *Handler) Mount(r chi.Router) {
 	r.With(httpx.RequireWrite).Delete("/notes/folders/{id}", h.deleteFolder) // hard=true additionally requires admin (in handler)
 	r.With(httpx.RequireWrite).Post("/notes/folders/{id}/move", h.moveFolder)
 
+	// Publish: private → shared, one-way (v9, D182). Registered on the static
+	// /notes/folders prefix above and on /notes/{id} below; there is deliberately
+	// NO unpublish route, and its absence is a decision rather than a gap.
+	r.With(httpx.RequireWrite).Post("/notes/folders/{id}/publish", h.publishFolder)
+
 	// Notes by id.
 	r.Get("/notes/{id}", h.getNote)
 	r.With(httpx.RequireWrite).Patch("/notes/{id}", h.updateNote)
 	r.With(httpx.RequireWrite).Delete("/notes/{id}", h.deleteNote) // hard=true additionally requires admin (in handler)
 	r.With(httpx.RequireWrite).Post("/notes/{id}/move", h.moveNote)
+	r.With(httpx.RequireWrite).Post("/notes/{id}/publish", h.publishNote)
 	r.With(httpx.RequireWrite).Post("/notes/{id}/images", h.uploadImage) // paste/drop image upload
 
 	// Pin/unpin: ungated at the router — the service allows a personal pin for any
@@ -56,12 +64,32 @@ func boolParam(r *http.Request, name string) bool {
 	return v == "true" || v == "1"
 }
 
-func strPtrParam(r *http.Request, name string) *string {
-	v := r.URL.Query().Get(name)
+// folderParam reads ?folder_id=. The literal "root" selects the notes directly at
+// the requested scope's root; an empty value means "no filter" (every note in the
+// scope).
+//
+// ⚠ `notes` had no such sentinel before v9, and its absence was a live bug (D203):
+// the handler passed the raw parameter through and the store's predicate
+// dereferenced a nil pointer to the empty string, so OMITTING folder_id already meant "root
+// notes only" rather than the "all notes" the 0.10.1 contract advertised. It is
+// modelled on the one `documents` has always had, so the two modules finally agree.
+func folderParam(r *http.Request) *string {
+	v := r.URL.Query().Get("folder_id")
 	if v == "" {
 		return nil
 	}
+	if v == "root" {
+		empty := ""
+		return &empty
+	}
 	return &v
+}
+
+// scopeParam resolves ?scope= against the CALLER's identity. Default `shared`,
+// which is why every pre-v9 client keeps working untouched; `private` always means
+// the caller's own root, and there is no value that names anybody else's.
+func scopeParam(r *http.Request) (Scope, error) {
+	return ParseScope(r.Context(), r.URL.Query().Get("scope"))
 }
 
 func isAdmin(r *http.Request) bool {
@@ -74,8 +102,12 @@ func isAdmin(r *http.Request) bool {
 // ---- Notes ----
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	page, err := h.svc.List(r.Context(), q.Get("q"), strPtrParam(r, "folder_id"), boolParam(r, "include_archived"))
+	sc, err := scopeParam(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	page, err := h.svc.List(r.Context(), r.URL.Query().Get("q"), folderParam(r), boolParam(r, "include_archived"), sc)
 	respond(w, http.StatusOK, page, err)
 }
 
@@ -187,13 +219,68 @@ func (h *Handler) moveFolder(w http.ResponseWriter, r *http.Request) {
 // ---- Tree / resolve ----
 
 func (h *Handler) tree(w http.ResponseWriter, r *http.Request) {
-	t, err := h.svc.Tree(r.Context(), boolParam(r, "include_archived"))
+	sc, err := scopeParam(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	t, err := h.svc.Tree(r.Context(), boolParam(r, "include_archived"), sc)
 	respond(w, http.StatusOK, t, err)
 }
 
 func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
-	res, err := h.svc.Resolve(r.Context(), r.URL.Query().Get("path"))
+	sc, err := scopeParam(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	res, err := h.svc.Resolve(r.Context(), r.URL.Query().Get("path"), sc)
 	respond(w, http.StatusOK, res, err)
+}
+
+// ---- Publish (v9) ----
+
+func (h *Handler) publishNote(w http.ResponseWriter, r *http.Request) {
+	in, err := decodePublish(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	n, err := h.svc.PublishNote(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, http.StatusOK, n, err)
+}
+
+func (h *Handler) publishFolder(w http.ResponseWriter, r *http.Request) {
+	in, err := decodePublish(r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	f, err := h.svc.PublishFolder(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, http.StatusOK, f, err)
+}
+
+// decodePublish accepts an absent or empty body: publishing to the shared ROOT is
+// the common case, so `POST …/publish` with no body has to work.
+//
+// ⚠ AN EMPTY BODY IS NOT THE SAME TEST AS `ContentLength == 0`. A chunked request
+// — curl -T, an HTTP/2 proxy, any client that streams without measuring first —
+// carries ContentLength -1 whether or not it has content, so the length check
+// alone sent an empty chunked publish into DecodeJSON, which returned io.EOF and
+// turned the documented "no body publishes to the shared root" into a 422 saying
+// "EOF". io.EOF from the decoder IS the empty body, so it is treated as one.
+func decodePublish(r *http.Request) (PublishRequest, error) {
+	var in PublishRequest
+	if r.ContentLength == 0 {
+		return in, nil
+	}
+	if err := httpx.DecodeJSON(r, &in); err != nil {
+		if errors.Is(err, io.EOF) {
+			return PublishRequest{}, nil
+		}
+		return in, httpx.ErrUnprocessable(err.Error())
+	}
+	return in, nil
 }
 
 // ---- response helpers ----

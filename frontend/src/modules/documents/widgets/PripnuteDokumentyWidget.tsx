@@ -1,5 +1,6 @@
 import type { PripnuteDokumentyWidget as PripnuteData } from '@/api/types'
 import { WidgetEmpty, type WidgetComponentProps } from '@/platform/widgets/shared'
+import { PrivateMark } from '@/components/common/RootSwitcher'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { fmtBytes } from '@/i18n/format'
@@ -50,7 +51,14 @@ export function PripnuteDokumentyWidget({ data, onOpenDocument }: WidgetComponen
                 </span>
               )}
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-fg">{p.title}</span>
+                <span className="flex items-center gap-2">
+                  <span className="min-w-0 truncate text-sm font-semibold text-fg">{p.title}</span>
+                  {/* A private row carries the lock AND the word (D183). The
+                      widget sits on Nástěnka, outside either tree, so nothing
+                      else on the row says the document is only visible to its
+                      owner. */}
+                  {p.visibility === 'private' && <PrivateMark />}
+                </span>
                 <span className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-subtle">
                   <span>{fmtBytes(p.byte_size)}</span>
                   {chip && (

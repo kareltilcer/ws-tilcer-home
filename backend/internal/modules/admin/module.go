@@ -57,8 +57,25 @@ func (m *Module) AuditActions() []string {
 		"rule.create", "rule.update", "rule.delete",
 		"schedule.create", "schedule.update", "schedule.delete",
 		"notification.test",
+		// v9: opening the list of other members' private items — the only READ in
+		// Home that writes an audit event (D198). It has to be declared here as well
+		// as labelled in labels.go: the catalog the rule composer offers and
+		// knownAction validates against is built from THIS list, so an emitted-but-
+		// undeclared action is one nobody can ever be notified about.
+		"private_items.view",
 	}
 }
 
 // Widgets returns none — see the type comment.
 func (m *Module) Widgets() []registry.WidgetProvider { return nil }
+
+// StorageTables declares this module's tables for the v9 storage catalog (D191).
+//
+// ⚠ `admin` owns the notification CONFIG and the delivery log — and nothing else.
+// The per-member push tables (push_subscriptions, notification_preferences) belong
+// to the PLATFORM, because any module may send and a member's consent must not
+// depend on the admin module existing. v9 adds no table here at all: the storage
+// page stores nothing (D195).
+func (m *Module) StorageTables() []string {
+	return []string{"notification_rules", "notification_schedules", "notification_deliveries"}
+}

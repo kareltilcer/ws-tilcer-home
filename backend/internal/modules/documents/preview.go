@@ -288,7 +288,7 @@ func (w *PreviewWorker) settlePending(ctx context.Context) {
 	w.logger.Info("documents: previews are disabled, settling rows left pending",
 		"count", len(ids))
 	for _, id := range ids {
-		sd, err := w.store.GetStoredDocument(ctx, w.store.db, id)
+		sd, err := w.store.GetStoredDocumentAnyScope(ctx, w.store.db, id)
 		if err != nil {
 			w.logger.Error("documents: cannot load a pending document", "document_id", id, "err", err)
 			continue
@@ -342,7 +342,7 @@ func (w *PreviewWorker) settlePanicked(parent context.Context, id string) {
 	// write has to land anyway, or the crash loop survives the restart.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 	defer cancel()
-	sd, err := w.store.GetStoredDocument(ctx, w.store.db, id)
+	sd, err := w.store.GetStoredDocumentAnyScope(ctx, w.store.db, id)
 	if err != nil || sd == nil {
 		if err != nil {
 			w.logger.Error("documents: cannot load the document of a panicked job",
@@ -359,11 +359,18 @@ func (w *PreviewWorker) settlePanicked(parent context.Context, id string) {
 
 // process derives whatever the document needs. It reads its own state from the DB
 // rather than trusting the queued message, so a re-run is always consistent.
+//
+// ⚠ v9: every load in this worker is the UNSCOPED one, and deliberately so (leak
+// table row 17). The worker is a background job with NO ACTOR — there is no
+// session, so a viewer-scoped read would see only shared rows and every private
+// upload would sit at `pending` forever, with no error anywhere to say why. Like
+// the mirror and the reconciliation pass it operates on keys and bytes; nothing it
+// reads reaches a response, and its log lines must never grow a title or filename.
 func (w *PreviewWorker) process(parent context.Context, id string) {
 	ctx, cancel := context.WithTimeout(parent, w.cfg.Timeout)
 	defer cancel()
 
-	sd, err := w.store.GetStoredDocument(ctx, w.store.db, id)
+	sd, err := w.store.GetStoredDocumentAnyScope(ctx, w.store.db, id)
 	if err != nil || sd == nil {
 		if err != nil {
 			w.logger.Error("documents: preview job cannot load its document", "document_id", id, "err", err)
