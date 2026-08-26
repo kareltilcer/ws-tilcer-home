@@ -724,6 +724,49 @@ func TestRevalidationKeepsAnIdentifiedlessConnection(t *testing.T) {
 	}
 }
 
+// TestRevalidationKeepsASocketWhenTheVerdictResolvesNoID is the MIRROR of
+// TestRevalidationKeepsAnIdentifiedlessConnection: there the socket carried no
+// id, here the verdict does not resolve one.
+//
+// ⚠ An empty verdict id is "I did not resolve a member", not "a different
+// member". A Revalidate that only proves the session live — a liveness-only
+// re-check, a stub, an auth mode that answers yes/no — returns ("",
+// RevalidationValid), which differs from every real id the sockets opened with.
+// Compared naively, the FIRST healthy tick closes every identified socket in the
+// household with a policy code, and ws.ts turns each of those into a login
+// screen: the whole family signed out by a check that said the session was fine.
+func TestRevalidationKeepsASocketWhenTheVerdictResolvesNoID(t *testing.T) {
+	var calls atomic.Int32
+	hub, wsURL := newRevalidatingServer(t, func(context.Context, string) (string, ws.Revalidation) {
+		calls.Add(1)
+		return "", ws.RevalidationValid // live, but resolves no member
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitCount(t, hub, 1)
+
+	// Several checks have now returned an id that differs from u-karel, and the
+	// socket survived all of them.
+	waitAtLeast(t, func() int { return int(calls.Load()) }, 3, "revalidation attempts")
+	if n := hub.Count(); n != 1 {
+		t.Fatalf("hub client count = %d after %d Valid verdicts carrying no user id, want 1 — "+
+			"an unresolved id is not a CHANGED one, and closing on it signs out every "+
+			"identified member in the household on the first healthy tick", n, calls.Load())
+	}
+	// And it is still targetable, which is what makes the difference from the
+	// id-less connection this mirrors.
+	hub.PublishTo([]string{"u-karel"}, ws.Message{Type: sentinelType})
+	if got := readType(t, conn, readTimeout); got != sentinelType {
+		t.Errorf("the kept client got %q, want the sentinel", got)
+	}
+}
+
 // TestOnePumpPerSessionNotPerSocket. Every tab of one browser carries the same
 // cookie, so they cannot disagree about the verdict.
 //

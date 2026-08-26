@@ -345,7 +345,7 @@ func revalidateOnce(ctx context.Context, revalidate RevalidateFunc, token, opene
 	case verdict == RevalidationGone:
 		logger.Info("ws: session revoked or expired — closing the socket",
 			"user", openedAs, "session", sessionID)
-	case verdict == RevalidationValid && openedAs != "" && userID != openedAs:
+	case verdict == RevalidationValid && openedAs != "" && userID != "" && userID != openedAs:
 		// A CHANGED id matters as much as a rejected one: the socket is indexed
 		// under the id it opened with, and would go on receiving that user's
 		// audience.
@@ -370,6 +370,15 @@ func revalidateOnce(ctx context.Context, revalidate RevalidateFunc, token, opene
 		// it is re-accepted and re-closed forever. There is nothing to protect
 		// there anyway — a client that is in no byUser set receives no targeted
 		// payload to leak.
+		//
+		// ⚠ AND AN EMPTY VERDICT ID IS NOT A CHANGED ID EITHER — the mirror clause,
+		// and the guard is only symmetric with both. A Revalidate that proves the
+		// session live without resolving a member (a liveness-only re-check, a
+		// stub, an auth mode that answers yes/no) returns ("", RevalidationValid),
+		// which differs from every real openedAs. Without this clause the FIRST
+		// healthy tick closes every identified socket in the household with a
+		// policy code and signs every member out. "I did not resolve an id" is a
+		// decision that could not be taken; only a DIFFERENT id is a changed one.
 		logger.Warn("ws: session now resolves to a different member — closing the socket",
 			"opened_as", openedAs, "now", userID, "session", sessionID)
 	default:
