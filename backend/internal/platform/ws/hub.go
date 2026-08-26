@@ -377,6 +377,7 @@ func (h *Hub) DisconnectSession(sessionID string) {
 	// session that had already been revoked. Precisely the leak the whole
 	// mechanism exists to close. remove() is idempotent, so the handler's own
 	// call on the way out still costs nothing.
+	// TestDisconnectSessionUnindexesBeforeItCancels is what says so.
 	for _, c := range doomed {
 		h.removeLocked(c)
 	}
