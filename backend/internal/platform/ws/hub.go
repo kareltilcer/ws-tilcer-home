@@ -38,6 +38,8 @@ package ws
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"sync"
@@ -115,10 +117,26 @@ type Hub struct {
 // Keying on all three costs nothing in the ordinary case (every tab of one
 // cookie jar agrees on all three, so they still share ONE ticker) and splits the
 // pumps only when the sockets genuinely disagree.
+//
+// ⚠ IT IS THE TOKEN'S DIGEST, NEVER THE TOKEN. The key is a map key in the Hub,
+// so whatever it holds is retained for as long as the session has a socket, in a
+// struct with no redaction on it: the raw value there is a working session
+// cookie, valid for the whole TTL (90 days by default), handed out by any %+v in
+// a future debug or panic path, any heap dump taken for a memory investigation,
+// any core file. The database itself stores only a hash. A digest compares
+// exactly as well — agreeing sockets agree on it, disagreeing ones do not — and
+// the raw token reaches the ticker as a parameter instead, where it lives on the
+// pump goroutine's stack and nothing reachable from the Hub can render it.
 type pumpKey struct {
 	sessionID string
 	openedAs  string
-	token     string
+	tokenHash string
+}
+
+// hashPumpToken reduces a raw session token to the digest pumpKey compares on.
+func hashPumpToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // NewHub returns an empty hub logging through logger (nil means slog.Default()).
@@ -403,8 +421,9 @@ func (c *client) revoke() {
 // that happened to open the session closing mid-query, and must stop when the
 // LAST of them goes.
 type sessionPump struct {
-	// key is what this ticker re-checks WITH, and what a joining socket has to
-	// match to share it. See pumpKey.
+	// key identifies what this ticker re-checks and what a joining socket has to
+	// match to share it. It carries the token's DIGEST, not the token — the raw
+	// one is a parameter of the goroutine. See pumpKey.
 	key    pumpKey
 	cancel context.CancelFunc
 	refs   int
@@ -414,7 +433,7 @@ type sessionPump struct {
 // starting one if no socket agreeing on the same key already has it. The returned
 // handle must be passed back to releaseSessionPump when the socket goes.
 func (h *Hub) startSessionPump(sessionID, openedAs, token string, revalidate RevalidateFunc, every time.Duration) *sessionPump {
-	key := pumpKey{sessionID: sessionID, openedAs: openedAs, token: token}
+	key := pumpKey{sessionID: sessionID, openedAs: openedAs, tokenHash: hashPumpToken(token)}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if p, ok := h.pumps[key]; ok {
@@ -424,7 +443,10 @@ func (h *Hub) startSessionPump(sessionID, openedAs, token string, revalidate Rev
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &sessionPump{key: key, cancel: cancel, refs: 1}
 	h.pumps[key] = p
-	go h.runSessionPump(ctx, p, revalidate, every)
+	// ⚠ The raw token goes to the goroutine, never onto the pump. Sharing is
+	// decided by the digest in the key; only the re-check itself needs the real
+	// value, and on that stack it is unreachable from the Hub.
+	go h.runSessionPump(ctx, p, token, revalidate, every)
 	return p
 }
 

@@ -311,11 +311,12 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 // handler runs that check itself, once, for each connection; this loop is only
 // the recurring half, and a second tab joining an existing session must not reset
 // its neighbours' schedule.
-func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, revalidate RevalidateFunc, every time.Duration) {
+func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, token string, revalidate RevalidateFunc, every time.Duration) {
 	// The session, the member it opened as and the token to re-check with are the
 	// pump's identity, not incidental parameters — every socket sharing this
-	// ticker agreed on all three. See pumpKey.
-	sessionID, openedAs, token := p.key.sessionID, p.key.openedAs, p.key.token
+	// ticker agreed on all three. See pumpKey, which holds the token's DIGEST;
+	// the raw one arrives here as an argument so it stays off the Hub.
+	sessionID, openedAs := p.key.sessionID, p.key.openedAs
 	// ⚠ The interval is JITTERED. Every session a page load opens would otherwise
 	// tick in phase for as long as it lives, and each tick is a query against a
 	// pool of exactly one connection, so the household's sessions would queue
