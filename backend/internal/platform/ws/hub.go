@@ -198,29 +198,55 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	if len(userIDs) == 0 {
 		return
 	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		// ⚠ Unlike a dropped broadcast this is silent AND unrepaired: nobody in the
-		// audience receives, and D259's gap check only notices on the NEXT message.
-		// Without this line the send happens and produces nothing, anywhere.
-		h.logger.Error("ws: targeted publish dropped, payload does not marshal",
-			"type", m.Type, "recipients", len(userIDs), "err", err)
-		return
-	}
-	h.mu.Lock()
 	// Dedupe the ID LIST, not the client set. A client is filed under exactly one
 	// id, so two different ids can never share one and a duplicate delivery can
 	// only come from a repeated id — a caller de-duplicating badly, or a member
 	// appearing as both author and recipient. A duplicate chat frame is a
 	// duplicate bubble. Deduping here costs one small map over a handful of
 	// strings rather than one over every recipient socket.
+	//
+	// ⚠ AND THE AUDIENCE IS CHECKED FOR REACHABILITY BEFORE THE PAYLOAD IS
+	// ENCODED. An audience with nobody connected is the ORDINARY case, not an
+	// error — the doc above says so — and for chat it is most of them: a household
+	// where one member has a tab open and the rest are on push means every message
+	// body would be marshalled in full and then dropped on the floor. This pass is
+	// one map lookup per recipient, against a marshal of the whole payload.
+	//
+	// ⚠ The cost of that ordering: a payload that does not marshal is now reported
+	// only when somebody was connected to receive it. Nothing was going to be
+	// delivered either way, but the log below is a bug signal rather than a
+	// delivery one, so a module publishing an unmarshalable payload can look clean
+	// on a dev machine with no browser open.
+	h.mu.Lock()
 	seen := make(map[string]struct{}, len(userIDs))
-	dropped := 0
+	reachable := false
 	for _, id := range userIDs {
 		if _, dup := seen[id]; dup {
 			continue
 		}
 		seen[id] = struct{}{}
+		if len(h.byUser[id]) > 0 {
+			reachable = true
+		}
+	}
+	h.mu.Unlock()
+	if !reachable {
+		return
+	}
+	// Marshalled OUTSIDE the lock: encoding a chat payload while holding h.mu
+	// would stall Publish, add, remove and Count for its duration.
+	data, err := json.Marshal(m)
+	if err != nil {
+		// ⚠ Unlike a dropped broadcast this is silent AND unrepaired: nobody in the
+		// audience receives, and D259's gap check only notices on the NEXT message.
+		// Without this line the send happens and produces nothing, anywhere.
+		h.logger.Error("ws: targeted publish dropped, payload does not marshal",
+			"type", m.Type, "recipients", len(seen), "err", err)
+		return
+	}
+	h.mu.Lock()
+	dropped := 0
+	for id := range seen {
 		for c := range h.byUser[id] {
 			select {
 			case c.send <- data:
