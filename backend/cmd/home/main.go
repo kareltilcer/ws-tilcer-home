@@ -113,12 +113,17 @@ func run(logger *slog.Logger) error {
 	// 3. Mode B auth + session (D23, D29). Home hosts login and owns its session;
 	// the browser carries no token. Under the dev bypass a fixed actor is injected
 	// and no auth service / session store is used, so the app runs offline.
+	// The hub is built here rather than at step 4 because auth needs it: revoking
+	// a session has to close that member's sockets too, or the socket keeps
+	// delivering private payloads to an account that is 401 everywhere else (v10).
+	hub := ws.NewHub()
 	authConf := auth.Config{
-		RoleRefresh: time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
-		SessionTTL:  time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
-		Secure:      cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
-		Origins:     cfg.AllowedOrigins,
-		Logger:      logger,
+		RoleRefresh:      time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
+		SessionTTL:       time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
+		Secure:           cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
+		Origins:          cfg.AllowedOrigins,
+		Logger:           logger,
+		OnSessionRevoked: hub.DisconnectUser,
 	}
 	var sessions *auth.SessionStore
 	if cfg.DevAuthBypass {
@@ -167,7 +172,6 @@ func run(logger *slog.Logger) error {
 	// 4. Websocket hub — session-authenticated on connect (the browser sends the
 	// session cookie on a same-origin upgrade; no bearer token). Feature modules
 	// publish change events so open boards and dashboards stay live.
-	hub := ws.NewHub()
 	wsCfg := ws.Config{BypassActor: authConf.BypassActor, Logger: logger}
 	if sessions != nil {
 		wsCfg.Authenticate = func(r *http.Request) (reqctx.Actor, bool) {
@@ -189,13 +193,10 @@ func run(logger *slog.Logger) error {
 	// Modules publish websocket change events via the hub after commit. The push
 	// carries the originating request's client id (from reqctx) so each browser
 	// tab can tell its own echo apart from a change made on another device.
-	notify := func(ctx context.Context, typ string, payload any) {
-		origin := ""
-		if info, ok := reqctx.RequestFrom(ctx); ok {
-			origin = info.ClientID
-		}
-		hub.Publish(ws.Message{Type: typ, Origin: origin, Payload: payload})
-	}
+	// hub.Notify stamps the Origin; hub.NotifyTo is its member-restricted sibling,
+	// so a targeted module gets the same echo-suppression without re-deriving the
+	// client id for itself (v10).
+	notify := hub.Notify
 
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)

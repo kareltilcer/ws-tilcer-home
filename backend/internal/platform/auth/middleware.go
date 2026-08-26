@@ -35,6 +35,22 @@ type Config struct {
 	BypassActor *reqctx.Actor // dev bypass; nil in production
 	Now         func() time.Time
 	Logger      *slog.Logger
+	// OnSessionRevoked, when set, is called with the user id whose session was
+	// just revoked — by logout, or by failing closed on a re-mint (v10).
+	//
+	// ⚠ It exists because a websocket is authenticated once, at upgrade, and then
+	// lives as long as the browser keeps it. Revoking the session 401s every HTTP
+	// request and does nothing at all to an open socket, which since v10 carries
+	// private message bodies. The composition root points this at
+	// ws.Hub.DisconnectUser.
+	OnSessionRevoked func(userID string)
+}
+
+// sessionRevoked notifies the composition root that userID's session is gone.
+func (c Config) sessionRevoked(userID string) {
+	if c.OnSessionRevoked != nil && userID != "" {
+		c.OnSessionRevoked(userID)
+	}
 }
 
 func (c Config) now() time.Time {
@@ -87,6 +103,7 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 				case errors.Is(mintErr, ErrUserClosed):
 					// Fail closed: the user was disabled/deleted in auth (FR-A2).
 					_ = cfg.Sessions.RevokeByID(r.Context(), sess.ID)
+					cfg.sessionRevoked(sess.UserID)
 					clearAuthCookies(w, cfg.Secure)
 					httpx.WriteError(w, httpx.ErrUnauthorized("session revoked"))
 					return

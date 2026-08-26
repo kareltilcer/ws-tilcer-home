@@ -197,6 +197,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.ErrInternal(""))
 		return
 	}
+	h.cfg.sessionRevoked(sess.UserID)
 	clearAuthCookies(w, h.cfg.Secure)
 	w.WriteHeader(http.StatusNoContent)
 }

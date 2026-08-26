@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,7 +60,14 @@ func dialAs(ctx context.Context, t *testing.T, wsURL, userID string) *cws.Conn {
 	return c
 }
 
-// readType reads one frame and returns its Type, or "" on any read failure.
+// readType reads one frame and returns its Type, failing the test on a read
+// error.
+//
+// ⚠ It does NOT swallow the error into "". Every call site now expects a frame,
+// and a Read that times out also CLOSES the connection (below) — so a single slow
+// read on a loaded machine would return "" and then make every later read on that
+// socket return "" too, reporting a chain of failures against PublishTo when the
+// cause was one slow read. The error names the cause; report it and stop.
 //
 // ⚠ NEGATIVE ASSERTIONS DO NOT USE A TIMEOUT HERE, and the reason is a property of
 // the library rather than a style preference: a coder/websocket Read whose context
@@ -79,7 +87,7 @@ func readType(t *testing.T, conn *cws.Conn, within time.Duration) string {
 	defer cancel()
 	_, data, err := conn.Read(ctx)
 	if err != nil {
-		return ""
+		t.Fatalf("read within %s: %v", within, err)
 	}
 	var m ws.Message
 	if err := json.Unmarshal(data, &m); err != nil {
@@ -98,15 +106,8 @@ const readTimeout = 3 * time.Second
 
 func waitTracked(t *testing.T, hub *ws.Hub, userID string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if hub.TrackedClientsForTest(userID) == want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("hub tracks %d clients for %q, want %d",
-		hub.TrackedClientsForTest(userID), userID, want)
+	waitFor(t, func() int { return hub.TrackedClientsForTest(userID) }, want,
+		"clients tracked for "+userID)
 }
 
 // TestPublishTo_ReachesOnlyTheNamedUsers is leak-table row 7 at the platform
@@ -238,14 +239,19 @@ func TestPublishStillReachesEveryClient(t *testing.T) {
 	}
 }
 
-// TestAnonymousClientIsBroadcastOnly covers the dev bypass with no configured
-// actor. It joins `clients` and never `byUser`, so Publish reaches it and
-// PublishTo cannot — the safe direction for a connection nobody identified.
+// TestAnonymousClientIsBroadcastOnly covers an actor that carries no user id at
+// all. It joins `clients` and never `byUser`, so Publish reaches it and PublishTo
+// cannot — the safe direction for a connection nobody identified.
+//
+// ⚠ This is NOT what HOME_DEV_AUTH_BYPASS produces. HOME_DEV_ACTOR_ID defaults to
+// "dev-user" and a blank value falls back to that default, so the composition root
+// always builds a BypassActor with an id — see
+// TestBypassRegistersEveryClientUnderOneID for what the bypass really does. What
+// this test pins is the handler's behaviour for an id-less actor from any source,
+// which reqctx.Actor explicitly allows ("" for system/service).
 func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 	hub := ws.NewHub()
 	mux := http.NewServeMux()
-	// BypassActor with an EMPTY UserID: the shape HOME_DEV_AUTH_BYPASS produces
-	// when no dev actor id is configured.
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{}}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -303,6 +309,119 @@ func TestBypassActorRegistersUnderItsID(t *testing.T) {
 	hub.PublishTo([]string{"dev-1"}, ws.Message{Type: "chat.message.created"})
 	if got := readType(t, conn, readTimeout); got != "chat.message.created" {
 		t.Errorf("bypass client got %q, want chat.message.created", got)
+	}
+}
+
+// TestBypassRegistersEveryClientUnderOneID pins what HOME_DEV_AUTH_BYPASS
+// ACTUALLY does, as opposed to the id-less shape above.
+//
+// ⚠ Authenticate is never called under the bypass, and the configured id is never
+// empty (HOME_DEV_ACTOR_ID defaults to "dev-user", and a blank value falls back to
+// that default), so every connection — a second browser, a phone on the same LAN,
+// anything that can reach the port — lands in the SAME byUser set and receives the
+// whole of that member's targeted feed, chat bodies included. That is the price of
+// fake authentication and the reason the bypass is refused in production. It is
+// pinned here so nobody reads the anonymous test above and concludes the bypass is
+// broadcast-only.
+func TestBypassRegistersEveryClientUnderOneID(t *testing.T) {
+	hub := ws.NewHub()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-user"}}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dial := func(who string) *cws.Conn {
+		c, _, err := cws.Dial(ctx, wsURL+"/ws", nil) // no credentials of any kind
+		if err != nil {
+			t.Fatalf("dial %s: %v", who, err)
+		}
+		t.Cleanup(func() { _ = c.Close(cws.StatusNormalClosure, "") })
+		return c
+	}
+	first, second := dial("first browser"), dial("second browser")
+	waitTracked(t, hub, "dev-user", 2)
+
+	hub.PublishTo([]string{"dev-user"}, ws.Message{Type: "chat.message.created"})
+	for name, conn := range map[string]*cws.Conn{"first": first, "second": second} {
+		if got := readType(t, conn, readTimeout); got != "chat.message.created" {
+			t.Errorf("%s bypass client got %q, want chat.message.created — under the bypass "+
+				"every connection shares the configured member's targeted feed", name, got)
+		}
+	}
+}
+
+// TestRevalidationClosesASocketWhoseSessionIsGone is the guard for the leak that
+// has nothing to do with the audience: a socket is authenticated ONCE, at upgrade,
+// and then lives as long as the browser keeps it.
+//
+// ⚠ Before v10 that cost nothing — every fan-out was household-wide. Now the
+// payload is the private content, so a member whose account is disabled (the
+// middleware fails closed and revokes) or whose session simply expires would go on
+// receiving message bodies over a connection that is 401 on every other request.
+func TestRevalidationClosesASocketWhoseSessionIsGone(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+
+	hub := ws.NewHub()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(*http.Request) (reqctx.Actor, bool) {
+			if !valid.Load() {
+				return reqctx.Actor{}, false
+			}
+			return reqctx.Actor{UserID: "u-karel", Type: "user"}, true
+		},
+		RevalidateEvery: 20 * time.Millisecond,
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitTracked(t, hub, "u-karel", 1)
+
+	valid.Store(false) // the session is revoked while the socket stays open
+	waitCount(t, hub, 0)
+
+	if n := hub.TrackedClientsForTest("u-karel"); n != 0 {
+		t.Errorf("a revoked session still holds %d socket(s) — PublishTo would keep "+
+			"delivering message bodies to an account that is 401 everywhere else", n)
+	}
+}
+
+// TestDisconnectUserClosesOnlyThatMembersSockets: the revalidation ticker bounds
+// the exposure, but auth knows the moment it revokes, so it says so directly —
+// and must not take anybody else down with it.
+func TestDisconnectUserClosesOnlyThatMembersSockets(t *testing.T) {
+	hub, wsURL := newIdentityServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dialAs(ctx, t, wsURL, "u-karel")
+	dialAs(ctx, t, wsURL, "u-karel") // two devices, both must go
+	marie := dialAs(ctx, t, wsURL, "u-marie")
+	waitCount(t, hub, 3)
+
+	hub.DisconnectUser("u-karel")
+	waitCount(t, hub, 1)
+
+	if n := hub.TrackedClientsForTest("u-karel"); n != 0 {
+		t.Errorf("DisconnectUser left %d socket(s) for u-karel, want 0", n)
+	}
+	// Marie is untouched and still reachable, which is the half a blunt "close
+	// everything" would get wrong.
+	hub.PublishTo([]string{"u-marie"}, ws.Message{Type: "chat.message.created"})
+	if got := readType(t, marie, readTimeout); got != "chat.message.created" {
+		t.Errorf("marie got %q after karel was disconnected, want chat.message.created", got)
 	}
 }
 

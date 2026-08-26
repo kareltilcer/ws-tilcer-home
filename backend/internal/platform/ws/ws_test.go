@@ -30,16 +30,25 @@ func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
 }
 
-func waitCount(t *testing.T, hub *ws.Hub, want int) {
+// waitFor polls get until it reaches want. Connect and disconnect are both
+// asynchronous (the handler registers after the dial returns, and unregisters
+// after its write pump unwinds), so every assertion about hub bookkeeping has to
+// wait for it. One polling policy, used by waitCount and by waitTracked.
+func waitFor(t *testing.T, get func() int, want int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if hub.Count() == want {
+		if get() == want {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("hub client count = %d, want %d", hub.Count(), want)
+	t.Fatalf("%s = %d, want %d", what, get(), want)
+}
+
+func waitCount(t *testing.T, hub *ws.Hub, want int) {
+	t.Helper()
+	waitFor(t, hub.Count, want, "hub client count")
 }
 
 func TestWS_ConnectRequiresValidSession(t *testing.T) {
