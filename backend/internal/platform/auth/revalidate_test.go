@@ -79,7 +79,7 @@ func TestRevalidateSession_GoneCases(t *testing.T) {
 // perfectly valid session row until something re-mints, and a browser tab that
 // issues no HTTP request never triggers one — so a socket checked only against the
 // row would keep receiving targeted payloads for the whole session TTL.
-func TestRevalidateSession_ClosedAccountIsGoneAndAnnounced(t *testing.T) {
+func TestRevalidateSession_ClosedAccountIsGoneAndRevoked(t *testing.T) {
 	h := newHarness(t)
 	sess, _ := h.authed(t)
 
@@ -97,10 +97,22 @@ func TestRevalidateSession_ClosedAccountIsGoneAndAnnounced(t *testing.T) {
 		t.Errorf("mint calls = %d, want 1 — the row was still live, so only a re-mint can "+
 			"discover that the account is closed", h.fake.mintCalls)
 	}
-	// And it went through the shared fail-closed path: revoked in the database and
-	// announced, so the member's other tabs on this session close with it.
-	if want := revokedSessionIDs(t, h.db); len(want) != 1 || len(h.revoked) != 1 || h.revoked[0] != want[0] {
-		t.Errorf("revalidation announced %v, want exactly the revoked session %v", h.revoked, want)
+	// And it went through the shared fail-closed path: the row is revoked in the
+	// database, which is what makes every later Lookup — this session's next tick,
+	// its next upgrade, its next HTTP request — fail closed too.
+	if ids := revokedSessionIDs(t, h.db); len(ids) != 1 {
+		t.Errorf("%d session rows revoked, want 1 — the fail-closed re-mint is shared with the "+
+			"request middleware and must mark the row from either caller", len(ids))
+	}
+	// ⚠ AND IT ANNOUNCES NOTHING. SessionGone IS the announcement here: the hook
+	// is ws.Hub.DisconnectSession, and the revalidation pump has to retire its
+	// ticker BEFORE it disconnects, or a socket arriving in between joins a pump
+	// about to be cancelled and never gets a recurring check again. Firing from
+	// inside this call put the disconnect two frames deep in the check, where no
+	// retire could have happened yet.
+	if len(h.revoked) != 0 {
+		t.Errorf("revalidation announced %v, want nothing — the caller disconnects, after "+
+			"retiring the session's ticker; announcing from here inverts that order", h.revoked)
 	}
 }
 
@@ -209,14 +221,18 @@ func TestRevalidateSession_RevokeSurvivesACancelledCaller(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.fake.onMint = cancel
 
-	h.cfg.RevalidateSession(ctx, sess.Value)
+	_, verdict := h.cfg.RevalidateSession(ctx, sess.Value)
 
 	if ids := revokedSessionIDs(t, h.db); len(ids) != 1 {
 		t.Errorf("%d session rows revoked, want 1 — the fail-closed revoke must run on a context "+
 			"detached from whoever happened to discover the closure", len(ids))
 	}
-	if len(h.revoked) != 1 {
-		t.Errorf("announced %v, want the one revoked session — a cancelled caller must not cost "+
-			"the member's other tabs their disconnect", h.revoked)
+	// The verdict is what carries the disconnect to the pump (which retires its
+	// ticker and then closes every socket of the session), so losing it to a
+	// cancelled caller costs the member's other tabs their disconnect just as
+	// surely as losing the UPDATE would.
+	if verdict != auth.SessionGone {
+		t.Errorf("verdict = %v, want SessionGone — the revoke landed, and the caller only "+
+			"disconnects the session's sockets if it is told so", verdict)
 	}
 }
