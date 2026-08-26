@@ -134,7 +134,26 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 		// is precisely the repeated-Mint cost one-pump-per-session exists to avoid.
 		roleCtx, cancel := c.writeContext(ctx, viaConnection)
 		defer cancel()
-		_ = c.Sessions.RefreshRoles(roleCtx, sess.ID, id.Roles, now)
+		if err := c.Sessions.RefreshRoles(roleCtx, sess.ID, id.Roles, now); err != nil {
+			// ⚠ THE MINT SUCCEEDED AND THE STAMP DID NOT, which is the one outcome
+			// this whole branch exists to protect and was also the only one with no
+			// trace. roles_refreshed_at is what every other caller reads to decide
+			// NOT to mint, so without it this session re-mints on its very next
+			// revalidation tick and on its next HTTP request, indefinitely — a
+			// standing stream of calls to the auth service for one session, which is
+			// precisely the cost one-pump-per-session was built to avoid. Discarded,
+			// it looked identical to a healthy refresh from every angle.
+			//
+			// Warn rather than Error, and only when the CALLER is still there: the
+			// request goes through on fresh roles either way, and from a connection
+			// ctx a member closing their tab cancels this write for a reason that is
+			// not a store problem (the same guard the transient branch below uses).
+			if ctx.Err() == nil {
+				c.logger().Warn("role stamp FAILED after a successful re-mint — this session will "+
+					"re-mint on every tick and every request until it lands",
+					"user", sess.UserID, "session", sess.ID, "err", err)
+			}
+		}
 		return id.Roles, false, nil
 	default:
 		// Transient auth outage: keep cached roles, retry next request.
