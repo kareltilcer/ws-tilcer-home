@@ -946,6 +946,131 @@ func newRevalidatingServerEvery(t *testing.T, every time.Duration, revalidate fu
 	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
 }
 
+// newTwoSeamServer builds a hub whose /ws is configured with the given
+// connect-time and recurring checks, either of which may be nil.
+func newTwoSeamServer(t *testing.T, recheck, revalidate ws.RevalidateFunc, every time.Duration) (*ws.Hub, string) {
+	t.Helper()
+	hub := ws.NewHub(discardLogger())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: "u-karel", Type: "user"},
+				SessionID: "s-karel",
+				Token:     "tok-karel",
+			}, true
+		},
+		Recheck:         recheck,
+		Revalidate:      revalidate,
+		RevalidateEvery: every,
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+}
+
+// TestConnectTimeCheckUsesRecheck pins the SEAM between the two checks, which
+// nothing else in this file touches: every other test here configures Revalidate
+// alone and so only ever exercises the fallback.
+//
+// ⚠ Config.Recheck exists for one reason. A deploy drops every socket in the
+// household and has every tab redial at once; routing the connect-time check
+// through the Mint-capable Revalidate then means a second Lookup AND, whenever
+// roles are stale, a Mint PER SOCKET — N concurrent mints on the auth service and
+// 2N lookups on a pool of exactly one connection, none of them seeing another's
+// roles_refreshed_at stamp. Nothing else asserts the separation, so deleting the
+// `recheck` variable and handing cfg.Revalidate to the immediate check leaves the
+// whole suite green and the regression invisible until a production deploy.
+func TestConnectTimeCheckUsesRecheck(t *testing.T) {
+	var recheckCalls, revalidateCalls atomic.Int32
+	// An hour: a recurring tick will never come, so every call counted below is
+	// the connect-time one.
+	_, wsURL := newTwoSeamServer(t,
+		func(context.Context, string) (string, ws.Revalidation) {
+			recheckCalls.Add(1)
+			return "u-karel", ws.RevalidationValid
+		},
+		func(context.Context, string) (string, ws.Revalidation) {
+			revalidateCalls.Add(1)
+			return "u-karel", ws.RevalidationValid
+		},
+		time.Hour)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+
+	waitAtLeast(t, func() int { return int(recheckCalls.Load()) }, 1, "connect-time Recheck calls")
+	if n := revalidateCalls.Load(); n != 0 {
+		t.Errorf("the connect-time check called Revalidate %d times, want 0 — it must go through "+
+			"Recheck, or a deploy puts a Mint per socket on the auth service", n)
+	}
+}
+
+// TestConnectTimeCheckFallsBackToRevalidate is the other half of the seam: a
+// Config that predates Recheck, or one that simply does not need a cheaper
+// connect-time query, must still get the connect-time pass.
+func TestConnectTimeCheckFallsBackToRevalidate(t *testing.T) {
+	var revalidateCalls atomic.Int32
+	hub, wsURL := newTwoSeamServer(t, nil,
+		func(context.Context, string) (string, ws.Revalidation) {
+			revalidateCalls.Add(1)
+			return "u-karel", ws.RevalidationGone
+		},
+		time.Hour) // a tick will never come; anything that closes did so at connect
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+
+	waitAtLeast(t, func() int { return int(revalidateCalls.Load()) }, 1, "connect-time Revalidate calls")
+	waitCount(t, hub, 0)
+}
+
+// TestRecheckRunsWithNoRecurringCheckConfigured. The two fields are independent
+// knobs, and a Config carrying only Recheck is a legible one: re-take the cheap
+// decision at connect, run no ticker.
+//
+// ⚠ Gated on cfg.Revalidate, that Config got NEITHER check. The race the
+// connect-time pass closes — a revocation sweeping bySession between the upgrade
+// decision and h.add, which misses a client that is not indexed yet — stayed
+// wide open, the configured callback was never once invoked, and nothing
+// errored, warned, or failed to say so.
+func TestRecheckRunsWithNoRecurringCheckConfigured(t *testing.T) {
+	var recheckCalls atomic.Int32
+	hub, wsURL := newTwoSeamServer(t,
+		func(context.Context, string) (string, ws.Revalidation) {
+			recheckCalls.Add(1)
+			return "", ws.RevalidationGone
+		},
+		nil, // no recurring check at all
+		time.Hour)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+
+	waitAtLeast(t, func() int { return int(recheckCalls.Load()) }, 1, "connect-time Recheck calls")
+	waitCount(t, hub, 0)
+	// And no ticker was registered for a Config that configured none — starting
+	// one would run it with a nil revalidate and panic on its first tick.
+	if n := hub.TrackedPumpsForTest(); n != 0 {
+		t.Errorf("%d revalidation pumps registered with no Revalidate configured, want 0", n)
+	}
+}
+
 // TestDisconnectSessionClosesEveryTabOfThatSession: the revalidation ticker
 // bounds the exposure, but auth knows the moment it revokes, so it says so
 // directly — and every tab sharing the revoked cookie has to go.

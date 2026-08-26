@@ -241,7 +241,14 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		logger.Info("ws connected", "user", userID, "session", sessionID, "clients", h.Count())
 
 		go h.readPump(readCtx, c)
-		if cfg.Revalidate != nil && token != "" {
+		// ⚠ GATED ON `recheck`, NOT ON cfg.Revalidate. The two fields are
+		// independent knobs — Recheck is the primary for this check and Revalidate
+		// only its fallback (see above) — so a Config carrying ONLY Recheck must
+		// still run the connect-time pass. Gating this on cfg.Revalidate left that
+		// Config with no check at all: the race between the upgrade decision and
+		// h.add stayed open, the configured callback was never once invoked, and
+		// nothing errored, warned or failed to say so.
+		if recheck != nil && token != "" {
 			// ⚠ TWO CHECKS AT TWO GRANULARITIES, and each is the right one for the
 			// hole it closes.
 			//
@@ -260,7 +267,12 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			// The RECURRING check is per SESSION, shared by every tab of it. See
 			// sessionPump. A connection with no session id gets none — it is
 			// unrevocable either way, which is what the warning above says.
-			if sessionID != "" {
+			//
+			// ⚠ And it is the ONLY half gated on cfg.Revalidate, which is now a
+			// check rather than an inherited guarantee: the block above admits a
+			// Config carrying only Recheck, and starting a ticker with a nil
+			// revalidate would panic on its first tick, minutes into the connection.
+			if cfg.Revalidate != nil && sessionID != "" {
 				p := h.startSessionPump(sessionID, userID, token, cfg.Revalidate, revalidateEvery)
 				defer h.releaseSessionPump(p)
 			}
