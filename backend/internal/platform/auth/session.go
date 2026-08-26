@@ -49,6 +49,14 @@ func newToken() (raw, hash string, err error) {
 	return raw, hashToken(raw), nil
 }
 
+// hashToken derives the `sessions.token_hash` column: the raw cookie token never
+// touches the database, so every lookup and revoke goes through here.
+//
+// ⚠ platform/ws has a byte-identical hashPumpToken, and it is NOT this function
+// under another name. That one is only a map-key for "did two sockets hand over
+// the same string?" and is never compared against a value auth produced, so this
+// one is free to grow a salt or a KDF without going to look for it. See
+// ws.hashPumpToken, which says the same from its side.
 func hashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

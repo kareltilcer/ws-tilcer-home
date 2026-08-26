@@ -76,6 +76,22 @@ const sendBuffer = 32
 
 // Hub tracks connected clients and broadcasts messages to them.
 type Hub struct {
+	// pub serialises a targeted fan-out END TO END — snapshot, marshal, send —
+	// so PublishTo delivers in the order it was CALLED (v10).
+	//
+	// ⚠ It is not a second index lock and must never be taken under mu. It exists
+	// because PublishTo does its marshal outside mu (encoding a chat payload while
+	// holding the index would stall Publish, add, remove and Count for its
+	// duration), and that gap let two concurrent targeted publishes swap places:
+	// the one that started second could finish marshalling first, take the fan-out
+	// first, and land in the recipient's send channel ahead of the earlier
+	// message. For chat that is not a reordering the client can absorb — D259's
+	// prev_message_id check reads it as a GAP and refetches the tail.
+	//
+	// It cannot make delivery match COMMIT order — the hub never sees the
+	// transaction — but it removes the reordering the hub itself introduces, which
+	// is the half the hub can be responsible for.
+	pub     sync.Mutex
 	mu      sync.Mutex
 	clients map[*client]struct{}
 	// byUser indexes the SAME clients by the user they authenticated as, so
@@ -134,6 +150,16 @@ type pumpKey struct {
 }
 
 // hashPumpToken reduces a raw session token to the digest pumpKey compares on.
+//
+// ⚠ IT IS AN EQUALITY KEY, NOT auth's TOKEN HASH, and the two must not be
+// confused because today they are the same bytes. auth.hashToken derives the
+// `sessions.token_hash` column with the same sha256-then-hex, but that one is a
+// STORED CREDENTIAL DIGEST that a future change may salt or run through a KDF;
+// this one only has to answer "did these two sockets hand over the same string?"
+// and is never compared against anything auth produced. So the duplication is
+// deliberate rather than an oversight: the two are free to diverge, and nothing
+// here breaks when they do. (platform/ws stays ignorant of platform/auth on
+// purpose — the whole Config surface is opaque callbacks for that reason.)
 func hashPumpToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
@@ -196,41 +222,62 @@ func (h *Hub) Publish(m Message) {
 // see the package comment), and the handler's revalidation loop.
 func (h *Hub) PublishTo(userIDs []string, m Message) {
 	if len(userIDs) == 0 {
+		// ⚠ AN EMPTY AUDIENCE IS NOT THE SAME THING AS AN UNREACHABLE ONE, and only
+		// one of the two is ordinary. Real ids that nobody is connected under is the
+		// normal case the doc above describes — a sleeping phone, the push channel's
+		// job. Zero ids means the CALLER resolved no audience at all, which for a
+		// member-restricted module is a bug: every conversation has at least its
+		// author. Left silent it was the one loss path in this file with no trace
+		// anywhere — the message is committed, no frame is sent to anybody, and
+		// D259's gap check only notices on the NEXT message in that conversation,
+		// which may never come.
+		h.logger.Warn("ws: targeted publish with an EMPTY audience — the caller resolved "+
+			"no recipients, so this change reached nobody", "type", m.Type)
 		return
 	}
+	// ⚠ ONE FAN-OUT AT A TIME, AND IT COVERS THE MARSHAL. See Hub.pub: the marshal
+	// happens off h.mu, and without this two concurrent targeted publishes could
+	// swap places in the recipient's send channel — which D259 reads as a gap, not
+	// as a reordering.
+	h.pub.Lock()
+	defer h.pub.Unlock()
+	// ONE PASS UNDER h.mu, and it snapshots the recipient CLIENTS rather than
+	// merely asking whether any exist. Holding the index across the fan-out meant
+	// Publish, add, remove and Count all waited on a select-send per socket; the
+	// snapshot is safe to send to afterwards because c.send is never closed (see
+	// the client type), which is the invariant the sends already relied on.
+	//
 	// Dedupe the ID LIST, not the client set. A client is filed under exactly one
 	// id, so two different ids can never share one and a duplicate delivery can
 	// only come from a repeated id — a caller de-duplicating badly, or a member
 	// appearing as both author and recipient. A duplicate chat frame is a
 	// duplicate bubble. Deduping here costs one small map over a handful of
 	// strings rather than one over every recipient socket.
-	//
-	// ⚠ AND THE AUDIENCE IS CHECKED FOR REACHABILITY BEFORE THE PAYLOAD IS
-	// ENCODED. An audience with nobody connected is the ORDINARY case, not an
-	// error — the doc above says so — and for chat it is most of them: a household
-	// where one member has a tab open and the rest are on push means every message
-	// body would be marshalled in full and then dropped on the floor. This pass is
-	// one map lookup per recipient, against a marshal of the whole payload.
-	//
-	// ⚠ The cost of that ordering: a payload that does not marshal is now reported
-	// only when somebody was connected to receive it. Nothing was going to be
-	// delivered either way, but the log below is a bug signal rather than a
-	// delivery one, so a module publishing an unmarshalable payload can look clean
-	// on a dev machine with no browser open.
 	h.mu.Lock()
 	seen := make(map[string]struct{}, len(userIDs))
-	reachable := false
+	targets := make([]*client, 0, len(userIDs))
 	for _, id := range userIDs {
 		if _, dup := seen[id]; dup {
 			continue
 		}
 		seen[id] = struct{}{}
-		if len(h.byUser[id]) > 0 {
-			reachable = true
+		for c := range h.byUser[id] {
+			targets = append(targets, c)
 		}
 	}
 	h.mu.Unlock()
-	if !reachable {
+	// ⚠ THE AUDIENCE IS CHECKED FOR REACHABILITY BEFORE THE PAYLOAD IS ENCODED. An
+	// audience with nobody connected is the ORDINARY case, not an error — the doc
+	// above says so — and for chat it is most of them: a household where one member
+	// has a tab open and the rest are on push would otherwise marshal every message
+	// body in full and then drop it on the floor.
+	//
+	// ⚠ The cost of that ordering: a payload that does not marshal is reported only
+	// when somebody was connected to receive it. Nothing was going to be delivered
+	// either way, but the log below is a bug signal rather than a delivery one, so
+	// a module publishing an unmarshalable payload can look clean on a dev machine
+	// with no browser open.
+	if len(targets) == 0 {
 		return
 	}
 	// Marshalled OUTSIDE the lock: encoding a chat payload while holding h.mu
@@ -244,28 +291,24 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 			"type", m.Type, "recipients", len(seen), "err", err)
 		return
 	}
-	h.mu.Lock()
 	dropped := 0
-	for id := range seen {
-		for c := range h.byUser[id] {
-			select {
-			case c.send <- data:
-			default: // slow client: drop; counted and logged below
-				dropped++
-			}
+	for _, c := range targets {
+		select {
+		case c.send <- data:
+		default: // slow client: drop; counted and logged below
+			dropped++
 		}
 	}
-	h.mu.Unlock()
-	// ⚠ A TARGETED DROP IS NOT A BROADCAST DROP, and it is the only loss in this
-	// file with no other trace. Publish's drop costs a refresh that
-	// refetch-on-focus repairs; here the frame IS the content and there is no
+	// ⚠ A TARGETED DROP IS NOT A BROADCAST DROP. Publish's drop costs a refresh
+	// that refetch-on-focus repairs; here the frame IS the content and there is no
 	// replay, so a saturated phone simply never sees that message — and D259's
-	// gap check only notices on the NEXT one, which may never come. The
-	// marshal-failure paths above were given a log on exactly this reasoning.
+	// gap check only notices on the NEXT one, which may never come. Every other
+	// way this function can lose a message — an empty audience, either marshal
+	// failure — was given a log on exactly this reasoning.
 	//
-	// Logged AFTER the unlock, and once per publish rather than once per client:
-	// a write to the log handler while holding h.mu would stall Publish, add,
-	// remove and Count on whatever stdout is attached to.
+	// Logged once per publish rather than once per client, and (like the sends
+	// above) with h.mu released: a write to the log handler while holding it would
+	// stall Publish, add, remove and Count on whatever stdout is attached to.
 	if dropped > 0 {
 		h.logger.Warn("ws: targeted publish dropped for a saturated client — the frame is not replayed",
 			"type", m.Type, "recipients", len(seen), "dropped", dropped)
@@ -323,6 +366,20 @@ func (h *Hub) DisconnectSession(sessionID string) {
 	for c := range h.bySession[sessionID] {
 		doomed = append(doomed, c)
 	}
+	// ⚠ UNINDEXED UNDER THE SAME LOCK THE SNAPSHOT WAS TAKEN UNDER, so the
+	// revocation decision and the loss of targetability are one step.
+	//
+	// Cancelling alone left the client in byUser until its own handler goroutine
+	// unwound and called remove() — and in that window a concurrent PublishTo
+	// still found it, queued a message body on its send channel, and the write
+	// pump (sitting in a select with ctx.Done() AND c.send both ready, which Go
+	// picks between at random) could put that private payload on the wire of a
+	// session that had already been revoked. Precisely the leak the whole
+	// mechanism exists to close. remove() is idempotent, so the handler's own
+	// call on the way out still costs nothing.
+	for _, c := range doomed {
+		h.removeLocked(c)
+	}
 	h.mu.Unlock()
 	// Cancel OUTSIDE the lock: cancelling unblocks the write pump, whose exit path
 	// calls remove(), which takes this same mutex.
@@ -360,12 +417,22 @@ func (h *Hub) add(c *client) {
 //
 // The empty inner map is deleted too, so a member who has not connected since boot
 // does not leave an entry behind for every id the hub has ever seen.
+// It is idempotent, and DisconnectSession relies on that: a revoked socket is
+// unindexed there, at the instant the revocation is decided, and again here when
+// its handler unwinds.
 func (h *Hub) remove(c *client) {
 	h.mu.Lock()
+	h.removeLocked(c)
+	h.mu.Unlock()
+}
+
+// removeLocked is remove's body for a caller that already holds h.mu — today
+// DisconnectSession, which must unindex inside the same critical section it
+// snapshots in. Callers hold h.mu.
+func (h *Hub) removeLocked(c *client) {
 	delete(h.clients, c)
 	indexDelete(h.byUser, c.userID, c)
 	indexDelete(h.bySession, c.sessionID, c)
-	h.mu.Unlock()
 }
 
 // indexAdd files c under key, skipping the empty key (an unidentified connection

@@ -16,12 +16,14 @@ import (
 // TestPublishToDropsOnlyForTheSaturatedClient pins the load-bearing `default:` in
 // PublishTo's send.
 //
-// ⚠ PublishTo does its sends while HOLDING h.mu. A maintainer who decides a
-// dropped chat frame is unacceptable and makes that send blocking (or gives it a
-// timeout) would not slow one phone down — they would freeze the mutex that
-// Publish, add, remove and Count all need, so one wedged device stops the whole
-// household's live updates. Nothing else in the suite exercises backpressure at
-// all: every other test reads its frames eagerly.
+// ⚠ PublishTo's fan-out runs off h.mu — it sends to a snapshot taken under the
+// lock — but it still holds Hub.pub, which serialises every targeted publish. A
+// maintainer who decides a dropped chat frame is unacceptable and makes that send
+// blocking (or gives it a timeout) would not slow one phone down: they would stall
+// every other targeted publish behind the wedged device, and a send that moved
+// back under h.mu would freeze Publish, add, remove and Count with it. Nothing
+// else in the suite exercises backpressure at all: every other test reads its
+// frames eagerly.
 func TestPublishToDropsOnlyForTheSaturatedClient(t *testing.T) {
 	// A real logger, not nil: the drop below is logged now, and slog.Default()
 	// would put that line on the suite's stderr on every run.
@@ -44,7 +46,8 @@ func TestPublishToDropsOnlyForTheSaturatedClient(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		// Fatal rather than Error: the hub mutex is still held, so every later
+		// Fatal rather than Error: a PublishTo that never returns is still holding
+		// Hub.pub (and, if the send moved back under it, h.mu), so every later
 		// assertion here would block too.
 		t.Fatal("PublishTo blocked on a client whose send buffer is full — it must drop " +
 			"for that client and move on, or one wedged device stalls the hub for everyone")
