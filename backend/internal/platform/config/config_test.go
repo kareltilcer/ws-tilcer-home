@@ -76,15 +76,25 @@ func TestLoad_Defaults(t *testing.T) {
 // operator reaches for from Coolify during an incident, so a value outside their
 // range has to fail the boot rather than be silently replaced.
 //
-// ⚠ HOME_WS_REVALIDATE_MINUTES is bounded at BOTH ends. 0 or a negative is the
-// natural way to write "turn the pump off" and would otherwise become the
-// 5-minute default inside ws.Handler, with Redacted() printing a number the
-// process is not using; an absurd value overflows the time.Duration arithmetic in
-// the composition root and again in the handler's jitter.
+// ⚠ ALL THREE are bounded at BOTH ends, and the upper bound is the one that
+// matters. Each is multiplied into a time.Duration in the composition root, and a
+// large enough value overflows int64 nanoseconds into a NEGATIVE duration every
+// comparison then reads backwards: a negative role-refresh threshold re-mints on
+// every request and every revalidation tick, and a negative session TTL issues
+// cookies with a negative MaxAge against rows that are already expired. On the
+// revalidation window a 0 or a negative additionally reads as "turn the pump off"
+// and would become the 5-minute default inside ws.Handler, with Redacted()
+// printing a number the process is not using.
 func TestLoad_SessionWindowRangeChecks(t *testing.T) {
 	for _, tc := range []struct{ key, value string }{
 		{"HOME_SESSION_TTL_DAYS", "0"},
+		{"HOME_SESSION_TTL_DAYS", "-1"},
+		// Overflows time.Duration(days) * 24 * time.Hour into a negative.
+		{"HOME_SESSION_TTL_DAYS", "200000"},
 		{"HOME_ROLE_REFRESH_MINUTES", "0"},
+		{"HOME_ROLE_REFRESH_MINUTES", "-1"},
+		// Overflows time.Duration(minutes) * time.Minute into a negative.
+		{"HOME_ROLE_REFRESH_MINUTES", "200000000"},
 		{"HOME_WS_REVALIDATE_MINUTES", "0"},
 		{"HOME_WS_REVALIDATE_MINUTES", "-1"},
 		{"HOME_WS_REVALIDATE_MINUTES", "10000"},

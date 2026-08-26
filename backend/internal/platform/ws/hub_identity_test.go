@@ -601,8 +601,10 @@ func TestRevalidationKeepsTheSocketWhenTheVerdictIsUnknown(t *testing.T) {
 // was not indexed yet. Without an immediate first pass that socket holds an
 // already-revoked session until the first tick, which in production is minutes.
 func TestRevalidationRunsImmediatelyOnConnect(t *testing.T) {
+	var calls atomic.Int32
 	hub, wsURL := newRevalidatingServerEvery(t, time.Hour, // a tick will never come
 		func(context.Context, string) (string, ws.Revalidation) {
+			calls.Add(1)
 			return "u-karel", ws.RevalidationGone
 		})
 
@@ -614,9 +616,167 @@ func TestRevalidationRunsImmediatelyOnConnect(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
 
-	// The interval is an hour, so anything that closes this socket did so on the
-	// pump's immediate first pass.
+	// ⚠ THE POSITIVE SIGNAL COMES FIRST, and it is not optional. Dial returns on
+	// the 101, which websocket.Accept writes BEFORE the handler reaches h.add, so
+	// a bare waitCount(0) has a legal interleaving in which it observes an
+	// unregistered client and passes having proven nothing — including with the
+	// immediate check deleted, which is the one mutation this test exists to
+	// catch. Every sibling waits for tracked==1 first; this socket is meant to die
+	// at once, so it waits for the CHECK instead.
+	waitAtLeast(t, func() int { return int(calls.Load()) }, 1, "revalidation attempts")
+	// The interval is an hour, so anything that closed this socket did so on that
+	// immediate first pass.
 	waitCount(t, hub, 0)
+}
+
+// TestRevalidationKeepsAnIdentifiedlessConnection is the other side of
+// TestAuthenticatedActorWithNoUserIDIsBroadcastOnly, and the branch that test
+// cannot reach because it configures no Revalidate.
+//
+// ⚠ The handler deliberately KEEPS a connection whose actor carries no user id
+// (reqctx.Actor documents "" for system/service principals) rather than refusing
+// the upgrade over a targeting problem. A changed-id check that compares a real
+// id against that empty one contradicts it: every such socket dies on its own
+// first check, the client's backoff has already been reset by `open`, and the
+// upgrade path never looks at the id — so it is re-accepted and re-closed
+// forever, at a Lookup and possibly a Mint per cycle.
+func TestRevalidationKeepsAnIdentifiedlessConnection(t *testing.T) {
+	var calls atomic.Int32
+	hub := ws.NewHub(discardLogger())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			// Authenticated, no user id — and a real session, so the pump runs.
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{Type: "service", Label: "importer"},
+				SessionID: "s-service",
+				Token:     "tok-service",
+			}, true
+		},
+		Revalidate: func(context.Context, string) (string, ws.Revalidation) {
+			// What the composition root's Revalidate really answers: the session
+			// row's own user id, which is never the empty string.
+			calls.Add(1)
+			return "u-karel", ws.RevalidationValid
+		},
+		RevalidateEvery: 20 * time.Millisecond,
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitCount(t, hub, 1)
+
+	// Several checks have now disagreed with c.userID, and the socket survived
+	// all of them.
+	waitAtLeast(t, func() int { return int(calls.Load()) }, 3, "revalidation attempts")
+	if n := hub.Count(); n != 1 {
+		t.Fatalf("hub client count = %d after %d revalidations of an id-less connection, want 1 "+
+			"— an empty user id is not a CHANGED one, and closing on it is an unbounded "+
+			"reconnect loop over a connection PublishTo cannot reach anyway", n, calls.Load())
+	}
+	// And it is still a live broadcast recipient, which is the whole point of
+	// having kept it.
+	hub.Publish(ws.Message{Type: sentinelType})
+	if got := readType(t, conn, readTimeout); got != sentinelType {
+		t.Errorf("the kept id-less client got %q, want the sentinel", got)
+	}
+}
+
+// TestOnePumpPerSessionNotPerSocket. Every tab of one browser carries the same
+// cookie, so they cannot disagree about the verdict.
+//
+// ⚠ A ticker per SOCKET means four Lookups per interval for four tabs against a
+// pool of exactly one connection (db.SetMaxOpenConns(1)) — and four Mints rather
+// than one whenever a re-mint fails transiently, because that path stamps no
+// roles_refreshed_at for the next tab to read. The saving is only real if the
+// pump is keyed by session, so it is asserted rather than assumed.
+func TestOnePumpPerSessionNotPerSocket(t *testing.T) {
+	var calls atomic.Int32
+	hub := ws.NewHub(discardLogger())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(r *http.Request) (ws.Upgrade, bool) {
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: "u-karel", Type: "user"},
+				SessionID: "s-karel",
+				Token:     "tok-karel",
+			}, true
+		},
+		Revalidate: func(context.Context, string) (string, ws.Revalidation) {
+			calls.Add(1)
+			return "u-karel", ws.RevalidationValid
+		},
+		RevalidateEvery: 20 * time.Millisecond,
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i := 0; i < 4; i++ {
+		c, _, err := cws.Dial(ctx, wsURL+"/ws", nil) // four tabs, one cookie jar
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		t.Cleanup(func() { _ = c.Close(cws.StatusNormalClosure, "") })
+	}
+	waitCount(t, hub, 4)
+
+	// Four connect-time checks (one per socket — that race IS per socket), then
+	// ONE ticker for the session. Let it run ~25 intervals: four tickers would be
+	// far past this bound, one is comfortably under it.
+	base := calls.Load()
+	time.Sleep(500 * time.Millisecond)
+	ticks := calls.Load() - base
+	if ticks > 45 {
+		t.Errorf("%d revalidations in ~25 intervals across 4 tabs of ONE session — that is a "+
+			"ticker per socket; every tab of a cookie jar shares one verdict and must share "+
+			"one query", ticks)
+	}
+	if ticks == 0 {
+		t.Error("the session's ticker never ran; the recurring check is what bounds a " +
+			"revocation nothing announces")
+	}
+	if n := hub.Count(); n != 4 {
+		t.Errorf("hub client count = %d, want 4", n)
+	}
+}
+
+// TestRevokedSocketClosesWithAPolicyCode. A revocation is not a restart, and the
+// close code is the only place that distinction reaches the browser.
+//
+// ⚠ Closed as StatusNormalClosure, a socket dropped because its session is gone
+// looks exactly like a deploy, so the client reconnects — onto an upgrade that
+// will 401 for the rest of the tab's life, once per backoff cap, forever, with
+// nothing anywhere in the app saying the session ended.
+func TestRevokedSocketClosesWithAPolicyCode(t *testing.T) {
+	hub, wsURL := newIdentityServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := dialAsSession(ctx, t, wsURL, "u-karel", "s-phone")
+	waitCount(t, hub, 1)
+
+	hub.DisconnectSession("s-phone")
+
+	_, _, err := conn.Read(ctx)
+	if err == nil {
+		t.Fatal("read succeeded after the session was revoked, want a close")
+	}
+	if got := cws.CloseStatus(err); got != cws.StatusPolicyViolation {
+		t.Errorf("revoked socket closed with status %v, want StatusPolicyViolation (%v) — a "+
+			"normal closure tells the browser to reconnect, and it will be 401ed every time",
+			got, cws.StatusPolicyViolation)
+	}
 }
 
 // newRevalidatingServer builds a hub whose /ws accepts anyone as u-karel and

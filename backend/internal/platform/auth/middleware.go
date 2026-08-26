@@ -102,7 +102,15 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) (
 		return id.Roles, false, nil
 	default:
 		// Transient auth outage: keep cached roles, retry next request.
-		c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
+		//
+		// ⚠ Silent when the CALLER went away. From the websocket revalidation pump
+		// ctx is the connection's, so a member closing their tab mid-mint lands
+		// here with context.Canceled — a normal disconnect logged as an auth-service
+		// problem, on a jittered tick across every session in the household. The
+		// detached revoke above exists for the same reason.
+		if ctx.Err() == nil {
+			c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
+		}
 		return sess.Roles, false, nil
 	}
 }
@@ -163,7 +171,15 @@ func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID 
 	sess, ok, err := c.Sessions.Lookup(ctx, rawToken, now)
 	switch {
 	case err != nil:
-		c.logger().Warn("session revalidation could not reach the store — keeping the connection", "err", err)
+		// ⚠ Silent when the CALLER went away. ctx here is the websocket
+		// connection's, so a member closing their tab while a tick is inside
+		// Lookup fails it with context.Canceled — and logging that as "could not
+		// reach the store" points an operator at a database problem that is really
+		// a closed browser tab, once per tab, forever. The verdict is unchanged:
+		// an undecidable check keeps the connection either way.
+		if ctx.Err() == nil {
+			c.logger().Warn("session revalidation could not reach the store — keeping the connection", "err", err)
+		}
 		return "", SessionUnknown
 	case !ok:
 		return "", SessionGone

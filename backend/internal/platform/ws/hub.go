@@ -41,6 +41,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
@@ -95,6 +97,9 @@ type Hub struct {
 	// through Config left half this package's output escaping the structured
 	// stream the moment anything stopped calling slog.SetDefault.
 	logger *slog.Logger
+	// pumps holds the recurring revalidation ticker of every connected SESSION,
+	// refcounted across that session's sockets. See startSessionPump.
+	pumps map[string]*sessionPump
 }
 
 // NewHub returns an empty hub logging through logger (nil means slog.Default()).
@@ -106,6 +111,7 @@ func NewHub(logger *slog.Logger) *Hub {
 		clients:   make(map[*client]struct{}),
 		byUser:    make(map[string]map[*client]struct{}),
 		bySession: make(map[string]map[*client]struct{}),
+		pumps:     make(map[string]*sessionPump),
 		logger:    logger,
 	}
 }
@@ -171,19 +177,13 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	// only come from a repeated id — a caller de-duplicating badly, or a member
 	// appearing as both author and recipient. A duplicate chat frame is a
 	// duplicate bubble. Deduping here costs one small map over a handful of
-	// strings rather than one over every recipient socket, and keeps the send loop
-	// branchless.
-	var seen map[string]struct{}
-	if len(userIDs) > 1 {
-		seen = make(map[string]struct{}, len(userIDs))
-	}
+	// strings rather than one over every recipient socket.
+	seen := make(map[string]struct{}, len(userIDs))
 	for _, id := range userIDs {
-		if seen != nil {
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
+		if _, dup := seen[id]; dup {
+			continue
 		}
+		seen[id] = struct{}{}
 		for c := range h.byUser[id] {
 			select {
 			case c.send <- data:
@@ -248,7 +248,7 @@ func (h *Hub) DisconnectSession(sessionID string) {
 	// Cancel OUTSIDE the lock: cancelling unblocks the write pump, whose exit path
 	// calls remove(), which takes this same mutex.
 	for _, c := range doomed {
-		c.cancel()
+		c.revoke()
 	}
 	if len(doomed) > 0 {
 		h.logger.Info("ws: closing the sockets of a revoked session", "session", sessionID, "sockets", len(doomed))
@@ -327,10 +327,102 @@ func indexDelete(index map[string]map[*client]struct{}, key string, c *client) {
 // never by PublishTo. sessionID is the session that authorised the upgrade, and is
 // empty under the dev bypass, where there is no session at all. Both are set once
 // at accept time and never mutated, so they need no lock of their own.
+//
+// revoked records that this socket was closed BECAUSE its session no longer
+// authorises it, rather than because the process or the browser went away. It
+// picks the websocket close code, which is the only thing that tells the two
+// apart on the wire: a client that treats a revocation like a restart reconnects
+// into an upgrade that will 401 for the rest of the tab's life. Written before
+// cancel and read after the write pump has unwound, so it is an atomic rather
+// than another field under h.mu.
 type client struct {
 	conn      *websocket.Conn
 	send      chan []byte
 	cancel    context.CancelFunc
 	userID    string
 	sessionID string
+	revoked   atomic.Bool
+}
+
+// revoke closes the socket AND records why, so the handler can answer with a
+// close code the browser can act on. Every path that drops a connection over the
+// session — DisconnectSession, and the revalidation checks — goes through here;
+// a plain cancel() stays "the connection is over", with no verdict attached.
+func (c *client) revoke() {
+	c.revoked.Store(true)
+	c.cancel()
+}
+
+// sessionPump is the recurring revalidation ticker of ONE session, shared by
+// every socket that session has open.
+//
+// ⚠ ONE TICKER PER SESSION, NOT PER SOCKET. Every tab of one browser carries the
+// same cookie, so they cannot disagree about the verdict, and a ticker each would
+// mean four Lookups per interval for four tabs against a pool of exactly one
+// connection (db.SetMaxOpenConns(1)) — and four Mints, not one, whenever a
+// re-mint fails transiently, because that path stamps no roles_refreshed_at for a
+// second tab to read. refs counts the sockets holding it; the last one out stops
+// it.
+//
+// ⚠ Its context is NOT any connection's. A tick in flight must survive the tab
+// that happened to open the session closing mid-query, and must stop when the
+// LAST of them goes.
+type sessionPump struct {
+	cancel context.CancelFunc
+	refs   int
+}
+
+// startSessionPump joins the caller to sessionID's revalidation ticker, starting
+// it if this is the session's first socket. The returned handle must be passed
+// back to releaseSessionPump when the socket goes.
+func (h *Hub) startSessionPump(sessionID, openedAs, token string, revalidate RevalidateFunc, every time.Duration) *sessionPump {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p, ok := h.pumps[sessionID]; ok {
+		p.refs++
+		return p
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &sessionPump{cancel: cancel, refs: 1}
+	h.pumps[sessionID] = p
+	go h.runSessionPump(ctx, p, sessionID, openedAs, token, revalidate, every)
+	return p
+}
+
+// releaseSessionPump drops one socket's hold on the ticker, stopping it when the
+// last one lets go.
+//
+// ⚠ It matches on the HANDLE, not on the session id. A pump that retired itself
+// on a verdict may already have been replaced by a fresh one for a reconnected
+// session, and decrementing that one's refs on behalf of a socket it never
+// counted would stop a live pump while sockets still depend on it.
+func (h *Hub) releaseSessionPump(sessionID string, p *sessionPump) {
+	if p == nil {
+		return
+	}
+	h.mu.Lock()
+	cur, ok := h.pumps[sessionID]
+	if !ok || cur != p {
+		h.mu.Unlock() // already retired; its goroutine is gone
+		return
+	}
+	p.refs--
+	if p.refs > 0 {
+		h.mu.Unlock()
+		return
+	}
+	delete(h.pumps, sessionID)
+	h.mu.Unlock()
+	p.cancel()
+}
+
+// retireSessionPump drops the registry entry for a pump that has decided to stop,
+// so the session's next socket starts a live ticker instead of joining a dead one.
+func (h *Hub) retireSessionPump(sessionID string, p *sessionPump) {
+	h.mu.Lock()
+	if cur, ok := h.pumps[sessionID]; ok && cur == p {
+		delete(h.pumps, sessionID)
+	}
+	h.mu.Unlock()
+	p.cancel()
 }

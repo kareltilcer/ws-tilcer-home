@@ -4,8 +4,15 @@ import { useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { qk } from './keys'
 import { clientId } from './clientId'
+import { reportUnauthorized } from './client'
 import { cs } from '@/i18n/cs'
 import { routes } from '@/app/routes'
+
+// WS_CLOSE_POLICY_VIOLATION (RFC 6455 §7.4.1, code 1008) is what the hub answers
+// with when it closes a socket because the session behind it no longer authorises
+// it. Every other code — a deploy, a dropped network, a browser sleeping — is a
+// reconnect.
+const WS_CLOSE_POLICY_VIOLATION = 1008
 
 // useLiveSync opens the session-authenticated websocket and applies pushed
 // changes by invalidating the affected query caches (refetch-on-focus is the
@@ -80,8 +87,20 @@ export function useLiveSync(): void {
           // ignore malformed frames
         }
       }
-      ws.onclose = () => {
+      ws.onclose = (e) => {
         if (closed) return
+        // ⚠ A REVOCATION IS NOT A RESTART. The server closes with the policy code
+        // when the session behind this socket is gone — revoked by a logout
+        // elsewhere, dropped by a mint that failed closed, or simply expired —
+        // and reconnecting then is pointless: the upgrade is 401ed, and because
+        // `open` resets the backoff this tab would redial every capped interval
+        // for as long as it stays open, with nothing on screen ever saying the
+        // session ended. Stop, and hand off to the same login screen a 401 does.
+        if (e.code === WS_CLOSE_POLICY_VIOLATION) {
+          closed = true
+          reportUnauthorized()
+          return
+        }
         attempt = Math.min(attempt + 1, 6)
         timer = setTimeout(connect, 400 * 2 ** attempt)
       }

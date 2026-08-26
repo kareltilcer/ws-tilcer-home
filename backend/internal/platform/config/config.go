@@ -399,8 +399,19 @@ const (
 	defaultSessionTTLDays       = 90
 	defaultRoleRefreshMinutes   = 15
 	defaultWSRevalidateMinutes  = 5
-	// maxWSRevalidateMinutes is a day. Past that the socket outlives any incident
-	// the window is meant to bound, so the value has stopped being a backstop.
+	// ⚠ ALL THREE SESSION WINDOWS ARE BOUNDED AT BOTH ENDS, and the upper bound is
+	// not tidiness. Each is multiplied into a time.Duration in the composition
+	// root, and a large enough value OVERFLOWS int64 nanoseconds into a NEGATIVE
+	// duration that every comparison then reads backwards: a negative role-refresh
+	// threshold re-mints on every single request and every revalidation tick, and
+	// a negative session TTL issues cookies with a negative MaxAge — the browser
+	// deletes them on arrival — against rows that are already expired. Both load
+	// silently and break login, so they are refused at boot.
+	//
+	// The caps are ten years, a day and a day: past those the window has stopped
+	// bounding the incident it exists for, long before arithmetic is the problem.
+	maxSessionTTLDays      = 3650
+	maxRoleRefreshMinutes  = 1440
 	maxWSRevalidateMinutes = 1440
 
 	// documents (v4)
@@ -525,17 +536,18 @@ func Load(getenv Getenv) (*Config, error) {
 	if c.NotesImageMaxUploadMB < 1 {
 		l.errf("HOME_NOTES_IMAGE_MAX_UPLOAD_MB must be >= 1 (got %d)", c.NotesImageMaxUploadMB)
 	}
-	if c.SessionTTLDays < 1 {
-		l.errf("HOME_SESSION_TTL_DAYS must be >= 1 (got %d)", c.SessionTTLDays)
+	// The three session windows, all bounded at BOTH ends for the same reason —
+	// see maxSessionTTLDays. A 0 or a negative on the revalidation window reads as
+	// "turn the pump off" and would additionally become the 5-minute default
+	// inside ws.Handler, with Redacted() printing a value the process does not have.
+	if c.SessionTTLDays < 1 || c.SessionTTLDays > maxSessionTTLDays {
+		l.errf("HOME_SESSION_TTL_DAYS must be between 1 and %d (got %d)",
+			maxSessionTTLDays, c.SessionTTLDays)
 	}
-	if c.RoleRefreshMinutes < 1 {
-		l.errf("HOME_ROLE_REFRESH_MINUTES must be >= 1 (got %d)", c.RoleRefreshMinutes)
+	if c.RoleRefreshMinutes < 1 || c.RoleRefreshMinutes > maxRoleRefreshMinutes {
+		l.errf("HOME_ROLE_REFRESH_MINUTES must be between 1 and %d (got %d)",
+			maxRoleRefreshMinutes, c.RoleRefreshMinutes)
 	}
-	// Bounded at BOTH ends, unlike the two above. A 0 or a negative reads as "turn
-	// the pump off" and would silently become the 5-minute default inside
-	// ws.Handler, with Redacted() printing a value the process does not have; an
-	// absurd value overflows the time.Duration multiplication in main.go and again
-	// in the handler's jitter, where it can yield a timer that fires immediately.
 	if c.WSRevalidateMinutes < 1 || c.WSRevalidateMinutes > maxWSRevalidateMinutes {
 		l.errf("HOME_WS_REVALIDATE_MINUTES must be between 1 and %d (got %d)",
 			maxWSRevalidateMinutes, c.WSRevalidateMinutes)

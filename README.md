@@ -136,8 +136,9 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `HOME_AUTH_JWT_ISSUER` | *(optional)* exact `iss` to require on those tokens = **auth's own base URL** (e.g. `https://auth.tilcer.cz`), which is **not** `AUTH_BASE_URL` when that ends in `/api`. Unset = don't check the issuer (signature + audience already bind the token) | *(unset)* |
 | `HOME_SITE_KEY` | auth site key | `home` (default) |
 | `HOME_ALLOWED_ORIGINS` | CSRF Origin allowlist for cookie-authenticated mutations | `https://*.tilcer.cz` (default) |
-| `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B) | `90` (default) |
-| `HOME_ROLE_REFRESH_MINUTES` | how often home re-mints to refresh cached roles | `15` (default) |
+| `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B; 1–3650) | `90` (default) |
+| `HOME_ROLE_REFRESH_MINUTES` | how often home re-mints to refresh cached roles (1–1440) | `15` (default) |
+| `HOME_WS_REVALIDATE_MINUTES` | how often an already-open websocket re-takes its session decision (1–1440). A socket is authenticated once, at upgrade; logout and a mint failing closed already close it immediately, so this bounds only the revocations nothing announces — an expiring TTL, a row revoked out of band | `5` (default) |
 | `HOME_TIMEZONE` | IANA zone for “today”/recurrence | `Europe/Prague` (default) |
 | `HOME_DASHBOARD_LOOKBACK_DAYS` | reminder lookback | `30` (default) |
 | `HOME_RRULE_MAX_OCCURRENCES` | expansion cap | `500` (default) |

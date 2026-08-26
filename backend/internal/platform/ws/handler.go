@@ -33,11 +33,16 @@ type Config struct {
 	// stale.
 	//
 	// ⚠ It must be able to say "I could not tell" — see Revalidation.
-	Revalidate func(ctx context.Context, token string) (userID string, verdict Revalidation)
+	Revalidate RevalidateFunc
 	// RevalidateEvery is how often an already-open socket re-takes that decision
-	// (v10). Zero means defaultRevalidateEvery. See revalidatePump.
+	// (v10). Zero means defaultRevalidateEvery. See runSessionPump.
 	RevalidateEvery time.Duration
 }
+
+// RevalidateFunc re-takes the session decision from the opaque token the upgrade
+// handed back. Named so the hub can pass it around without repeating the
+// signature at every seam.
+type RevalidateFunc func(ctx context.Context, token string) (userID string, verdict Revalidation)
 
 // Upgrade is what the upgrade decision yields: the actor the connection belongs
 // to, plus the session that authorised it.
@@ -80,15 +85,26 @@ const (
 // HOME_WS_REVALIDATE_MINUTES.
 const defaultRevalidateEvery = 5 * time.Minute
 
+// revalidateInterval resolves the configured tick, falling back to the default
+// for a zero or negative one.
+//
+// ⚠ Extracted from Handler so the fallback can be tested. The only thing keeping
+// a 0 out of here is a range check that lives in another package
+// (HOME_WS_REVALIDATE_MINUTES), so the substitution has to be pinned on this side
+// of that boundary too.
+func revalidateInterval(every time.Duration) time.Duration {
+	if every <= 0 {
+		return defaultRevalidateEvery
+	}
+	return every
+}
+
 // Handler returns the session-authenticated /ws upgrade handler. Reads are open
 // to any authenticated user, so connecting only requires a valid session (no role
 // gate here).
 func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 	logger := h.logger
-	revalidateEvery := cfg.RevalidateEvery
-	if revalidateEvery <= 0 {
-		revalidateEvery = defaultRevalidateEvery
-	}
+	revalidateEvery := revalidateInterval(cfg.RevalidateEvery)
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ⚠ v10: the actor resolved here is KEPT (D232). Until v10 it was resolved
 		// purely to decide accept-or-reject and then discarded, which is what made
@@ -151,28 +167,75 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
+		// ⚠ THE READ PUMP GETS ITS OWN CONTEXT, and it must not be this one. A
+		// coder/websocket Read whose context is cancelled ABORTS the connection
+		// rather than closing it, so a read pump sharing ctx tears the socket down
+		// the instant anything cancels — before the close below can put a status on
+		// the wire, leaving every peer with an abnormal closure and no verdict.
+		// Read stays blocked until conn.Close completes instead, which the library
+		// documents as unblocking every goroutine on the connection; cancelRead is
+		// the backstop if that ever fails to.
+		readCtx, cancelRead := context.WithCancel(context.Background())
+		defer cancelRead()
 		c := &client{conn: conn, send: make(chan []byte, sendBuffer), cancel: cancel, userID: userID, sessionID: sessionID}
 		h.add(c)
+		// ⚠ Deferred AS WELL AS called explicitly below. h.add files this client in
+		// THREE maps and only the ordinary path unwinds through the explicit
+		// remove, so a panic in the write pump — or a return added between add and
+		// writePump one day — would otherwise leave a dead *client in byUser and
+		// bySession for the process's lifetime, holding a 32-slot channel and a
+		// cancel func, and found by every later DisconnectSession for that session.
+		// remove is idempotent, so the second call costs nothing.
+		defer h.remove(c)
 		// The id is logged on both ends: "did that member's socket register, and
 		// under what?" is the first question a missing targeted push raises, and
 		// byUser is otherwise reachable only from a test.
 		logger.Info("ws connected", "user", userID, "session", sessionID, "clients", h.Count())
 
-		go h.readPump(ctx, c)
+		go h.readPump(readCtx, c)
 		if cfg.Revalidate != nil && token != "" {
-			go revalidatePump(ctx, c, cfg.Revalidate, token, revalidateEvery, logger)
+			// ⚠ TWO CHECKS AT TWO GRANULARITIES, and each is the right one for the
+			// hole it closes.
+			//
+			// The IMMEDIATE check is per SOCKET, because the race it closes is: the
+			// upgrade decision and h.add are not one atomic step, so a revocation
+			// sweeping bySession in between misses this client entirely — it was not
+			// indexed yet — and it would otherwise hold an already-revoked session
+			// until the first tick, minutes later.
+			go func() {
+				if !revalidateOnce(ctx, cfg.Revalidate, token, userID, sessionID, logger) {
+					c.revoke()
+				}
+			}()
+			// The RECURRING check is per SESSION, shared by every tab of it. See
+			// sessionPump. A connection with no session id gets none — it is
+			// unrevocable either way, which is what the warning above says.
+			if sessionID != "" {
+				p := h.startSessionPump(sessionID, userID, token, cfg.Revalidate, revalidateEvery)
+				defer h.releaseSessionPump(sessionID, p)
+			}
 		}
 		h.writePump(ctx, c)
 
 		h.remove(c)
 		cancel()
-		_ = conn.Close(websocket.StatusNormalClosure, "")
+		// ⚠ A REVOCATION IS NOT A RESTART, and the close code is the only place
+		// that distinction survives to the browser. Closed as StatusNormalClosure,
+		// a socket dropped because its session is gone is indistinguishable from a
+		// deploy, so the client reconnects — onto an upgrade that will 401 for the
+		// rest of the tab's life, once every backoff cap, forever. The policy code
+		// is what lets it stop and send the member to the login screen instead.
+		status, reason := websocket.StatusNormalClosure, ""
+		if c.revoked.Load() {
+			status, reason = websocket.StatusPolicyViolation, "session revoked"
+		}
+		_ = conn.Close(status, reason)
 		logger.Info("ws disconnected", "user", userID, "session", sessionID, "clients", h.Count())
 	}
 }
 
-// revalidatePump re-takes the session decision periodically and closes the socket
-// when it no longer holds.
+// runSessionPump re-takes one SESSION's decision periodically and closes every
+// socket it authorised when it no longer holds.
 //
 // ⚠ Without it a socket is authenticated exactly once and then trusted forever.
 // That cost nothing while every fan-out was a household-wide broadcast; with
@@ -181,19 +244,16 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 // 401 on every HTTP request, still live on the socket. Auth's own revocations
 // call Hub.DisconnectSession immediately; this is the backstop for the ones
 // nothing announces.
-func revalidatePump(ctx context.Context, c *client, revalidate func(context.Context, string) (string, Revalidation), token string, every time.Duration, logger *slog.Logger) {
-	// ⚠ CHECK ONCE IMMEDIATELY, before waiting out an interval. The upgrade
-	// decision and h.add are not one atomic step: a revocation that swept
-	// bySession in between misses this client entirely — it was not indexed yet —
-	// and without this first pass the socket would hold an already-revoked session
-	// until the first tick, minutes later.
-	if !stillValid(ctx, c, revalidate, token, logger) {
-		return
-	}
-	// ⚠ The interval is JITTERED. Every socket a page load opens would otherwise
+//
+// ⚠ It does NOT check immediately. The connect-time race is per socket, so the
+// handler runs that check itself, once, for each connection; this loop is only
+// the recurring half, and a second tab joining an existing session must not reset
+// its neighbours' schedule.
+func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, sessionID, openedAs, token string, revalidate RevalidateFunc, every time.Duration) {
+	// ⚠ The interval is JITTERED. Every session a page load opens would otherwise
 	// tick in phase for as long as it lives, and each tick is a query against a
-	// pool of exactly one connection, so the household's sockets would queue their
-	// re-checks ahead of user-facing requests in one burst every interval.
+	// pool of exactly one connection, so the household's sessions would queue
+	// their re-checks ahead of user-facing requests in one burst every interval.
 	t := time.NewTimer(jitter(every))
 	defer t.Stop()
 	for {
@@ -201,7 +261,12 @@ func revalidatePump(ctx context.Context, c *client, revalidate func(context.Cont
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if !stillValid(ctx, c, revalidate, token, logger) {
+			if !revalidateOnce(ctx, revalidate, token, openedAs, sessionID, h.logger) {
+				// Every socket of this session goes, and the ticker retires rather
+				// than idling — the session's next connection must start a live one
+				// instead of joining this dead entry.
+				h.DisconnectSession(sessionID)
+				h.retireSessionPump(sessionID, p)
 				return
 			}
 			t.Reset(jitter(every))
@@ -209,18 +274,19 @@ func revalidatePump(ctx context.Context, c *client, revalidate func(context.Cont
 	}
 }
 
-// stillValid re-takes the decision once and reports whether the socket lives on,
-// cancelling it when it must not.
+// revalidateOnce re-takes the decision once and reports whether the connections
+// it covers live on. It closes nothing itself: the caller decides whether that
+// means one socket (the connect-time check) or a whole session (the pump).
 //
-// ⚠ ONLY RevalidationGone CLOSES THE SOCKET. "I could not tell" keeps the
-// connection: see RevalidationUnknown.
-func stillValid(ctx context.Context, c *client, revalidate func(context.Context, string) (string, Revalidation), token string, logger *slog.Logger) bool {
+// ⚠ ONLY RevalidationGone CLOSES. "I could not tell" keeps the connection: see
+// RevalidationUnknown.
+func revalidateOnce(ctx context.Context, revalidate RevalidateFunc, token, openedAs, sessionID string, logger *slog.Logger) bool {
 	userID, verdict := revalidate(ctx, token)
 	switch {
 	case verdict == RevalidationGone:
 		logger.Info("ws: session revoked or expired — closing the socket",
-			"user", c.userID, "session", c.sessionID)
-	case verdict == RevalidationValid && userID != c.userID:
+			"user", openedAs, "session", sessionID)
+	case verdict == RevalidationValid && openedAs != "" && userID != openedAs:
 		// A CHANGED id matters as much as a rejected one: the socket is indexed
 		// under the id it opened with, and would go on receiving that user's
 		// audience.
@@ -234,12 +300,22 @@ func stillValid(ctx context.Context, c *client, revalidate func(context.Context,
 		// branch exists so that a Revalidate whose id CAN move — a future store, a
 		// different auth mode — cannot silently leave a socket indexed under the
 		// wrong member. Do not read its presence as evidence the case occurs.
+		//
+		// ⚠ AN EMPTY openedAs IS NOT A CHANGED ID, and the guard is load-bearing.
+		// The upgrade handler deliberately KEEPS a connection whose actor carries
+		// no user id — reqctx.Actor documents "" for system/service principals — as
+		// broadcast-only, because refusing it would take out live boards over a
+		// targeting problem. Without this clause every such connection is closed by
+		// its own first check, milliseconds after the 101: the client's backoff has
+		// already been reset by `open`, the upgrade path never looks at the id, so
+		// it is re-accepted and re-closed forever. There is nothing to protect
+		// there anyway — a client that is in no byUser set receives no targeted
+		// payload to leak.
 		logger.Warn("ws: session now resolves to a different member — closing the socket",
-			"opened_as", c.userID, "now", userID, "session", c.sessionID)
+			"opened_as", openedAs, "now", userID, "session", sessionID)
 	default:
 		return true
 	}
-	c.cancel()
 	return false
 }
 

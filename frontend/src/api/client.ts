@@ -17,6 +17,15 @@ export function setUnauthorizedHandler(fn: (() => void) | null): void {
   onUnauthorized = fn
 }
 
+/** reportUnauthorized runs the same handoff a 401 does, for the one place that
+ *  learns the session ended without issuing a request: the websocket, which the
+ *  server closes with a policy code when it revokes (see api/ws.ts). Without it
+ *  an idle tab whose account was disabled sits on the app shell indefinitely,
+ *  reconnecting into an upgrade that will 401 every time. */
+export function reportUnauthorized(): void {
+  onUnauthorized?.()
+}
+
 /** csrfToken reads the double-submit token from the `csrf` cookie (not HttpOnly). */
 function csrfToken(): string {
   const m = document.cookie.match(/(?:^|;\s*)csrf=([^;]+)/)
