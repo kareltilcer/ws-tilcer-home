@@ -1,21 +1,19 @@
 package ws_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	cws "github.com/coder/websocket"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
 
@@ -85,39 +83,15 @@ func poll(t *testing.T, get func() int, ok func(int) bool, want, what string) {
 	t.Fatalf("%s = %d, %s", what, last, want)
 }
 
-// discardLogger keeps the hub's own logging out of test output.
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(io.Discard, nil))
-}
+// The log sink and the two loggers live in testsupport: the mutex-guarded buffer
+// was already written verbatim in documents' preview tests, and asserting on a
+// log line is not a ws-specific need. captureLogger is for the handler's warnings
+// about connections that are a BUG STATE rather than a policy — they change no
+// observable behaviour, so the log line is the only thing that can be asserted,
+// and without asserting it the branch can be deleted whole.
+func discardLogger() *slog.Logger { return testsupport.DiscardLogger() }
 
-// syncBuffer is a concurrency-safe sink for the hub's logger. The handler writes
-// from the connection's goroutine while the test reads, so an unguarded
-// bytes.Buffer here is a race the assertions would only sometimes lose.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// captureLogger returns a logger and the buffer it writes to, for the handler's
-// warnings about connections that are a BUG STATE rather than a policy — they
-// change no observable behaviour, so the log line is the only thing that can be
-// asserted, and without asserting it the branch can be deleted whole.
-func captureLogger() (*slog.Logger, *syncBuffer) {
-	var b syncBuffer
-	return slog.New(slog.NewJSONHandler(&b, nil)), &b
-}
+func captureLogger() (*slog.Logger, *testsupport.SyncBuffer) { return testsupport.CaptureLogger() }
 
 func waitCount(t *testing.T, hub *ws.Hub, want int) {
 	t.Helper()
