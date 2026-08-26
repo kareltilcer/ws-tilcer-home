@@ -27,3 +27,11 @@ func (h *Hub) TrackedUsersForTest() int {
 	defer h.mu.Unlock()
 	return len(h.byUser)
 }
+
+// TrackedSessionsForTest returns how many session ids the revocation index holds.
+// The same leak the user index can have, one map over.
+func (h *Hub) TrackedSessionsForTest() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.bySession)
+}

@@ -3,6 +3,8 @@ package ws_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,11 +20,15 @@ import (
 // production handler reads the session cookie; the test stubs the decision).
 func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub()
+	hub := ws.NewHub(discardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
-		Authenticate: func(*http.Request) (reqctx.Actor, bool) {
-			return reqctx.Actor{UserID: "u1", Type: "user", Roles: []string{"editor"}}, authOK
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: "u1", Type: "user", Roles: []string{"editor"}},
+				SessionID: "s1",
+				Token:     "t1",
+			}, authOK
 		},
 	}))
 	srv := httptest.NewServer(mux)
@@ -37,13 +43,25 @@ func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 func waitFor(t *testing.T, get func() int, want int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+	// ⚠ The message reports the LAST POLLED value, not a fresh read. On a loaded
+	// machine the awaited value routinely lands just after the deadline, and
+	// re-reading here printed "hub client count = 0, want 0" — a failure whose own
+	// text says the assertion held, sending the reader after a hub bug that is not
+	// there.
+	last := get()
 	for time.Now().Before(deadline) {
-		if get() == want {
+		if last == want {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+		last = get()
 	}
-	t.Fatalf("%s = %d, want %d", what, get(), want)
+	t.Fatalf("%s = %d, want %d", what, last, want)
+}
+
+// discardLogger keeps the hub's own logging out of test output.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
 func waitCount(t *testing.T, hub *ws.Hub, want int) {

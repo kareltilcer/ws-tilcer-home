@@ -29,17 +29,29 @@ import (
 // newIdentityServer builds a hub whose /ws resolves the connecting user from an
 // X-Test-User header, so one server can hold connections for several members —
 // which is what every test below is actually about.
+//
+// The session id and token are derived from the header too, so a member dialling
+// twice with the same X-Test-User shares ONE session (two tabs of one browser);
+// dialAsSession opens a distinct one, which is what the revocation tests need.
 func newIdentityServer(t *testing.T) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub()
+	hub := ws.NewHub(discardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
-		Authenticate: func(r *http.Request) (reqctx.Actor, bool) {
+		Authenticate: func(r *http.Request) (ws.Upgrade, bool) {
 			id := r.Header.Get("X-Test-User")
 			if id == "" {
-				return reqctx.Actor{}, false
+				return ws.Upgrade{}, false
 			}
-			return reqctx.Actor{UserID: id, Type: "user", Roles: []string{"reader"}}, true
+			sessionID := r.Header.Get("X-Test-Session")
+			if sessionID == "" {
+				sessionID = "sess-" + id
+			}
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: id, Type: "user", Roles: []string{"reader"}},
+				SessionID: sessionID,
+				Token:     "tok-" + sessionID,
+			}, true
 		},
 	}))
 	srv := httptest.NewServer(mux)
@@ -47,12 +59,22 @@ func newIdentityServer(t *testing.T) (*ws.Hub, string) {
 	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
 }
 
-// dialAs opens a connection authenticated as userID.
+// dialAs opens a connection authenticated as userID, on that member's default
+// session.
 func dialAs(ctx context.Context, t *testing.T, wsURL, userID string) *cws.Conn {
 	t.Helper()
-	c, _, err := cws.Dial(ctx, wsURL+"/ws", &cws.DialOptions{
-		HTTPHeader: http.Header{"X-Test-User": []string{userID}},
-	})
+	return dialAsSession(ctx, t, wsURL, userID, "")
+}
+
+// dialAsSession opens a connection authenticated as userID on a named session —
+// one member's phone and laptop are two sessions, two tabs of one browser are one.
+func dialAsSession(ctx context.Context, t *testing.T, wsURL, userID, sessionID string) *cws.Conn {
+	t.Helper()
+	header := http.Header{"X-Test-User": []string{userID}}
+	if sessionID != "" {
+		header.Set("X-Test-Session", sessionID)
+	}
+	c, _, err := cws.Dial(ctx, wsURL+"/ws", &cws.DialOptions{HTTPHeader: header})
 	if err != nil {
 		t.Fatalf("dial as %s: %v", userID, err)
 	}
@@ -250,7 +272,7 @@ func TestPublishStillReachesEveryClient(t *testing.T) {
 // this test pins is the handler's behaviour for an id-less actor from any source,
 // which reqctx.Actor explicitly allows ("" for system/service).
 func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(discardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{}}))
 	srv := httptest.NewServer(mux)
@@ -290,7 +312,7 @@ func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 // TestBypassActorRegistersUnderItsID: with a dev actor id configured, targeted
 // pushes DO arrive, so a developer running under the bypass sees chat work.
 func TestBypassActorRegistersUnderItsID(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(discardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-1"}}))
 	srv := httptest.NewServer(mux)
@@ -324,7 +346,7 @@ func TestBypassActorRegistersUnderItsID(t *testing.T) {
 // pinned here so nobody reads the anonymous test above and concludes the bypass is
 // broadcast-only.
 func TestBypassRegistersEveryClientUnderOneID(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(discardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-user"}}))
 	srv := httptest.NewServer(mux)
@@ -362,23 +384,11 @@ func TestBypassRegistersEveryClientUnderOneID(t *testing.T) {
 // middleware fails closed and revokes) or whose session simply expires would go on
 // receiving message bodies over a connection that is 401 on every other request.
 func TestRevalidationClosesASocketWhoseSessionIsGone(t *testing.T) {
-	var valid atomic.Bool
-	valid.Store(true)
-
-	hub := ws.NewHub()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
-		Authenticate: func(*http.Request) (reqctx.Actor, bool) {
-			if !valid.Load() {
-				return reqctx.Actor{}, false
-			}
-			return reqctx.Actor{UserID: "u-karel", Type: "user"}, true
-		},
-		RevalidateEvery: 20 * time.Millisecond,
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	var verdict atomic.Int32
+	verdict.Store(int32(ws.RevalidationValid))
+	hub, wsURL := newRevalidatingServer(t, func(context.Context, string) (string, ws.Revalidation) {
+		return "u-karel", ws.Revalidation(verdict.Load())
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -389,7 +399,7 @@ func TestRevalidationClosesASocketWhoseSessionIsGone(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
 	waitTracked(t, hub, "u-karel", 1)
 
-	valid.Store(false) // the session is revoked while the socket stays open
+	verdict.Store(int32(ws.RevalidationGone)) // revoked while the socket stays open
 	waitCount(t, hub, 0)
 
 	if n := hub.TrackedClientsForTest("u-karel"); n != 0 {
@@ -398,30 +408,184 @@ func TestRevalidationClosesASocketWhoseSessionIsGone(t *testing.T) {
 	}
 }
 
-// TestDisconnectUserClosesOnlyThatMembersSockets: the revalidation ticker bounds
-// the exposure, but auth knows the moment it revokes, so it says so directly —
-// and must not take anybody else down with it.
-func TestDisconnectUserClosesOnlyThatMembersSockets(t *testing.T) {
+// TestRevalidationClosesASocketWhoseSessionChangedHands is the OTHER half of the
+// pump's decision, and it had no test.
+//
+// ⚠ A socket is indexed under the user id it opened with. If the session it was
+// authorised by now resolves to somebody else — a different member signing in on
+// the same browser — a verdict of "still valid" is not enough: the connection
+// would go on receiving the FIRST member's audience under the second member's
+// session.
+func TestRevalidationClosesASocketWhoseSessionChangedHands(t *testing.T) {
+	var owner atomic.Value
+	owner.Store("u-karel")
+	hub, wsURL := newRevalidatingServer(t, func(context.Context, string) (string, ws.Revalidation) {
+		// Always VALID — only the member behind the session changes.
+		return owner.Load().(string), ws.RevalidationValid
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitTracked(t, hub, "u-karel", 1)
+
+	owner.Store("u-marie")
+	waitCount(t, hub, 0)
+
+	if n := hub.TrackedClientsForTest("u-karel"); n != 0 {
+		t.Errorf("the socket still holds %d client(s) indexed under the member who OPENED "+
+			"it, while its session now belongs to another — a changed id must close the "+
+			"connection just as a rejected one does", n)
+	}
+}
+
+// TestRevalidationKeepsTheSocketWhenTheVerdictIsUnknown pins the difference
+// between "revoked" and "could not tell".
+//
+// ⚠ The session store is one SQLite connection behind a 5s busy timeout, so a
+// long write can make a queued lookup error. Treating that as a revocation would
+// close every socket in the household at once, over sessions nobody revoked, and
+// log it as if they had been. The socket must survive an undecidable verdict.
+func TestRevalidationKeepsTheSocketWhenTheVerdictIsUnknown(t *testing.T) {
+	var calls atomic.Int32
+	hub, wsURL := newRevalidatingServer(t, func(context.Context, string) (string, ws.Revalidation) {
+		calls.Add(1)
+		return "", ws.RevalidationUnknown // the store could not answer
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitTracked(t, hub, "u-karel", 1)
+
+	// Let several ticks fail to decide, then confirm the connection is still there
+	// and still reachable.
+	waitFor(t, func() int { return int(calls.Load()) }, 4, "revalidation attempts")
+	if n := hub.Count(); n != 1 {
+		t.Fatalf("hub client count = %d after %d undecidable revalidations, want 1 — a "+
+			"database hiccup is not a revocation", n, calls.Load())
+	}
+	hub.PublishTo([]string{"u-karel"}, ws.Message{Type: "chat.message.created"})
+	if got := readType(t, conn, readTimeout); got != "chat.message.created" {
+		t.Errorf("the kept socket got %q, want chat.message.created", got)
+	}
+}
+
+// TestRevalidationRunsImmediatelyOnConnect: the pump's FIRST check does not wait
+// out an interval.
+//
+// ⚠ The upgrade decision and the hub registration are not one atomic step, so a
+// revocation that sweeps bySession in between misses the connection entirely — it
+// was not indexed yet. Without an immediate first pass that socket holds an
+// already-revoked session until the first tick, which in production is minutes.
+func TestRevalidationRunsImmediatelyOnConnect(t *testing.T) {
+	hub, wsURL := newRevalidatingServerEvery(t, time.Hour, // a tick will never come
+		func(context.Context, string) (string, ws.Revalidation) {
+			return "u-karel", ws.RevalidationGone
+		})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+
+	// The interval is an hour, so anything that closes this socket did so on the
+	// pump's immediate first pass.
+	waitCount(t, hub, 0)
+}
+
+// newRevalidatingServer builds a hub whose /ws accepts anyone as u-karel and
+// re-takes the decision through revalidate every 20ms.
+func newRevalidatingServer(t *testing.T, revalidate func(context.Context, string) (string, ws.Revalidation)) (*ws.Hub, string) {
+	t.Helper()
+	return newRevalidatingServerEvery(t, 20*time.Millisecond, revalidate)
+}
+
+func newRevalidatingServerEvery(t *testing.T, every time.Duration, revalidate func(context.Context, string) (string, ws.Revalidation)) (*ws.Hub, string) {
+	t.Helper()
+	hub := ws.NewHub(discardLogger())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: "u-karel", Type: "user"},
+				SessionID: "s-karel",
+				Token:     "tok-karel",
+			}, true
+		},
+		Revalidate:      revalidate,
+		RevalidateEvery: every,
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+}
+
+// TestDisconnectSessionClosesEveryTabOfThatSession: the revalidation ticker
+// bounds the exposure, but auth knows the moment it revokes, so it says so
+// directly — and every tab sharing the revoked cookie has to go.
+func TestDisconnectSessionClosesEveryTabOfThatSession(t *testing.T) {
 	hub, wsURL := newIdentityServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	dialAs(ctx, t, wsURL, "u-karel")
-	dialAs(ctx, t, wsURL, "u-karel") // two devices, both must go
+	dialAsSession(ctx, t, wsURL, "u-karel", "s-phone")
+	dialAsSession(ctx, t, wsURL, "u-karel", "s-phone") // two tabs, one cookie jar
 	marie := dialAs(ctx, t, wsURL, "u-marie")
 	waitCount(t, hub, 3)
 
-	hub.DisconnectUser("u-karel")
+	hub.DisconnectSession("s-phone")
 	waitCount(t, hub, 1)
 
 	if n := hub.TrackedClientsForTest("u-karel"); n != 0 {
-		t.Errorf("DisconnectUser left %d socket(s) for u-karel, want 0", n)
+		t.Errorf("DisconnectSession left %d socket(s) for the revoked session, want 0", n)
 	}
 	// Marie is untouched and still reachable, which is the half a blunt "close
 	// everything" would get wrong.
 	hub.PublishTo([]string{"u-marie"}, ws.Message{Type: "chat.message.created"})
 	if got := readType(t, marie, readTimeout); got != "chat.message.created" {
-		t.Errorf("marie got %q after karel was disconnected, want chat.message.created", got)
+		t.Errorf("marie got %q after another session was disconnected, want chat.message.created", got)
+	}
+}
+
+// TestDisconnectSessionSparesTheMembersOtherDevices is the reason revocation is
+// keyed by session and not by member.
+//
+// ⚠ Every revocation auth performs is per-session: logout drops the calling
+// device's token, the fail-closed re-mint one row. Closing by USER id instead
+// would mean logging out on a phone tears down the laptop's socket — a session
+// nobody revoked, losing every frame published before the reconnect backoff
+// completes, on every logout, forever.
+func TestDisconnectSessionSparesTheMembersOtherDevices(t *testing.T) {
+	hub, wsURL := newIdentityServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dialAsSession(ctx, t, wsURL, "u-karel", "s-phone")
+	laptop := dialAsSession(ctx, t, wsURL, "u-karel", "s-laptop")
+	waitTracked(t, hub, "u-karel", 2)
+
+	hub.DisconnectSession("s-phone") // he logged out on the phone, and only there
+	waitCount(t, hub, 1)
+
+	if n := hub.TrackedClientsForTest("u-karel"); n != 1 {
+		t.Fatalf("u-karel holds %d socket(s) after logging out on ONE device, want 1 — the "+
+			"laptop's session was never revoked and its live feed must survive", n)
+	}
+	hub.PublishTo([]string{"u-karel"}, ws.Message{Type: "chat.message.created"})
+	if got := readType(t, laptop, readTimeout); got != "chat.message.created" {
+		t.Errorf("the surviving device got %q, want chat.message.created", got)
 	}
 }
 
@@ -462,4 +626,85 @@ func TestByUserEmptiesOnDisconnect(t *testing.T) {
 	if n := hub.TrackedUsersForTest(); n != 0 {
 		t.Errorf("the per-user index still holds %d ids with no connections, want 0", n)
 	}
+	// The same leak, one map over: remove() drops from the session index too.
+	if n := hub.TrackedSessionsForTest(); n != 0 {
+		t.Errorf("the per-session index still holds %d ids with no connections, want 0", n)
+	}
+}
+
+// TestNotifyStampsTheOriginFromTheRequest and its targeted sibling below pin the
+// field that moved out of main.go's closure and into the hub.
+//
+// ⚠ Origin is not decoration. It is how a tab tells its OWN echo apart from a
+// change made on another device: the frontend skips the "changed elsewhere" toast
+// when origin equals its own client id (PRD 3544). Drop it and nothing fails
+// anywhere in the backend — the symptom is every member being toasted for their
+// own edits.
+func TestNotifyStampsTheOriginFromTheRequest(t *testing.T) {
+	hub, wsURL := newIdentityServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := dialAs(ctx, t, wsURL, "u-karel")
+	waitTracked(t, hub, "u-karel", 1)
+
+	reqCtx := reqctx.WithRequest(context.Background(), reqctx.RequestInfo{ClientID: "tab-7"})
+	hub.Notify(reqCtx, "card.moved", nil)
+
+	if got := readOrigin(t, conn, readTimeout); got != "tab-7" {
+		t.Errorf("Notify stamped origin %q, want tab-7 — without it the tab that made the "+
+			"change is toasted for its own echo", got)
+	}
+}
+
+func TestNotifyToStampsTheOriginFromTheRequest(t *testing.T) {
+	hub, wsURL := newIdentityServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := dialAs(ctx, t, wsURL, "u-karel")
+	waitTracked(t, hub, "u-karel", 1)
+
+	reqCtx := reqctx.WithRequest(context.Background(), reqctx.RequestInfo{ClientID: "tab-7"})
+	hub.NotifyTo(reqCtx, []string{"u-karel"}, "chat.message.created", nil)
+
+	if got := readOrigin(t, conn, readTimeout); got != "tab-7" {
+		t.Errorf("NotifyTo stamped origin %q, want tab-7 — a member-restricted module must "+
+			"get the same echo suppression as a broadcasting one", got)
+	}
+}
+
+// TestNotifyLeavesTheOriginEmptyWithNoRequest: a background job, a cron run or a
+// BE→BE call has no tab behind it, and an invented origin would suppress the
+// toast on whichever tab happened to match.
+func TestNotifyLeavesTheOriginEmptyWithNoRequest(t *testing.T) {
+	hub, wsURL := newIdentityServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := dialAs(ctx, t, wsURL, "u-karel")
+	waitTracked(t, hub, "u-karel", 1)
+
+	hub.Notify(context.Background(), "card.moved", nil)
+
+	if got := readOrigin(t, conn, readTimeout); got != "" {
+		t.Errorf("origin = %q for a change with no request behind it, want empty", got)
+	}
+}
+
+// readOrigin reads one frame and returns its Origin. See readType for why there
+// is no negative-assertion timeout here.
+func readOrigin(t *testing.T, conn *cws.Conn, within time.Duration) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read within %s: %v", within, err)
+	}
+	var m ws.Message
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return m.Origin
 }

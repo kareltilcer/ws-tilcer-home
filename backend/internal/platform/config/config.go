@@ -69,6 +69,13 @@ type Config struct {
 	// roles against auth (Mode B, FR-A2; default 15).
 	RoleRefreshMinutes int
 
+	// WSRevalidateMinutes is how often an already-open websocket re-takes its
+	// session decision (v10; default 5). It is the upper bound on how long a
+	// socket keeps receiving member-restricted payloads after a revocation that
+	// auth could not announce — an expiring TTL, a row changed out of band — so it
+	// is tunable without a rebuild, like the two windows above.
+	WSRevalidateMinutes int
+
 	// Timezone is the IANA location used for "today", month boundaries, and
 	// recurrence expansion (never UTC). TimezoneName is its original string.
 	Timezone     *time.Location
@@ -302,10 +309,10 @@ func (c *Config) Redacted() string {
 	return fmt.Sprintf(
 		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
-			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t %s %s",
+			"session_ttl_days=%d role_refresh_min=%d ws_revalidate_min=%d origins=%v dev_auth_bypass=%t %s %s",
 		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
-		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.AllowedOrigins, c.DevAuthBypass,
+		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.WSRevalidateMinutes, c.AllowedOrigins, c.DevAuthBypass,
 		c.Docs.redacted(), c.Notif.redacted(),
 	)
 }
@@ -391,6 +398,7 @@ const (
 	defaultLogRetentionDays     = 0
 	defaultSessionTTLDays       = 90
 	defaultRoleRefreshMinutes   = 15
+	defaultWSRevalidateMinutes  = 5
 
 	// documents (v4)
 	defaultDocsMirrorInterval   = 24 * time.Hour
@@ -479,6 +487,7 @@ func Load(getenv Getenv) (*Config, error) {
 
 	c.SessionTTLDays = l.intDefault("HOME_SESSION_TTL_DAYS", defaultSessionTTLDays)
 	c.RoleRefreshMinutes = l.intDefault("HOME_ROLE_REFRESH_MINUTES", defaultRoleRefreshMinutes)
+	c.WSRevalidateMinutes = l.intDefault("HOME_WS_REVALIDATE_MINUTES", defaultWSRevalidateMinutes)
 
 	c.TimezoneName = l.strDefault("HOME_TIMEZONE", defaultTimezone)
 	if loc, err := time.LoadLocation(c.TimezoneName); err != nil {

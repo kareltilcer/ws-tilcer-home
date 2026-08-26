@@ -21,7 +21,7 @@ import (
 // household's live updates. Nothing else in the suite exercises backpressure at
 // all: every other test reads its frames eagerly.
 func TestPublishToDropsOnlyForTheSaturatedClient(t *testing.T) {
-	h := NewHub()
+	h := NewHub(nil)
 	newClient := func(userID string) *client {
 		return &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: userID}
 	}

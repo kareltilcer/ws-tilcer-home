@@ -44,6 +44,9 @@ type harness struct {
 	fake   *fakeAuthr
 	db     *sql.DB
 	clock  time.Time
+	// revoked records every session id announced through OnSessionRevoked — the
+	// hook the composition root points at ws.Hub.DisconnectSession.
+	revoked []string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -63,6 +66,9 @@ func newHarness(t *testing.T) *harness {
 		Origins:     []string{origin},
 		Now:         func() time.Time { return h.clock },
 		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		OnSessionRevoked: func(sessionID string) {
+			h.revoked = append(h.revoked, sessionID)
+		},
 	}
 	csrf := auth.NewCSRF(cfg.Origins, false)
 	handler := auth.NewHandler(cfg, db, audit.NewSink())
@@ -103,6 +109,29 @@ func cookie(rr *httptest.ResponseRecorder, name string) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+// revokedSessionIDs returns the ids of every session row marked revoked, so an
+// announcement can be checked against what the database actually did.
+func revokedSessionIDs(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query("SELECT id FROM sessions WHERE revoked_at IS NOT NULL ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func countEvents(t *testing.T, db *sql.DB, action string) int {
@@ -376,6 +405,14 @@ func TestSession_RoleRefreshFailClosed(t *testing.T) {
 	if rr := h.do(t, req); rr.Code != http.StatusUnauthorized {
 		t.Errorf("after revoke = %d, want 401", rr.Code)
 	}
+	// ⚠ And the revocation was ANNOUNCED. 401ing every HTTP request does nothing
+	// to a websocket that was authenticated once at upgrade and has been trusted
+	// ever since; this hook is what closes it. Nothing else in the suite covers
+	// the call, so deleting it would leave the socket of a disabled account live
+	// with every test still green.
+	if want := revokedSessionIDs(t, h.db); len(want) != 1 || len(h.revoked) != 1 || h.revoked[0] != want[0] {
+		t.Errorf("fail-closed re-mint announced %v, want exactly the revoked session %v", h.revoked, want)
+	}
 }
 
 func TestCSRF_OnMutations(t *testing.T) {
@@ -432,5 +469,47 @@ func TestLogout_RevokesAndAudits(t *testing.T) {
 	req.AddCookie(sess)
 	if rr := h.do(t, req); rr.Code != http.StatusUnauthorized {
 		t.Errorf("after logout GET = %d, want 401", rr.Code)
+	}
+	// ⚠ And the revocation was ANNOUNCED, so the member's open sockets close with
+	// it. Without this assertion the hook could be deleted and the whole suite
+	// would still pass, while a logged-out tab kept receiving private payloads.
+	if want := revokedSessionIDs(t, h.db); len(want) != 1 || len(h.revoked) != 1 || h.revoked[0] != want[0] {
+		t.Errorf("logout announced %v, want exactly the revoked session %v", h.revoked, want)
+	}
+}
+
+// TestLogout_AnnouncesOnlyTheDeviceThatLoggedOut. Revocation is per-session and
+// the announcement has to be too.
+//
+// ⚠ Logout revokes the CALLING device's token and nothing else. Announcing the
+// member instead of the session would close their sockets everywhere — the
+// laptop's session is untouched and still valid, and it would lose every frame
+// published before its reconnect backoff completed, on every logout.
+func TestLogout_AnnouncesOnlyTheDeviceThatLoggedOut(t *testing.T) {
+	h := newHarness(t)
+	phone, phoneCSRF := h.authed(t)
+	laptop, _ := h.authed(t) // same member, second device, second session
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.AddCookie(phone)
+	req.AddCookie(phoneCSRF)
+	req.Header.Set("Origin", origin)
+	req.Header.Set("X-CSRF-Token", phoneCSRF.Value)
+	if rr := h.do(t, req); rr.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d, want 204", rr.Code)
+	}
+
+	revoked := revokedSessionIDs(t, h.db)
+	if len(revoked) != 1 {
+		t.Fatalf("%d session rows revoked, want 1 — logout must not touch the other device", len(revoked))
+	}
+	if len(h.revoked) != 1 || h.revoked[0] != revoked[0] {
+		t.Errorf("announced %v, want exactly the one revoked session %v", h.revoked, revoked)
+	}
+	// And the other device is genuinely still signed in.
+	req = httptest.NewRequest(http.MethodGet, "/api/things", nil)
+	req.AddCookie(laptop)
+	if rr := h.do(t, req); rr.Code != http.StatusOK {
+		t.Errorf("the other device = %d after logging out elsewhere, want 200", rr.Code)
 	}
 }

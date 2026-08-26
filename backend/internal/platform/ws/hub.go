@@ -25,9 +25,15 @@
 // a household-wide broadcast a stale connection leaked nothing; now that the
 // payload is the private content (D233), a session revoked by logout or by a
 // failed role re-mint has to stop reaching its sockets. Two mechanisms, because
-// neither covers the other: DisconnectUser closes them the moment auth knows, and
-// the handler re-takes the upgrade decision on a ticker for everything auth never
-// gets to announce — a TTL that simply expires, a row revoked out of band.
+// neither covers the other: DisconnectSession closes them the moment auth knows,
+// and the handler re-takes the session decision on a ticker for everything auth
+// never gets to announce — a TTL that simply expires, a row revoked out of band.
+//
+// ⚠ TARGETING AND REVOCATION ARE KEYED DIFFERENTLY, and both keys are needed. A
+// chat audience is a set of MEMBERS, so PublishTo walks byUser. A revocation is
+// always one SESSION — logout drops the calling device's token, the fail-closed
+// re-mint one row — so DisconnectSession walks bySession. Closing by user id
+// instead would tear down a member's laptop because they logged out on a phone.
 package ws
 
 import (
@@ -75,18 +81,32 @@ type Hub struct {
 	// two tabs, and all of them must receive. Anonymous clients (an actor carrying
 	// no user id) appear only in `clients`.
 	byUser map[string]map[*client]struct{}
+	// bySession indexes the SAME clients by the session that authorised them, so a
+	// revocation closes exactly the sockets it revoked. A set per id because one
+	// session is one cookie jar, which can hold several tabs.
+	bySession map[string]map[*client]struct{}
 	// logger records the fan-out failures that are otherwise invisible. A message
 	// dropped for ONE slow client needs no log — refetch-on-focus repairs it — but
 	// a message that reached NOBODY leaves no trace anywhere else.
+	//
+	// ⚠ It is injected rather than reached for, and it is the package's ONLY
+	// logger: the handler logs through it too. Defaulting to slog.Default() inside
+	// the hub while the composition root threaded its configured handler in
+	// through Config left half this package's output escaping the structured
+	// stream the moment anything stopped calling slog.SetDefault.
 	logger *slog.Logger
 }
 
-// NewHub returns an empty hub.
-func NewHub() *Hub {
+// NewHub returns an empty hub logging through logger (nil means slog.Default()).
+func NewHub(logger *slog.Logger) *Hub {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Hub{
-		clients: make(map[*client]struct{}),
-		byUser:  make(map[string]map[*client]struct{}),
-		logger:  slog.Default(),
+		clients:   make(map[*client]struct{}),
+		byUser:    make(map[string]map[*client]struct{}),
+		bySession: make(map[string]map[*client]struct{}),
+		logger:    logger,
 	}
 }
 
@@ -200,7 +220,7 @@ func originFrom(ctx context.Context) string {
 	return ""
 }
 
-// DisconnectUser closes every socket belonging to userID (v10).
+// DisconnectSession closes every socket that sessionID authorised (v10).
 //
 // ⚠ A websocket is authenticated ONCE, at upgrade, and then lives for as long as
 // the browser keeps it. That was harmless while every fan-out was household-wide;
@@ -208,13 +228,19 @@ func originFrom(ctx context.Context) string {
 // failed role re-mint would otherwise keep receiving private content on behalf of
 // an account that is 401 on every other request. Auth calls this the moment it
 // revokes.
-func (h *Hub) DisconnectUser(userID string) {
-	if userID == "" {
+//
+// ⚠ ONE SESSION, NOT ONE MEMBER. Every revocation auth performs is per-session,
+// so this is the granularity that matches it: a member logging out on their phone
+// must not lose the laptop's live feed, whose session was never touched. It does
+// close every TAB of that one session, which is correct — they share the cookie
+// that was just revoked.
+func (h *Hub) DisconnectSession(sessionID string) {
+	if sessionID == "" {
 		return
 	}
 	h.mu.Lock()
-	doomed := make([]*client, 0, len(h.byUser[userID]))
-	for c := range h.byUser[userID] {
+	doomed := make([]*client, 0, len(h.bySession[sessionID]))
+	for c := range h.bySession[sessionID] {
 		doomed = append(doomed, c)
 	}
 	h.mu.Unlock()
@@ -224,7 +250,7 @@ func (h *Hub) DisconnectUser(userID string) {
 		c.cancel()
 	}
 	if len(doomed) > 0 {
-		h.logger.Info("ws: closing the sockets of a revoked session", "user", userID, "sockets", len(doomed))
+		h.logger.Info("ws: closing the sockets of a revoked session", "session", sessionID, "sockets", len(doomed))
 	}
 }
 
@@ -238,39 +264,58 @@ func (h *Hub) Count() int {
 func (h *Hub) add(c *client) {
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
-	if c.userID != "" {
-		set, ok := h.byUser[c.userID]
-		if !ok {
-			set = make(map[*client]struct{})
-			h.byUser[c.userID] = set
-		}
-		set[c] = struct{}{}
-	}
+	indexAdd(h.byUser, c.userID, c)
+	indexAdd(h.bySession, c.sessionID, c)
 	h.mu.Unlock()
 }
 
-// remove drops a client from BOTH maps.
+// remove drops a client from ALL THREE maps.
 //
-// ⚠ THE SECOND DELETE IS THE WHOLE POINT, and forgetting it is a leak that never
-// errors and never logs: every disconnect would leave a dead *client in
-// byUser[id], holding its send channel and its cancel func, and the set would grow
-// for the process's lifetime. It surfaces as memory months later, on a household
-// app nobody profiles. TestByUserEmptiesOnDisconnect exists for exactly this.
+// ⚠ THE INDEX DELETES ARE THE WHOLE POINT, and forgetting one is a leak that
+// never errors and never logs: every disconnect would leave a dead *client in
+// byUser[id] or bySession[id], holding its send channel and its cancel func, and
+// the set would grow for the process's lifetime. It surfaces as memory months
+// later, on a household app nobody profiles. TestByUserEmptiesOnDisconnect exists
+// for exactly this.
 //
 // The empty inner map is deleted too, so a member who has not connected since boot
 // does not leave an entry behind for every id the hub has ever seen.
 func (h *Hub) remove(c *client) {
 	h.mu.Lock()
 	delete(h.clients, c)
-	if c.userID != "" {
-		if set, ok := h.byUser[c.userID]; ok {
-			delete(set, c)
-			if len(set) == 0 {
-				delete(h.byUser, c.userID)
-			}
-		}
-	}
+	indexDelete(h.byUser, c.userID, c)
+	indexDelete(h.bySession, c.sessionID, c)
 	h.mu.Unlock()
+}
+
+// indexAdd files c under key, skipping the empty key (an unidentified connection
+// belongs in `clients` and nowhere else). Callers hold h.mu.
+func indexAdd(index map[string]map[*client]struct{}, key string, c *client) {
+	if key == "" {
+		return
+	}
+	set, ok := index[key]
+	if !ok {
+		set = make(map[*client]struct{})
+		index[key] = set
+	}
+	set[c] = struct{}{}
+}
+
+// indexDelete removes c from index[key], and the now-empty set with it. Callers
+// hold h.mu.
+func indexDelete(index map[string]map[*client]struct{}, key string, c *client) {
+	if key == "" {
+		return
+	}
+	set, ok := index[key]
+	if !ok {
+		return
+	}
+	delete(set, c)
+	if len(set) == 0 {
+		delete(index, key)
+	}
 }
 
 // client is one connected websocket. send is never closed (removal cancels the
@@ -278,11 +323,13 @@ func (h *Hub) remove(c *client) {
 //
 // userID is the authenticated actor's id (v10). It is EMPTY only for a connection
 // whose actor carried no user id, and such a client is reachable by Publish and
-// never by PublishTo. It is set once at accept time and never mutated, so it needs
-// no lock of its own.
+// never by PublishTo. sessionID is the session that authorised the upgrade, and is
+// empty under the dev bypass, where there is no session at all. Both are set once
+// at accept time and never mutated, so they need no lock of their own.
 type client struct {
-	conn   *websocket.Conn
-	send   chan []byte
-	cancel context.CancelFunc
-	userID string
+	conn      *websocket.Conn
+	send      chan []byte
+	cancel    context.CancelFunc
+	userID    string
+	sessionID string
 }

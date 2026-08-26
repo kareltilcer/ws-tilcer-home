@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -35,22 +36,117 @@ type Config struct {
 	BypassActor *reqctx.Actor // dev bypass; nil in production
 	Now         func() time.Time
 	Logger      *slog.Logger
-	// OnSessionRevoked, when set, is called with the user id whose session was
+	// OnSessionRevoked, when set, is called with the id of the session that was
 	// just revoked — by logout, or by failing closed on a re-mint (v10).
 	//
 	// ⚠ It exists because a websocket is authenticated once, at upgrade, and then
 	// lives as long as the browser keeps it. Revoking the session 401s every HTTP
 	// request and does nothing at all to an open socket, which since v10 carries
 	// private message bodies. The composition root points this at
-	// ws.Hub.DisconnectUser.
-	OnSessionRevoked func(userID string)
+	// ws.Hub.DisconnectSession.
+	//
+	// ⚠ It carries the SESSION id, not the user id. Revocation here is always
+	// per-session — RevokeByToken drops the calling device's token, RevokeByID
+	// one row — so announcing the user would close that member's sockets on every
+	// OTHER device too, whose sessions are untouched and still valid: logging out
+	// on a phone would tear down the laptop's live feed.
+	OnSessionRevoked func(sessionID string)
 }
 
-// sessionRevoked notifies the composition root that userID's session is gone.
-func (c Config) sessionRevoked(userID string) {
-	if c.OnSessionRevoked != nil && userID != "" {
-		c.OnSessionRevoked(userID)
+// sessionRevoked notifies the composition root that sessionID is gone.
+func (c Config) sessionRevoked(sessionID string) {
+	if c.OnSessionRevoked != nil && sessionID != "" {
+		c.OnSessionRevoked(sessionID)
 	}
+}
+
+// refreshRoles re-mints sess's cached roles when they are past the threshold
+// (FR-A2), and is the ONE place the fail-closed decision is taken — shared by the
+// request middleware and by RevalidateSession, so an open websocket and an HTTP
+// request cannot disagree about whether an account is still open.
+//
+// It returns ErrUserClosed once the session has been revoked, the cached roles
+// unchanged on a transient auth outage, and never an error the caller has to map.
+func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) ([]string, error) {
+	if c.Authr == nil || now.Sub(sess.RolesRefreshedAt) <= c.RoleRefresh {
+		return sess.Roles, nil
+	}
+	id, mintErr := c.Authr.Mint(ctx, sess.UserID)
+	switch {
+	case errors.Is(mintErr, ErrUserClosed):
+		// ⚠ The hook fires ONLY when the revoke actually landed. Announcing a
+		// revocation that did not happen closes the member's sockets and lets them
+		// reconnect straight onto a session that is still live in the DB — which
+		// reads as "handled" everywhere while the leak continues. Left un-announced
+		// and logged, the next request (and the next revalidation tick) re-mints
+		// and retries, because roles_refreshed_at was not stamped.
+		if err := c.Sessions.RevokeByID(ctx, sess.ID); err != nil {
+			c.logger().Error("session revoke FAILED for a closed user — the session is still live in the database",
+				"user", sess.UserID, "session", sess.ID, "err", err)
+		} else {
+			c.sessionRevoked(sess.ID)
+		}
+		return nil, ErrUserClosed
+	case mintErr == nil:
+		_ = c.Sessions.RefreshRoles(ctx, sess.ID, id.Roles, now)
+		return id.Roles, nil
+	default:
+		// Transient auth outage: keep cached roles, retry next request.
+		c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
+		return sess.Roles, nil
+	}
+}
+
+// SessionVerdict is the outcome of re-taking the session decision for a
+// connection that was authorised once and has been open ever since.
+type SessionVerdict int
+
+const (
+	// SessionUnknown means the decision could NOT be taken — the store was
+	// unreachable, a query lost its race with a writer. It is deliberately not
+	// SessionGone: see RevalidateSession.
+	SessionUnknown SessionVerdict = iota
+	// SessionLive means the session still authorises the connection.
+	SessionLive
+	// SessionGone means the session is revoked, expired, or belongs to an account
+	// auth has closed. The caller must drop the connection.
+	SessionGone
+)
+
+// RevalidateSession re-takes the session decision from the raw cookie token, for
+// a caller holding a connection that was authenticated once at upgrade (v10).
+//
+// ⚠ It runs the SAME fail-closed re-mint as the request middleware, and that is
+// the point of it existing rather than the caller repeating a Lookup. Checking
+// only that the session row is live is strictly weaker than what every HTTP
+// request does: a member disabled in auth keeps a perfectly valid row until
+// something re-mints, and a browser tab that issues no HTTP request never
+// triggers one — so a bare row check would let a closed account keep receiving
+// targeted payloads for the whole session TTL (90 days by default).
+//
+// ⚠ THE THREE OUTCOMES ARE DISTINCT ON PURPOSE. A database failure is
+// SessionUnknown, never SessionGone. The pool is a single connection
+// (db.SetMaxOpenConns(1)) behind a 5s busy timeout, so one long write — an
+// import, a migration, a checkpoint — can make a queued Lookup error; collapsing
+// that onto "revoked" would close every socket in the household at once and log
+// it against sessions nobody revoked.
+func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID string, verdict SessionVerdict) {
+	if c.Sessions == nil || rawToken == "" {
+		return "", SessionUnknown
+	}
+	now := c.now()
+	sess, ok, err := c.Sessions.Lookup(ctx, rawToken, now)
+	switch {
+	case err != nil:
+		c.logger().Warn("session revalidation could not reach the store — keeping the connection", "err", err)
+		return "", SessionUnknown
+	case !ok:
+		return "", SessionGone
+	}
+	if _, mintErr := c.refreshRoles(ctx, sess, now); errors.Is(mintErr, ErrUserClosed) {
+		return sess.UserID, SessionGone
+	}
+	return sess.UserID, SessionLive
 }
 
 func (c Config) now() time.Time {
@@ -96,24 +192,12 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			roles := sess.Roles
-			if cfg.Authr != nil && now.Sub(sess.RolesRefreshedAt) > cfg.RoleRefresh {
-				id, mintErr := cfg.Authr.Mint(r.Context(), sess.UserID)
-				switch {
-				case errors.Is(mintErr, ErrUserClosed):
-					// Fail closed: the user was disabled/deleted in auth (FR-A2).
-					_ = cfg.Sessions.RevokeByID(r.Context(), sess.ID)
-					cfg.sessionRevoked(sess.UserID)
-					clearAuthCookies(w, cfg.Secure)
-					httpx.WriteError(w, httpx.ErrUnauthorized("session revoked"))
-					return
-				case mintErr == nil:
-					roles = id.Roles
-					_ = cfg.Sessions.RefreshRoles(r.Context(), sess.ID, roles, now)
-				default:
-					// Transient auth outage: keep cached roles, retry next request.
-					cfg.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
-				}
+			roles, mintErr := cfg.refreshRoles(r.Context(), sess, now)
+			if errors.Is(mintErr, ErrUserClosed) {
+				// Fail closed: the user was disabled/deleted in auth (FR-A2).
+				clearAuthCookies(w, cfg.Secure)
+				httpx.WriteError(w, httpx.ErrUnauthorized("session revoked"))
+				return
 			}
 
 			// Slide the expiry lazily to avoid a write on every request. The DB

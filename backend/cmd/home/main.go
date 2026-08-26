@@ -116,14 +116,14 @@ func run(logger *slog.Logger) error {
 	// The hub is built here rather than at step 4 because auth needs it: revoking
 	// a session has to close that member's sockets too, or the socket keeps
 	// delivering private payloads to an account that is 401 everywhere else (v10).
-	hub := ws.NewHub()
+	hub := ws.NewHub(logger)
 	authConf := auth.Config{
 		RoleRefresh:      time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
 		SessionTTL:       time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
 		Secure:           cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
 		Origins:          cfg.AllowedOrigins,
 		Logger:           logger,
-		OnSessionRevoked: hub.DisconnectUser,
+		OnSessionRevoked: hub.DisconnectSession,
 	}
 	var sessions *auth.SessionStore
 	if cfg.DevAuthBypass {
@@ -172,18 +172,48 @@ func run(logger *slog.Logger) error {
 	// 4. Websocket hub — session-authenticated on connect (the browser sends the
 	// session cookie on a same-origin upgrade; no bearer token). Feature modules
 	// publish change events so open boards and dashboards stay live.
-	wsCfg := ws.Config{BypassActor: authConf.BypassActor, Logger: logger}
+	wsCfg := ws.Config{
+		BypassActor:     authConf.BypassActor,
+		RevalidateEvery: time.Duration(cfg.WSRevalidateMinutes) * time.Minute,
+	}
 	if sessions != nil {
-		wsCfg.Authenticate = func(r *http.Request) (reqctx.Actor, bool) {
+		// The upgrade decision. Collapsing a store error onto "reject" is right
+		// HERE — refusing a new connection costs a reconnect and the browser is
+		// already backing off — and wrong for the revalidation below, which would
+		// be tearing down live sockets instead.
+		wsCfg.Authenticate = func(r *http.Request) (ws.Upgrade, bool) {
 			c, err := r.Cookie("session")
 			if err != nil || c.Value == "" {
-				return reqctx.Actor{}, false
+				return ws.Upgrade{}, false
 			}
 			s, ok, err := sessions.Lookup(r.Context(), c.Value, time.Now())
 			if err != nil || !ok {
-				return reqctx.Actor{}, false
+				return ws.Upgrade{}, false
 			}
-			return reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles}, true
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles},
+				SessionID: s.ID,
+				Token:     c.Value,
+			}, true
+		}
+		// ⚠ The pump re-takes the decision through auth's OWN revalidation, not
+		// through a second Lookup here. Re-checking only that the session row is
+		// live is what every HTTP request does NOT do: the middleware fails closed
+		// on a re-mint that says the account is disabled, and a socket whose tab
+		// issues no HTTP request would otherwise never meet that check and keep
+		// receiving targeted payloads for the whole session TTL. It also reports
+		// "could not tell" apart from "revoked", so a slow query does not close
+		// every socket in the household.
+		wsCfg.Revalidate = func(ctx context.Context, token string) (string, ws.Revalidation) {
+			userID, verdict := authConf.RevalidateSession(ctx, token)
+			switch verdict {
+			case auth.SessionLive:
+				return userID, ws.RevalidationValid
+			case auth.SessionGone:
+				return userID, ws.RevalidationGone
+			default:
+				return userID, ws.RevalidationUnknown
+			}
 		}
 	}
 	wsHandler := hub.Handler(wsCfg)
