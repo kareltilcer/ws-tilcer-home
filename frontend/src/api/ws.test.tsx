@@ -177,7 +177,7 @@ describe('useLiveSync close handling', () => {
       expect(FakeSocket.instances.length).toBeGreaterThan(sockets)
     })
 
-    it('never probes a socket that opened — a deploy is not a revocation', async () => {
+    it('never counts a dial that opened — a deploy is not a revocation', async () => {
       const fetchMock = vi.fn().mockResolvedValue(response(401))
       vi.stubGlobal('fetch', fetchMock)
       renderProbe()
@@ -191,6 +191,20 @@ describe('useLiveSync close handling', () => {
           await vi.advanceTimersByTimeAsync(800)
         })
       }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // ⚠ AND THE SUCCESSFUL DIAL DOES NOT COUNT TOWARDS THE NEXT THREE. Resetting
+      // on `open` alone cannot express that: it makes the counter zero AT the open
+      // and then lets that socket's own close increment it, so a tab that connected
+      // fine and then hit two bad redials reaches the threshold on a run in which
+      // only two dials ever failed. `opened` is what keeps the count to dials that
+      // never connected, and this is the only sequence where the two differ.
+      act(() => FakeSocket.last.onopen?.())
+      closeWith(1006)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(800)
+      })
+      await dialAndFail(2)
       expect(fetchMock).not.toHaveBeenCalled()
     })
   })
