@@ -828,6 +828,91 @@ func TestOnePumpPerSessionNotPerSocket(t *testing.T) {
 	}
 }
 
+// TestSocketsThatDisagreeGetSeparatePumps is the OTHER half of
+// TestOnePumpPerSessionNotPerSocket, and without it pumpKey's whole reason for
+// being three fields is unpinned: every other pump assertion in this file uses
+// sockets that agree on all three, so collapsing the key back to a bare
+// sessionID — the regression pumpKey's own doc calls a silent hazard — leaves the
+// entire suite green.
+//
+// ⚠ Two bugs ship behind that. A later socket handing over a DIFFERENT token has
+// it discarded: the ticker goes on re-checking the first socket's token and,
+// when that stops resolving, closes every socket of a session that is perfectly
+// live. And a session whose first socket is an id-less service principal pins
+// openedAs to "" for the pump's whole life, disabling the changed-id guard for
+// every later socket on it.
+func TestSocketsThatDisagreeGetSeparatePumps(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		secondUser      string
+		secondToken     string
+		wantPumps       int
+		whenItRegresses string
+	}{{
+		name: "same session, same user, same token — one ticker",
+		// The ORDINARY case, and the control: keying on all three must not split
+		// the tabs of one cookie jar, which is what one-pump-per-session buys.
+		secondUser: "u-karel", secondToken: "tok-karel", wantPumps: 1,
+		whenItRegresses: "every tab of one cookie jar agrees on all three and must share ONE ticker",
+	}, {
+		name:       "same session, different token — two tickers",
+		secondUser: "u-karel", secondToken: "tok-karel-reissued", wantPumps: 2,
+		whenItRegresses: "the second socket's token was discarded and the ticker is re-checking a " +
+			"token nobody holds any more — when that stops resolving it closes a live session",
+	}, {
+		name: "same session, no user id — two tickers",
+		// An id-less service principal. Its pump must not be the one a real member's
+		// socket joins, or that member's changed-id guard is disabled for good.
+		secondUser: "", secondToken: "tok-karel", wantPumps: 2,
+		whenItRegresses: "an id-less principal pinned openedAs to \"\" for the whole pump, disabling " +
+			"the changed-id guard for every later socket on that session",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var nth atomic.Int32
+			hub := ws.NewHub(discardLogger())
+			mux := http.NewServeMux()
+			// One SESSION throughout; only the user id and the token vary, and only
+			// on the second dial.
+			mux.HandleFunc("/ws", hub.Handler(ws.Config{
+				Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+					user, token := "u-karel", "tok-karel"
+					if nth.Add(1) == 2 {
+						user, token = tc.secondUser, tc.secondToken
+					}
+					return ws.Upgrade{
+						Actor:     reqctx.Actor{UserID: user, Type: "user"},
+						SessionID: "s-karel",
+						Token:     token,
+					}, true
+				},
+				Revalidate: func(context.Context, string) (string, ws.Revalidation) {
+					return "u-karel", ws.RevalidationValid
+				},
+				RevalidateEvery: time.Hour, // no tick will come; only registration matters
+			}))
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			for i := 0; i < 2; i++ {
+				c, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+				if err != nil {
+					t.Fatalf("dial %d: %v", i, err)
+				}
+				t.Cleanup(func() { _ = c.Close(cws.StatusNormalClosure, "") })
+			}
+			waitCount(t, hub, 2)
+
+			waitFor(t, hub.TrackedPumpsForTest, tc.wantPumps, "registered revalidation pumps")
+			if n := hub.TrackedPumpsForTest(); n != tc.wantPumps {
+				t.Errorf("%d pumps, want %d — %s", n, tc.wantPumps, tc.whenItRegresses)
+			}
+		})
+	}
+}
+
 // TestRevokedSocketClosesWithAPolicyCode. A revocation is not a restart, and the
 // close code is the only place that distinction reaches the browser.
 //
