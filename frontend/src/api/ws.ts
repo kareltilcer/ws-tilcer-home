@@ -12,7 +12,12 @@ import { routes } from '@/app/routes'
 // with when it closes a socket because the session behind it no longer authorises
 // it. Every other code — a deploy, a dropped network, a browser sleeping — is a
 // reconnect.
-const WS_CLOSE_POLICY_VIOLATION = 1008
+//
+// ⚠ Exported so ws.test.ts can pin BOTH halves of it: that the number is 1008 —
+// the wire contract with the backend's websocket.StatusPolicyViolation, which
+// this file cannot import — and that a close carrying it stops the reconnect
+// loop. Nothing else links the two sides.
+export const WS_CLOSE_POLICY_VIOLATION = 1008
 
 // useLiveSync opens the session-authenticated websocket and applies pushed
 // changes by invalidating the affected query caches (refetch-on-focus is the
