@@ -31,15 +31,29 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		logger = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		// ⚠ v10: the actor resolved here is KEPT (D232). Until v10 it was resolved
+		// purely to decide accept-or-reject and then discarded, which is what made
+		// the hub anonymous and every fan-out a broadcast. `chat` publishes message
+		// bodies to a member set, so the connection has to know who it belongs to.
+		var userID string
 		if cfg.BypassActor == nil {
 			if cfg.Authenticate == nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			if _, ok := cfg.Authenticate(r); !ok {
+			actor, ok := cfg.Authenticate(r)
+			if !ok {
 				http.Error(w, "invalid or missing session", http.StatusUnauthorized)
 				return
 			}
+			userID = actor.UserID
+		} else {
+			// The dev bypass has no session and therefore no real actor. It registers
+			// under the configured fake id so a developer's own targeted pushes arrive;
+			// with no id configured the connection is ANONYMOUS and PublishTo never
+			// reaches it — which is the safe direction, and HOME_DEV_AUTH_BYPASS is
+			// refused in production regardless.
+			userID = cfg.BypassActor.UserID
 		}
 
 		conn, err := websocket.Accept(w, r, nil)
@@ -48,7 +62,7 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-		c := &client{conn: conn, send: make(chan []byte, sendBuffer), cancel: cancel}
+		c := &client{conn: conn, send: make(chan []byte, sendBuffer), cancel: cancel, userID: userID}
 		h.add(c)
 		logger.Info("ws connected", "clients", h.Count())
 
