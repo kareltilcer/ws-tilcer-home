@@ -65,6 +65,12 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("config loaded", "config", cfg.Redacted())
+	// Values that were corrected rather than refused — a window clamped to its
+	// ceiling. Logged loudly here because the process is UP: refusing them instead
+	// would have put the only explanation inside a restart loop.
+	for _, w := range cfg.Warnings {
+		logger.Warn("CONFIGURATION CORRECTED — " + w)
+	}
 	if cfg.DevAuthBypass {
 		logger.Warn("AUTH BYPASS ACTIVE — ALL REQUESTS ARE FAKE-AUTHENTICATED — DO NOT DEPLOY",
 			"dev_actor", cfg.DevActorID, "dev_roles", cfg.DevActorRoles)

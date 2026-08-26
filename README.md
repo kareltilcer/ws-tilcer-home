@@ -151,17 +151,22 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `LITESTREAM_SECRET_ACCESS_KEY` | R2 secret key | *(secret)* |
 
 > ⚠ **The three session windows are range-checked at boot, and the UPPER bounds
-> are new in v10.** `HOME_SESSION_TTL_DAYS` and `HOME_ROLE_REFRESH_MINUTES` were
-> previously only checked for a floor, so a value above the cap that is already
-> set in Coolify **starts failing the boot on the deploy that lands v10** — the
-> config error aborts `Load`, which crash-loops the container rather than
-> substituting a default, and the only signal is a log line inside a restarting
-> container. **Check the live Coolify values against the ranges above before
-> merging.** The caps exist because each value is multiplied into a
+> are new in v10.** The caps exist because each value is multiplied into a
 > `time.Duration`: a large enough one overflows int64 nanoseconds into a
 > *negative* duration that every comparison then reads backwards (re-minting on
-> every request, cookies issued with a negative `MaxAge`), and both load
-> silently and break login.
+> every request, cookies issued with a negative `MaxAge`), and both load silently
+> and break login.
+>
+> `HOME_SESSION_TTL_DAYS` and `HOME_ROLE_REFRESH_MINUTES` shipped with a **floor
+> check only**, so a value above the new cap has been legal for their whole life
+> and may already be set in Coolify. Those two are therefore **clamped to the cap
+> with a loud `CONFIGURATION CORRECTED` warning at startup, not refused** — the
+> boot succeeds, the oversized value never reaches the arithmetic, and the
+> operator finds it in the logs of a service that is *up*. `Load` aborting would
+> instead crash-loop the container on the deploy that lands v10, with the only
+> signal a log line inside the restart loop. Values *below* the floor are still
+> refused (they always were, so nothing deployed carries one), and
+> `HOME_WS_REVALIDATE_MINUTES` is new in v10 and refused at both ends.
 
 **Documents (v4) — the `documents` module stores file BYTES in its own R2 bucket**
 (SQLite keeps only metadata). This bucket is **separate from the Litestream DB

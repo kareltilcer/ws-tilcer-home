@@ -69,6 +69,11 @@ type Config struct {
 	// roles against auth (Mode B, FR-A2; default 15).
 	RoleRefreshMinutes int
 
+	// Warnings are the configuration problems that did NOT stop the boot — today,
+	// a window clamped to its ceiling. The composition root logs them at Warn
+	// right after Load. Empty on a clean configuration.
+	Warnings []string
+
 	// WSRevalidateMinutes is how often an already-open websocket re-takes its
 	// session decision (v10; default 5). It is the upper bound on how long a
 	// socket keeps receiving member-restricted payloads after a revocation that
@@ -406,10 +411,23 @@ const (
 	// threshold re-mints on every single request and every revalidation tick, and
 	// a negative session TTL issues cookies with a negative MaxAge — the browser
 	// deletes them on arrival — against rows that are already expired. Both load
-	// silently and break login, so they are refused at boot.
+	// silently and break login.
 	//
 	// The caps are ten years, a day and a day: past those the window has stopped
 	// bounding the incident it exists for, long before arithmetic is the problem.
+	//
+	// ⚠ THE TWO PRE-EXISTING WINDOWS ARE CLAMPED TO THE CAP, NOT REFUSED, AND THAT
+	// IS THE WHOLE DIFFERENCE BETWEEN A DEGRADED SETTING AND AN OUTAGE.
+	// HOME_SESSION_TTL_DAYS and HOME_ROLE_REFRESH_MINUTES have shipped with a
+	// FLOOR check only, and every secret and window on this service lives in
+	// Coolify (see CLAUDE.md) — so nothing in this repo can say what they are set
+	// to. Refusing an over-cap value aborts Load, which does not degrade a
+	// feature: it crash-loops the container on the deploy that lands v10, with the
+	// only signal a log line inside a restarting container. Clamping closes the
+	// overflow hole just as completely (the arithmetic never sees the big value)
+	// and the loud warning names the variable, so an operator finds it from the
+	// logs of a service that is UP. HOME_WS_REVALIDATE_MINUTES is new in v10 and
+	// has no deployed value to break, so it is range-checked outright.
 	maxSessionTTLDays      = 3650
 	maxRoleRefreshMinutes  = 1440
 	maxWSRevalidateMinutes = 1440
@@ -540,14 +558,21 @@ func Load(getenv Getenv) (*Config, error) {
 	// see maxSessionTTLDays. A 0 or a negative on the revalidation window reads as
 	// "turn the pump off" and would additionally become the 5-minute default
 	// inside ws.Handler, with Redacted() printing a value the process does not have.
-	if c.SessionTTLDays < 1 || c.SessionTTLDays > maxSessionTTLDays {
-		l.errf("HOME_SESSION_TTL_DAYS must be between 1 and %d (got %d)",
-			maxSessionTTLDays, c.SessionTTLDays)
+	//
+	// ⚠ The FLOOR is an error and the CEILING is a clamp, for the two long-lived
+	// variables. A too-small value has always been refused, so nothing deployed
+	// can be carrying one; a too-large one has always been ACCEPTED, so refusing
+	// it now is a boot failure introduced by an upgrade. See maxSessionTTLDays.
+	if c.SessionTTLDays < 1 {
+		l.errf("HOME_SESSION_TTL_DAYS must be >= 1 (got %d)", c.SessionTTLDays)
 	}
-	if c.RoleRefreshMinutes < 1 || c.RoleRefreshMinutes > maxRoleRefreshMinutes {
-		l.errf("HOME_ROLE_REFRESH_MINUTES must be between 1 and %d (got %d)",
-			maxRoleRefreshMinutes, c.RoleRefreshMinutes)
+	c.SessionTTLDays = l.clampMax("HOME_SESSION_TTL_DAYS", c.SessionTTLDays, maxSessionTTLDays)
+	if c.RoleRefreshMinutes < 1 {
+		l.errf("HOME_ROLE_REFRESH_MINUTES must be >= 1 (got %d)", c.RoleRefreshMinutes)
 	}
+	c.RoleRefreshMinutes = l.clampMax("HOME_ROLE_REFRESH_MINUTES", c.RoleRefreshMinutes, maxRoleRefreshMinutes)
+	// New in v10: no deployed value can be above the cap, so it is refused rather
+	// than clamped.
 	if c.WSRevalidateMinutes < 1 || c.WSRevalidateMinutes > maxWSRevalidateMinutes {
 		l.errf("HOME_WS_REVALIDATE_MINUTES must be between 1 and %d (got %d)",
 			maxWSRevalidateMinutes, c.WSRevalidateMinutes)
@@ -566,6 +591,7 @@ func Load(getenv Getenv) (*Config, error) {
 	if len(l.errs) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(l.errs, "\n  - "))
 	}
+	c.Warnings = l.warns
 	return c, nil
 }
 
@@ -764,9 +790,34 @@ func redactKey(v string) string {
 type loader struct {
 	getenv Getenv
 	errs   []string
+	warns  []string
 }
 
 func (l *loader) errf(format string, a ...any) { l.errs = append(l.errs, fmt.Sprintf(format, a...)) }
+
+// warnf records a problem the process can BOOT THROUGH — a value that had to be
+// corrected rather than one that makes the configuration unusable. Load surfaces
+// them on Config.Warnings and the composition root logs them at Warn.
+//
+// ⚠ It exists so that "this setting is wrong" and "this service cannot start"
+// stop being the same outcome. errf aborts Load, which crash-loops the container
+// and puts the only explanation inside the restart loop; a warning reaches the
+// operator from a service that is up.
+func (l *loader) warnf(format string, a ...any) { l.warns = append(l.warns, fmt.Sprintf(format, a...)) }
+
+// clampMax holds an already-deployed window to its ceiling and says so loudly,
+// rather than refusing to start over a value that was legal until this release.
+// See maxSessionTTLDays.
+func (l *loader) clampMax(key string, got, max int) int {
+	if got <= max {
+		return got
+	}
+	l.warnf("%s is %d, above the maximum of %d — CLAMPED to %d for this process. "+
+		"Fix the value in Coolify: past the cap the window has stopped bounding the "+
+		"incident it exists for, and a large enough one overflows the time.Duration "+
+		"it is multiplied into", key, got, max, max)
+	return max
+}
 
 func (l *loader) strRequired(key string) string {
 	v, ok := l.getenv(key)

@@ -86,17 +86,17 @@ func TestLoad_Defaults(t *testing.T) {
 // and would become the 5-minute default inside ws.Handler, with Redacted()
 // printing a number the process is not using.
 func TestLoad_SessionWindowRangeChecks(t *testing.T) {
+	// A value BELOW the floor has always been refused, so nothing deployed can be
+	// carrying one and refusing it costs nobody a boot.
 	for _, tc := range []struct{ key, value string }{
 		{"HOME_SESSION_TTL_DAYS", "0"},
 		{"HOME_SESSION_TTL_DAYS", "-1"},
-		// Overflows time.Duration(days) * 24 * time.Hour into a negative.
-		{"HOME_SESSION_TTL_DAYS", "200000"},
 		{"HOME_ROLE_REFRESH_MINUTES", "0"},
 		{"HOME_ROLE_REFRESH_MINUTES", "-1"},
-		// Overflows time.Duration(minutes) * time.Minute into a negative.
-		{"HOME_ROLE_REFRESH_MINUTES", "200000000"},
 		{"HOME_WS_REVALIDATE_MINUTES", "0"},
 		{"HOME_WS_REVALIDATE_MINUTES", "-1"},
+		// The revalidation window is NEW in v10, so no deployed value can be above
+		// its ceiling either: it is refused at both ends.
 		{"HOME_WS_REVALIDATE_MINUTES", "10000"},
 	} {
 		env := validBase()
@@ -115,6 +115,68 @@ func TestLoad_SessionWindowRangeChecks(t *testing.T) {
 	}
 	if c.WSRevalidateMinutes != 2 {
 		t.Errorf("WSRevalidateMinutes = %d, want 2", c.WSRevalidateMinutes)
+	}
+}
+
+// TestLoad_PreExistingWindowsAreClampedNotRefused. The two windows that shipped
+// before v10 were FLOOR-checked only, so any value above the new ceiling is one
+// that has been legal for their whole life — and every one of them lives in
+// Coolify, where the repo cannot see it.
+//
+// ⚠ Refusing it aborts Load, and Load's error is not a degraded setting: it
+// crash-loops the container on the deploy that lands v10, with the only signal a
+// log line inside the restart loop. Clamping closes the overflow hole just as
+// completely — the oversized value never reaches the multiplication — and leaves
+// the operator a warning they can read from a service that is UP.
+func TestLoad_PreExistingWindowsAreClampedNotRefused(t *testing.T) {
+	for _, tc := range []struct {
+		key   string
+		value string
+		want  int
+		get   func(*Config) int
+	}{
+		// Both of these overflow their time.Duration multiplication if they reach it.
+		{"HOME_SESSION_TTL_DAYS", "200000", maxSessionTTLDays,
+			func(c *Config) int { return c.SessionTTLDays }},
+		{"HOME_ROLE_REFRESH_MINUTES", "200000000", maxRoleRefreshMinutes,
+			func(c *Config) int { return c.RoleRefreshMinutes }},
+		// And a merely-too-large one, which is the realistic Coolify value.
+		{"HOME_ROLE_REFRESH_MINUTES", "10080", maxRoleRefreshMinutes,
+			func(c *Config) int { return c.RoleRefreshMinutes }},
+	} {
+		env := validBase()
+		env[tc.key] = tc.value
+		c, err := Load(envMap(env))
+		if err != nil {
+			t.Fatalf("%s=%s refused the boot (%v) — a value that was legal before this "+
+				"release must not crash-loop the container", tc.key, tc.value, err)
+		}
+		if got := tc.get(c); got != tc.want {
+			t.Errorf("%s=%s loaded as %d, want it clamped to %d — the oversized value must "+
+				"never reach the time.Duration multiplication", tc.key, tc.value, got, tc.want)
+		}
+		// ⚠ And it is LOUD. A silent clamp is a setting the operator believes is in
+		// force and is not, which is the failure mode a bare cap avoids.
+		var named bool
+		for _, w := range c.Warnings {
+			if strings.Contains(w, tc.key) {
+				named = true
+			}
+		}
+		if !named {
+			t.Errorf("%s=%s was clamped with no warning naming it (warnings: %v) — a silent "+
+				"clamp leaves the operator believing a setting is in force that is not",
+				tc.key, tc.value, c.Warnings)
+		}
+	}
+
+	// A configuration inside the ranges warns about nothing.
+	c, err := Load(envMap(validBase()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(c.Warnings) != 0 {
+		t.Errorf("a valid configuration produced warnings %v, want none", c.Warnings)
 	}
 }
 
