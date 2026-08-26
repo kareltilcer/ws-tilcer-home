@@ -149,7 +149,8 @@ func (h *Hub) Publish(m Message) {
 // member removed a moment earlier is already absent from the set handed here. This
 // function does no access control of its own and must not be asked to: it takes
 // the ids it is given. What it does NOT cover is a socket whose SESSION has since
-// been revoked — that is DisconnectUser's job, and the handler's revalidation loop.
+// been revoked — that is DisconnectSession's job (per SESSION, never per member;
+// see the package comment), and the handler's revalidation loop.
 func (h *Hub) PublishTo(userIDs []string, m Message) {
 	if len(userIDs) == 0 {
 		return

@@ -206,14 +206,7 @@ func run(logger *slog.Logger) error {
 		// every socket in the household.
 		wsCfg.Revalidate = func(ctx context.Context, token string) (string, ws.Revalidation) {
 			userID, verdict := authConf.RevalidateSession(ctx, token)
-			switch verdict {
-			case auth.SessionLive:
-				return userID, ws.RevalidationValid
-			case auth.SessionGone:
-				return userID, ws.RevalidationGone
-			default:
-				return userID, ws.RevalidationUnknown
-			}
+			return userID, wsRevalidation(verdict)
 		}
 	}
 	wsHandler := hub.Handler(wsCfg)
@@ -532,6 +525,30 @@ func run(logger *slog.Logger) error {
 		err := srv.Shutdown(ctx)
 		<-flushed
 		return err
+	}
+}
+
+// wsRevalidation translates auth's session verdict into the websocket hub's.
+//
+// ⚠ It is a named function rather than an inline switch because it is the one
+// place the two three-state vocabularies meet, and inverting a single arm here is
+// invisible: mapping SessionLive to RevalidationGone tears down every socket in
+// the household on the first healthy tick, and mapping the default arm to
+// RevalidationGone does the same on the first contended query — with the whole
+// backend suite still green, because nothing else crosses this boundary.
+// TestWSRevalidation pins all three.
+//
+// The default arm is deliberately RevalidationUnknown: an unrecognised verdict is
+// a decision that could not be taken, and the safe direction for one of those is
+// keeping live boards up.
+func wsRevalidation(verdict auth.SessionVerdict) ws.Revalidation {
+	switch verdict {
+	case auth.SessionLive:
+		return ws.RevalidationValid
+	case auth.SessionGone:
+		return ws.RevalidationGone
+	default:
+		return ws.RevalidationUnknown
 	}
 }
 

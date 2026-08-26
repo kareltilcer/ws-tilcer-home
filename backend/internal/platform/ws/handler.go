@@ -119,6 +119,21 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 					"broadcast-only and no targeted push will ever reach it",
 					"actor_type", actor.Type, "actor_label", actor.Label)
 			}
+			// ⚠ AUTHENTICATED BUT UNREVOCABLE — the same class of bug state, and the
+			// more dangerous one. Without a session id the connection is invisible to
+			// DisconnectSession (indexAdd skips the empty key); without a token no
+			// revalidation pump is started below. Either way the socket keeps a
+			// member-restricted feed for its whole lifetime with both revocation
+			// mechanisms disabled, and the only other trace is a "ws connected" line
+			// with an empty field nobody is looking for. Logged rather than rejected
+			// for the same reason as above: an upgrade refused here takes out live
+			// boards over a revocation-plumbing problem.
+			if sessionID == "" || token == "" {
+				logger.Warn("ws: authenticated connection cannot be revoked — Authenticate "+
+					"returned no session id and/or no token, so DisconnectSession cannot "+
+					"reach it and no revalidation pump will run",
+					"user", userID, "has_session_id", sessionID != "", "has_token", token != "")
+			}
 		} else {
 			// ⚠ Under HOME_DEV_AUTH_BYPASS there is no session and Authenticate is
 			// never called, so EVERY connection — a second browser, a phone on the
@@ -209,6 +224,16 @@ func stillValid(ctx context.Context, c *client, revalidate func(context.Context,
 		// A CHANGED id matters as much as a rejected one: the socket is indexed
 		// under the id it opened with, and would go on receiving that user's
 		// audience.
+		//
+		// ⚠ NO PRODUCTION Revalidate CAN REACH THIS TODAY, and it is here as a
+		// property of the interface rather than a live scenario. The composition
+		// root resolves the id from the session row the raw token hashes to, and
+		// nothing updates sessions.user_id in place: a second member signing in on
+		// the same browser gets a NEW row and a NEW token, so this socket's token
+		// either finds its original row (same id) or finds nothing (Gone). The
+		// branch exists so that a Revalidate whose id CAN move — a future store, a
+		// different auth mode — cannot silently leave a socket indexed under the
+		// wrong member. Do not read its presence as evidence the case occurs.
 		logger.Warn("ws: session now resolves to a different member — closing the socket",
 			"opened_as", c.userID, "now", userID, "session", c.sessionID)
 	default:

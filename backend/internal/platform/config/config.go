@@ -399,6 +399,9 @@ const (
 	defaultSessionTTLDays       = 90
 	defaultRoleRefreshMinutes   = 15
 	defaultWSRevalidateMinutes  = 5
+	// maxWSRevalidateMinutes is a day. Past that the socket outlives any incident
+	// the window is meant to bound, so the value has stopped being a backstop.
+	maxWSRevalidateMinutes = 1440
 
 	// documents (v4)
 	defaultDocsMirrorInterval   = 24 * time.Hour
@@ -527,6 +530,15 @@ func Load(getenv Getenv) (*Config, error) {
 	}
 	if c.RoleRefreshMinutes < 1 {
 		l.errf("HOME_ROLE_REFRESH_MINUTES must be >= 1 (got %d)", c.RoleRefreshMinutes)
+	}
+	// Bounded at BOTH ends, unlike the two above. A 0 or a negative reads as "turn
+	// the pump off" and would silently become the 5-minute default inside
+	// ws.Handler, with Redacted() printing a value the process does not have; an
+	// absurd value overflows the time.Duration multiplication in main.go and again
+	// in the handler's jitter, where it can yield a timer that fires immediately.
+	if c.WSRevalidateMinutes < 1 || c.WSRevalidateMinutes > maxWSRevalidateMinutes {
+		l.errf("HOME_WS_REVALIDATE_MINUTES must be between 1 and %d (got %d)",
+			maxWSRevalidateMinutes, c.WSRevalidateMinutes)
 	}
 
 	c.Docs = l.docs(c)

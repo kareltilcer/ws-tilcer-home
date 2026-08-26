@@ -65,37 +65,52 @@ func (c Config) sessionRevoked(sessionID string) {
 // request middleware and by RevalidateSession, so an open websocket and an HTTP
 // request cannot disagree about whether an account is still open.
 //
-// It returns ErrUserClosed once the session has been revoked, the cached roles
+// It returns ErrUserClosed once auth has closed the account, the cached roles
 // unchanged on a transient auth outage, and never an error the caller has to map.
-func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) ([]string, error) {
+// `revoked` reports whether the session row was ACTUALLY revoked, which is a
+// different question from whether the account is closed — see RevalidateSession.
+func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) (roles []string, revoked bool, err error) {
 	if c.Authr == nil || now.Sub(sess.RolesRefreshedAt) <= c.RoleRefresh {
-		return sess.Roles, nil
+		return sess.Roles, false, nil
 	}
 	id, mintErr := c.Authr.Mint(ctx, sess.UserID)
 	switch {
 	case errors.Is(mintErr, ErrUserClosed):
+		// ⚠ The revoke runs on a context DETACHED from the caller's. From the
+		// websocket revalidation pump ctx is the connection's, and the member
+		// closing their tab mid-mint would otherwise cancel this UPDATE: the row
+		// stays live, nothing is announced, and the loud error below fires for what
+		// was a normal disconnect. The decision to revoke has already been taken by
+		// then and must not be undone by whoever happened to discover it.
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+		defer cancel()
 		// ⚠ The hook fires ONLY when the revoke actually landed. Announcing a
 		// revocation that did not happen closes the member's sockets and lets them
 		// reconnect straight onto a session that is still live in the DB — which
 		// reads as "handled" everywhere while the leak continues. Left un-announced
 		// and logged, the next request (and the next revalidation tick) re-mints
 		// and retries, because roles_refreshed_at was not stamped.
-		if err := c.Sessions.RevokeByID(ctx, sess.ID); err != nil {
+		if err := c.Sessions.RevokeByID(revokeCtx, sess.ID); err != nil {
 			c.logger().Error("session revoke FAILED for a closed user — the session is still live in the database",
 				"user", sess.UserID, "session", sess.ID, "err", err)
-		} else {
-			c.sessionRevoked(sess.ID)
+			return nil, false, ErrUserClosed
 		}
-		return nil, ErrUserClosed
+		c.sessionRevoked(sess.ID)
+		return nil, true, ErrUserClosed
 	case mintErr == nil:
 		_ = c.Sessions.RefreshRoles(ctx, sess.ID, id.Roles, now)
-		return id.Roles, nil
+		return id.Roles, false, nil
 	default:
 		// Transient auth outage: keep cached roles, retry next request.
 		c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
-		return sess.Roles, nil
+		return sess.Roles, false, nil
 	}
 }
+
+// revokeTimeout bounds the detached fail-closed revoke. Long enough to outlast
+// SQLite's busy timeout, short enough that a wedged store cannot pin a request
+// goroutine (or a revalidation tick) indefinitely.
+const revokeTimeout = 10 * time.Second
 
 // SessionVerdict is the outcome of re-taking the session decision for a
 // connection that was authorised once and has been open ever since.
@@ -130,6 +145,16 @@ const (
 // import, a migration, a checkpoint — can make a queued Lookup error; collapsing
 // that onto "revoked" would close every socket in the household at once and log
 // it against sessions nobody revoked.
+//
+// ⚠ A CLOSED ACCOUNT WHOSE REVOKE DID NOT LAND IS SessionUnknown, NOT SessionGone.
+// SessionGone tells the caller to drop the connection, and the upgrade path is a
+// bare Lookup: if the row is still live because the UPDATE failed, the browser
+// reconnects 800ms later (its backoff resets on open), is ACCEPTED, and is closed
+// again on the pump's immediate check — an unbounded loop spending two lookups, a
+// mint and another failing write per cycle against a single-connection pool,
+// which is exactly the contention that made the revoke fail. Closing buys nothing
+// either: the reconnect restores the same feed. So the connection is kept and the
+// next tick re-mints and retries, because roles_refreshed_at was not stamped.
 func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID string, verdict SessionVerdict) {
 	if c.Sessions == nil || rawToken == "" {
 		return "", SessionUnknown
@@ -143,10 +168,18 @@ func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID 
 	case !ok:
 		return "", SessionGone
 	}
-	if _, mintErr := c.refreshRoles(ctx, sess, now); errors.Is(mintErr, ErrUserClosed) {
+	_, revoked, mintErr := c.refreshRoles(ctx, sess, now)
+	switch {
+	case !errors.Is(mintErr, ErrUserClosed):
+		return sess.UserID, SessionLive
+	case revoked:
 		return sess.UserID, SessionGone
+	default:
+		c.logger().Warn("session revalidation found a closed account whose revoke did not land — "+
+			"keeping the connection so it cannot reconnect-loop onto the still-live row",
+			"user", sess.UserID, "session", sess.ID)
+		return sess.UserID, SessionUnknown
 	}
-	return sess.UserID, SessionLive
 }
 
 func (c Config) now() time.Time {
@@ -192,7 +225,10 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			roles, mintErr := cfg.refreshRoles(r.Context(), sess, now)
+			// The HTTP path fails closed on the account, not on the revoke: a 401 is
+			// correct whether or not the row could be marked, and it does not
+			// reconnect-loop the way a dropped socket does (see RevalidateSession).
+			roles, _, mintErr := cfg.refreshRoles(r.Context(), sess, now)
 			if errors.Is(mintErr, ErrUserClosed) {
 				// Fail closed: the user was disabled/deleted in auth (FR-A2).
 				clearAuthCookies(w, cfg.Secure)

@@ -1,13 +1,16 @@
 package ws_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,11 +39,27 @@ func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
 }
 
-// waitFor polls get until it reaches want. Connect and disconnect are both
+// waitFor polls get until it EQUALS want. Connect and disconnect are both
 // asynchronous (the handler registers after the dial returns, and unregisters
 // after its write pump unwinds), so every assertion about hub bookkeeping has to
-// wait for it. One polling policy, used by waitCount and by waitTracked.
+// wait for it. Equality is right for a value that settles — Count,
+// TrackedClientsForTest — and wrong for one that only climbs: see waitAtLeast.
 func waitFor(t *testing.T, get func() int, want int, what string) {
+	t.Helper()
+	poll(t, get, func(n int) bool { return n == want }, "want "+strconv.Itoa(want), what)
+}
+
+// waitAtLeast polls get until it REACHES min. A counter that only increases can
+// step straight past an exact target when a poll is descheduled (3 -> 5 across
+// one slow sleep), and waitFor would then spin out its whole deadline and fail a
+// test that had already done what it was waiting for.
+func waitAtLeast(t *testing.T, get func() int, min int, what string) {
+	t.Helper()
+	poll(t, get, func(n int) bool { return n >= min }, "want >= "+strconv.Itoa(min), what)
+}
+
+// poll is the one polling policy behind both.
+func poll(t *testing.T, get func() int, ok func(int) bool, want, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	// ⚠ The message reports the LAST POLLED value, not a fresh read. On a loaded
@@ -48,20 +67,56 @@ func waitFor(t *testing.T, get func() int, want int, what string) {
 	// re-reading here printed "hub client count = 0, want 0" — a failure whose own
 	// text says the assertion held, sending the reader after a hub bug that is not
 	// there.
+	//
+	// ⚠ For the same reason the check runs AFTER the re-read rather than at the
+	// top of the loop: a value that arrives on the final poll used to exit through
+	// the deadline and print that same self-contradicting message.
 	last := get()
-	for time.Now().Before(deadline) {
-		if last == want {
+	for {
+		if ok(last) {
 			return
+		}
+		if !time.Now().Before(deadline) {
+			break
 		}
 		time.Sleep(10 * time.Millisecond)
 		last = get()
 	}
-	t.Fatalf("%s = %d, want %d", what, last, want)
+	t.Fatalf("%s = %d, %s", what, last, want)
 }
 
 // discardLogger keeps the hub's own logging out of test output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+}
+
+// syncBuffer is a concurrency-safe sink for the hub's logger. The handler writes
+// from the connection's goroutine while the test reads, so an unguarded
+// bytes.Buffer here is a race the assertions would only sometimes lose.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogger returns a logger and the buffer it writes to, for the handler's
+// warnings about connections that are a BUG STATE rather than a policy — they
+// change no observable behaviour, so the log line is the only thing that can be
+// asserted, and without asserting it the branch can be deleted whole.
+func captureLogger() (*slog.Logger, *syncBuffer) {
+	var b syncBuffer
+	return slog.New(slog.NewJSONHandler(&b, nil)), &b
 }
 
 func waitCount(t *testing.T, hub *ws.Hub, want int) {

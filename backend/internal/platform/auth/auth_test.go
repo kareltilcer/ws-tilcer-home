@@ -27,6 +27,9 @@ type fakeAuthr struct {
 	mintID    auth.Identity
 	mintErr   error
 	mintCalls int
+	// onMint runs inside Mint, so a test can make something happen in the window
+	// between the session Lookup and the fail-closed revoke that follows.
+	onMint func()
 }
 
 func (f *fakeAuthr) Login(context.Context, string, string) (auth.Identity, error) {
@@ -34,6 +37,9 @@ func (f *fakeAuthr) Login(context.Context, string, string) (auth.Identity, error
 }
 func (f *fakeAuthr) Mint(context.Context, string) (auth.Identity, error) {
 	f.mintCalls++
+	if f.onMint != nil {
+		f.onMint()
+	}
 	return f.mintID, f.mintErr
 }
 
@@ -44,6 +50,10 @@ type harness struct {
 	fake   *fakeAuthr
 	db     *sql.DB
 	clock  time.Time
+	// cfg is the same Config the router was built from, kept so the tests can call
+	// the decisions that have no HTTP surface — RevalidateSession is taken by the
+	// websocket pump, not by a request.
+	cfg auth.Config
 	// revoked records every session id announced through OnSessionRevoked — the
 	// hook the composition root points at ws.Hub.DisconnectSession.
 	revoked []string
@@ -70,6 +80,7 @@ func newHarness(t *testing.T) *harness {
 			h.revoked = append(h.revoked, sessionID)
 		},
 	}
+	h.cfg = cfg
 	csrf := auth.NewCSRF(cfg.Origins, false)
 	handler := auth.NewHandler(cfg, db, audit.NewSink())
 	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }

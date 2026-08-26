@@ -54,12 +54,57 @@ func TestLoad_Defaults(t *testing.T) {
 	if c.LogRetentionDays != 0 {
 		t.Errorf("LogRetentionDays = %d, want 0", c.LogRetentionDays)
 	}
+	if c.SessionTTLDays != 90 {
+		t.Errorf("SessionTTLDays = %d, want 90", c.SessionTTLDays)
+	}
+	if c.RoleRefreshMinutes != 15 {
+		t.Errorf("RoleRefreshMinutes = %d, want 15", c.RoleRefreshMinutes)
+	}
+	if c.WSRevalidateMinutes != 5 {
+		t.Errorf("WSRevalidateMinutes = %d, want 5", c.WSRevalidateMinutes)
+	}
 	if c.DevAuthBypass {
 		t.Error("DevAuthBypass = true, want false")
 	}
 	// The JWT issuer pin is optional and defaults to unset (not enforced).
 	if c.AuthJWTIssuer != "" {
 		t.Errorf("AuthJWTIssuer = %q, want empty (issuer not enforced by default)", c.AuthJWTIssuer)
+	}
+}
+
+// TestLoad_SessionWindowRangeChecks. The three session windows are the numbers an
+// operator reaches for from Coolify during an incident, so a value outside their
+// range has to fail the boot rather than be silently replaced.
+//
+// ⚠ HOME_WS_REVALIDATE_MINUTES is bounded at BOTH ends. 0 or a negative is the
+// natural way to write "turn the pump off" and would otherwise become the
+// 5-minute default inside ws.Handler, with Redacted() printing a number the
+// process is not using; an absurd value overflows the time.Duration arithmetic in
+// the composition root and again in the handler's jitter.
+func TestLoad_SessionWindowRangeChecks(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"HOME_SESSION_TTL_DAYS", "0"},
+		{"HOME_ROLE_REFRESH_MINUTES", "0"},
+		{"HOME_WS_REVALIDATE_MINUTES", "0"},
+		{"HOME_WS_REVALIDATE_MINUTES", "-1"},
+		{"HOME_WS_REVALIDATE_MINUTES", "10000"},
+	} {
+		env := validBase()
+		env[tc.key] = tc.value
+		_, err := Load(envMap(env))
+		if err == nil || !strings.Contains(err.Error(), tc.key) {
+			t.Errorf("%s=%s was accepted, want a boot error naming it: %v", tc.key, tc.value, err)
+		}
+	}
+	// And a legal value round-trips rather than falling back to the default.
+	env := validBase()
+	env["HOME_WS_REVALIDATE_MINUTES"] = "2"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.WSRevalidateMinutes != 2 {
+		t.Errorf("WSRevalidateMinutes = %d, want 2", c.WSRevalidateMinutes)
 	}
 }
 

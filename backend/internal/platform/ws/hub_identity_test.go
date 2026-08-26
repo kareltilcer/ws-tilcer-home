@@ -268,9 +268,11 @@ func TestPublishStillReachesEveryClient(t *testing.T) {
 // ⚠ This is NOT what HOME_DEV_AUTH_BYPASS produces. HOME_DEV_ACTOR_ID defaults to
 // "dev-user" and a blank value falls back to that default, so the composition root
 // always builds a BypassActor with an id — see
-// TestBypassRegistersEveryClientUnderOneID for what the bypass really does. What
-// this test pins is the handler's behaviour for an id-less actor from any source,
-// which reqctx.Actor explicitly allows ("" for system/service).
+// TestBypassRegistersEveryClientUnderOneID for what the bypass really does.
+//
+// ⚠ This covers the BYPASS arm only. An id-less actor arriving through
+// Authenticate — the branch production takes, and the one that warns — is a
+// different code path with its own test: TestAuthenticatedActorWithNoUserIDIsBroadcastOnly.
 func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 	hub := ws.NewHub(discardLogger())
 	mux := http.NewServeMux()
@@ -306,6 +308,118 @@ func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 	if got != sentinelType {
 		t.Errorf("Publish did not reach the anonymous client (first frame %q, want the "+
 			"sentinel) — an anonymous connection must still receive every broadcast", got)
+	}
+}
+
+// TestAuthenticatedActorWithNoUserIDIsBroadcastOnly covers the SAME shape through
+// the branch production actually uses.
+//
+// ⚠ The test above reaches an id-less client through BypassActor, which is the
+// handler's `else` arm — it never enters the `if userID == ""` block on the
+// Authenticate path, so that block (and its warning) could be deleted whole with
+// the suite still green. reqctx.Actor documents UserID as "" for system/service
+// principals, so an authenticated connection carrying no id is reachable the day
+// a non-user principal opens a socket, and it must be broadcast-only there too.
+func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
+	logger, logs := captureLogger()
+	hub := ws.NewHub(logger)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			// Authenticated, and deliberately carrying no user id — a service
+			// principal, not the dev bypass. The session is real.
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{Type: "service", Label: "importer"},
+				SessionID: "s-service",
+				Token:     "tok-service",
+			}, true
+		},
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitCount(t, hub, 1)
+
+	if n := hub.TrackedUsersForTest(); n != 0 {
+		t.Errorf("an authenticated actor with no user id was indexed under %d user ids, want 0", n)
+	}
+	// ⚠ And it was LOGGED. Being broadcast-only is what indexAdd's empty-key skip
+	// already guarantees, so without this the whole `if userID == ""` block could
+	// be deleted with the suite green — and "authenticated but unidentified" would
+	// go back to being indistinguishable from a deliberately anonymous connection.
+	if !strings.Contains(logs.String(), "no user id") {
+		t.Errorf("nothing warned about an authenticated actor carrying no user id; the log "+
+			"is the only trace this bug state leaves. Got:\n%s", logs.String())
+	}
+
+	hub.PublishTo([]string{""}, ws.Message{Type: "chat.message.created"})
+	hub.Publish(ws.Message{Type: sentinelType})
+
+	got := readType(t, conn, readTimeout)
+	if got == "chat.message.created" {
+		t.Error("PublishTo reached an authenticated connection carrying NO user id — an " +
+			"unidentified principal must be broadcast-only, whatever authenticated it")
+	}
+	if got != sentinelType {
+		t.Errorf("Publish did not reach the unidentified client (first frame %q, want the "+
+			"sentinel) — it must still receive every broadcast", got)
+	}
+}
+
+// TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged covers the bug state
+// that is worse than an unidentified actor, because it is the one that cannot be
+// UNDONE.
+//
+// ⚠ A connection whose Upgrade carries no session id is invisible to
+// DisconnectSession (indexAdd skips the empty key) and one that carries no token
+// starts no revalidation pump. Either way the socket keeps a member-restricted
+// feed for its whole lifetime with BOTH revocation mechanisms disabled, and every
+// other signal — Count, PublishTo, the boards — looks perfectly healthy. The
+// composition root fills both fields today, so the log line is the only thing
+// standing between a future Authenticate that forgets one and a silent leak.
+func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
+	logger, logs := captureLogger()
+	hub := ws.NewHub(logger)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			// Identified, authenticated — and unrevocable: no session id, no token.
+			return ws.Upgrade{Actor: reqctx.Actor{UserID: "u-karel", Type: "user"}}, true
+		},
+		Revalidate: func(context.Context, string) (string, ws.Revalidation) {
+			t.Error("the revalidation pump ran for a connection that handed over no token")
+			return "u-karel", ws.RevalidationValid
+		},
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := cws.Dial(ctx, wsURL+"/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
+	waitTracked(t, hub, "u-karel", 1)
+
+	if !strings.Contains(logs.String(), "cannot be revoked") {
+		t.Errorf("nothing warned about a connection neither DisconnectSession nor the "+
+			"revalidation pump can reach. Got:\n%s", logs.String())
+	}
+	// And the state the warning describes is real: no session index entry, so a
+	// revocation for it sweeps nothing.
+	if n := hub.TrackedSessionsForTest(); n != 0 {
+		t.Errorf("the session index holds %d ids for a connection that gave none, want 0", n)
 	}
 }
 
@@ -468,7 +582,7 @@ func TestRevalidationKeepsTheSocketWhenTheVerdictIsUnknown(t *testing.T) {
 
 	// Let several ticks fail to decide, then confirm the connection is still there
 	// and still reachable.
-	waitFor(t, func() int { return int(calls.Load()) }, 4, "revalidation attempts")
+	waitAtLeast(t, func() int { return int(calls.Load()) }, 4, "revalidation attempts")
 	if n := hub.Count(); n != 1 {
 		t.Fatalf("hub client count = %d after %d undecidable revalidations, want 1 — a "+
 			"database hiccup is not a revocation", n, calls.Load())
