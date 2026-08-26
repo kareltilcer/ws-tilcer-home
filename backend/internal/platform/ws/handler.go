@@ -381,13 +381,25 @@ func (h *Hub) readPump(ctx context.Context, c *client) {
 }
 
 // writePump delivers queued broadcasts until the connection is cancelled.
+//
+// ⚠ THE WRITE DEADLINE IS NOT DERIVED FROM ctx, for the same reason the read
+// pump has a context of its own. coder/websocket arms a context.AfterFunc for
+// the duration of every Write that tears the raw connection down — no close
+// frame, no status — the moment that context is cancelled. Derived from ctx, a
+// revocation landing while a Write is in flight therefore ABORTS the socket
+// before the handler can put StatusPolicyViolation on the wire, and the browser
+// sees an abnormal closure and reconnects into an upgrade that 401s for the rest
+// of the tab's life. The window is not hypothetical: a backgrounded phone on a
+// bad network keeps a Write blocked for the whole 5s, and a stale client is
+// exactly what a revocation is aimed at. Cancellation is observed by the select
+// below instead, so a revoked socket waits out at most one in-flight write.
 func (h *Hub) writePump(ctx context.Context, c *client) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case data := <-c.send:
-			wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := c.conn.Write(wctx, websocket.MessageText, data)
 			cancel()
 			if err != nil {
