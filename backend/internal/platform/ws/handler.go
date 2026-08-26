@@ -113,8 +113,25 @@ const defaultRevalidateEvery = 5 * time.Minute
 // while a value below it can only be a unit slip.
 const minRevalidateEvery = 10 * time.Millisecond
 
+// maxRevalidateEvery is the ceiling a configured tick is held to, and it is the
+// floor's mirror rather than a second opinion about what a sane interval is.
+//
+// ⚠ jitter computes every*3/4, which OVERFLOWS int64 into a NEGATIVE duration
+// once every passes math.MaxInt64/3 (~97 years) — and a timer re-armed with a
+// negative duration fires immediately, which is the same hot-ticker failure the
+// floor exists to prevent, one Lookup (and past the threshold one Mint) per
+// iteration for every connected session against a pool of exactly one
+// connection. HOME_WS_REVALIDATE_MINUTES is bounded at 1..1440, but that check
+// lives in another package and RevalidateEvery is an EXPORTED field: a unit slip
+// the other way (time.Duration(n) * time.Hour * 24 * 365 * 1000) or a test
+// harness reaches this with no range check at all — which is the argument the
+// floor below is already made on. A day is orders of magnitude above any real
+// setting and leaves jitter's arithmetic nowhere near the edge.
+const maxRevalidateEvery = 24 * time.Hour
+
 // revalidateInterval resolves the configured tick, falling back to the default
-// for a zero or negative one and refusing to go below minRevalidateEvery.
+// for a zero or negative one and holding it between minRevalidateEvery and
+// maxRevalidateEvery.
 //
 // ⚠ Extracted from Handler so the fallback can be tested. The only thing keeping
 // a 0 out of here is a range check that lives in another package
@@ -128,6 +145,8 @@ func revalidateInterval(every time.Duration) time.Duration {
 		return defaultRevalidateEvery
 	case every < minRevalidateEvery:
 		return minRevalidateEvery
+	case every > maxRevalidateEvery:
+		return maxRevalidateEvery
 	}
 	return every
 }

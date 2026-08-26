@@ -7,6 +7,7 @@ package ws
 // interval — so they are pinned here or not at all.
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -40,6 +41,15 @@ func TestRevalidateInterval(t *testing.T) {
 		{"a microsecond is floored", time.Microsecond, minRevalidateEvery},
 		{"the floor itself is kept", minRevalidateEvery, minRevalidateEvery},
 		{"just above the floor is kept", minRevalidateEvery + time.Millisecond, minRevalidateEvery + time.Millisecond},
+		// ⚠ AND A CEILING, for the floor's own reason read the other way. jitter
+		// computes every*3/4, which overflows int64 into a NEGATIVE duration past
+		// math.MaxInt64/3 — and a timer re-armed with a negative duration fires
+		// immediately, which is the same hot ticker a nanosecond produces. The env
+		// var is bounded at 1..1440 minutes, but that check is in another package
+		// and RevalidateEvery is exported.
+		{"the ceiling itself is kept", maxRevalidateEvery, maxRevalidateEvery},
+		{"a week is capped", 7 * 24 * time.Hour, maxRevalidateEvery},
+		{"a value that would overflow jitter is capped", time.Duration(math.MaxInt64), maxRevalidateEvery},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := revalidateInterval(tc.in); got != tc.want {
