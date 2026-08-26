@@ -82,7 +82,7 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) (
 		// stays live, nothing is announced, and the loud error below fires for what
 		// was a normal disconnect. The decision to revoke has already been taken by
 		// then and must not be undone by whoever happened to discover it.
-		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revokeTimeout)
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedWriteTimeout)
 		defer cancel()
 		// ⚠ The hook fires ONLY when the revoke actually landed. Announcing a
 		// revocation that did not happen closes the member's sockets and lets them
@@ -98,7 +98,17 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) (
 		c.sessionRevoked(sess.ID)
 		return nil, true, ErrUserClosed
 	case mintErr == nil:
-		_ = c.Sessions.RefreshRoles(ctx, sess.ID, id.Roles, now)
+		// ⚠ DETACHED FOR THE SAME REASON THE REVOKE ABOVE IS. This write is what
+		// makes a mint that already succeeded STICK: it stamps roles_refreshed_at,
+		// and every other caller reads that stamp to decide not to mint again. From
+		// the websocket ctx is a connection's or a pump's, so a member closing the
+		// tab in the window between Mint returning and this UPDATE cancelled it,
+		// the error was discarded, and the fresh roles were thrown away — leaving
+		// the session to re-mint on the very next tick, which is precisely the
+		// repeated-Mint cost one-pump-per-session exists to avoid.
+		roleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedWriteTimeout)
+		defer cancel()
+		_ = c.Sessions.RefreshRoles(roleCtx, sess.ID, id.Roles, now)
 		return id.Roles, false, nil
 	default:
 		// Transient auth outage: keep cached roles, retry next request.
@@ -115,10 +125,12 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time) (
 	}
 }
 
-// revokeTimeout bounds the detached fail-closed revoke. Long enough to outlast
-// SQLite's busy timeout, short enough that a wedged store cannot pin a request
-// goroutine (or a revalidation tick) indefinitely.
-const revokeTimeout = 10 * time.Second
+// detachedWriteTimeout bounds the two writes refreshRoles runs on a context
+// detached from its caller's — the fail-closed revoke, and the roles stamp that
+// makes a successful mint stick. Long enough to outlast SQLite's busy timeout,
+// short enough that a wedged store cannot pin a request goroutine (or a
+// revalidation tick) indefinitely.
+const detachedWriteTimeout = 10 * time.Second
 
 // SessionVerdict is the outcome of re-taking the session decision for a
 // connection that was authorised once and has been open ever since.

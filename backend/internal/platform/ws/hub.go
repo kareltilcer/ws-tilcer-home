@@ -99,7 +99,26 @@ type Hub struct {
 	logger *slog.Logger
 	// pumps holds the recurring revalidation ticker of every connected SESSION,
 	// refcounted across that session's sockets. See startSessionPump.
-	pumps map[string]*sessionPump
+	pumps map[pumpKey]*sessionPump
+}
+
+// pumpKey is what a socket must AGREE ON to share a session's ticker: the
+// session, the member it opened as, and the token the re-check is taken with.
+//
+// ⚠ The session id alone is not enough, and keying on it was a silent hazard.
+// The pump keeps the FIRST socket's token and openedAs for its whole life, so a
+// later socket handing over a different token had its own discarded: the ticker
+// would go on re-checking the stale one and, when that stopped resolving, close
+// every socket of a session that is perfectly live. The mirror case was already
+// reachable — a session whose first socket is an id-less service principal pins
+// openedAs to "" and disables the changed-id guard for every later socket on it.
+// Keying on all three costs nothing in the ordinary case (every tab of one
+// cookie jar agrees on all three, so they still share ONE ticker) and splits the
+// pumps only when the sockets genuinely disagree.
+type pumpKey struct {
+	sessionID string
+	openedAs  string
+	token     string
 }
 
 // NewHub returns an empty hub logging through logger (nil means slog.Default()).
@@ -111,7 +130,7 @@ func NewHub(logger *slog.Logger) *Hub {
 		clients:   make(map[*client]struct{}),
 		byUser:    make(map[string]map[*client]struct{}),
 		bySession: make(map[string]map[*client]struct{}),
-		pumps:     make(map[string]*sessionPump),
+		pumps:     make(map[pumpKey]*sessionPump),
 		logger:    logger,
 	}
 }
@@ -171,7 +190,6 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	// Dedupe the ID LIST, not the client set. A client is filed under exactly one
 	// id, so two different ids can never share one and a duplicate delivery can
 	// only come from a repeated id — a caller de-duplicating badly, or a member
@@ -179,6 +197,7 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	// duplicate bubble. Deduping here costs one small map over a handful of
 	// strings rather than one over every recipient socket.
 	seen := make(map[string]struct{}, len(userIDs))
+	dropped := 0
 	for _, id := range userIDs {
 		if _, dup := seen[id]; dup {
 			continue
@@ -187,9 +206,25 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 		for c := range h.byUser[id] {
 			select {
 			case c.send <- data:
-			default: // slow client: drop; D259's gap check repairs the thread
+			default: // slow client: drop; counted and logged below
+				dropped++
 			}
 		}
+	}
+	h.mu.Unlock()
+	// ⚠ A TARGETED DROP IS NOT A BROADCAST DROP, and it is the only loss in this
+	// file with no other trace. Publish's drop costs a refresh that
+	// refetch-on-focus repairs; here the frame IS the content and there is no
+	// replay, so a saturated phone simply never sees that message — and D259's
+	// gap check only notices on the NEXT one, which may never come. The
+	// marshal-failure paths above were given a log on exactly this reasoning.
+	//
+	// Logged AFTER the unlock, and once per publish rather than once per client:
+	// a write to the log handler while holding h.mu would stall Publish, add,
+	// remove and Count on whatever stdout is attached to.
+	if dropped > 0 {
+		h.logger.Warn("ws: targeted publish dropped for a saturated client — the frame is not replayed",
+			"type", m.Type, "recipients", len(seen), "dropped", dropped)
 	}
 }
 
@@ -368,40 +403,44 @@ func (c *client) revoke() {
 // that happened to open the session closing mid-query, and must stop when the
 // LAST of them goes.
 type sessionPump struct {
+	// key is what this ticker re-checks WITH, and what a joining socket has to
+	// match to share it. See pumpKey.
+	key    pumpKey
 	cancel context.CancelFunc
 	refs   int
 }
 
-// startSessionPump joins the caller to sessionID's revalidation ticker, starting
-// it if this is the session's first socket. The returned handle must be passed
-// back to releaseSessionPump when the socket goes.
+// startSessionPump joins the caller to the revalidation ticker for its session,
+// starting one if no socket agreeing on the same key already has it. The returned
+// handle must be passed back to releaseSessionPump when the socket goes.
 func (h *Hub) startSessionPump(sessionID, openedAs, token string, revalidate RevalidateFunc, every time.Duration) *sessionPump {
+	key := pumpKey{sessionID: sessionID, openedAs: openedAs, token: token}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if p, ok := h.pumps[sessionID]; ok {
+	if p, ok := h.pumps[key]; ok {
 		p.refs++
 		return p
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &sessionPump{cancel: cancel, refs: 1}
-	h.pumps[sessionID] = p
-	go h.runSessionPump(ctx, p, sessionID, openedAs, token, revalidate, every)
+	p := &sessionPump{key: key, cancel: cancel, refs: 1}
+	h.pumps[key] = p
+	go h.runSessionPump(ctx, p, revalidate, every)
 	return p
 }
 
 // releaseSessionPump drops one socket's hold on the ticker, stopping it when the
 // last one lets go.
 //
-// ⚠ It matches on the HANDLE, not on the session id. A pump that retired itself
-// on a verdict may already have been replaced by a fresh one for a reconnected
+// ⚠ It matches on the HANDLE, not on the key. A pump that retired itself on a
+// verdict may already have been replaced by a fresh one for a reconnected
 // session, and decrementing that one's refs on behalf of a socket it never
 // counted would stop a live pump while sockets still depend on it.
-func (h *Hub) releaseSessionPump(sessionID string, p *sessionPump) {
+func (h *Hub) releaseSessionPump(p *sessionPump) {
 	if p == nil {
 		return
 	}
 	h.mu.Lock()
-	cur, ok := h.pumps[sessionID]
+	cur, ok := h.pumps[p.key]
 	if !ok || cur != p {
 		h.mu.Unlock() // already retired; its goroutine is gone
 		return
@@ -411,17 +450,17 @@ func (h *Hub) releaseSessionPump(sessionID string, p *sessionPump) {
 		h.mu.Unlock()
 		return
 	}
-	delete(h.pumps, sessionID)
+	delete(h.pumps, p.key)
 	h.mu.Unlock()
 	p.cancel()
 }
 
 // retireSessionPump drops the registry entry for a pump that has decided to stop,
 // so the session's next socket starts a live ticker instead of joining a dead one.
-func (h *Hub) retireSessionPump(sessionID string, p *sessionPump) {
+func (h *Hub) retireSessionPump(p *sessionPump) {
 	h.mu.Lock()
-	if cur, ok := h.pumps[sessionID]; ok && cur == p {
-		delete(h.pumps, sessionID)
+	if cur, ok := h.pumps[p.key]; ok && cur == p {
+		delete(h.pumps, p.key)
 	}
 	h.mu.Unlock()
 	p.cancel()

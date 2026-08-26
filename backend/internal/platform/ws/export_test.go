@@ -35,3 +35,16 @@ func (h *Hub) TrackedSessionsForTest() int {
 	defer h.mu.Unlock()
 	return len(h.bySession)
 }
+
+// TrackedPumpsForTest returns how many revalidation tickers are registered.
+//
+// ⚠ The refcount behind them is the most intricate state in the package and the
+// least observable: a pump whose refs never reach zero keeps issuing a Lookup —
+// and, past the threshold, a Mint — every interval for a session with no sockets
+// left, for the process's lifetime, while Count, PublishTo and every other
+// assertion stay correct. Same reason as the two seams above, one map over.
+func (h *Hub) TrackedPumpsForTest() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.pumps)
+}

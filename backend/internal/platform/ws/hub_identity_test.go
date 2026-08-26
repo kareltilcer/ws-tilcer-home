@@ -82,8 +82,9 @@ func dialAsSession(ctx context.Context, t *testing.T, wsURL, userID, sessionID s
 	return c
 }
 
-// readType reads one frame and returns its Type, failing the test on a read
-// error.
+// readMessage reads one frame and decodes it, failing the test on a read error.
+// readType and readOrigin are the two projections of it the assertions want; the
+// policy below is stated once so neither copy can drift from it.
 //
 // ⚠ It does NOT swallow the error into "". Every call site now expects a frame,
 // and a Read that times out also CLOSES the connection (below) — so a single slow
@@ -103,7 +104,7 @@ func dialAsSession(ctx context.Context, t *testing.T, wsURL, userID, sessionID s
 // to, and assert the client's NEXT frame is the sentinel. It is stronger (it
 // proves the client was reachable and still did not get X) and it costs no wall
 // clock.
-func readType(t *testing.T, conn *cws.Conn, within time.Duration) string {
+func readMessage(t *testing.T, conn *cws.Conn, within time.Duration) ws.Message {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), within)
 	defer cancel()
@@ -115,7 +116,13 @@ func readType(t *testing.T, conn *cws.Conn, within time.Duration) string {
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	return m.Type
+	return m
+}
+
+// readType reads one frame and returns its Type. See readMessage.
+func readType(t *testing.T, conn *cws.Conn, within time.Duration) string {
+	t.Helper()
+	return readMessage(t, conn, within).Type
 }
 
 // sentinelType is broadcast with Publish (which reaches everyone) immediately
@@ -380,11 +387,17 @@ func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
 //
 // ⚠ A connection whose Upgrade carries no session id is invisible to
 // DisconnectSession (indexAdd skips the empty key) and one that carries no token
-// starts no revalidation pump. Either way the socket keeps a member-restricted
-// feed for its whole lifetime with BOTH revocation mechanisms disabled, and every
-// other signal — Count, PublishTo, the boards — looks perfectly healthy. The
-// composition root fills both fields today, so the log line is the only thing
-// standing between a future Authenticate that forgets one and a silent leak.
+// starts no revalidation pump. Either way BOTH revocation mechanisms are
+// disabled for the life of the socket, and every other signal — Count, the
+// boards — looks perfectly healthy.
+//
+// ⚠ So it is degraded to BROADCAST-ONLY, exactly as an actor with no user id is.
+// Warning and otherwise carrying on left the worse of the two bug states as the
+// only one that can leak: the socket stayed in byUser, so PublishTo kept handing
+// it member-restricted payloads after a logout, after the TTL expired, after
+// auth closed the account, with nothing able to close it. The upgrade is still
+// not refused — that would take out live boards over a revocation-plumbing
+// problem — but the half that can leak is dropped.
 func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 	logger, logs := captureLogger()
 	hub := ws.NewHub(logger)
@@ -410,7 +423,7 @@ func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(cws.StatusNormalClosure, "") })
-	waitTracked(t, hub, "u-karel", 1)
+	waitCount(t, hub, 1)
 
 	if !strings.Contains(logs.String(), "cannot be revoked") {
 		t.Errorf("nothing warned about a connection neither DisconnectSession nor the "+
@@ -420,6 +433,27 @@ func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 	// revocation for it sweeps nothing.
 	if n := hub.TrackedSessionsForTest(); n != 0 {
 		t.Errorf("the session index holds %d ids for a connection that gave none, want 0", n)
+	}
+	// Which is exactly why it must not be targetable: an unrevocable socket in
+	// byUser receives member-restricted payloads that nothing can ever stop.
+	if n := hub.TrackedClientsForTest("u-karel"); n != 0 {
+		t.Errorf("an UNREVOCABLE connection is indexed under its member (%d client(s)), want 0 — "+
+			"PublishTo would deliver to it after a logout, after the TTL expires and after "+
+			"auth closes the account, with both revocation mechanisms disabled", n)
+	}
+
+	hub.PublishTo([]string{"u-karel"}, ws.Message{Type: "chat.message.created"})
+	hub.Publish(ws.Message{Type: sentinelType})
+
+	got := readType(t, conn, readTimeout)
+	if got == "chat.message.created" {
+		t.Error("PublishTo reached a connection neither DisconnectSession nor the revalidation " +
+			"pump can close — an unrevocable socket must be broadcast-only")
+	}
+	// And the broadcast half survives, which is why the upgrade is not refused.
+	if got != sentinelType {
+		t.Errorf("Publish did not reach the unrevocable client (first frame %q, want the "+
+			"sentinel) — it must still receive every broadcast", got)
 	}
 }
 
@@ -779,6 +813,69 @@ func TestRevokedSocketClosesWithAPolicyCode(t *testing.T) {
 	}
 }
 
+// TestSessionPumpStopsWhenTheLastSocketGoes pins the refcount, which is the most
+// intricate state in the package and the least observable.
+//
+// ⚠ Nothing else reaches releaseSessionPump's ordinary path. The two tests that
+// do tear a pump down go through retireSessionPump (the ticker retiring on a
+// verdict); TestOnePumpPerSessionNotPerSocket never disconnects anything. So an
+// off-by-one — decrementing on the wrong branch, or skipping the delete — leaks a
+// ticker that keeps issuing a Lookup, and past the threshold a Mint, every
+// interval for a session with NO sockets left, for the process's lifetime, while
+// Count, PublishTo and every other assertion in this file stay correct.
+//
+// ⚠ And the release must not fire EARLY either: the first tab of two closing has
+// to leave its neighbour's ticker running, or the surviving socket silently loses
+// the only backstop for a revocation nothing announces.
+func TestSessionPumpStopsWhenTheLastSocketGoes(t *testing.T) {
+	var calls atomic.Int32
+	hub, wsURL := newRevalidatingServer(t, func(context.Context, string) (string, ws.Revalidation) {
+		calls.Add(1)
+		return "u-karel", ws.RevalidationValid
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	dial := func(who string) *cws.Conn {
+		c, _, err := cws.Dial(ctx, wsURL+"/ws", nil) // two tabs, one cookie jar
+		if err != nil {
+			t.Fatalf("dial %s: %v", who, err)
+		}
+		t.Cleanup(func() { _ = c.Close(cws.StatusNormalClosure, "") })
+		return c
+	}
+	first, second := dial("first tab"), dial("second tab")
+	waitCount(t, hub, 2)
+	waitFor(t, hub.TrackedPumpsForTest, 1, "registered revalidation pumps")
+
+	// One tab out of two: the ticker stays, because the other still depends on it.
+	_ = first.Close(cws.StatusNormalClosure, "")
+	waitCount(t, hub, 1)
+	if n := hub.TrackedPumpsForTest(); n != 1 {
+		t.Fatalf("%d pumps after ONE of two tabs closed, want 1 — the surviving socket "+
+			"would be left with no recurring check at all", n)
+	}
+	// And it is genuinely still ticking, not merely still registered.
+	waitAtLeast(t, func() int { return int(calls.Load()) }, int(calls.Load())+2,
+		"revalidations after one tab closed")
+
+	// The last one out stops it.
+	_ = second.Close(cws.StatusNormalClosure, "")
+	waitCount(t, hub, 0)
+	waitFor(t, hub.TrackedPumpsForTest, 0, "registered revalidation pumps")
+
+	// ⚠ And the GOROUTINE stopped, not just its registry entry: a pump that lost
+	// its entry but kept its context would go on querying forever and the map
+	// assertion above would still pass. One in-flight tick may land after the
+	// cancel; ~10 intervals of a live ticker could not.
+	settled := calls.Load()
+	time.Sleep(200 * time.Millisecond)
+	if n := calls.Load(); n > settled+1 {
+		t.Errorf("the ticker ran %d more times after its last socket closed, want at most 1 "+
+			"in-flight — a pump nobody holds must stop querying the store", n-settled)
+	}
+}
+
 // newRevalidatingServer builds a hub whose /ws accepts anyone as u-karel and
 // re-takes the decision through revalidate every 20ms.
 func newRevalidatingServer(t *testing.T, revalidate func(context.Context, string) (string, ws.Revalidation)) (*ws.Hub, string) {
@@ -966,19 +1063,8 @@ func TestNotifyLeavesTheOriginEmptyWithNoRequest(t *testing.T) {
 	}
 }
 
-// readOrigin reads one frame and returns its Origin. See readType for why there
-// is no negative-assertion timeout here.
+// readOrigin reads one frame and returns its Origin. See readMessage.
 func readOrigin(t *testing.T, conn *cws.Conn, within time.Duration) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), within)
-	defer cancel()
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("read within %s: %v", within, err)
-	}
-	var m ws.Message
-	if err := json.Unmarshal(data, &m); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	return m.Origin
+	return readMessage(t, conn, within).Origin
 }

@@ -34,6 +34,21 @@ type Config struct {
 	//
 	// ⚠ It must be able to say "I could not tell" — see Revalidation.
 	Revalidate RevalidateFunc
+	// Recheck is the CONNECT-TIME check, taken once per socket right after it is
+	// registered. nil falls back to Revalidate.
+	//
+	// ⚠ It exists so the connect-time check is not the expensive one. The hole it
+	// closes is narrow and cheap: the upgrade decision and h.add are not one
+	// atomic step, so a DisconnectSession sweeping bySession in between misses
+	// this socket entirely. Re-reading the session row is enough to see that.
+	// Running the full Revalidate there instead cost a second Lookup AND, when
+	// roles were stale, an outbound Mint PER SOCKET — so a deploy, which drops
+	// every socket in the household and has every tab redial at once, put N
+	// concurrent Mints on the auth service and 2N lookups on a pool of exactly
+	// one connection, none of them seeing another's roles_refreshed_at stamp.
+	// The fail-closed re-mint belongs on the session's ticker, where it happens
+	// once per session per interval.
+	Recheck RevalidateFunc
 	// RevalidateEvery is how often an already-open socket re-takes that decision
 	// (v10). Zero means defaultRevalidateEvery. See runSessionPump.
 	RevalidateEvery time.Duration
@@ -105,6 +120,12 @@ func revalidateInterval(every time.Duration) time.Duration {
 func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 	logger := h.logger
 	revalidateEvery := revalidateInterval(cfg.RevalidateEvery)
+	// The connect-time check falls back to the recurring one when no cheaper
+	// seam is configured, so a Config that predates Recheck behaves as before.
+	recheck := cfg.Recheck
+	if recheck == nil {
+		recheck = cfg.Revalidate
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ⚠ v10: the actor resolved here is KEPT (D232). Until v10 it was resolved
 		// purely to decide accept-or-reject and then discarded, which is what made
@@ -147,8 +168,17 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			if sessionID == "" || token == "" {
 				logger.Warn("ws: authenticated connection cannot be revoked — Authenticate "+
 					"returned no session id and/or no token, so DisconnectSession cannot "+
-					"reach it and no revalidation pump will run",
+					"reach it and no revalidation pump will run; keeping it broadcast-only",
 					"user", userID, "has_session_id", sessionID != "", "has_token", token != "")
+				// ⚠ AND IT IS DEGRADED TO BROADCAST-ONLY, exactly as an actor with no
+				// user id is. Logging alone left the worse of the two bug states as the
+				// only one that can leak: the socket stayed in byUser, so PublishTo went
+				// on handing it member-restricted payloads after a logout, after the TTL
+				// expired, after auth closed the account — for the whole life of the
+				// connection, with Count, the boards and every other signal healthy.
+				// Dropping the targeting removes the only half that can leak; the
+				// broadcast half is why the upgrade is still not refused.
+				userID = ""
 			}
 		} else {
 			// ⚠ Under HOME_DEV_AUTH_BYPASS there is no session and Authenticate is
@@ -201,9 +231,11 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			// upgrade decision and h.add are not one atomic step, so a revocation
 			// sweeping bySession in between misses this client entirely — it was not
 			// indexed yet — and it would otherwise hold an already-revoked session
-			// until the first tick, minutes later.
+			// until the first tick, minutes later. It goes through Recheck, which is
+			// the CHEAP half of the decision: see Config.Recheck for why the
+			// Mint-capable one must not run once per socket.
 			go func() {
-				if !revalidateOnce(ctx, cfg.Revalidate, token, userID, sessionID, logger) {
+				if !revalidateOnce(ctx, recheck, token, userID, sessionID, logger) {
 					c.revoke()
 				}
 			}()
@@ -212,7 +244,7 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			// unrevocable either way, which is what the warning above says.
 			if sessionID != "" {
 				p := h.startSessionPump(sessionID, userID, token, cfg.Revalidate, revalidateEvery)
-				defer h.releaseSessionPump(sessionID, p)
+				defer h.releaseSessionPump(p)
 			}
 		}
 		h.writePump(ctx, c)
@@ -249,7 +281,11 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 // handler runs that check itself, once, for each connection; this loop is only
 // the recurring half, and a second tab joining an existing session must not reset
 // its neighbours' schedule.
-func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, sessionID, openedAs, token string, revalidate RevalidateFunc, every time.Duration) {
+func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, revalidate RevalidateFunc, every time.Duration) {
+	// The session, the member it opened as and the token to re-check with are the
+	// pump's identity, not incidental parameters — every socket sharing this
+	// ticker agreed on all three. See pumpKey.
+	sessionID, openedAs, token := p.key.sessionID, p.key.openedAs, p.key.token
 	// ⚠ The interval is JITTERED. Every session a page load opens would otherwise
 	// tick in phase for as long as it lives, and each tick is a query against a
 	// pool of exactly one connection, so the household's sessions would queue
@@ -262,11 +298,16 @@ func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, sessionID, ope
 			return
 		case <-t.C:
 			if !revalidateOnce(ctx, revalidate, token, openedAs, sessionID, h.logger) {
-				// Every socket of this session goes, and the ticker retires rather
-				// than idling — the session's next connection must start a live one
-				// instead of joining this dead entry.
+				// ⚠ RETIRE BEFORE DISCONNECTING, not after. Retiring second left a
+				// window in which a socket that connected after DisconnectSession
+				// snapshotted bySession still found this pump registered, joined it,
+				// and was then left running against a ticker retireSessionPump was
+				// about to cancel — no recurring check for the rest of its life, and a
+				// releaseSessionPump that silently no-ops because the entry is gone.
+				// Retiring first means such a socket starts a LIVE pump of its own.
+				h.retireSessionPump(p)
+				// Every socket of this session goes.
 				h.DisconnectSession(sessionID)
-				h.retireSessionPump(sessionID, p)
 				return
 			}
 			t.Reset(jitter(every))

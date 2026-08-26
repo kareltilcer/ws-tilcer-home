@@ -7,6 +7,8 @@ package ws
 // package ws rather than beside the others in ws_test.
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -21,7 +23,9 @@ import (
 // household's live updates. Nothing else in the suite exercises backpressure at
 // all: every other test reads its frames eagerly.
 func TestPublishToDropsOnlyForTheSaturatedClient(t *testing.T) {
-	h := NewHub(nil)
+	// A real logger, not nil: the drop below is logged now, and slog.Default()
+	// would put that line on the suite's stderr on every run.
+	h := NewHub(slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	newClient := func(userID string) *client {
 		return &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: userID}
 	}
