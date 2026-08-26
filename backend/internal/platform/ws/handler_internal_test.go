@@ -28,6 +28,18 @@ func TestRevalidateInterval(t *testing.T) {
 		{"negative falls back", -time.Minute, defaultRevalidateEvery},
 		{"configured value is kept", 90 * time.Second, 90 * time.Second},
 		{"the default itself is kept", defaultRevalidateEvery, defaultRevalidateEvery},
+		// ⚠ AND A POSITIVE VALUE HAS A FLOOR. jitter must return an interval too
+		// small to halve unchanged (a spread of zero cannot be drawn from), so a
+		// nanosecond here becomes a timer that re-fires as fast as the scheduler
+		// allows — a Lookup, and past the threshold a Mint, per iteration against a
+		// pool of exactly one connection, for every connected session, with no
+		// error anywhere. RevalidateEvery is exported and a caller that never goes
+		// through config.Load (a time.Millisecond/time.Minute slip, a harness)
+		// reaches this with no range check at all.
+		{"a nanosecond is floored", time.Nanosecond, minRevalidateEvery},
+		{"a microsecond is floored", time.Microsecond, minRevalidateEvery},
+		{"the floor itself is kept", minRevalidateEvery, minRevalidateEvery},
+		{"just above the floor is kept", minRevalidateEvery + time.Millisecond, minRevalidateEvery + time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := revalidateInterval(tc.in); got != tc.want {

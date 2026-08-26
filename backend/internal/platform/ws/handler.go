@@ -100,16 +100,34 @@ const (
 // HOME_WS_REVALIDATE_MINUTES.
 const defaultRevalidateEvery = 5 * time.Minute
 
+// minRevalidateEvery is the floor a configured tick is held to.
+//
+// ⚠ It is not tidiness: runSessionPump re-arms a timer with jitter(every), and
+// jitter has to return an interval too small to halve UNCHANGED — a spread of
+// zero cannot be drawn from. So a nanosecond or microsecond `every` becomes a
+// timer that re-fires as fast as the scheduler allows, issuing a Lookup — and
+// past the threshold a Mint — per iteration against a pool of exactly one
+// connection, for every connected session, with nothing anywhere reporting an
+// error. Ten milliseconds is orders of magnitude below any real setting (the
+// env var floor is a minute) and still leaves jitter a spread to draw from,
+// while a value below it can only be a unit slip.
+const minRevalidateEvery = 10 * time.Millisecond
+
 // revalidateInterval resolves the configured tick, falling back to the default
-// for a zero or negative one.
+// for a zero or negative one and refusing to go below minRevalidateEvery.
 //
 // ⚠ Extracted from Handler so the fallback can be tested. The only thing keeping
 // a 0 out of here is a range check that lives in another package
 // (HOME_WS_REVALIDATE_MINUTES), so the substitution has to be pinned on this side
-// of that boundary too.
+// of that boundary too — and RevalidateEvery is an exported field, so a caller
+// that never goes through config.Load (a unit slip of time.Millisecond for
+// time.Minute, a test harness) reaches this with no range check at all.
 func revalidateInterval(every time.Duration) time.Duration {
-	if every <= 0 {
+	switch {
+	case every <= 0:
 		return defaultRevalidateEvery
+	case every < minRevalidateEvery:
+		return minRevalidateEvery
 	}
 	return every
 }
