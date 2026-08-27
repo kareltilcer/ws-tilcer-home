@@ -9,6 +9,7 @@ package ws
 // DisconnectSession's alone. Same reason the backpressure test is in package ws.
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
@@ -29,8 +30,17 @@ import (
 // waits for the count to settle, which it does either way.
 func TestDisconnectSessionUnindexesBeforeItCancels(t *testing.T) {
 	h := NewHub(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	// ⚠ A REAL cancel, not a no-op stub. revoke() is only half a revocation if the
+	// cancel behind it does nothing, and a stub cannot tell a client that was
+	// closed from one that was merely unindexed — the two halves this test is
+	// about. Each client's context stands in for the write pump's.
+	done := map[*client]context.Context{}
 	newClient := func(userID, sessionID string) *client {
-		return &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: userID, sessionID: sessionID}
+		ctx, cancel := context.WithCancel(context.Background())
+		c := &client{send: make(chan []byte, sendBuffer), cancel: cancel, userID: userID, sessionID: sessionID}
+		t.Cleanup(cancel)
+		done[c] = ctx
+		return c
 	}
 	// Two tabs of the doomed session, plus the same member's OTHER device, whose
 	// session nobody touched.
@@ -42,6 +52,24 @@ func TestDisconnectSessionUnindexesBeforeItCancels(t *testing.T) {
 	}
 
 	h.DisconnectSession("s-phone")
+
+	for name, c := range map[string]*client{"tab 1": phoneTab1, "tab 2": phoneTab2} {
+		select {
+		case <-done[c].Done():
+		default:
+			t.Errorf("revoked %s was never cancelled — unindexing without closing leaves the "+
+				"socket live on a session that is 401 on every other request", name)
+		}
+		if !c.revoked.Load() {
+			t.Errorf("revoked %s is not marked revoked, so it would close as a NORMAL closure "+
+				"and the browser would reconnect into an upgrade that 401s forever", name)
+		}
+	}
+	select {
+	case <-done[laptop].Done():
+		t.Error("the member's untouched device was cancelled — a revocation is per SESSION")
+	default:
+	}
 
 	// ⚠ The assertion is about the INDEX, not the socket. revoke() has run; no
 	// handler ever will, so anything still filed here is what a live PublishTo
@@ -70,5 +98,67 @@ func TestDisconnectSessionUnindexesBeforeItCancels(t *testing.T) {
 			t.Errorf("revoked %s queued %d frames, want 0 — this is the leak the revocation "+
 				"exists to close", name, n)
 		}
+	}
+}
+
+// TestPublishToSkipsASocketRevokedAfterTheSnapshot pins the half of the leak that
+// unindexing under h.mu cannot reach.
+//
+// ⚠ DisconnectSession's removeLocked stops the NEXT fan-out from finding the
+// socket. It does nothing about one already in flight: PublishTo snapshots its
+// recipients under h.mu and then RELEASES it to marshal (encoding a chat payload
+// under the index would stall Publish, add, remove and Count), so a revocation
+// landing in that gap still finds an open send channel. Without fanOut's revoked
+// check the message BODY is queued there, and the write pump — in a select with
+// ctx.Done() AND c.send both ready, which Go picks between at random — can put it
+// on the wire of a session that was revoked before the marshal even finished.
+//
+// The state below is exactly that mid-flight one: still indexed (the snapshot has
+// been taken), already revoked. TestDisconnectSessionUnindexesBeforeItCancels
+// cannot reach it — it publishes only after DisconnectSession has returned, by
+// which point the client is out of byUser and the send would be skipped either
+// way.
+func TestPublishToSkipsASocketRevokedAfterTheSnapshot(t *testing.T) {
+	h := NewHub(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	revoked := &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: "u-karel", sessionID: "s-phone"}
+	live := &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: "u-karel", sessionID: "s-laptop"}
+	h.add(revoked)
+	h.add(live)
+	// Revoked WITHOUT unindexing: the socket a fan-out that snapshotted a moment
+	// earlier is still holding.
+	revoked.revoke()
+
+	h.PublishTo([]string{"u-karel"}, Message{Type: "chat.message.created"})
+
+	if n := len(revoked.send); n != 0 {
+		t.Errorf("a revoked socket queued %d frames, want 0 — a message body handed to a session "+
+			"that is already gone is the leak the whole revocation mechanism exists to close", n)
+	}
+	if n := len(live.send); n != 1 {
+		t.Errorf("the member's live device queued %d frames, want 1 — skipping a revoked socket "+
+			"must not cost its neighbours the message", n)
+	}
+}
+
+// TestPublishSkipsARevokedSocket is the same guarantee on the broadcast path,
+// which shares the fan-out. A broadcast carries no private content, so this is
+// belt-and-braces rather than a leak — but the two paths must not diverge, or a
+// future change that gives Publish an audience inherits a hole nothing tests.
+func TestPublishSkipsARevokedSocket(t *testing.T) {
+	h := NewHub(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	revoked := &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: "u-karel"}
+	live := &client{send: make(chan []byte, sendBuffer), cancel: func() {}, userID: "u-eva"}
+	h.add(revoked)
+	h.add(live)
+	revoked.revoke()
+
+	h.Publish(Message{Type: "todo.changed"})
+
+	if n := len(revoked.send); n != 0 {
+		t.Errorf("a revoked socket queued %d broadcast frames, want 0", n)
+	}
+	if n := len(live.send); n != 1 {
+		t.Errorf("the live socket queued %d broadcast frames, want 1 — Publish must still reach "+
+			"every client that has not been revoked", n)
 	}
 }

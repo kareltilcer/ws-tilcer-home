@@ -77,7 +77,7 @@ const sendBuffer = 32
 // Hub tracks connected clients and broadcasts messages to them.
 type Hub struct {
 	// pub serialises a targeted fan-out END TO END — snapshot, marshal, send —
-	// so PublishTo delivers in the order it was CALLED (v10).
+	// so that no two targeted publishes are ever INTERLEAVED (v10).
 	//
 	// ⚠ It is not a second index lock and must never be taken under mu. It exists
 	// because PublishTo does its marshal outside mu (encoding a chat payload while
@@ -88,9 +88,15 @@ type Hub struct {
 	// message. For chat that is not a reordering the client can absorb — D259's
 	// prev_message_id check reads it as a GAP and refetches the tail.
 	//
-	// It cannot make delivery match COMMIT order — the hub never sees the
-	// transaction — but it removes the reordering the hub itself introduces, which
-	// is the half the hub can be responsible for.
+	// ⚠ IT IS NOT A DELIVERY ORDER, AND CALLERS MUST NOT READ IT AS ONE. A
+	// sync.Mutex hands the lock to whichever waiter wins the race, not to the one
+	// that arrived first, so two publishes made microseconds apart from different
+	// goroutines can still be fanned out in the other order — and it cannot match
+	// COMMIT order either, because the hub never sees the transaction. What it
+	// removes is the WIDER window the marshal opened, in which a publish that
+	// started second could overtake one already halfway through this function.
+	// Anything that must be ordered has to carry that order in the payload (D259's
+	// prev_message_id), assigned before this lock is taken.
 	pub     sync.Mutex
 	mu      sync.Mutex
 	clients map[*client]struct{}
@@ -182,8 +188,12 @@ func NewHub(logger *slog.Logger) *Hub {
 // Publish marshals m once and delivers it to every connected client without
 // blocking; a full client buffer drops the message for that client.
 //
-// ⚠ UNCHANGED BY v10, deliberately. Every module written before chat publishes
-// through here and its fan-out must stay byte-identical.
+// ⚠ ITS FAN-OUT IS UNCHANGED BY v10, deliberately: every module written before
+// chat publishes through here and must see the same behaviour. What it shares
+// with PublishTo is the MECHANISM — snapshot the recipients under h.mu, deliver
+// with the lock released (see fanOut) — because holding the index across a
+// select-send per socket stalls add, remove, Count, DisconnectSession and
+// PublishTo's own snapshot, and that cost is the older, hotter path's too.
 func (h *Hub) Publish(m Message) {
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -191,13 +201,43 @@ func (h *Hub) Publish(m Message) {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	targets := make([]*client, 0, len(h.clients))
 	for c := range h.clients {
+		targets = append(targets, c)
+	}
+	h.mu.Unlock()
+	// A broadcast drop costs a refresh that refetch-on-focus repairs, so unlike
+	// PublishTo's it is not worth a log line per publish.
+	fanOut(targets, data)
+}
+
+// fanOut delivers data to a snapshot of clients without blocking, and reports how
+// many had to be dropped. Callers must NOT hold h.mu.
+//
+// ⚠ IT SKIPS A SOCKET THAT WAS REVOKED SINCE THE SNAPSHOT, and that check is the
+// second half of DisconnectSession's unindex-then-cancel. Unindexing under h.mu
+// stops the NEXT fan-out from finding the socket; it does nothing about one that
+// had already snapshotted it and is between the marshal and the send — and there
+// the client is still holding an open send channel. Without this, a revocation
+// landing in that window still queues a message BODY on a session that is already
+// gone, and the write pump (in a select with ctx.Done() AND c.send both ready,
+// which Go picks between at random) can put it on the wire. That is precisely the
+// leak the whole revocation mechanism exists to close.
+//
+// Sending to the snapshot is otherwise safe because c.send is never closed (see
+// the client type), which is the invariant the sends already relied on.
+func fanOut(targets []*client, data []byte) (dropped int) {
+	for _, c := range targets {
+		if c.revoked.Load() {
+			continue
+		}
 		select {
 		case c.send <- data:
 		default: // slow client: drop; it recovers via refetch-on-focus
+			dropped++
 		}
 	}
+	return dropped
 }
 
 // PublishTo marshals m ONCE and delivers it to every connection belonging to any
@@ -238,14 +278,13 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	// ⚠ ONE FAN-OUT AT A TIME, AND IT COVERS THE MARSHAL. See Hub.pub: the marshal
 	// happens off h.mu, and without this two concurrent targeted publishes could
 	// swap places in the recipient's send channel — which D259 reads as a gap, not
-	// as a reordering.
+	// as a reordering. It is not a delivery ORDER; see Hub.pub.
 	h.pub.Lock()
 	defer h.pub.Unlock()
 	// ONE PASS UNDER h.mu, and it snapshots the recipient CLIENTS rather than
 	// merely asking whether any exist. Holding the index across the fan-out meant
-	// Publish, add, remove and Count all waited on a select-send per socket; the
-	// snapshot is safe to send to afterwards because c.send is never closed (see
-	// the client type), which is the invariant the sends already relied on.
+	// Publish, add, remove and Count all waited on a select-send per socket; a
+	// socket revoked between the snapshot and the send is skipped by fanOut.
 	//
 	// Dedupe the ID LIST, not the client set. A client is filed under exactly one
 	// id, so two different ids can never share one and a duplicate delivery can
@@ -253,10 +292,20 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	// appearing as both author and recipient. A duplicate chat frame is a
 	// duplicate bubble. Deduping here costs one small map over a handful of
 	// strings rather than one over every recipient socket.
+	//
+	// ⚠ AN EMPTY ID IS DROPPED RATHER THAN LOOKED UP, so that an audience made
+	// only of them lands on the warning below and not on the silent no-op. indexAdd
+	// never files anybody under "" (an unidentified connection is broadcast-only),
+	// so byUser[""] can only ever miss — which made a caller whose author id came
+	// back empty, from a failed join or a NULL scanned into a string, look exactly
+	// like the ordinary "nobody is connected" case.
 	h.mu.Lock()
 	seen := make(map[string]struct{}, len(userIDs))
 	targets := make([]*client, 0, len(userIDs))
 	for _, id := range userIDs {
+		if id == "" {
+			continue
+		}
 		if _, dup := seen[id]; dup {
 			continue
 		}
@@ -266,6 +315,15 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 		}
 	}
 	h.mu.Unlock()
+	if len(seen) == 0 {
+		// Every id was empty: the caller resolved no usable audience at all, which
+		// for a member-restricted module is the same bug as handing over none —
+		// committed message, no frame anywhere, and D259's gap check only notices on
+		// the NEXT message in that conversation, which may never come.
+		h.logger.Warn("ws: targeted publish whose audience holds no usable ids — every id was "+
+			"empty, so this change reached nobody", "type", m.Type, "ids", len(userIDs))
+		return
+	}
 	// ⚠ THE AUDIENCE IS CHECKED FOR REACHABILITY BEFORE THE PAYLOAD IS ENCODED. An
 	// audience with nobody connected is the ORDINARY case, not an error — the doc
 	// above says so — and for chat it is most of them: a household where one member
@@ -288,17 +346,14 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 		// audience receives, and D259's gap check only notices on the NEXT message.
 		// Without this line the send happens and produces nothing, anywhere.
 		h.logger.Error("ws: targeted publish dropped, payload does not marshal",
-			"type", m.Type, "recipients", len(seen), "err", err)
+			"type", m.Type, "users", len(seen), "sockets", len(targets), "err", err)
 		return
 	}
-	dropped := 0
-	for _, c := range targets {
-		select {
-		case c.send <- data:
-		default: // slow client: drop; counted and logged below
-			dropped++
-		}
-	}
+	// ⚠ `dropped` COUNTS SOCKETS, which is why it is not reported beside a count of
+	// user ids: one member with a phone, a laptop and two tabs is a single
+	// recipient and four sends, so "recipients=1 dropped=4" read like a corrupted
+	// counter and sent operators after a hub bug rather than after the device.
+	dropped := fanOut(targets, data)
 	// ⚠ A TARGETED DROP IS NOT A BROADCAST DROP. Publish's drop costs a refresh
 	// that refetch-on-focus repairs; here the frame IS the content and there is no
 	// replay, so a saturated phone simply never sees that message — and D259's
@@ -311,7 +366,7 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	// stall Publish, add, remove and Count on whatever stdout is attached to.
 	if dropped > 0 {
 		h.logger.Warn("ws: targeted publish dropped for a saturated client — the frame is not replayed",
-			"type", m.Type, "recipients", len(seen), "dropped", dropped)
+			"type", m.Type, "users", len(seen), "sockets", len(targets), "dropped", dropped)
 	}
 }
 
