@@ -5,41 +5,105 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	cws "github.com/coder/websocket"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
+
+// newWSServer serves hub.Handler(cfg) on a test HTTP server and returns its
+// ws:// URL. Every test server in this package is this same scaffold; the hub
+// comes in as a parameter because some tests build theirs around a
+// CaptureLogger, so the helper cannot own its construction.
+func newWSServer(t *testing.T, hub *ws.Hub, cfg ws.Config) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(cfg))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http")
+}
 
 // newServer builds a hub whose /ws authenticates via the injected closure (the
 // production handler reads the session cookie; the test stubs the decision).
 func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
-		Authenticate: func(*http.Request) (reqctx.Actor, bool) {
-			return reqctx.Actor{UserID: "u1", Type: "user", Roles: []string{"editor"}}, authOK
+	hub := ws.NewHub(testsupport.DiscardLogger())
+	wsURL := newWSServer(t, hub, ws.Config{
+		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: "u1", Type: "user", Roles: []string{"editor"}},
+				SessionID: "s1",
+				Token:     "t1",
+			}, authOK
 		},
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
+	return hub, wsURL
 }
+
+// waitFor polls get until it EQUALS want. Connect and disconnect are both
+// asynchronous (the handler registers after the dial returns, and unregisters
+// after its write pump unwinds), so every assertion about hub bookkeeping has to
+// wait for it. Equality is right for a value that settles — Count,
+// TrackedClientsForTest — and wrong for one that only climbs: see waitAtLeast.
+func waitFor(t *testing.T, get func() int, want int, what string) {
+	t.Helper()
+	poll(t, get, func(n int) bool { return n == want }, "want "+strconv.Itoa(want), what)
+}
+
+// waitAtLeast polls get until it REACHES min. A counter that only increases can
+// step straight past an exact target when a poll is descheduled (3 -> 5 across
+// one slow sleep), and waitFor would then spin out its whole deadline and fail a
+// test that had already done what it was waiting for.
+func waitAtLeast(t *testing.T, get func() int, min int, what string) {
+	t.Helper()
+	poll(t, get, func(n int) bool { return n >= min }, "want >= "+strconv.Itoa(min), what)
+}
+
+// poll is the one polling policy behind both.
+func poll(t *testing.T, get func() int, ok func(int) bool, want, what string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	// ⚠ The message reports the LAST POLLED value, not a fresh read. On a loaded
+	// machine the awaited value routinely lands just after the deadline, and
+	// re-reading here printed "hub client count = 0, want 0" — a failure whose own
+	// text says the assertion held, sending the reader after a hub bug that is not
+	// there.
+	//
+	// ⚠ For the same reason the check runs AFTER the re-read rather than at the
+	// top of the loop: a value that arrives on the final poll used to exit through
+	// the deadline and print that same self-contradicting message.
+	last := get()
+	for {
+		if ok(last) {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+		last = get()
+	}
+	t.Fatalf("%s = %d, %s", what, last, want)
+}
+
+// The log sink and the two loggers live in testsupport and are called from there
+// directly: the mutex-guarded buffer was already written verbatim in documents'
+// preview tests, and asserting on a log line is not a ws-specific need, so a
+// package-local alias for them would just fork the naming again.
+// testsupport.CaptureLogger is for the handler's warnings about connections that
+// are a BUG STATE rather than a policy — they change no observable behaviour, so
+// the log line is the only thing that can be asserted, and without asserting it
+// the branch can be deleted whole.
 
 func waitCount(t *testing.T, hub *ws.Hub, want int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if hub.Count() == want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("hub client count = %d, want %d", hub.Count(), want)
+	waitFor(t, hub.Count, want, "hub client count")
 }
 
 func TestWS_ConnectRequiresValidSession(t *testing.T) {

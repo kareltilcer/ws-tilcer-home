@@ -136,8 +136,9 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `HOME_AUTH_JWT_ISSUER` | *(optional)* exact `iss` to require on those tokens = **auth's own base URL** (e.g. `https://auth.tilcer.cz`), which is **not** `AUTH_BASE_URL` when that ends in `/api`. Unset = don't check the issuer (signature + audience already bind the token) | *(unset)* |
 | `HOME_SITE_KEY` | auth site key | `home` (default) |
 | `HOME_ALLOWED_ORIGINS` | CSRF Origin allowlist for cookie-authenticated mutations | `https://*.tilcer.cz` (default) |
-| `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B) | `90` (default) |
-| `HOME_ROLE_REFRESH_MINUTES` | how often home re-mints to refresh cached roles | `15` (default) |
+| `HOME_SESSION_TTL_DAYS` | home session sliding window (Mode B; 1–3650) | `90` (default) |
+| `HOME_ROLE_REFRESH_MINUTES` | how often home re-mints to refresh cached roles (1–1440) | `15` (default) |
+| `HOME_WS_REVALIDATE_MINUTES` | how often an already-open websocket re-takes its session decision (1–1440). A socket is authenticated once, at upgrade; logout and a mint failing closed already close it immediately, so this bounds only the revocations nothing announces — an expiring TTL, a row revoked out of band | `5` (default) |
 | `HOME_TIMEZONE` | IANA zone for “today”/recurrence | `Europe/Prague` (default) |
 | `HOME_DASHBOARD_LOOKBACK_DAYS` | reminder lookback | `30` (default) |
 | `HOME_RRULE_MAX_OCCURRENCES` | expansion cap | `500` (default) |
@@ -148,6 +149,24 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `LITESTREAM_R2_BUCKET` | R2 bucket | *(bucket name)* |
 | `LITESTREAM_ACCESS_KEY_ID` | R2 access key | *(secret)* |
 | `LITESTREAM_SECRET_ACCESS_KEY` | R2 secret key | *(secret)* |
+
+> ⚠ **The three session windows are range-checked at boot, and the UPPER bounds
+> are new in v10.** The caps exist because each value is multiplied into a
+> `time.Duration`: a large enough one overflows int64 nanoseconds into a
+> *negative* duration that every comparison then reads backwards (re-minting on
+> every request, cookies issued with a negative `MaxAge`), and both load silently
+> and break login.
+>
+> `HOME_SESSION_TTL_DAYS` and `HOME_ROLE_REFRESH_MINUTES` shipped with a **floor
+> check only**, so a value above the new cap has been legal for their whole life
+> and may already be set in Coolify. Those two are therefore **clamped to the cap
+> with a loud `CONFIGURATION CORRECTED` warning at startup, not refused** — the
+> boot succeeds, the oversized value never reaches the arithmetic, and the
+> operator finds it in the logs of a service that is *up*. `Load` aborting would
+> instead crash-loop the container on the deploy that lands v10, with the only
+> signal a log line inside the restart loop. Values *below* the floor are still
+> refused (they always were, so nothing deployed carries one), and
+> `HOME_WS_REVALIDATE_MINUTES` is new in v10 and refused at both ends.
 
 **Documents (v4) — the `documents` module stores file BYTES in its own R2 bucket**
 (SQLite keeps only metadata). This bucket is **separate from the Litestream DB

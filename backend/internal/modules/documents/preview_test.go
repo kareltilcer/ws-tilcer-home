@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -167,24 +166,6 @@ func columnOf(t *testing.T, db *sql.DB, column, id string) string {
 		t.Fatalf("read %s: %v", column, err)
 	}
 	return got
-}
-
-// syncBuffer collects log output from the worker's goroutines.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 // encodedPNG builds a real w×h PNG — the 1×1 pngBytes fixture is too small to
@@ -778,7 +759,7 @@ func TestPreviewWorker_RefusesToDecodeAnImageOverThePixelLimit(t *testing.T) {
 		{name: "within the limit", limit: 1 << 20, refused: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := &syncBuffer{}
+			logs := &testsupport.SyncBuffer{}
 			x := newPreviewHarness(t, documents.PreviewConfig{
 				Enabled:        true,
 				Timeout:        2 * time.Second,

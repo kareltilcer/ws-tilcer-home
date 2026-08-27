@@ -4,8 +4,41 @@ import { useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { qk } from './keys'
 import { clientId } from './clientId'
+import { ApiError, reportUnauthorized } from './client'
+import { getSession } from './endpoints'
 import { cs } from '@/i18n/cs'
 import { routes } from '@/app/routes'
+
+// WS_CLOSE_POLICY_VIOLATION (RFC 6455 §7.4.1, code 1008) is what the hub answers
+// with when it closes a socket because the session behind it no longer authorises
+// it. Every other code — a deploy, a dropped network, a browser sleeping — is a
+// reconnect.
+//
+// ⚠ Exported so ws.test.ts can pin BOTH halves of it: that the number is 1008 —
+// the wire contract with the backend's websocket.StatusPolicyViolation, which
+// this file cannot import — and that a close carrying it stops the reconnect
+// loop. Nothing else links the two sides.
+export const WS_CLOSE_POLICY_VIOLATION = 1008
+
+// PROBE_AFTER_FAILED_DIALS is how many dials may fail IN A ROW WITHOUT THE SOCKET
+// EVER OPENING before the tab stops guessing and asks the server directly whether
+// the session is still there.
+//
+// ⚠ The close code above only reaches a tab that was CONNECTED when the session
+// went. The common case is the opposite one: a phone asleep or offline when the
+// revocation lands has no socket to close, so DisconnectSession finds nothing and
+// the frame is never sent. On resume it dials, the server 401s the UPGRADE, and
+// the WebSocket API deliberately hides the handshake response — the browser
+// reports code 1006, indistinguishable from a dropped network. Without a second
+// signal that tab redials every capped interval (25.6s) for as long as it stays
+// open, with nothing on screen ever saying the session ended: exactly the loop
+// the close code was added to stop.
+//
+// ⚠ AND IT COUNTS ONLY DIALS THAT NEVER OPENED. A tab that connects, works, and
+// is dropped by a deploy or a flaky link has a healthy session and must never be
+// probed; `opened` resets the counter for that reason. Three is past any single
+// restart or handover and still under a minute of backoff.
+const PROBE_AFTER_FAILED_DIALS = 3
 
 // useLiveSync opens the session-authenticated websocket and applies pushed
 // changes by invalidating the affected query caches (refetch-on-focus is the
@@ -30,16 +63,67 @@ export function useLiveSync(): void {
     let closed = false
     let ws: WebSocket | null = null
     let attempt = 0
+    // Dials that closed WITHOUT ever opening, in a row. See PROBE_AFTER_FAILED_DIALS.
+    let unopened = 0
     let timer: ReturnType<typeof setTimeout> | undefined
+
+    // A probe already in flight. See probeSession.
+    let probing = false
+
+    // giveUp stops the reconnect loop for good and hands off to the login screen,
+    // which is the same place a 401 goes. Both routes into it — the policy close
+    // code, and the session probe below — are answers to "the session is gone",
+    // and neither may leave a timer armed behind it.
+    //
+    // ⚠ The `closed` guard is the same one every other entry point here has, and
+    // it is load-bearing for the ASYNC route: probeSession is launched from a
+    // close and resolves whenever the network lets it, by which time the effect
+    // may have been torn down (a route change unmounting the shell, StrictMode's
+    // double-invoke in dev) or a policy close may already have given up. Without
+    // it that stale probe still calls reportUnauthorized() on behalf of an effect
+    // that no longer exists.
+    const giveUp = () => {
+      if (closed) return
+      closed = true
+      if (timer) clearTimeout(timer)
+      ws?.close()
+      reportUnauthorized()
+    }
+
+    // probeSession asks the one question the WebSocket API cannot: is this tab
+    // failing to connect because the network is bad, or because the session is
+    // over? getSession carries skipAuthRedirect, so a 401 arrives here as a value
+    // instead of routing itself — which keeps the handoff in one place, and keeps
+    // every OTHER failure (offline, 5xx, the server still booting) a reconnect.
+    //
+    // ⚠ ONE AT A TIME. `unopened` is zeroed when a probe is LAUNCHED, not when it
+    // answers, so a probe hung behind a slow network is still pending when the
+    // next three capped-backoff dials fail (~77s) and would start a second one.
+    const probeSession = async () => {
+      if (probing || closed) return
+      probing = true
+      try {
+        await getSession()
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) giveUp()
+      } finally {
+        probing = false
+      }
+    }
 
     const connect = () => {
       if (closed) return
+      // Per-socket, deliberately: a dial that reached `open` proves the session
+      // authorised it, whatever happens to the connection afterwards.
+      let opened = false
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       // The session cookie rides the same-origin upgrade automatically (Mode B) —
       // no token in the URL.
       ws = new WebSocket(`${proto}://${location.host}/ws`)
       ws.onopen = () => {
+        opened = true
         attempt = 0
+        unopened = 0
       }
       ws.onmessage = (e) => {
         try {
@@ -80,8 +164,31 @@ export function useLiveSync(): void {
           // ignore malformed frames
         }
       }
-      ws.onclose = () => {
+      ws.onclose = (e) => {
         if (closed) return
+        // ⚠ A REVOCATION IS NOT A RESTART. The server closes with the policy code
+        // when the session behind this socket is gone — revoked by a logout
+        // elsewhere, dropped by a mint that failed closed, or simply expired —
+        // and reconnecting then is pointless: the upgrade is 401ed, and because
+        // `open` resets the backoff this tab would redial every capped interval
+        // for as long as it stays open, with nothing on screen ever saying the
+        // session ended. Stop, and hand off to the same login screen a 401 does.
+        if (e.code === WS_CLOSE_POLICY_VIOLATION) {
+          giveUp()
+          return
+        }
+        // ⚠ The close code above is only the half the server gets to SAY. A tab
+        // that was asleep or offline when the session went never receives it and
+        // lands here instead, with 1006 from a 401ed upgrade — identical, to the
+        // browser, to a dropped network. After enough dials that never opened,
+        // ask the server outright rather than redialling forever.
+        if (!opened) {
+          unopened += 1
+          if (unopened >= PROBE_AFTER_FAILED_DIALS) {
+            unopened = 0
+            void probeSession()
+          }
+        }
         attempt = Math.min(attempt + 1, 6)
         timer = setTimeout(connect, 400 * 2 ** attempt)
       }

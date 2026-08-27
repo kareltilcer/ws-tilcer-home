@@ -65,6 +65,12 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("config loaded", "config", cfg.Redacted())
+	// Values that were corrected rather than refused — a window clamped to its
+	// ceiling. Logged loudly here because the process is UP: refusing them instead
+	// would have put the only explanation inside a restart loop.
+	for _, w := range cfg.Warnings {
+		logger.Warn("CONFIGURATION CORRECTED — " + w)
+	}
 	if cfg.DevAuthBypass {
 		logger.Warn("AUTH BYPASS ACTIVE — ALL REQUESTS ARE FAKE-AUTHENTICATED — DO NOT DEPLOY",
 			"dev_actor", cfg.DevActorID, "dev_roles", cfg.DevActorRoles)
@@ -113,12 +119,17 @@ func run(logger *slog.Logger) error {
 	// 3. Mode B auth + session (D23, D29). Home hosts login and owns its session;
 	// the browser carries no token. Under the dev bypass a fixed actor is injected
 	// and no auth service / session store is used, so the app runs offline.
+	// The hub is built here rather than at step 4 because auth needs it: revoking
+	// a session has to close that member's sockets too, or the socket keeps
+	// delivering private payloads to an account that is 401 everywhere else (v10).
+	hub := ws.NewHub(logger)
 	authConf := auth.Config{
-		RoleRefresh: time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
-		SessionTTL:  time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
-		Secure:      cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
-		Origins:     cfg.AllowedOrigins,
-		Logger:      logger,
+		RoleRefresh:      time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
+		SessionTTL:       time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
+		Secure:           cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
+		Origins:          cfg.AllowedOrigins,
+		Logger:           logger,
+		OnSessionRevoked: hub.DisconnectSession,
 	}
 	var sessions *auth.SessionStore
 	if cfg.DevAuthBypass {
@@ -167,19 +178,60 @@ func run(logger *slog.Logger) error {
 	// 4. Websocket hub — session-authenticated on connect (the browser sends the
 	// session cookie on a same-origin upgrade; no bearer token). Feature modules
 	// publish change events so open boards and dashboards stay live.
-	hub := ws.NewHub()
-	wsCfg := ws.Config{BypassActor: authConf.BypassActor, Logger: logger}
+	wsCfg := ws.Config{
+		BypassActor:     authConf.BypassActor,
+		RevalidateEvery: time.Duration(cfg.WSRevalidateMinutes) * time.Minute,
+	}
 	if sessions != nil {
-		wsCfg.Authenticate = func(r *http.Request) (reqctx.Actor, bool) {
+		// The upgrade decision. Collapsing a store error onto "reject" is right
+		// HERE — refusing a new connection costs a reconnect and the browser is
+		// already backing off — and wrong for the revalidation below, which would
+		// be tearing down live sockets instead.
+		wsCfg.Authenticate = func(r *http.Request) (ws.Upgrade, bool) {
 			c, err := r.Cookie("session")
 			if err != nil || c.Value == "" {
-				return reqctx.Actor{}, false
+				return ws.Upgrade{}, false
 			}
 			s, ok, err := sessions.Lookup(r.Context(), c.Value, time.Now())
 			if err != nil || !ok {
-				return reqctx.Actor{}, false
+				return ws.Upgrade{}, false
 			}
-			return reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles}, true
+			return ws.Upgrade{
+				Actor:     reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles},
+				SessionID: s.ID,
+				Token:     c.Value,
+			}, true
+		}
+		// ⚠ The pump re-takes the decision through auth's OWN revalidation, not
+		// through a second Lookup here. Re-checking only that the session row is
+		// live is what every HTTP request does NOT do: the middleware fails closed
+		// on a re-mint that says the account is disabled, and a socket whose tab
+		// issues no HTTP request would otherwise never meet that check and keep
+		// receiving targeted payloads for the whole session TTL. It also reports
+		// "could not tell" apart from "revoked", so a slow query does not close
+		// every socket in the household.
+		wsCfg.Revalidate = func(ctx context.Context, token string) (string, ws.Revalidation) {
+			userID, verdict := authConf.RevalidateSession(ctx, token)
+			return userID, wsRevalidation(verdict)
+		}
+		// ⚠ The CONNECT-TIME check is a bare row check (auth.CheckSession),
+		// deliberately weaker than the pump's. The hole it closes is a revocation
+		// that landed between the upgrade decision and the hub registration, and
+		// the revoked row is enough to see that. Pointing it at RevalidateSession
+		// instead meant a second Lookup and — whenever roles were stale — a Mint
+		// PER SOCKET: on a deploy every tab in the household redials at once, and
+		// none of those mints sees another's roles_refreshed_at stamp, so they all
+		// go to the auth service together, over a pool of exactly one connection.
+		// The fail-closed re-mint still runs, on the session's ticker, once per
+		// session per interval.
+		//
+		// Both seams cross the verdict boundary through the SAME pinned pieces:
+		// auth's SessionVerdict (TestCheckSession) and the wsRevalidation bridge
+		// (TestWSRevalidation). An inline three-state mapping here was the one arm
+		// of this boundary nothing pinned.
+		wsCfg.Recheck = func(ctx context.Context, token string) (string, ws.Revalidation) {
+			userID, verdict := authConf.CheckSession(ctx, token)
+			return userID, wsRevalidation(verdict)
 		}
 	}
 	wsHandler := hub.Handler(wsCfg)
@@ -189,13 +241,10 @@ func run(logger *slog.Logger) error {
 	// Modules publish websocket change events via the hub after commit. The push
 	// carries the originating request's client id (from reqctx) so each browser
 	// tab can tell its own echo apart from a change made on another device.
-	notify := func(ctx context.Context, typ string, payload any) {
-		origin := ""
-		if info, ok := reqctx.RequestFrom(ctx); ok {
-			origin = info.ClientID
-		}
-		hub.Publish(ws.Message{Type: typ, Origin: origin, Payload: payload})
-	}
+	// hub.Notify stamps the Origin; hub.NotifyTo is its member-restricted sibling,
+	// so a targeted module gets the same echo-suppression without re-deriving the
+	// client id for itself (v10).
+	notify := hub.Notify
 
 	todoSvc := todo.NewService(sqldb, sink, notify)
 	eventsSvc := events.NewService(sqldb, sink, notify, cfg.RRuleMaxOccurrences, cfg.RRuleMaxWindowMonths)
@@ -501,6 +550,30 @@ func run(logger *slog.Logger) error {
 		err := srv.Shutdown(ctx)
 		<-flushed
 		return err
+	}
+}
+
+// wsRevalidation translates auth's session verdict into the websocket hub's.
+//
+// ⚠ It is a named function rather than an inline switch because it is the one
+// place the two three-state vocabularies meet, and inverting a single arm here is
+// invisible: mapping SessionLive to RevalidationGone tears down every socket in
+// the household on the first healthy tick, and mapping the default arm to
+// RevalidationGone does the same on the first contended query — with the whole
+// backend suite still green, because nothing else crosses this boundary.
+// TestWSRevalidation pins all three.
+//
+// The default arm is deliberately RevalidationUnknown: an unrecognised verdict is
+// a decision that could not be taken, and the safe direction for one of those is
+// keeping live boards up.
+func wsRevalidation(verdict auth.SessionVerdict) ws.Revalidation {
+	switch verdict {
+	case auth.SessionLive:
+		return ws.RevalidationValid
+	case auth.SessionGone:
+		return ws.RevalidationGone
+	default:
+		return ws.RevalidationUnknown
 	}
 }
 

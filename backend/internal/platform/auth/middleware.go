@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -35,6 +37,321 @@ type Config struct {
 	BypassActor *reqctx.Actor // dev bypass; nil in production
 	Now         func() time.Time
 	Logger      *slog.Logger
+	// OnSessionRevoked, when set, is called with the id of the session that was
+	// just revoked — by logout, or by failing closed on a re-mint (v10).
+	//
+	// ⚠ It exists because a websocket is authenticated once, at upgrade, and then
+	// lives as long as the browser keeps it. Revoking the session 401s every HTTP
+	// request and does nothing at all to an open socket, which since v10 carries
+	// private message bodies. The composition root points this at
+	// ws.Hub.DisconnectSession.
+	//
+	// ⚠ It carries the SESSION id, not the user id. Revocation here is always
+	// per-session — RevokeByToken drops the calling device's token, RevokeByID
+	// one row — so announcing the user would close that member's sockets on every
+	// OTHER device too, whose sessions are untouched and still valid: logging out
+	// on a phone would tear down the laptop's live feed.
+	OnSessionRevoked func(sessionID string)
+}
+
+// sessionRevoked notifies the composition root that sessionID is gone.
+func (c Config) sessionRevoked(sessionID string) {
+	if c.OnSessionRevoked != nil && sessionID != "" {
+		c.OnSessionRevoked(sessionID)
+	}
+}
+
+// refreshRoles re-mints sess's cached roles when they are past the threshold
+// (FR-A2), and is the ONE place the fail-closed decision is taken — shared by the
+// request middleware and by RevalidateSession, so an open websocket and an HTTP
+// request cannot disagree about whether an account is still open.
+//
+// It returns ErrUserClosed once auth has closed the account, the cached roles
+// unchanged on a transient auth outage, and never an error the caller has to map.
+// `revoked` reports whether the session row was ACTUALLY revoked, which is a
+// different question from whether the account is closed — see RevalidateSession.
+//
+// ⚠ viaConnection says WHO IS ASKING, and it is not decoration: the two callers
+// need different cancellation and different announcement, and collapsing them
+// onto one policy broke whichever one did not write it.
+//
+//   - false — an HTTP request. Its context dying means the browser went away and
+//     the follow-up writes should die with it, and the revocation must be
+//     announced from here because nothing else in that path will.
+//   - true — a websocket re-check. Its context is a connection's or a pump's, so
+//     the writes are detached (a tab closed mid-mint must not undo a decided
+//     revoke), and the announcement is left to the caller, which has an ordering
+//     constraint this frame cannot see. See RevalidateSession.
+func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, viaConnection bool) (roles []string, revoked bool, err error) {
+	if c.Authr == nil || now.Sub(sess.RolesRefreshedAt) <= c.RoleRefresh {
+		return sess.Roles, false, nil
+	}
+	// ⚠ COALESCED PER SESSION. The roles_refreshed_at stamp is what normally
+	// prevents a duplicate Mint, but it only works for callers who Lookup AFTER
+	// it lands: the revalidation pump's tick and a concurrent HTTP request both
+	// past the threshold have both already read the stale stamp, and without
+	// this each would put its own Mint on the auth service — every refresh
+	// window, precisely for a member active enough to be using the app when the
+	// tick fires. The joiner shares the leader's outcome, which is the same
+	// answer its own call would have fetched.
+	id, mintErr := mints.do(sess.ID, func() (Identity, error) {
+		return c.Authr.Mint(ctx, sess.UserID)
+	})
+	switch {
+	case errors.Is(mintErr, ErrUserClosed):
+		// ⚠ From a CONNECTION the revoke runs on a context detached from the
+		// caller's: ctx is the connection's, and the member closing their tab
+		// mid-mint would otherwise cancel this UPDATE — the row stays live, nothing
+		// is announced, and the loud error below fires for what was a normal
+		// disconnect. The decision to revoke has already been taken by then and
+		// must not be undone by whoever happened to discover it. An HTTP request
+		// keeps its own context: there the caller going away IS a reason to stop,
+		// and a detached 10s write pins a request goroutine — and the sole SQLite
+		// connection — long after the browser has navigated on.
+		revokeCtx, cancel := c.writeContext(ctx, viaConnection)
+		defer cancel()
+		// ⚠ The hook fires ONLY when the revoke actually landed. Announcing a
+		// revocation that did not happen closes the member's sockets and lets them
+		// reconnect straight onto a session that is still live in the DB — which
+		// reads as "handled" everywhere while the leak continues. Left un-announced
+		// and logged, the next request (and the next revalidation tick) re-mints
+		// and retries, because roles_refreshed_at was not stamped.
+		if err := c.Sessions.RevokeByID(revokeCtx, sess.ID); err != nil {
+			c.logger().Error("session revoke FAILED for a closed user — the session is still live in the database",
+				"user", sess.UserID, "session", sess.ID, "err", err)
+			return nil, false, ErrUserClosed
+		}
+		// ⚠ AND IT DOES NOT FIRE FROM INSIDE A CONNECTION'S OWN RE-CHECK. The hook
+		// is ws.Hub.DisconnectSession, and the revalidation pump has to RETIRE its
+		// ticker before disconnecting — a socket landing between the two joins a
+		// pump that is about to be cancelled and then runs with no recurring check
+		// for the rest of its life. Announcing from here put the disconnect two
+		// frames INSIDE the check, before the retire could possibly happen. The
+		// pump calls DisconnectSession itself, in the right order, once the verdict
+		// has come back. An HTTP request has no such ordering and no other
+		// announcer, so it still announces here.
+		if !viaConnection {
+			c.sessionRevoked(sess.ID)
+		}
+		return nil, true, ErrUserClosed
+	case mintErr == nil:
+		// ⚠ DETACHED FOR A CONNECTION, FOR THE SAME REASON THE REVOKE ABOVE IS.
+		// This write is what makes a mint that already succeeded STICK: it stamps
+		// roles_refreshed_at, and every other caller reads that stamp to decide not
+		// to mint again. From the websocket ctx is a connection's or a pump's, so a
+		// member closing the tab in the window between Mint returning and this
+		// UPDATE cancelled it, the error was discarded, and the fresh roles were
+		// thrown away — leaving the session to re-mint on the very next tick, which
+		// is precisely the repeated-Mint cost one-pump-per-session exists to avoid.
+		roleCtx, cancel := c.writeContext(ctx, viaConnection)
+		defer cancel()
+		if err := c.Sessions.RefreshRoles(roleCtx, sess.ID, id.Roles, now); err != nil {
+			// ⚠ THE MINT SUCCEEDED AND THE STAMP DID NOT, which is the one outcome
+			// this whole branch exists to protect and was also the only one with no
+			// trace. roles_refreshed_at is what every other caller reads to decide
+			// NOT to mint, so without it this session re-mints on its very next
+			// revalidation tick and on its next HTTP request, indefinitely — a
+			// standing stream of calls to the auth service for one session, which is
+			// precisely the cost one-pump-per-session was built to avoid. Discarded,
+			// it looked identical to a healthy refresh from every angle.
+			//
+			// Warn rather than Error, and only when the CALLER is still there: the
+			// request goes through on fresh roles either way, and from a connection
+			// ctx a member closing their tab cancels this write for a reason that is
+			// not a store problem (the same guard the transient branch below uses).
+			if ctx.Err() == nil {
+				c.logger().Warn("role stamp FAILED after a successful re-mint — this session will "+
+					"re-mint on every tick and every request until it lands",
+					"user", sess.UserID, "session", sess.ID, "err", err)
+			}
+		}
+		return id.Roles, false, nil
+	default:
+		// Transient auth outage: keep cached roles, retry next request.
+		//
+		// ⚠ Silent when the CALLER went away. From the websocket revalidation pump
+		// ctx is the connection's, so a member closing their tab mid-mint lands
+		// here with context.Canceled — a normal disconnect logged as an auth-service
+		// problem, on a jittered tick across every session in the household. The
+		// detached revoke above exists for the same reason.
+		if ctx.Err() == nil {
+			c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
+		}
+		return sess.Roles, false, nil
+	}
+}
+
+// mintFlight coalesces concurrent re-mints of one session: the first caller in
+// runs the fetch, everyone who arrives while it is in flight waits for and
+// shares that result. Keyed by session id, which is globally unique, so the one
+// package-level instance serves every Config without a constructor to hang
+// per-process state on (Config is a value copied into the handler and the
+// middleware).
+type mintFlight struct {
+	mu       sync.Mutex
+	inflight map[string]*mintCall
+}
+
+type mintCall struct {
+	done chan struct{}
+	id   Identity
+	err  error
+}
+
+var mints = &mintFlight{inflight: make(map[string]*mintCall)}
+
+func (f *mintFlight) do(key string, fetch func() (Identity, error)) (Identity, error) {
+	f.mu.Lock()
+	if c, ok := f.inflight[key]; ok {
+		f.mu.Unlock()
+		<-c.done
+		return c.id, c.err
+	}
+	c := &mintCall{done: make(chan struct{})}
+	f.inflight[key] = c
+	f.mu.Unlock()
+	c.id, c.err = fetch()
+	f.mu.Lock()
+	delete(f.inflight, key)
+	f.mu.Unlock()
+	close(c.done)
+	return c.id, c.err
+}
+
+// writeContext returns the context refreshRoles' two follow-up writes run on —
+// the fail-closed revoke, and the roles stamp that makes a successful mint stick.
+//
+// Detached (and bounded) only for a websocket caller, whose context is a
+// connection's and can die for a reason that has nothing to do with the write.
+// An HTTP request keeps its own: cancellation there means the client is gone,
+// which is exactly when a write should stop rather than run on for another ten
+// seconds holding the one SQLite connection.
+func (c Config) writeContext(ctx context.Context, viaConnection bool) (context.Context, context.CancelFunc) {
+	if !viaConnection {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), detachedWriteTimeout)
+}
+
+// detachedWriteTimeout bounds the two writes refreshRoles runs on a context
+// detached from a CONNECTION's — the fail-closed revoke, and the roles stamp that
+// makes a successful mint stick. Long enough to outlast SQLite's busy timeout,
+// short enough that a wedged store cannot pin a revalidation tick indefinitely.
+const detachedWriteTimeout = 10 * time.Second
+
+// SessionVerdict is the outcome of re-taking the session decision for a
+// connection that was authorised once and has been open ever since.
+type SessionVerdict int
+
+const (
+	// SessionUnknown means the decision could NOT be taken — the store was
+	// unreachable, a query lost its race with a writer. It is deliberately not
+	// SessionGone: see RevalidateSession.
+	SessionUnknown SessionVerdict = iota
+	// SessionLive means the session still authorises the connection.
+	SessionLive
+	// SessionGone means the session is revoked, expired, or belongs to an account
+	// auth has closed. The caller must drop the connection.
+	SessionGone
+)
+
+// RevalidateSession re-takes the session decision from the raw cookie token, for
+// a caller holding a connection that was authenticated once at upgrade (v10).
+//
+// ⚠ It runs the SAME fail-closed re-mint as the request middleware, and that is
+// the point of it existing rather than the caller repeating a Lookup. Checking
+// only that the session row is live is strictly weaker than what every HTTP
+// request does: a member disabled in auth keeps a perfectly valid row until
+// something re-mints, and a browser tab that issues no HTTP request never
+// triggers one — so a bare row check would let a closed account keep receiving
+// targeted payloads for the whole session TTL (90 days by default).
+//
+// ⚠ THE THREE OUTCOMES ARE DISTINCT ON PURPOSE. A database failure is
+// SessionUnknown, never SessionGone. The pool is a single connection
+// (db.SetMaxOpenConns(1)) behind a 5s busy timeout, so one long write — an
+// import, a migration, a checkpoint — can make a queued Lookup error; collapsing
+// that onto "revoked" would close every socket in the household at once and log
+// it against sessions nobody revoked.
+//
+// ⚠ A CLOSED ACCOUNT WHOSE REVOKE DID NOT LAND IS SessionUnknown, NOT SessionGone.
+// SessionGone tells the caller to drop the connection, and the upgrade path is a
+// bare Lookup: if the row is still live because the UPDATE failed, the browser
+// reconnects 800ms later (its backoff resets on open), is ACCEPTED, and is closed
+// again on the pump's immediate check — an unbounded loop spending two lookups, a
+// mint and another failing write per cycle against a single-connection pool,
+// which is exactly the contention that made the revoke fail. Closing buys nothing
+// either: the reconnect restores the same feed. So the connection is kept and the
+// next tick re-mints and retries, because roles_refreshed_at was not stamped.
+//
+// ⚠ IT DOES NOT ANNOUNCE THE REVOCATION — SessionGone IS THE ANNOUNCEMENT, and
+// acting on it is the caller's. OnSessionRevoked is ws.Hub.DisconnectSession, and
+// the revalidation pump must retire its ticker BEFORE it disconnects, or a socket
+// arriving in between joins a pump about to be cancelled and never gets a
+// recurring check again. Firing the hook from inside refreshRoles put that
+// disconnect two frames deep inside the check, where no retire could have
+// happened yet. So this returns the verdict and the pump does both, in order.
+// (A connect-time check that falls back to this function therefore revokes only
+// its own socket; the session's other sockets go on the next tick, which is the
+// bound this design already accepts.)
+// CheckSession re-takes only the ROW half of the session decision: is rawToken
+// still backed by a live session row? It is deliberately WEAKER than
+// RevalidateSession — no fail-closed re-mint — which is exactly the shape the
+// websocket's connect-time re-check needs: the Mint-capable path must not run
+// once per socket (see the composition root's wsCfg.Recheck). A member disabled
+// in auth whose row is still live therefore comes back SessionLive here; the
+// session's ticker is what discovers the closure.
+//
+// The verdict vocabulary is shared with RevalidateSession so one pinned bridge
+// (the composition root's wsRevalidation) serves both, and an inverted arm here
+// is caught by TestCheckSession the same way TestWSRevalidation catches the
+// bridge's.
+func (c Config) CheckSession(ctx context.Context, rawToken string) (userID string, verdict SessionVerdict) {
+	if c.Sessions == nil || rawToken == "" {
+		return "", SessionUnknown
+	}
+	sess, ok, err := c.Sessions.Lookup(ctx, rawToken, c.now())
+	switch {
+	case err != nil:
+		return "", SessionUnknown // could not tell: the caller keeps the socket
+	case !ok:
+		return "", SessionGone
+	}
+	return sess.UserID, SessionLive
+}
+
+func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID string, verdict SessionVerdict) {
+	if c.Sessions == nil || rawToken == "" {
+		return "", SessionUnknown
+	}
+	now := c.now()
+	sess, ok, err := c.Sessions.Lookup(ctx, rawToken, now)
+	switch {
+	case err != nil:
+		// ⚠ Silent when the CALLER went away. ctx here is the websocket
+		// connection's, so a member closing their tab while a tick is inside
+		// Lookup fails it with context.Canceled — and logging that as "could not
+		// reach the store" points an operator at a database problem that is really
+		// a closed browser tab, once per tab, forever. The verdict is unchanged:
+		// an undecidable check keeps the connection either way.
+		if ctx.Err() == nil {
+			c.logger().Warn("session revalidation could not reach the store — keeping the connection", "err", err)
+		}
+		return "", SessionUnknown
+	case !ok:
+		return "", SessionGone
+	}
+	_, revoked, mintErr := c.refreshRoles(ctx, sess, now, true)
+	switch {
+	case !errors.Is(mintErr, ErrUserClosed):
+		return sess.UserID, SessionLive
+	case revoked:
+		return sess.UserID, SessionGone
+	default:
+		c.logger().Warn("session revalidation found a closed account whose revoke did not land — "+
+			"keeping the connection so it cannot reconnect-loop onto the still-live row",
+			"user", sess.UserID, "session", sess.ID)
+		return sess.UserID, SessionUnknown
+	}
 }
 
 func (c Config) now() time.Time {
@@ -80,23 +397,19 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			roles := sess.Roles
-			if cfg.Authr != nil && now.Sub(sess.RolesRefreshedAt) > cfg.RoleRefresh {
-				id, mintErr := cfg.Authr.Mint(r.Context(), sess.UserID)
-				switch {
-				case errors.Is(mintErr, ErrUserClosed):
-					// Fail closed: the user was disabled/deleted in auth (FR-A2).
-					_ = cfg.Sessions.RevokeByID(r.Context(), sess.ID)
-					clearAuthCookies(w, cfg.Secure)
-					httpx.WriteError(w, httpx.ErrUnauthorized("session revoked"))
-					return
-				case mintErr == nil:
-					roles = id.Roles
-					_ = cfg.Sessions.RefreshRoles(r.Context(), sess.ID, roles, now)
-				default:
-					// Transient auth outage: keep cached roles, retry next request.
-					cfg.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
-				}
+			// The HTTP path fails closed on the account, not on the revoke: a 401 is
+			// correct whether or not the row could be marked, and it does not
+			// reconnect-loop the way a dropped socket does (see RevalidateSession).
+			//
+			// viaConnection is false: the follow-up writes ride r.Context() and die
+			// with the request, and the revocation is announced from inside
+			// refreshRoles because no caller further up this path will do it.
+			roles, _, mintErr := cfg.refreshRoles(r.Context(), sess, now, false)
+			if errors.Is(mintErr, ErrUserClosed) {
+				// Fail closed: the user was disabled/deleted in auth (FR-A2).
+				clearAuthCookies(w, cfg.Secure)
+				httpx.WriteError(w, httpx.ErrUnauthorized("session revoked"))
+				return
 			}
 
 			// Slide the expiry lazily to avoid a write on every request. The DB

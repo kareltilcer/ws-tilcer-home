@@ -184,11 +184,16 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actorCtx := reqctx.WithActor(r.Context(), reqctx.Actor{UserID: sess.UserID, Type: "user", Label: labelFor(sess), Roles: sess.Roles})
+	// The id of the session this logout actually revoked — this device's, and only
+	// this device's. It is what the socket hook is told below.
+	var revokedID string
 	if err := appdb.WithTx(actorCtx, h.db, func(tx *sql.Tx) error {
-		if _, _, _, err := h.cfg.Sessions.RevokeByToken(actorCtx, tx, c.Value, now); err != nil {
+		_, sessionID, _, err := h.cfg.Sessions.RevokeByToken(actorCtx, tx, c.Value, now)
+		if err != nil {
 			return err
 		}
-		_, err := h.sink.Record(actorCtx, tx, audit.Event{
+		revokedID = sessionID
+		_, err = h.sink.Record(actorCtx, tx, audit.Event{
 			Module: audit.ModulePlatform, Action: "logout",
 			Summary: fmt.Sprintf("Odhlášení uživatele %s", sess.Email),
 		})
@@ -197,6 +202,10 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.ErrInternal(""))
 		return
 	}
+	// Announced only after the transaction committed, and only for THIS session:
+	// the member's other devices hold their own sessions, which this logout did
+	// not touch and whose sockets must stay up.
+	h.cfg.sessionRevoked(revokedID)
 	clearAuthCookies(w, h.cfg.Secure)
 	w.WriteHeader(http.StatusNoContent)
 }

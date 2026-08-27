@@ -69,6 +69,18 @@ type Config struct {
 	// roles against auth (Mode B, FR-A2; default 15).
 	RoleRefreshMinutes int
 
+	// Warnings are the configuration problems that did NOT stop the boot — today,
+	// a window clamped to its ceiling. The composition root logs them at Warn
+	// right after Load. Empty on a clean configuration.
+	Warnings []string
+
+	// WSRevalidateMinutes is how often an already-open websocket re-takes its
+	// session decision (v10; default 5). It is the upper bound on how long a
+	// socket keeps receiving member-restricted payloads after a revocation that
+	// auth could not announce — an expiring TTL, a row changed out of band — so it
+	// is tunable without a rebuild, like the two windows above.
+	WSRevalidateMinutes int
+
 	// Timezone is the IANA location used for "today", month boundaries, and
 	// recurrence expansion (never UTC). TimezoneName is its original string.
 	Timezone     *time.Location
@@ -302,10 +314,10 @@ func (c *Config) Redacted() string {
 	return fmt.Sprintf(
 		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
-			"session_ttl_days=%d role_refresh_min=%d origins=%v dev_auth_bypass=%t %s %s",
+			"session_ttl_days=%d role_refresh_min=%d ws_revalidate_min=%d origins=%v dev_auth_bypass=%t %s %s",
 		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
-		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.AllowedOrigins, c.DevAuthBypass,
+		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.WSRevalidateMinutes, c.AllowedOrigins, c.DevAuthBypass,
 		c.Docs.redacted(), c.Notif.redacted(),
 	)
 }
@@ -391,6 +403,34 @@ const (
 	defaultLogRetentionDays     = 0
 	defaultSessionTTLDays       = 90
 	defaultRoleRefreshMinutes   = 15
+	defaultWSRevalidateMinutes  = 5
+	// ⚠ ALL THREE SESSION WINDOWS ARE BOUNDED AT BOTH ENDS, and the upper bound is
+	// not tidiness. Each is multiplied into a time.Duration in the composition
+	// root, and a large enough value OVERFLOWS int64 nanoseconds into a NEGATIVE
+	// duration that every comparison then reads backwards: a negative role-refresh
+	// threshold re-mints on every single request and every revalidation tick, and
+	// a negative session TTL issues cookies with a negative MaxAge — the browser
+	// deletes them on arrival — against rows that are already expired. Both load
+	// silently and break login.
+	//
+	// The caps are ten years, a day and a day: past those the window has stopped
+	// bounding the incident it exists for, long before arithmetic is the problem.
+	//
+	// ⚠ THE TWO PRE-EXISTING WINDOWS ARE CLAMPED TO THE CAP, NOT REFUSED, AND THAT
+	// IS THE WHOLE DIFFERENCE BETWEEN A DEGRADED SETTING AND AN OUTAGE.
+	// HOME_SESSION_TTL_DAYS and HOME_ROLE_REFRESH_MINUTES have shipped with a
+	// FLOOR check only, and every secret and window on this service lives in
+	// Coolify (see CLAUDE.md) — so nothing in this repo can say what they are set
+	// to. Refusing an over-cap value aborts Load, which does not degrade a
+	// feature: it crash-loops the container on the deploy that lands v10, with the
+	// only signal a log line inside a restarting container. Clamping closes the
+	// overflow hole just as completely (the arithmetic never sees the big value)
+	// and the loud warning names the variable, so an operator finds it from the
+	// logs of a service that is UP. HOME_WS_REVALIDATE_MINUTES is new in v10 and
+	// has no deployed value to break, so it is range-checked outright.
+	maxSessionTTLDays      = 3650
+	maxRoleRefreshMinutes  = 1440
+	maxWSRevalidateMinutes = 1440
 
 	// documents (v4)
 	defaultDocsMirrorInterval   = 24 * time.Hour
@@ -479,6 +519,7 @@ func Load(getenv Getenv) (*Config, error) {
 
 	c.SessionTTLDays = l.intDefault("HOME_SESSION_TTL_DAYS", defaultSessionTTLDays)
 	c.RoleRefreshMinutes = l.intDefault("HOME_ROLE_REFRESH_MINUTES", defaultRoleRefreshMinutes)
+	c.WSRevalidateMinutes = l.intDefault("HOME_WS_REVALIDATE_MINUTES", defaultWSRevalidateMinutes)
 
 	c.TimezoneName = l.strDefault("HOME_TIMEZONE", defaultTimezone)
 	if loc, err := time.LoadLocation(c.TimezoneName); err != nil {
@@ -513,11 +554,28 @@ func Load(getenv Getenv) (*Config, error) {
 	if c.NotesImageMaxUploadMB < 1 {
 		l.errf("HOME_NOTES_IMAGE_MAX_UPLOAD_MB must be >= 1 (got %d)", c.NotesImageMaxUploadMB)
 	}
+	// The three session windows, all bounded at BOTH ends for the same reason —
+	// see maxSessionTTLDays. A 0 or a negative on the revalidation window reads as
+	// "turn the pump off" and would additionally become the 5-minute default
+	// inside ws.Handler, with Redacted() printing a value the process does not have.
+	//
+	// ⚠ The FLOOR is an error and the CEILING is a clamp, for the two long-lived
+	// variables. A too-small value has always been refused, so nothing deployed
+	// can be carrying one; a too-large one has always been ACCEPTED, so refusing
+	// it now is a boot failure introduced by an upgrade. See maxSessionTTLDays.
 	if c.SessionTTLDays < 1 {
 		l.errf("HOME_SESSION_TTL_DAYS must be >= 1 (got %d)", c.SessionTTLDays)
 	}
+	c.SessionTTLDays = l.clampMax("HOME_SESSION_TTL_DAYS", c.SessionTTLDays, maxSessionTTLDays)
 	if c.RoleRefreshMinutes < 1 {
 		l.errf("HOME_ROLE_REFRESH_MINUTES must be >= 1 (got %d)", c.RoleRefreshMinutes)
+	}
+	c.RoleRefreshMinutes = l.clampMax("HOME_ROLE_REFRESH_MINUTES", c.RoleRefreshMinutes, maxRoleRefreshMinutes)
+	// New in v10: no deployed value can be above the cap, so it is refused rather
+	// than clamped.
+	if c.WSRevalidateMinutes < 1 || c.WSRevalidateMinutes > maxWSRevalidateMinutes {
+		l.errf("HOME_WS_REVALIDATE_MINUTES must be between 1 and %d (got %d)",
+			maxWSRevalidateMinutes, c.WSRevalidateMinutes)
 	}
 
 	c.Docs = l.docs(c)
@@ -533,6 +591,7 @@ func Load(getenv Getenv) (*Config, error) {
 	if len(l.errs) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(l.errs, "\n  - "))
 	}
+	c.Warnings = l.warns
 	return c, nil
 }
 
@@ -731,9 +790,34 @@ func redactKey(v string) string {
 type loader struct {
 	getenv Getenv
 	errs   []string
+	warns  []string
 }
 
 func (l *loader) errf(format string, a ...any) { l.errs = append(l.errs, fmt.Sprintf(format, a...)) }
+
+// warnf records a problem the process can BOOT THROUGH — a value that had to be
+// corrected rather than one that makes the configuration unusable. Load surfaces
+// them on Config.Warnings and the composition root logs them at Warn.
+//
+// ⚠ It exists so that "this setting is wrong" and "this service cannot start"
+// stop being the same outcome. errf aborts Load, which crash-loops the container
+// and puts the only explanation inside the restart loop; a warning reaches the
+// operator from a service that is up.
+func (l *loader) warnf(format string, a ...any) { l.warns = append(l.warns, fmt.Sprintf(format, a...)) }
+
+// clampMax holds an already-deployed window to its ceiling and says so loudly,
+// rather than refusing to start over a value that was legal until this release.
+// See maxSessionTTLDays.
+func (l *loader) clampMax(key string, got, max int) int {
+	if got <= max {
+		return got
+	}
+	l.warnf("%s is %d, above the maximum of %d — CLAMPED to %d for this process. "+
+		"Fix the value in Coolify: past the cap the window has stopped bounding the "+
+		"incident it exists for, and a large enough one overflows the time.Duration "+
+		"it is multiplied into", key, got, max, max)
+	return max
+}
 
 func (l *loader) strRequired(key string) string {
 	v, ok := l.getenv(key)

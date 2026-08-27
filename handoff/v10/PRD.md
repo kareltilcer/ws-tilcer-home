@@ -424,8 +424,10 @@ Env (Coolify only; nothing secret in the repo):
 
 - `HOME_DB_PATH` · `HOME_SITE_KEY` (default `home`) · `AUTH_BASE_URL` (`https://auth.tilcer.cz` — `/internal/login`, `/internal/token/mint`, and the target of "reset password" / MFA-fallback links).
 - `HOME_AUTH_SERVICE_SECRET` — auth **service-client** secret bound to site `home`; authenticates `/internal/login` **and** `/internal/token/mint`. *(New role vs v1, where it only gated introspect.)*
-- `HOME_SESSION_TTL_DAYS` — home session sliding window (default 90).
-- `HOME_ROLE_REFRESH_MINUTES` — how often home re-mints to refresh cached roles (default 15).
+- `HOME_SESSION_TTL_DAYS` — home session sliding window (default 90, **range 1–3650**).
+- `HOME_ROLE_REFRESH_MINUTES` — how often home re-mints to refresh cached roles (default 15, **range 1–1440**).
+- `HOME_WS_REVALIDATE_MINUTES` — how often an already-open websocket re-takes its session decision (default 5, **range 1–1440**). A socket is authenticated once, at upgrade; auth announces its own revocations immediately (logout, a mint failing closed), so this is the bound only on the ones nothing announces — a TTL that simply expires, a row revoked out of band.
+- ⚠ **The UPPER bounds on the first two are new in v10** — both were previously floor-checked only, so a value above the cap has been legal for their whole life and may already be set in Coolify. Those two are **clamped to the cap with a loud `CONFIGURATION CORRECTED` warning, not refused**: the boot succeeds, the oversized value never reaches the arithmetic, and the operator reads the warning from a service that is up. Refusing would abort `Load` and crash-loop the container on the deploy that lands v10, with the only signal a log line inside the restart loop — an outage rather than a degraded setting. Values below the floor are still refused (they always were), and `HOME_WS_REVALIDATE_MINUTES` is new in v10, so it is refused at both ends. The caps exist because each value is multiplied into a `time.Duration` in the composition root, and a large enough one overflows int64 nanoseconds into a *negative* duration every comparison then reads backwards.
 - `HOME_ALLOWED_ORIGINS` — CORS/CSRF Origin allowlist (`https://*.tilcer.cz`).
 - `HOME_TIMEZONE` (`Europe/Prague`) · `HOME_DASHBOARD_LOOKBACK_DAYS` (30) · `HOME_RRULE_MAX_OCCURRENCES` (500) · `HOME_LOG_RETENTION_DAYS` (0 = keep forever).
 - `LITESTREAM_*` / R2 credentials — prefix `home/` (the **DB** replica).
