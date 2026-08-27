@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -85,7 +86,17 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 	if c.Authr == nil || now.Sub(sess.RolesRefreshedAt) <= c.RoleRefresh {
 		return sess.Roles, false, nil
 	}
-	id, mintErr := c.Authr.Mint(ctx, sess.UserID)
+	// ⚠ COALESCED PER SESSION. The roles_refreshed_at stamp is what normally
+	// prevents a duplicate Mint, but it only works for callers who Lookup AFTER
+	// it lands: the revalidation pump's tick and a concurrent HTTP request both
+	// past the threshold have both already read the stale stamp, and without
+	// this each would put its own Mint on the auth service — every refresh
+	// window, precisely for a member active enough to be using the app when the
+	// tick fires. The joiner shares the leader's outcome, which is the same
+	// answer its own call would have fetched.
+	id, mintErr := mints.do(sess.ID, func() (Identity, error) {
+		return c.Authr.Mint(ctx, sess.UserID)
+	})
 	switch {
 	case errors.Is(mintErr, ErrUserClosed):
 		// ⚠ From a CONNECTION the revoke runs on a context detached from the
@@ -170,6 +181,43 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 	}
 }
 
+// mintFlight coalesces concurrent re-mints of one session: the first caller in
+// runs the fetch, everyone who arrives while it is in flight waits for and
+// shares that result. Keyed by session id, which is globally unique, so the one
+// package-level instance serves every Config without a constructor to hang
+// per-process state on (Config is a value copied into the handler and the
+// middleware).
+type mintFlight struct {
+	mu       sync.Mutex
+	inflight map[string]*mintCall
+}
+
+type mintCall struct {
+	done chan struct{}
+	id   Identity
+	err  error
+}
+
+var mints = &mintFlight{inflight: make(map[string]*mintCall)}
+
+func (f *mintFlight) do(key string, fetch func() (Identity, error)) (Identity, error) {
+	f.mu.Lock()
+	if c, ok := f.inflight[key]; ok {
+		f.mu.Unlock()
+		<-c.done
+		return c.id, c.err
+	}
+	c := &mintCall{done: make(chan struct{})}
+	f.inflight[key] = c
+	f.mu.Unlock()
+	c.id, c.err = fetch()
+	f.mu.Lock()
+	delete(f.inflight, key)
+	f.mu.Unlock()
+	close(c.done)
+	return c.id, c.err
+}
+
 // writeContext returns the context refreshRoles' two follow-up writes run on —
 // the fail-closed revoke, and the roles stamp that makes a successful mint stick.
 //
@@ -245,6 +293,32 @@ const (
 // (A connect-time check that falls back to this function therefore revokes only
 // its own socket; the session's other sockets go on the next tick, which is the
 // bound this design already accepts.)
+// CheckSession re-takes only the ROW half of the session decision: is rawToken
+// still backed by a live session row? It is deliberately WEAKER than
+// RevalidateSession — no fail-closed re-mint — which is exactly the shape the
+// websocket's connect-time re-check needs: the Mint-capable path must not run
+// once per socket (see the composition root's wsCfg.Recheck). A member disabled
+// in auth whose row is still live therefore comes back SessionLive here; the
+// session's ticker is what discovers the closure.
+//
+// The verdict vocabulary is shared with RevalidateSession so one pinned bridge
+// (the composition root's wsRevalidation) serves both, and an inverted arm here
+// is caught by TestCheckSession the same way TestWSRevalidation catches the
+// bridge's.
+func (c Config) CheckSession(ctx context.Context, rawToken string) (userID string, verdict SessionVerdict) {
+	if c.Sessions == nil || rawToken == "" {
+		return "", SessionUnknown
+	}
+	sess, ok, err := c.Sessions.Lookup(ctx, rawToken, c.now())
+	switch {
+	case err != nil:
+		return "", SessionUnknown // could not tell: the caller keeps the socket
+	case !ok:
+		return "", SessionGone
+	}
+	return sess.UserID, SessionLive
+}
+
 func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID string, verdict SessionVerdict) {
 	if c.Sessions == nil || rawToken == "" {
 		return "", SessionUnknown

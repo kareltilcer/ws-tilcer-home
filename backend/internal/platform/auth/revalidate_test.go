@@ -236,3 +236,64 @@ func TestRevalidateSession_RevokeSurvivesACancelledCaller(t *testing.T) {
 			"disconnects the session's sockets if it is told so", verdict)
 	}
 }
+
+// TestCheckSession pins the bare row check the websocket's CONNECT-TIME seam is
+// built on. Like wsRevalidation's, its three-state mapping is a household-wide
+// outage inverted silently: err mapped to SessionGone policy-closes a redialing
+// socket on one contended connect-time query, and the frontend answers a policy
+// close by signing the member out.
+func TestCheckSession(t *testing.T) {
+	t.Run("live row is Live, with its member", func(t *testing.T) {
+		h := newHarness(t)
+		sess, _ := h.authed(t)
+		userID, verdict := h.cfg.CheckSession(context.Background(), sess.Value)
+		if verdict != auth.SessionLive {
+			t.Errorf("verdict = %v, want SessionLive", verdict)
+		}
+		if userID != "u1" {
+			t.Errorf("userID = %q, want u1 — the caller compares it against the id the socket opened with", userID)
+		}
+	})
+	t.Run("closed account with a live row is still Live — and it must not mint", func(t *testing.T) {
+		h := newHarness(t)
+		sess, _ := h.authed(t)
+		h.clock = h.clock.Add(20 * time.Minute) // roles are stale
+		h.fake.mintErr = auth.ErrUserClosed
+		if _, verdict := h.cfg.CheckSession(context.Background(), sess.Value); verdict != auth.SessionLive {
+			t.Errorf("verdict = %v, want SessionLive — CheckSession is deliberately the WEAK half; "+
+				"the fail-closed re-mint belongs on the session's ticker", verdict)
+		}
+		// The whole reason this is not RevalidateSession: a deploy redials every
+		// tab at once, and a Mint per socket is the cost the Recheck seam exists
+		// to avoid.
+		if h.fake.mintCalls != 0 {
+			t.Errorf("CheckSession minted %d time(s), want 0 — it must never be the Mint-capable check",
+				h.fake.mintCalls)
+		}
+	})
+	t.Run("token no row matches is Gone", func(t *testing.T) {
+		h := newHarness(t)
+		if _, verdict := h.cfg.CheckSession(context.Background(), "not-a-token"); verdict != auth.SessionGone {
+			t.Errorf("verdict = %v for an unknown token, want SessionGone", verdict)
+		}
+	})
+	t.Run("store error is Unknown", func(t *testing.T) {
+		h := newHarness(t)
+		sess, _ := h.authed(t)
+		h.db.Close() // every query from here on fails
+		if _, verdict := h.cfg.CheckSession(context.Background(), sess.Value); verdict != auth.SessionUnknown {
+			t.Errorf("verdict = %v when the store cannot answer, want SessionUnknown — a database "+
+				"hiccup is not a revocation", verdict)
+		}
+	})
+	t.Run("nothing to check is Unknown", func(t *testing.T) {
+		h := newHarness(t)
+		if _, verdict := h.cfg.CheckSession(context.Background(), ""); verdict != auth.SessionUnknown {
+			t.Errorf("verdict = %v for an empty token, want SessionUnknown", verdict)
+		}
+		var empty auth.Config
+		if _, verdict := empty.CheckSession(context.Background(), "tok"); verdict != auth.SessionUnknown {
+			t.Errorf("verdict = %v with no session store, want SessionUnknown", verdict)
+		}
+	})
+}

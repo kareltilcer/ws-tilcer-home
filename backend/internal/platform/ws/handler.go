@@ -35,7 +35,10 @@ type Config struct {
 	// ⚠ It must be able to say "I could not tell" — see Revalidation.
 	Revalidate RevalidateFunc
 	// Recheck is the CONNECT-TIME check, taken once per socket right after it is
-	// registered. nil falls back to Revalidate.
+	// registered — and only when a revocation landed while the socket was being
+	// accepted (the hub's epoch moved between the upgrade decision and the
+	// registration), which is the one window a DisconnectSession sweep can miss.
+	// nil falls back to Revalidate.
 	//
 	// ⚠ It exists so the connect-time check is not the expensive one. The hole it
 	// closes is narrow and cheap: the upgrade decision and h.add are not one
@@ -164,6 +167,12 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		recheck = cfg.Revalidate
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Snapshotted BEFORE the upgrade decision's Lookup. Compared after h.add:
+		// unchanged means no revocation landed in the window a DisconnectSession
+		// sweep could have missed this not-yet-indexed socket in, so the
+		// connect-time DB re-check is skipped — which is every ordinary connect,
+		// and on a deploy every redialling tab.
+		epoch := h.epoch.Load()
 		// ⚠ v10: the actor resolved here is KEPT (D232). Until v10 it was resolved
 		// purely to decide accept-or-reject and then discarded, which is what made
 		// the hub anonymous and every fan-out a broadcast. `chat` publishes message
@@ -195,18 +204,19 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			}
 			// ⚠ AUTHENTICATED BUT UNREVOCABLE — the same class of bug state, and the
 			// more dangerous one. Without a session id the connection is invisible to
-			// DisconnectSession (indexAdd skips the empty key); without a token no
-			// revalidation pump is started below. Either way the socket keeps a
-			// member-restricted feed for its whole lifetime with both revocation
-			// mechanisms disabled, and the only other trace is a "ws connected" line
-			// with an empty field nobody is looking for. Logged rather than rejected
-			// for the same reason as above: an upgrade refused here takes out live
-			// boards over a revocation-plumbing problem.
-			if sessionID == "" || token == "" {
+			// DisconnectSession (indexAdd skips the empty key) AND no revalidation
+			// pump is started below: the socket keeps a member-restricted feed for
+			// its whole lifetime with both revocation mechanisms disabled, and the
+			// only other trace is a "ws connected" line with an empty field nobody is
+			// looking for. Logged rather than rejected for the same reason as above:
+			// an upgrade refused here takes out live boards over a
+			// revocation-plumbing problem.
+			switch {
+			case sessionID == "":
 				logger.Warn("ws: authenticated connection cannot be revoked — Authenticate "+
-					"returned no session id and/or no token, so DisconnectSession cannot "+
-					"reach it and no revalidation pump will run; keeping it broadcast-only",
-					"user", userID, "has_session_id", sessionID != "", "has_token", token != "")
+					"returned no session id, so DisconnectSession cannot reach it and no "+
+					"revalidation pump will run; keeping it broadcast-only",
+					"user", userID, "has_token", token != "")
 				// ⚠ AND IT IS DEGRADED TO BROADCAST-ONLY, exactly as an actor with no
 				// user id is. Logging alone left the worse of the two bug states as the
 				// only one that can leak: the socket stayed in byUser, so PublishTo went
@@ -216,6 +226,19 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 				// Dropping the targeting removes the only half that can leak; the
 				// broadcast half is why the upgrade is still not refused.
 				userID = ""
+			case token == "":
+				// ⚠ A SESSION ID WITHOUT A TOKEN IS THE MILDER SHAPE, and it is not
+				// unrevocable: the client IS indexed in bySession, so DisconnectSession
+				// reaches it and every announced revocation — logout, a mint failing
+				// closed — closes it. What is missing is only the recurring re-check
+				// (no token to re-take the decision with), so a revocation nothing
+				// announces (an expiring TTL, a row changed out of band) is not bounded
+				// for this socket. Targeted delivery is therefore KEPT; degrading it to
+				// broadcast-only punished a socket the announce path fully covers.
+				logger.Warn("ws: authenticated connection handed over no token — no "+
+					"revalidation pump will run for it, so only announced revocations "+
+					"(logout, a mint failing closed) can close it",
+					"user", userID, "session", sessionID)
 			}
 		} else {
 			// ⚠ Under HOME_DEV_AUTH_BYPASS there is no session and Authenticate is
@@ -254,6 +277,11 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		readCtx, cancelRead := context.WithCancel(context.Background())
 		defer cancelRead()
 		c := &client{conn: conn, send: make(chan []byte, sendBuffer), cancel: cancel, userID: userID, sessionID: sessionID}
+		if token != "" {
+			// The digest, never the token — see pumpKey. It is what lets a retiring
+			// pump close only the sockets its verdict was about.
+			c.tokenHash = hashPumpToken(token)
+		}
 		h.add(c)
 		// ⚠ A REVOCATION IS NOT A RESTART, and the close code is the only place
 		// that distinction survives to the browser. Closed as StatusNormalClosure,
@@ -305,21 +333,34 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			// until the first tick, minutes later. It goes through Recheck, which is
 			// the CHEAP half of the decision: see Config.Recheck for why the
 			// Mint-capable one must not run once per socket.
-			go func() {
-				if !revalidateOnce(ctx, recheck, sessionCheck{token: token, openedAs: userID, sessionID: sessionID}, logger) {
-					// ⚠ UNINDEX BEFORE CANCELLING, exactly as DisconnectSession does and
-					// for the same reason. Cancelling alone leaves this client in byUser
-					// until its write pump unwinds and the deferred remove runs, and in
-					// that window a concurrent PublishTo still finds it, queues a message
-					// BODY on its send channel, and the write pump — in a select with
-					// ctx.Done() AND c.send both ready, which Go picks between at random —
-					// can put that private payload on the wire of a session this check
-					// has just established is gone. remove is idempotent, so the deferred
-					// one still costs nothing.
-					h.remove(c)
-					c.revoke()
-				}
-			}()
+			//
+			// ⚠ AND IT RUNS ONLY WHEN THE EPOCH MOVED. The race is a revocation
+			// landing between the upgrade decision's Lookup and h.add, and every
+			// revocation the hub performs bumps h.epoch — so an unchanged epoch
+			// proves the window was empty and the re-check would only repeat the
+			// Lookup Authenticate ran microseconds ago. On a deploy that is N
+			// redialling tabs spared a second session read each, against a pool of
+			// exactly one connection. (A row revoked out of band with no
+			// DisconnectSession call is not covered — but a bare row re-read in the
+			// same microsecond window barely was either, and the pump's next tick
+			// is the bound that path already accepts.)
+			if h.epoch.Load() != epoch {
+				go func() {
+					if !revalidateOnce(ctx, recheck, sessionCheck{token: token, openedAs: userID, sessionID: sessionID}, logger) {
+						// ⚠ UNINDEX BEFORE CANCELLING, exactly as DisconnectSession does and
+						// for the same reason. Cancelling alone leaves this client in byUser
+						// until its write pump unwinds and the deferred remove runs, and in
+						// that window a concurrent PublishTo still finds it, queues a message
+						// BODY on its send channel, and the write pump — in a select with
+						// ctx.Done() AND c.send both ready, which Go picks between at random —
+						// can put that private payload on the wire of a session this check
+						// has just established is gone. remove is idempotent, so the deferred
+						// one still costs nothing.
+						h.remove(c)
+						c.revoke()
+					}
+				}()
+			}
 			// The RECURRING check is per SESSION, shared by every tab of it. See
 			// sessionPump. A connection with no session id gets none — it is
 			// unrevocable either way, which is what the warning above says.
@@ -380,8 +421,12 @@ func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, token string, 
 				// releaseSessionPump that silently no-ops because the entry is gone.
 				// Retiring first means such a socket starts a LIVE pump of its own.
 				h.retireSessionPump(p)
-				// Every socket of this session goes.
-				h.DisconnectSession(sessionID)
+				// ⚠ Every socket sharing this pump's KEY goes — not every socket of
+				// the session. The verdict was taken on THIS pump's token; a sibling
+				// pump on the same session id holds a different one the verdict says
+				// nothing about, and its own ticker decides for its sockets. See
+				// disconnectPump.
+				h.disconnectPump(p.key)
 				return
 			}
 			t.Reset(jitter(every))
@@ -500,6 +545,15 @@ func (h *Hub) writePump(ctx context.Context, c *client) {
 		case <-ctx.Done():
 			return
 		case data := <-c.send:
+			// ⚠ RE-CHECKED HERE, not only in fanOut. fanOut's revoked-skip is a
+			// check-then-send with nothing atomic about it: a revocation landing
+			// after its Load and before its send still queues the payload, and this
+			// select — ctx.Done() and c.send both ready — picks between them at
+			// random. This last Load shrinks that window from the whole
+			// marshal-and-fan-out to the in-flight Write itself.
+			if c.revoked.Load() {
+				continue // ctx is cancelled (revoke cancels); the next select returns
+			}
 			wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := c.conn.Write(wctx, websocket.MessageText, data)
 			cancel()

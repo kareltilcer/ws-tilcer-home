@@ -124,6 +124,15 @@ type Hub struct {
 	// pumps holds the recurring revalidation ticker of every connected SESSION,
 	// refcounted across that session's sockets. See startSessionPump.
 	pumps map[pumpKey]*sessionPump
+	// epoch counts revocations. The upgrade handler snapshots it before the
+	// upgrade decision's Lookup and compares after h.add: unchanged means no
+	// revocation landed in the window where a DisconnectSession sweep could have
+	// missed the not-yet-indexed socket, so the connect-time DB re-check can be
+	// skipped — which is the common case for every connect. Bumped under mu (and
+	// even when the sweep finds no sockets: a socket mid-upgrade is exactly the
+	// one the sweep cannot find), so the mu ordering of bump-then-sweep vs
+	// h.add makes the bump visible to any handler that indexed after the sweep.
+	epoch atomic.Uint64
 }
 
 // pumpKey is what a socket must AGREE ON to share a session's ticker: the
@@ -195,17 +204,25 @@ func NewHub(logger *slog.Logger) *Hub {
 // select-send per socket stalls add, remove, Count, DisconnectSession and
 // PublishTo's own snapshot, and that cost is the older, hotter path's too.
 func (h *Hub) Publish(m Message) {
-	data, err := json.Marshal(m)
-	if err != nil {
-		h.logger.Error("ws: broadcast dropped, payload does not marshal", "type", m.Type, "err", err)
-		return
-	}
 	h.mu.Lock()
 	targets := make([]*client, 0, len(h.clients))
 	for c := range h.clients {
 		targets = append(targets, c)
 	}
 	h.mu.Unlock()
+	// Snapshot BEFORE the marshal, so an empty hub — overnight, a cron or import
+	// run, a dev machine with no browser open — does not JSON-encode every
+	// mutation's payload just to iterate an empty slice. Same ordering (and same
+	// accepted cost) as PublishTo's: a payload that does not marshal is reported
+	// only when somebody was connected to receive it.
+	if len(targets) == 0 {
+		return
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		h.logger.Error("ws: broadcast dropped, payload does not marshal", "type", m.Type, "err", err)
+		return
+	}
 	// A broadcast drop costs a refresh that refetch-on-focus repairs, so unlike
 	// PublishTo's it is not worth a log line per publish.
 	fanOut(targets, data)
@@ -222,7 +239,9 @@ func (h *Hub) Publish(m Message) {
 // landing in that window still queues a message BODY on a session that is already
 // gone, and the write pump (in a select with ctx.Done() AND c.send both ready,
 // which Go picks between at random) can put it on the wire. That is precisely the
-// leak the whole revocation mechanism exists to close.
+// leak the whole revocation mechanism exists to close. This check is itself a
+// non-atomic check-then-send, so the write pump re-checks the flag once more
+// before its Write — between the two, the window shrinks to the in-flight write.
 //
 // Sending to the snapshot is otherwise safe because c.send is never closed (see
 // the client type), which is the invariant the sends already relied on.
@@ -261,20 +280,6 @@ func fanOut(targets []*client, data []byte) (dropped int) {
 // been revoked — that is DisconnectSession's job (per SESSION, never per member;
 // see the package comment), and the handler's revalidation loop.
 func (h *Hub) PublishTo(userIDs []string, m Message) {
-	if len(userIDs) == 0 {
-		// ⚠ AN EMPTY AUDIENCE IS NOT THE SAME THING AS AN UNREACHABLE ONE, and only
-		// one of the two is ordinary. Real ids that nobody is connected under is the
-		// normal case the doc above describes — a sleeping phone, the push channel's
-		// job. Zero ids means the CALLER resolved no audience at all, which for a
-		// member-restricted module is a bug: every conversation has at least its
-		// author. Left silent it was the one loss path in this file with no trace
-		// anywhere — the message is committed, no frame is sent to anybody, and
-		// D259's gap check only notices on the NEXT message in that conversation,
-		// which may never come.
-		h.logger.Warn("ws: targeted publish with an EMPTY audience — the caller resolved "+
-			"no recipients, so this change reached nobody", "type", m.Type)
-		return
-	}
 	// ⚠ ONE FAN-OUT AT A TIME, AND IT COVERS THE MARSHAL. See Hub.pub: the marshal
 	// happens off h.mu, and without this two concurrent targeted publishes could
 	// swap places in the recipient's send channel — which D259 reads as a gap, not
@@ -316,12 +321,19 @@ func (h *Hub) PublishTo(userIDs []string, m Message) {
 	}
 	h.mu.Unlock()
 	if len(seen) == 0 {
-		// Every id was empty: the caller resolved no usable audience at all, which
-		// for a member-restricted module is the same bug as handing over none —
-		// committed message, no frame anywhere, and D259's gap check only notices on
-		// the NEXT message in that conversation, which may never come.
-		h.logger.Warn("ws: targeted publish whose audience holds no usable ids — every id was "+
-			"empty, so this change reached nobody", "type", m.Type, "ids", len(userIDs))
+		// ⚠ AN EMPTY AUDIENCE IS NOT THE SAME THING AS AN UNREACHABLE ONE, and only
+		// one of the two is ordinary. Real ids that nobody is connected under is the
+		// normal case the doc above describes — a sleeping phone, the push channel's
+		// job. NO usable ids — none at all, or only empty ones (a failed join, a
+		// NULL scanned into a string) — means the CALLER resolved no audience,
+		// which for a member-restricted module is a bug: every conversation has at
+		// least its author. Left silent it was the one loss path in this file with
+		// no trace anywhere — the message is committed, no frame is sent to
+		// anybody, and D259's gap check only notices on the NEXT message in that
+		// conversation, which may never come. The ids attribute tells the two
+		// caller bugs apart.
+		h.logger.Warn("ws: targeted publish with an EMPTY audience — the caller resolved "+
+			"no usable recipients, so this change reached nobody", "type", m.Type, "ids", len(userIDs))
 		return
 	}
 	// ⚠ THE AUDIENCE IS CHECKED FOR REACHABILITY BEFORE THE PAYLOAD IS ENCODED. An
@@ -417,6 +429,10 @@ func (h *Hub) DisconnectSession(sessionID string) {
 		return
 	}
 	h.mu.Lock()
+	// Bumped BEFORE the sweep, and even when the sweep will find nothing: a
+	// socket mid-upgrade is not indexed yet, and the changed epoch is what tells
+	// its handler to run the connect-time re-check this sweep could not cover.
+	h.epoch.Add(1)
 	doomed := make([]*client, 0, len(h.bySession[sessionID]))
 	for c := range h.bySession[sessionID] {
 		doomed = append(doomed, c)
@@ -444,6 +460,40 @@ func (h *Hub) DisconnectSession(sessionID string) {
 	}
 	if len(doomed) > 0 {
 		h.logger.Info("ws: closing the sockets of a revoked session", "session", sessionID, "sockets", len(doomed))
+	}
+}
+
+// disconnectPump closes every socket sharing the retiring pump's KEY — session,
+// openedAs and token digest — rather than every socket of the session.
+//
+// ⚠ A pump's Gone verdict is about ITS token failing to resolve, and says
+// nothing about a sibling pump's token on the same session id (the divergent
+// case pumpKey splits the tickers for): sweeping the whole session here would
+// close the sibling's still-valid sockets with a policy code and sign that tab
+// out — the exact blast radius the three-field key exists to prevent. The
+// sibling's own ticker takes its sockets' decision. Auth-announced revocations
+// (logout, a mint failing closed) still go through DisconnectSession, whose
+// whole-session sweep matches the row that was actually revoked.
+//
+// Same unindex-then-cancel shape as DisconnectSession, for the same reasons.
+func (h *Hub) disconnectPump(key pumpKey) {
+	h.mu.Lock()
+	h.epoch.Add(1) // as in DisconnectSession: cover a socket mid-upgrade
+	doomed := make([]*client, 0, len(h.bySession[key.sessionID]))
+	for c := range h.bySession[key.sessionID] {
+		if c.userID == key.openedAs && c.tokenHash == key.tokenHash {
+			doomed = append(doomed, c)
+		}
+	}
+	for _, c := range doomed {
+		h.removeLocked(c)
+	}
+	h.mu.Unlock()
+	for _, c := range doomed {
+		c.revoke()
+	}
+	if len(doomed) > 0 {
+		h.logger.Info("ws: closing the sockets of a revoked session", "session", key.sessionID, "sockets", len(doomed))
 	}
 }
 
@@ -543,6 +593,12 @@ type client struct {
 	cancel    context.CancelFunc
 	userID    string
 	sessionID string
+	// tokenHash is the digest of the token this connection authenticated with
+	// (empty when it handed over none). It is what lets a retiring pump close
+	// only the sockets whose token its verdict was actually about — a sibling
+	// socket on the same session with a different token is not covered by that
+	// verdict. Same digest-not-token rule as pumpKey.
+	tokenHash string
 	revoked   atomic.Bool
 }
 

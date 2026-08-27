@@ -214,24 +214,24 @@ func run(logger *slog.Logger) error {
 			userID, verdict := authConf.RevalidateSession(ctx, token)
 			return userID, wsRevalidation(verdict)
 		}
-		// ⚠ The CONNECT-TIME check is a bare Lookup, deliberately weaker than the
-		// pump's. The hole it closes is a revocation that landed between the
-		// upgrade decision and the hub registration, and the revoked row is enough
-		// to see that. Pointing it at RevalidateSession instead meant a second
-		// Lookup and — whenever roles were stale — a Mint PER SOCKET: on a deploy
-		// every tab in the household redials at once, and none of those mints sees
-		// another's roles_refreshed_at stamp, so they all go to the auth service
-		// together, over a pool of exactly one connection. The fail-closed re-mint
-		// still runs, on the session's ticker, once per session per interval.
+		// ⚠ The CONNECT-TIME check is a bare row check (auth.CheckSession),
+		// deliberately weaker than the pump's. The hole it closes is a revocation
+		// that landed between the upgrade decision and the hub registration, and
+		// the revoked row is enough to see that. Pointing it at RevalidateSession
+		// instead meant a second Lookup and — whenever roles were stale — a Mint
+		// PER SOCKET: on a deploy every tab in the household redials at once, and
+		// none of those mints sees another's roles_refreshed_at stamp, so they all
+		// go to the auth service together, over a pool of exactly one connection.
+		// The fail-closed re-mint still runs, on the session's ticker, once per
+		// session per interval.
+		//
+		// Both seams cross the verdict boundary through the SAME pinned pieces:
+		// auth's SessionVerdict (TestCheckSession) and the wsRevalidation bridge
+		// (TestWSRevalidation). An inline three-state mapping here was the one arm
+		// of this boundary nothing pinned.
 		wsCfg.Recheck = func(ctx context.Context, token string) (string, ws.Revalidation) {
-			s, ok, err := sessions.Lookup(ctx, token, time.Now())
-			switch {
-			case err != nil:
-				return "", ws.RevalidationUnknown // could not tell: keep the socket
-			case !ok:
-				return "", ws.RevalidationGone
-			}
-			return s.UserID, ws.RevalidationValid
+			userID, verdict := authConf.CheckSession(ctx, token)
+			return userID, wsRevalidation(verdict)
 		}
 	}
 	wsHandler := hub.Handler(wsCfg)

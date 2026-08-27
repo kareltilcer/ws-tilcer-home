@@ -16,13 +16,25 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
 
+// newWSServer serves hub.Handler(cfg) on a test HTTP server and returns its
+// ws:// URL. Every test server in this package is this same scaffold; the hub
+// comes in as a parameter because some tests build theirs around a
+// CaptureLogger, so the helper cannot own its construction.
+func newWSServer(t *testing.T, hub *ws.Hub, cfg ws.Config) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.Handler(cfg))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http")
+}
+
 // newServer builds a hub whose /ws authenticates via the injected closure (the
 // production handler reads the session cookie; the test stubs the decision).
 func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 	t.Helper()
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
 			return ws.Upgrade{
 				Actor:     reqctx.Actor{UserID: "u1", Type: "user", Roles: []string{"editor"}},
@@ -30,10 +42,8 @@ func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 				Token:     "t1",
 			}, authOK
 		},
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
+	return hub, wsURL
 }
 
 // waitFor polls get until it EQUALS want. Connect and disconnect are both

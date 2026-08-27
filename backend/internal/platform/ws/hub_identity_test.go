@@ -15,7 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -37,8 +36,7 @@ import (
 func newIdentityServer(t *testing.T) (*ws.Hub, string) {
 	t.Helper()
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(r *http.Request) (ws.Upgrade, bool) {
 			id := r.Header.Get("X-Test-User")
 			if id == "" {
@@ -54,10 +52,8 @@ func newIdentityServer(t *testing.T) (*ws.Hub, string) {
 				Token:     "tok-" + sessionID,
 			}, true
 		},
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
+	return hub, wsURL
 }
 
 // dialAs opens a connection authenticated as userID, on that member's default
@@ -283,11 +279,7 @@ func TestPublishStillReachesEveryClient(t *testing.T) {
 // different code path with its own test: TestAuthenticatedActorWithNoUserIDIsBroadcastOnly.
 func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{}}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	wsURL := newWSServer(t, hub, ws.Config{BypassActor: &reqctx.Actor{}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -331,8 +323,7 @@ func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
 	logger, logs := testsupport.CaptureLogger()
 	hub := ws.NewHub(logger)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
 			// Authenticated, and deliberately carrying no user id — a service
 			// principal, not the dev bypass. The session is real.
@@ -342,10 +333,7 @@ func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
 				Token:     "tok-service",
 			}, true
 		},
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -387,10 +375,12 @@ func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
 // UNDONE.
 //
 // ⚠ A connection whose Upgrade carries no session id is invisible to
-// DisconnectSession (indexAdd skips the empty key) and one that carries no token
-// starts no revalidation pump. Either way BOTH revocation mechanisms are
+// DisconnectSession (indexAdd skips the empty key), and this shape hands over no
+// token either, so no revalidation pump starts: BOTH revocation mechanisms are
 // disabled for the life of the socket, and every other signal — Count, the
-// boards — looks perfectly healthy.
+// boards — looks perfectly healthy. (A session id WITHOUT a token is the milder
+// shape — bySession still reaches it — and keeps its targeting; only the
+// no-session-id shape is degraded.)
 //
 // ⚠ So it is degraded to BROADCAST-ONLY, exactly as an actor with no user id is.
 // Warning and otherwise carrying on left the worse of the two bug states as the
@@ -402,8 +392,7 @@ func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
 func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 	logger, logs := testsupport.CaptureLogger()
 	hub := ws.NewHub(logger)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
 			// Identified, authenticated — and unrevocable: no session id, no token.
 			return ws.Upgrade{Actor: reqctx.Actor{UserID: "u-karel", Type: "user"}}, true
@@ -412,10 +401,7 @@ func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 			t.Error("the revalidation pump ran for a connection that handed over no token")
 			return "u-karel", ws.RevalidationValid
 		},
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -462,11 +448,7 @@ func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 // pushes DO arrive, so a developer running under the bypass sees chat work.
 func TestBypassActorRegistersUnderItsID(t *testing.T) {
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-1"}}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	wsURL := newWSServer(t, hub, ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-1"}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -496,11 +478,7 @@ func TestBypassActorRegistersUnderItsID(t *testing.T) {
 // broadcast-only.
 func TestBypassRegistersEveryClientUnderOneID(t *testing.T) {
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-user"}}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	wsURL := newWSServer(t, hub, ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-user"}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -635,6 +613,8 @@ func TestRevalidationKeepsTheSocketWhenTheVerdictIsUnknown(t *testing.T) {
 // revocation that sweeps bySession in between misses the connection entirely — it
 // was not indexed yet. Without an immediate first pass that socket holds an
 // already-revoked session until the first tick, which in production is minutes.
+// (newTwoSeamServer simulates exactly that in-window revocation, which is what
+// arms the connect-time check — an unchanged epoch skips it.)
 func TestRevalidationRunsImmediatelyOnConnect(t *testing.T) {
 	var calls atomic.Int32
 	hub, wsURL := newRevalidatingServerEvery(t, time.Hour, // a tick will never come
@@ -678,8 +658,7 @@ func TestRevalidationRunsImmediatelyOnConnect(t *testing.T) {
 func TestRevalidationKeepsAnIdentifiedlessConnection(t *testing.T) {
 	var calls atomic.Int32
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
 			// Authenticated, no user id — and a real session, so the pump runs.
 			return ws.Upgrade{
@@ -695,10 +674,7 @@ func TestRevalidationKeepsAnIdentifiedlessConnection(t *testing.T) {
 			return "u-karel", ws.RevalidationValid
 		},
 		RevalidateEvery: 20 * time.Millisecond,
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -779,8 +755,7 @@ func TestRevalidationKeepsASocketWhenTheVerdictResolvesNoID(t *testing.T) {
 func TestOnePumpPerSessionNotPerSocket(t *testing.T) {
 	var calls atomic.Int32
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(r *http.Request) (ws.Upgrade, bool) {
 			return ws.Upgrade{
 				Actor:     reqctx.Actor{UserID: "u-karel", Type: "user"},
@@ -793,10 +768,7 @@ func TestOnePumpPerSessionNotPerSocket(t *testing.T) {
 			return "u-karel", ws.RevalidationValid
 		},
 		RevalidateEvery: 20 * time.Millisecond,
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -809,9 +781,9 @@ func TestOnePumpPerSessionNotPerSocket(t *testing.T) {
 	}
 	waitCount(t, hub, 4)
 
-	// Four connect-time checks (one per socket — that race IS per socket), then
-	// ONE ticker for the session. Let it run ~25 intervals: four tickers would be
-	// far past this bound, one is comfortably under it.
+	// ONE ticker for the session (no connect-time checks here: nothing moved the
+	// revocation epoch, so the handler skips them). Let it run ~25 intervals:
+	// four tickers would be far past this bound, one is comfortably under it.
 	base := calls.Load()
 	time.Sleep(500 * time.Millisecond)
 	ticks := calls.Load() - base
@@ -871,10 +843,9 @@ func TestSocketsThatDisagreeGetSeparatePumps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var nth atomic.Int32
 			hub := ws.NewHub(testsupport.DiscardLogger())
-			mux := http.NewServeMux()
 			// One SESSION throughout; only the user id and the token vary, and only
 			// on the second dial.
-			mux.HandleFunc("/ws", hub.Handler(ws.Config{
+			wsURL := newWSServer(t, hub, ws.Config{
 				Authenticate: func(*http.Request) (ws.Upgrade, bool) {
 					user, token := "u-karel", "tok-karel"
 					if nth.Add(1) == 2 {
@@ -890,10 +861,7 @@ func TestSocketsThatDisagreeGetSeparatePumps(t *testing.T) {
 					return "u-karel", ws.RevalidationValid
 				},
 				RevalidateEvery: time.Hour, // no tick will come; only registration matters
-			}))
-			srv := httptest.NewServer(mux)
-			t.Cleanup(srv.Close)
-			wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+			})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -1014,32 +982,24 @@ func newRevalidatingServer(t *testing.T, revalidate func(context.Context, string
 
 func newRevalidatingServerEvery(t *testing.T, every time.Duration, revalidate func(context.Context, string) (string, ws.Revalidation)) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
-		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
-			return ws.Upgrade{
-				Actor:     reqctx.Actor{UserID: "u-karel", Type: "user"},
-				SessionID: "s-karel",
-				Token:     "tok-karel",
-			}, true
-		},
-		Revalidate:      revalidate,
-		RevalidateEvery: every,
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+	return newTwoSeamServer(t, nil, revalidate, every)
 }
 
 // newTwoSeamServer builds a hub whose /ws is configured with the given
 // connect-time and recurring checks, either of which may be nil.
+//
+// ⚠ Its Authenticate SIMULATES A REVOCATION LANDING DURING THE UPGRADE — the
+// DisconnectSession call moves the hub's revocation epoch inside the window the
+// connect-time check exists for (between the upgrade decision and h.add), which
+// is the only condition under which the handler runs that check at all. Every
+// test that asserts on the connect-time seam depends on it; without it the
+// epoch is unchanged and the check is (correctly) skipped as the common case.
 func newTwoSeamServer(t *testing.T, recheck, revalidate ws.RevalidateFunc, every time.Duration) (*ws.Hub, string) {
 	t.Helper()
 	hub := ws.NewHub(testsupport.DiscardLogger())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", hub.Handler(ws.Config{
+	wsURL := newWSServer(t, hub, ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
+			hub.DisconnectSession("s-elsewhere") // a revocation lands mid-upgrade
 			return ws.Upgrade{
 				Actor:     reqctx.Actor{UserID: "u-karel", Type: "user"},
 				SessionID: "s-karel",
@@ -1049,10 +1009,8 @@ func newTwoSeamServer(t *testing.T, recheck, revalidate ws.RevalidateFunc, every
 		Recheck:         recheck,
 		Revalidate:      revalidate,
 		RevalidateEvery: every,
-	}))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+	})
+	return hub, wsURL
 }
 
 // TestConnectTimeCheckUsesRecheck pins the SEAM between the two checks, which
