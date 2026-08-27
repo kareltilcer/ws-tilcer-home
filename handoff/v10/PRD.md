@@ -3251,7 +3251,7 @@ This is the requirement, not a summary of it. Each row is a place where membersh
 
 ⚠ **`02004` and `08003` are out-of-order goose versions** — numerically below `11001`, which is already applied on the live database. v9 shipped exactly this shape with `01002`, `06004` and `07004`, so the runner tolerates it; **verify that before writing them, not after.**
 
-⚠ **`08003` is the only v10 migration that touches an existing table with live data.** SQLite cannot alter a CHECK, so widening `notification_deliveries.kind` to include `'chat'` and `.category` likewise is a **table rebuild**: create, copy, drop, rename, re-create the three indexes. It is small, operational, non-audit data, and it wants the care §V9-12 gave the `soukrome` backfill — a down migration that survives, and a run against a restored copy of production.
+⚠ **`08003` is the only v10 migration that touches an existing table with live data.** SQLite cannot alter a CHECK, so widening `notification_deliveries.kind` to include `'chat'` and `.category` likewise is a **table rebuild**: create, copy, drop, rename, re-create the **four** indexes (`_ts`, `_kind_ts`, `_rule_ts`, `_status_ts` — this section originally said three; the v10 build counted them). It is small, operational, non-audit data, and it wants the care §V9-12 gave the `soukrome` backfill — a down migration that survives, and a run against a restored copy of production.
 
 **`chat_conversations`**
 
@@ -3594,3 +3594,62 @@ Surfaced by working the build guide against this spec before a line of v10 was w
 - [ ] **Chat renders an offline state, not a stale thread**, and no chat data is written to the persisted cache (row 20).
 - [ ] Every chat query key carries the **conversation id** as a segment.
 - [ ] Accessibility pass at 375/1440 in both themes: the composer and the members panel are keyboard-operable, the unread divider is announced, the two warning registers pass AA, and the delete-conversation confirmation is reachable and reversible by keyboard.
+
+---
+
+## V10-12. As built — PR 2, chat core (built 2026-08-27, OpenAPI 0.11.0 → **0.12.0**)
+
+> **Read this before trusting §V10-1…§V10-11 on the points below.** PR 1 (`platform/ws`) shipped as [#23](https://github.com/kareltilcer/ws-tilcer-home/pull/23); PR 2 is chat core — schema, membership, messages, search, realtime, push and the screens. **PR 3 is unbuilt**: attachments, the two thresholds, `/chat/uklid`, the move to Dokumenty, the drain and the Administrace storage block.
+>
+> Six things shipped differently from the spec, none accidentally. Two of them are corrections to facts the spec asserts.
+
+### The floor is anchored on a message id, not on a timestamp (supersedes the §V10-5 column list)
+
+`chat_members` carries **`effective_from_id`** beside `effective_from`, and every read path compares `id > effective_from_id`. HANDOFF-12 §7's own search SQL already assumed such a column; §V10-5's table did not list it.
+
+⚠ **It is NOT `effective_from` converted into a UUIDv7, and that was the first implementation.** Deriving the bound from the timestamp — build the lowest UUIDv7 for its millisecond, compare `id >= that` — is **wrong by up to one millisecond in the leaking direction**: a message minted in the *same* millisecond somebody was added has a larger random suffix than the synthetic bound, so it sorts above it and the new member reads it. It is a one-millisecond window, it is real, and **the first adversarial test written against the floor found it**. Anchoring on the id of the newest message the member may not read removes the clock entirely; the empty string, written for Všichni, means "the conversation's beginning".
+
+This also makes **D258 fall out rather than branch**: the household room's floor is a *value* (`''`), not a special case, and `TestDefaultConversationHasNoHistoryBranch` walks the module's Go files to keep it that way.
+
+### `POST /conversations/{id}/restore` answers **204** for an admin who is not a member (supersedes §V10-6)
+
+The spec has it returning the `Conversation`. It cannot, for the one caller D255 exists for: the restore is a storage verb an admin legitimately has over a room they are not in, but **the conversation is a read they do not have** — and handing it back in the response body is exactly what the very next `GET` correctly refuses them. A member still gets 200 and the room. `TestAdminMayPurgeAConversationTheyCannotOpen` asserts both halves together.
+
+### Seven audit actions in PR 2, not eleven (defers part of §V10-5)
+
+`chat.attachment.uploaded/.removed/.moved` and the threshold verb belong to the code that emits them, which is PR 3. A declared action that can never fire is a dead entry in the trigger composer's picker — an admin offered a rule that will never run.
+
+⚠ **And the threshold verb is `chat.threshold.update`, not `chat.settings.updated`** (D263, from the design bundle, which is later than this PRD and wins). `backend/openapi.yaml` will record that at **0.12.1** in PR 3, with a note saying it supersedes the 0.12.0 spec copy on that point.
+
+### `notification_deliveries` has **four** indexes, not three
+
+Corrected in §V10-5 and HANDOFF-12 §9.2 above. `_ts`, `_kind_ts`, `_rule_ts` and `_status_ts` have all existed since `08001`. A rebuild that re-creates three of them leaves the delivery log's status filter on a full scan — nothing fails, it just gets slower every month.
+
+### `storage_thresholds` joins `storage.PlatformTables` in **PR 2**, not PR 3
+
+`02004` creates the table here, and `TestEveryTableIsDeclaredByExactlyOneModule` fails the moment a table exists that nobody declares. The same applies to `"chat_messages_fts": "chat"` in the completeness test's FTS map. Both were planned for PR 3 and had to move.
+
+### Search refuses a cursor rather than ignoring one (narrows §V10-6)
+
+The ordering is `rank` and a keyset cursor is an id, which does not locate a position in a relevance ordering. Silently ignoring the parameter returns page one forever and reads as the end of the results — so it is **422**, following the v9 `private-items` precedent this spec already invokes for the clean-up page's `sort=size`.
+
+### Two frontend defects found by counting requests, not by reading code
+
+Both were invisible in review because each piece looked correct on its own:
+
+1. **The query keys nested messages under the conversation.** `qk.chatConversation(id)` was a **prefix** of `qk.chatMessages(id)`, and TanStack invalidates by prefix — so advancing the read marker refetched the entire thread, on every message, in every open tab. The keys now put the resource before the id, and a test asserts no chat key is a prefix of another.
+2. **The gap check kept its own "newest held" map beside the cache**, seeded from the thread query. The seed re-ran on every cache mutation and moved the marker the incoming frame was about to be compared against. The cache is now the single source of truth, and our own echo is never gap-checked at all.
+
+`gap.test.ts` pins both properties D259 actually claims: the check **detects** a dropped frame, and it **terminates** — a member added to a busy conversation refetches exactly once.
+
+### What PR 2 deliberately does not ship
+
+- **The nav entry.** `AppShell` keeps its four thumb tabs and Okno do budoucnosti stays primary; `/chat` is routed and reachable by typing it. The demotion (D260) lands with PR 3, so the household meets chat when it can send a photo. `platform/widgets/registry.tsx` is untouched for the third version running.
+- **The koš purge job.** `chat_deleted_keys` exists and the delete paths enqueue into it; the drain is PR 3's. In PR 2 there are no attachments, so nothing is ever queued.
+- **The composer's attachment half** — drag-and-drop, paste, the picker, progress rows and the over-cap refusal.
+
+### Outstanding before merge
+
+- [ ] **Karel's gate:** `08003` up **and** down against a Litestream-restored copy of production. `TestV10MigrationOnRestoredCopy` is the harness; it skips unless `HOME_V10_MIGRATION_TEST_DB` points at a **copy**.
+- [ ] Playwright + axe at 375 and 1440 in both themes — outstanding since v5, and chat is the densest screen in the app.
+- [ ] A click-through **with a second member's session**. Everything verified live so far ran under one dev-bypass actor, so the adversarial half is covered by tests alone. §V9-12 records six frontend bugs no test caught.

@@ -368,7 +368,7 @@ Payload: sender's display name + up to 140 characters, deep link `/chat/{id}`, `
 
 ### 9.2 `08003_chat_delivery.sql` — ⚠ the only v10 migration that touches live data
 
-`notification_deliveries.kind` and `.category` are `CHECK`-constrained. **SQLite cannot alter a CHECK**, so this is a table rebuild: create the widened table, copy, drop, rename, re-create the three indexes.
+`notification_deliveries.kind` and `.category` are `CHECK`-constrained. **SQLite cannot alter a CHECK**, so this is a table rebuild: create the widened table, copy, drop, rename, re-create the **four** indexes. ⚠ **FOUR, not three** — `_ts`, `_kind_ts`, `_rule_ts` and `_status_ts` have all existed since `08001`; this line said three until the v10 build counted them.
 
 - It is small, operational, non-audit data. That makes it low-risk, **not** no-risk.
 - **The down migration must delete `'chat'` rows before rebuilding narrow**, or the restore fails on its own copy step.
