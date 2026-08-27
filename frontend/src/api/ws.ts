@@ -67,11 +67,23 @@ export function useLiveSync(): void {
     let unopened = 0
     let timer: ReturnType<typeof setTimeout> | undefined
 
+    // A probe already in flight. See probeSession.
+    let probing = false
+
     // giveUp stops the reconnect loop for good and hands off to the login screen,
     // which is the same place a 401 goes. Both routes into it — the policy close
     // code, and the session probe below — are answers to "the session is gone",
     // and neither may leave a timer armed behind it.
+    //
+    // ⚠ The `closed` guard is the same one every other entry point here has, and
+    // it is load-bearing for the ASYNC route: probeSession is launched from a
+    // close and resolves whenever the network lets it, by which time the effect
+    // may have been torn down (a route change unmounting the shell, StrictMode's
+    // double-invoke in dev) or a policy close may already have given up. Without
+    // it that stale probe still calls reportUnauthorized() on behalf of an effect
+    // that no longer exists.
     const giveUp = () => {
+      if (closed) return
       closed = true
       if (timer) clearTimeout(timer)
       ws?.close()
@@ -83,11 +95,19 @@ export function useLiveSync(): void {
     // over? getSession carries skipAuthRedirect, so a 401 arrives here as a value
     // instead of routing itself — which keeps the handoff in one place, and keeps
     // every OTHER failure (offline, 5xx, the server still booting) a reconnect.
+    //
+    // ⚠ ONE AT A TIME. `unopened` is zeroed when a probe is LAUNCHED, not when it
+    // answers, so a probe hung behind a slow network is still pending when the
+    // next three capped-backoff dials fail (~77s) and would start a second one.
     const probeSession = async () => {
+      if (probing || closed) return
+      probing = true
       try {
         await getSession()
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) giveUp()
+      } finally {
+        probing = false
       }
     }
 
