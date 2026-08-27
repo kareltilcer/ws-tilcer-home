@@ -116,13 +116,15 @@ func TestFTSShadowTablesAreAttributedToTheirParentsModule(t *testing.T) {
 	owners := reg.TableOwners()
 
 	// Every FTS5 index in Home and the module whose data it indexes. ⚠ There are
-	// FOUR, not the three the v9 spec counted: garden_plants_fts arrived in v7 and
-	// the spec's "Home's three FTS tables" is stale (recorded in PRD §V9-12).
+	// FIVE as of v10: garden_plants_fts arrived in v7 (the v9 spec's "Home's three
+	// FTS tables" was already stale, recorded in PRD §V9-12) and chat_messages_fts
+	// arrives now — which takes the shadow row count from twenty to TWENTY-FIVE.
 	for parent, wantModule := range map[string]string{
 		"notes_fts":         "notes",
 		"documents_fts":     "documents",
 		"audit_events_fts":  "logging",
 		"garden_plants_fts": "garden",
+		"chat_messages_fts": "chat",
 	} {
 		for _, shadow := range storage.FTSShadows(parent) {
 			got, ok := owners[shadow]

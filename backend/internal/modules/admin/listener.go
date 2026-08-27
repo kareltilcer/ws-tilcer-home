@@ -637,6 +637,13 @@ func inAppURL(e audit.Entry) string {
 		return "/zahrada"
 	case audit.ModuleElectricity:
 		return "/elektrina"
+	case audit.ModuleChat:
+		// ⚠ THE LIST, NEVER THE CONVERSATION. Documents get /d/{id} because a
+		// document is readable by the household; a conversation is readable by its
+		// members, and a trigger rule's audience is chosen by ROLE. Deep-linking
+		// /chat/{id} here would send an admin's rule at somebody who then 404s —
+		// and the id in the notification would itself be the disclosure.
+		return "/chat"
 	default:
 		return "/"
 	}

@@ -13,6 +13,7 @@ import (
 	"io/fs"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
@@ -31,7 +32,8 @@ import (
 // MigrationSources returns every SCHEMA migration contributor. Goose applies
 // migrations globally by their numeric filename prefix, so the effective order is
 // logging(01) → platform(02) → todo(03) → events(04) → dashboard(05) → notes(06)
-// → documents(07) → admin(08) → finance(09) → garden(10) → electricity(11), regardless of the slice
+// → documents(07) → admin(08) → finance(09) → garden(10) → electricity(11)
+// → chat(12), regardless of the slice
 // order below (PRD §5 D25). The logging (audit) tables must exist before any
 // feature table because every module writes through the audit spine; its 01xxx
 // prefix guarantees that. The slice is listed in prefix order purely so it reads
@@ -62,6 +64,17 @@ func MigrationSources() []registry.MigrationSource {
 		// carry and no built-in knowledge to preload, so there is nothing for
 		// testsupport to exclude. Do not add one for symmetry.
 		{Name: "electricity", FS: electricity.MigrationsFS},
+		// v10: chat is block 12, the first new block since v8. Its 12001 seeds ONE
+		// row — the "Všichni" conversation — and that row is SCHEMA rather than
+		// data: the household room is a structural fixture every read path assumes
+		// exists, not a preloaded opinion like garden's rules or finance's history.
+		// So it rides here and not in a seed source, and testsupport gets it.
+		//
+		// ⚠ v10 also adds two migrations OUTSIDE any new block: 02004 in
+		// platform's, 08003 in admin's. Both are numerically below the applied
+		// 11001 — see 02004_chat_platform.sql for why goose tolerates that, and
+		// v10_migration_test.go for the test of it.
+		{Name: "chat", FS: chat.MigrationsFS},
 	}
 }
 
@@ -117,6 +130,6 @@ func StorageSourcesForTest() []any {
 	return []any{
 		&logging.Module{}, &todo.Module{}, &events.Module{}, &dashboard.Module{},
 		&notes.Module{}, &documents.Module{}, &admin.Module{}, &finance.Module{},
-		&garden.Module{}, &electricity.Module{},
+		&garden.Module{}, &electricity.Module{}, &chat.Module{},
 	}
 }

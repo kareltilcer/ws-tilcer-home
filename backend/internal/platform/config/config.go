@@ -110,6 +110,13 @@ type Config struct {
 	// nobody re-reads (§V9-9).
 	Storage StorageConfig
 
+	// ChatTrashDays is how long a deleted conversation sits in the koš before the
+	// drain destroys its bytes (default 7). ⚠ It is chat's ONLY environment
+	// variable: the module's two storage thresholds are DATABASE ROWS, not vars,
+	// because `admin` edits them at runtime and a limit somebody has to redeploy to
+	// change is a limit nobody changes (D236).
+	ChatTrashDays int
+
 	// DevAuthBypass, when true (and only outside production), skips real JWT
 	// introspection and injects a fake actor so the app runs offline. It is a
 	// development-only convenience and a security hole if ever enabled in prod.
@@ -447,6 +454,12 @@ const (
 	// notes (v4.1) inline images
 	defaultNotesImageMaxUploadMB = 10
 
+	// chat (v10). Seven days is long enough that "I deleted the wrong room" is
+	// recoverable over a weekend away, and short enough that the bytes of a
+	// conversation somebody deleted TO FREE SPACE actually go. `?hard=true` is
+	// there for when seven days is still too long.
+	defaultChatTrashDays = 7
+
 	// defaultStorageWarnTotalMB is a CHANGE detector, not a bill detector (D196).
 	// R2's free allowance is 10 GB and household usage is expected to sit well
 	// under a gigabyte, so a threshold parked at the billing cliff would stay
@@ -537,6 +550,7 @@ func Load(getenv Getenv) (*Config, error) {
 		WarnTotalMB:  l.intDefault("HOME_STORAGE_WARN_TOTAL_MB", defaultStorageWarnTotalMB),
 		CacheSeconds: l.intDefault("HOME_STORAGE_CACHE_SECONDS", defaultStorageCacheSeconds),
 	}
+	c.ChatTrashDays = l.intDefault("HOME_CHAT_TRASH_DAYS", defaultChatTrashDays)
 
 	// Range sanity — these bound server work, so a nonsensical value is a bug.
 	if c.DashboardLookbackDays < 0 {
@@ -553,6 +567,12 @@ func Load(getenv Getenv) (*Config, error) {
 	}
 	if c.NotesImageMaxUploadMB < 1 {
 		l.errf("HOME_NOTES_IMAGE_MAX_UPLOAD_MB must be >= 1 (got %d)", c.NotesImageMaxUploadMB)
+	}
+	// ⚠ Bounded at 1, not at 0. A zero-day koš is not "delete immediately" — it is
+	// a koš whose Obnovit button races the drain, which is worse than either
+	// behaviour on its own. Deleting a conversation's bytes now is `?hard=true`.
+	if c.ChatTrashDays < 1 {
+		l.errf("HOME_CHAT_TRASH_DAYS must be >= 1 (got %d)", c.ChatTrashDays)
 	}
 	// The three session windows, all bounded at BOTH ends for the same reason —
 	// see maxSessionTTLDays. A 0 or a negative on the revalidation window reads as

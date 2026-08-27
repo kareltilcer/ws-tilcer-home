@@ -30,6 +30,15 @@ const (
 	CategoryBroadcast = "broadcast"
 	CategoryTriggers  = "triggers"
 	CategorySummaries = "summaries"
+	// CategoryChat is v10's fourth bucket (D248).
+	//
+	// ⚠ IT IS ITS OWN BUCKET AND NOT A REUSE OF `triggers`. Recording chat pushes
+	// under an existing category would let a member silence chat by muting
+	// Administrace's trigger rules, and vice versa — two unrelated things behind
+	// one switch, with nothing in the settings panel to say which one just went
+	// quiet. Chat also carries a SECOND mute, per conversation, on chat_members;
+	// this one is the app-wide half.
+	CategoryChat = "chat"
 )
 
 // Kinds label a delivery attempt in the operational log (§9). They are coarser
@@ -39,6 +48,10 @@ const (
 	KindTrigger   = "trigger"
 	KindSchedule  = "schedule"
 	KindTest      = "test"
+	// KindChat is v10's. `notification_deliveries` CHECK-constrains both columns,
+	// which is why 08003 rebuilds the table to admit this value and CategoryChat —
+	// SQLite cannot alter a CHECK.
+	KindChat = "chat"
 )
 
 // Delivery statuses recorded per endpoint attempt.
@@ -388,6 +401,8 @@ func kindForCategory(category string) string {
 		return KindTrigger
 	case CategorySummaries:
 		return KindSchedule
+	case CategoryChat:
+		return KindChat
 	default:
 		return KindBroadcast
 	}

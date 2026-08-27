@@ -23,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/dashboard"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
@@ -274,6 +275,22 @@ func run(logger *slog.Logger) error {
 		Logger:         logger,
 	})
 
+	// chat (v10) is the ONLY module here that does not take `notify`. Every other
+	// one broadcasts "something changed" to every connected client; chat's payload
+	// IS the content, so it takes hub.NotifyTo instead and names its audience per
+	// message (D232/D233). That method exists because PR 1 taught the hub who is
+	// connected — nothing else in this file changed for it.
+	//
+	// It also takes pushStore twice over, in two different roles: as the member
+	// DIRECTORY (projected from `sessions` — Home has no user table) and, through
+	// pushSvc, as the notification channel. Chat narrows the directory to user id
+	// and display name at its own boundary, because /api/chat/directory is the
+	// first surface in Home that shows it to a non-admin (D230).
+	chatSvc := chat.NewService(sqldb, sink, hub.NotifyTo, pushSvc, pushStore, chat.Options{
+		TrashDays: cfg.ChatTrashDays,
+		Logger:    logger,
+	})
+
 	// documents (v4) is the first module with bytes outside SQLite: it needs an object
 	// store, an async preview worker, and — because Litestream cannot back up a blob
 	// bucket — its own mirror/reconciliation job (D45).
@@ -323,6 +340,12 @@ func run(logger *slog.Logger) error {
 	// nothing to Nástěnka and nothing to the notification catalogs.
 	elecMod := electricity.NewModule(elecSvc)
 
+	// chat (v10) joins featureModules and the storage catalog, and NOTHING else.
+	// It is deliberately absent from CollectWidgets, metrics.Collect and
+	// lists.Collect (D252) — the electricity precedent, enforced this time by
+	// forbiddenImports["chat"] rather than only by not registering.
+	chatMod := chat.NewModule(chatSvc)
+
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
 	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod}))
@@ -334,7 +357,7 @@ func run(logger *slog.Logger) error {
 	// 5b. v5: the metrics catalog — the THIRD registered catalog, beside widgets
 	// and audit actions. Modules publish counts; the admin module's summaries
 	// reference them by key and never touch a feature table (D59/D28).
-	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, elecMod, dashMod}
+	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, elecMod, chatMod, dashMod}
 	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod)
 	if err != nil {
 		return err

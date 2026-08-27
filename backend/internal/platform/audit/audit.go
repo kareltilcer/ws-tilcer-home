@@ -29,6 +29,12 @@ const (
 	// never a literal, so a typo in a module name is a compile error rather than
 	// a row that quietly falls out of the log browser's filter.
 	ModuleElectricity = "electricity"
+	// ModuleChat is v10's Chat. ⚠ It writes NO event for a message — sending,
+	// editing and deleting one leave audit_events untouched (D231), which makes
+	// chat the first module in Home whose primary mutation is invisible in the
+	// Log. What it does write is structural: rooms and membership, plus
+	// attachments from PR 3.
+	ModuleChat = "chat"
 )
 
 // PlatformActions are the action verbs emitted by platform/ packages. They are

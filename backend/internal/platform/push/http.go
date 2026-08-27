@@ -307,6 +307,7 @@ type preferencesPatchRequest struct {
 		Broadcast *bool `json:"broadcast"`
 		Triggers  *bool `json:"triggers"`
 		Summaries *bool `json:"summaries"`
+		Chat      *bool `json:"chat"`
 	} `json:"categories"`
 }
 
@@ -332,6 +333,7 @@ func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request) {
 		patch.Broadcast = req.Categories.Broadcast
 		patch.Triggers = req.Categories.Triggers
 		patch.Summaries = req.Categories.Summaries
+		patch.Chat = req.Categories.Chat
 	}
 
 	var prefs Preferences
@@ -438,6 +440,9 @@ func prefsSummary(p Preferences) string {
 	}
 	if p.Categories.Summaries {
 		on = append(on, "souhrny")
+	}
+	if p.Categories.Chat {
+		on = append(on, "chat")
 	}
 	if len(on) == 0 {
 		return "zapnuto, všechny kategorie ztlumené"

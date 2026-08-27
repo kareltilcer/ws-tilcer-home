@@ -113,6 +113,22 @@ var forbiddenImports = map[string][]struct{ pkg, why string }{
 		{"platform/blobstore", "the electricity module holds NO BYTES. Invoice PDFs are out of scope, so " +
 			"there is no bucket, no mirror job and no reconciliation"},
 	},
+	// v10. Chat is the opposite of electricity — it takes audit, blobstore, push,
+	// scheduler, storage AND ws — so these two bans are not "this module needs
+	// nothing". They are specific: chat must publish no metric and no list, because
+	// both are halves of a notification an admin composes in Administrace, and chat
+	// already has a notification path with a per-conversation mute on it.
+	"chat": {
+		{"platform/metrics", "the chat module publishes NO METRIC (PRD D252). A metric exists to be a " +
+			"CONDITION in Administrace, which is the first step toward a household notification about " +
+			"chat that no member could silence per conversation — and chat_members.muted plus cat_chat " +
+			"are how silencing chat is supposed to work. A count of unread messages on Nástěnka would " +
+			"also be the one place membership is not the access rule"},
+		{"platform/lists", "the chat module publishes NO LIST (PRD D252). A list names the ITEMS behind a " +
+			"count, and chat's items are messages: a list provider here would hand message text to the " +
+			"summary composer, which renders for an audience chosen by role rather than by membership. " +
+			"It is the same reasoning that keeps message bodies out of audit_events (D231)"},
+	},
 }
 
 // TestForbiddenPlatformImports enforces the per-module platform bans above.

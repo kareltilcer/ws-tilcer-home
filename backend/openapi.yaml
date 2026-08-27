@@ -1,10 +1,53 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.11.0
+  version: 0.12.0
   description: >-
-    API for the `home` household-management service. **0.11.0 IS THE SERVED CONTRACT: v9 as
-    built.**
+    API for the `home` household-management service. **0.12.0 IS THE v10 SPEC: chat.**
+    0.11.0 remains the served contract until v10 ships.
+
+    v10 adds the ELEVENTH module, `chat`: one household conversation everybody is in
+    (**Vsichni** / Vsichni) plus any number of created groups, carrying images, video and
+    files. It introduces a THIRD ACCESS AXIS beside role and ownership - MEMBERSHIP. A
+    conversation is readable by the people in it, which is neither "everyone" (v1-v8) nor
+    "one person" (v9), and the refusal is v9's: **404, never 403**, byte-identical to an
+    unknown id, admins included (PRD D217). Every read carries a second predicate,
+    `chat_members.effective_from` - the instant from which a conversation is a member's to
+    read - applied INSIDE the SQL, never over a fetched page, because a post-filter leaks
+    through cursors, counts and snippets even when the rows themselves are gone (D218).
+
+    (WARNING) `effective_from` is NOT "when they joined". The default conversation seeds it
+    with the conversation's own `created_at`, so a member the app sees for the first time in
+    2028 reads the household room in full, while a group add writes `now`. The exemption is
+    a VALUE, not a branch: no read path anywhere in the module tests `kind == "default"` to
+    decide what history to show, and a test asserts it (D258).
+
+    Two changes are larger than the chat itself. `platform/ws` grows an IDENTITY - the hub
+    broadcast to every connected client and kept no user id at all, so it gains a per-user
+    index and `PublishTo`, and chat's payload is the first in Home to carry content (D232,
+    D233); `Publish` is untouched and no other module's fan-out changes. And **Presunout do
+    Dokumentu** is a CUSTODY TRANSFER across the storage catalog, not a copy: `chat` may not
+    import `documents`, so it goes through a new `BlobSink`, and the ordering - validate,
+    copy, insert, mark, **delete last** - is fixed so that every crash point over-counts
+    rather than loses the file (D238). (WARNING) **A move is a PUBLISH**: the file becomes
+    readable by the whole household, non-members of that conversation included, and the
+    dialog says so in words (D245).
+
+    Storage is the other half. Two DB-backed thresholds - `chat.total` (512 MB) and
+    `chat.conversation` (128 MB, one number applied to every room) - are WARN ONLY and never
+    block an upload (D237). The clean-up page is member-scoped with an `editor`/`admin` gate
+    on top (D241), and deleting a conversation is a **7-day kos** whose bytes keep counting
+    until they are actually gone, which is why *Smazat natrvalo* exists (D253, D254).
+
+    (WARNING) **Messages write NO audit event** (D231). Only structural events do -
+    conversations, membership, attachments, settings. Chat is the first module in Home whose
+    primary mutation breaks the every-mutation-audits invariant, and it does so deliberately:
+    auditing every message content-free was adopted for one round and reverted, because it
+    turns the Log into a traffic-analysis record of the household and grows the audit spine
+    by a row per message with `HOME_LOG_RETENTION_DAYS` defaulting to never-prune.
+    `TestChatMessagesAreNotAudited` guards the breach so it cannot be "fixed" by accident.
+
+    (WARNING) 0.11.0 NOTES BELOW, UNCHANGED - v9 as built.
 
     ⚠ Two places where this document differs from the v9 SPEC copy in
     `handoff/v9/openapi.yaml`, both recorded in `PRD.md` §V9-12:
@@ -131,6 +174,9 @@ tags:
     description: "Elektřina — VT/NT meter readings, a ceník versioned by effective date, zálohy, user-set settlement periods and an on-read nedoplatek/přeplatek prediction (new in v8). Publishes no widget, metric, list or push."
   - name: admin-storage
     description: "Admin-only storage statistics and the private-items purge listing (new in v9). Owns no state: the snapshot is computed on read behind a short cache, and deletion happens through the owning module's hard-delete route."
+  - name: chat
+    description: "Chat \u2014 a default household conversation (V\u0161ichni) plus created groups, carrying images, video and files. MEMBERS-ONLY: a non-member gets 404, admins included (new in v10). Publishes no widget, metric or list."
+
 paths:
   # ---------------- Auth (Mode B, home-hosted) ----------------
   /api/auth/login:
@@ -4457,6 +4503,789 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  /api/chat/conversations:
+    get:
+      tags: [chat]
+      summary: The caller's conversations (v10)
+      description: >-
+        Lists ONLY conversations the caller is a member of. There is no parameter that
+        widens this, no admin override and no debug flag: a conversation a member is not in
+        does not appear here and does not exist for them anywhere else either (PRD D217).
+
+        Each row carries the caller's own `unread_count`, their `muted` flag and their
+        `effective_from` — the instant from which the conversation is theirs to read
+        (D218). `bytes` is the conversation's live attachment total, and
+        `over_conversation_limit` compares it against the `chat.conversation` threshold, so
+        the warning is computed for the caller rather than inferred by them.
+      parameters:
+        - $ref: "#/components/parameters/ConversationState"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: OK — always an array, never null (D174).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    post:
+      tags: [chat]
+      summary: Create a conversation
+      description: >-
+        Any authenticated member may create one — **`reader` included** (PRD D222). Chat is
+        the first module in Home where a `reader` writes, and the role model is deliberately
+        absent from everything inside it except the clean-up page (D241).
+
+        The creator is added as the first member with `effective_from = now`; any
+        `member_ids` supplied are added with the same instant, so nobody joins a new
+        conversation with history behind them. Ids must be known to the member directory —
+        which is a LOGIN HISTORY projected from `sessions`, so a person who has never
+        logged in cannot be added (D230).
+
+        ⚠ There is no slug. A conversation is addressed by its UUIDv7 id, because the house
+        `freeSlug` pattern appends `-2` on a sibling collision and being handed
+        `dovolena-2` discloses a conversation the caller may not see (D220).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConversationCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/conversations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [chat]
+      summary: One conversation
+      description: >-
+        ⚠ **404 for a non-member — an admin included — and byte-identical to the response
+        for an id that does not exist** (PRD D217). Never 403. This is v9's D180 with
+        ownership swapped for membership: a 403 confirms the conversation exists, which
+        turns a guessed id into an oracle over who in the household talks to whom.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [chat]
+      summary: Rename a conversation
+      description: >-
+        Any MEMBER may rename, regardless of role (PRD D222). **Všichni is renameable** —
+        it is only delete and leave that it refuses (D219). Audited as
+        `chat.conversation.renamed`. Requires the CSRF header.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConversationUpdate" }
+      responses:
+        "200":
+          description: Renamed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [chat]
+      summary: Move a conversation to the koš, or purge it
+      description: >-
+        WITHOUT `hard`: a SOFT delete into the koš (PRD D253). `deleted_at` is set, the
+        conversation vanishes from every read in the module — list, thread, search, unread,
+        clean-up — and appears only under `?state=trash` for its members, with
+        `HOME_CHAT_TRASH_DAYS` (default 7) to be restored. Its attachment keys are queued
+        with a `purge_after`; the drain does not touch them until then.
+
+        ⚠ **A conversation in the koš STILL COUNTS toward both storage thresholds** (D254).
+        The bytes are still in R2, and reporting them as freed would make the Úložiště page
+        lie for a week — the page's whole premise is that its figures sum.
+
+        WITH `hard=true` — *Smazat natrvalo*: the queued keys are rewritten to `now` and the
+        drain removes them on its next pass, so the figures fall. It exists precisely so
+        that somebody deleting a heavy conversation TO FIX AN OVERRUN is never told to come
+        back in seven days. Deletion is recoverable by default and irreversible on request.
+
+        Any MEMBER may do either (D222) — the koš is what makes that survivable — and so may
+        an **`admin` who is not a member** (D255). ⚠ v9's asymmetry, repeated exactly: an
+        admin may reclaim the space and may never read what was in it, so `GET` of this same
+        id still returns 404 to them.
+
+        ⚠ A `moved` attachment's document in Dokumenty **survives both paths**. The cascade
+        takes `chat/` objects; `documents/` objects belong to another module now.
+
+        `kind=default` (Všichni) refuses both with 422 (D219).
+      parameters:
+        - name: hard
+          in: query
+          description: Purge immediately instead of moving to the koš. Requires a typed confirmation in the UI.
+          schema: { type: boolean, default: false }
+      responses:
+        "204": { description: "Trashed, or purged." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/conversations/{id}/restore:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [chat]
+      summary: Restore a conversation from the koš
+      description: >-
+        Clears `deleted_at` and removes the queued object keys in one transaction (PRD
+        D253). Membership, messages and attachments were never touched, so this is the state
+        before the delete — **not a reconstruction**. Available to its members and to an
+        `admin` who is not one (D255). Audited as `chat.conversation.restored`.
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Conversation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: The conversation is not in the koš.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/chat/conversations/{id}/members:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [chat]
+      summary: Who is in this conversation
+      description: >-
+        Members only (404 otherwise). Each row carries `effective_from`, so the panel can
+        say plainly that a member added yesterday cannot read last week — the fact the floor
+        makes true and that nothing else in the UI would explain (PRD D218).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationMemberList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [chat]
+      summary: Add a member
+      description: >-
+        Any MEMBER may add anyone the directory knows, regardless of role (PRD D222). The
+        new row's `effective_from` is **now**, so the added member reads nothing written
+        before this moment (D218) — which is the whole reason the floor exists: being added
+        to a group is one person's decision about another person's access to a third
+        person's history.
+
+        Audited as `chat.member.added`. ⚠ Nothing is written into the thread — there are no
+        system messages, and the members panel is the truth (D221).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConversationMemberAdd" }
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationMember" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: >-
+            An unknown user id, or any membership change on `kind=default` — Všichni's
+            membership is every member the app has seen and is not editable (D219).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/chat/conversations/{id}/members/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [chat]
+      summary: Remove a member
+      description: >-
+        Any MEMBER may remove any other, including the one who created the conversation
+        (PRD D222). The membership row is DELETED, not marked — so re-adding writes a new
+        `effective_from` and leaves a **permanent gap** in the middle of a conversation the
+        member can otherwise read in full (D218). The UI says so before confirming.
+
+        Their messages stay; authorship does not depend on membership. Audited as
+        `chat.member.removed`. Removing the last member of a group is a 422 — delete the
+        conversation instead.
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/conversations/{id}/members/me:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    patch:
+      tags: [chat]
+      summary: The caller's own per-conversation settings (mute)
+      description: >-
+        Mute is **per conversation, per member**, default unmuted, stored on the membership
+        row (PRD D248). A muted conversation still accrues unread counts and still updates
+        live over `/ws`; only the Web Push is suppressed. The global `cat_chat` preference
+        (on `PushPreferences`) switches chat push off entirely.
+
+        `me` is a literal: there is no path anywhere in this contract that expresses another
+        member's settings or another member's view.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConversationMemberSelfUpdate" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationMember" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/conversations/{id}/messages:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [chat]
+      summary: The thread
+      description: >-
+        Messages the caller may read, newest-first by default, paged on the house UUIDv7
+        `Cursor` with a `direction` — a thread is read backwards from the end and then
+        forwards as new messages arrive.
+
+        ⚠ **The caller's `effective_from` is a predicate INSIDE the query, not a filter over
+        the page** (PRD D218). `next_cursor`, `has_more` and any count therefore agree with
+        the rows returned; a post-filter would leak what it removed through exactly those
+        three fields, which is why the acceptance criteria assert them rather than only the
+        visible rows.
+
+        A deleted message is returned as a TOMBSTONE — `deleted: true`, an empty body, the
+        author and the time — because removing the row would leave a reply pointing at
+        nothing and silently reflow a thread somebody else is reading (D223).
+      parameters:
+        - $ref: "#/components/parameters/MessageDirection"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: OK — always an array, never null (D174).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatMessagePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    post:
+      tags: [chat]
+      summary: Send a message, with or without attachments
+      description: >-
+        JSON for a plain message; `multipart/form-data` when it carries files — **one
+        request either way** (PRD D224). An upload-then-reference pair was rejected: it
+        leaves an orphaned object every time the second step never happens, and chat has no
+        reconciliation pass to find one.
+
+        Up to **10 files**. Each is sniffed SERVER-SIDE for its MIME type — the client's
+        claim is never trusted (D48's rule) — and classified `image`, `video` or `file`
+        (D227). Images get a `thumb.webp` and their intrinsic dimensions recorded, so the
+        thread does not reflow as they load. Video is stored as uploaded: **no transcoding
+        and no poster frame**.
+
+        ⚠ The per-file cap is **`HOME_DOCS_MAX_UPLOAD_MB`, shared with Dokumenty on
+        purpose** (D228). The reason is not thrift: a file above Dokumenty's cap could never
+        be MOVED into Dokumenty, so the clean-up page's headline action would fail on
+        exactly the files heavy enough to have caused the overrun.
+
+        After the transaction commits, the message is published over `/ws` to the member set
+        resolved INSIDE that transaction (D233) — the first `/ws` payload in Home that
+        carries content, and safe only because the hub now knows who is connected (D232) —
+        and pushed to every member except the author (D248).
+
+        ⚠ **No audit event is written** (D231). Chat is the first module in Home whose
+        primary mutation writes none, deliberately, and `TestChatMessagesAreNotAudited`
+        asserts it. Attachments ARE audited (`chat.attachment.uploaded`): the bytes are what
+        the thresholds and the clean-up page exist for.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatMessageCreate" }
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/ChatMessageUpload" }
+            encoding:
+              files: { contentType: application/octet-stream }
+      responses:
+        "201":
+          description: Sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatMessage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413":
+          description: A file exceeds HOME_DOCS_MAX_UPLOAD_MB. The message names the limit in MB.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: >-
+            Neither body nor attachment; a body over 8 000 characters; more than ten files;
+            or a `reply_to_id` in another conversation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Object storage unreachable — nothing committed, no partial message.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/chat/conversations/{id}/read:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [chat]
+      summary: Advance the caller's read marker
+      description: >-
+        Sets `last_read_at` from the named message. **Idempotent, and never backwards** — a
+        client that replays an older marker cannot un-read a conversation (PRD D250).
+
+        Unread is `created_at > MAX(last_read_at, effective_from)` AND not the caller's own
+        AND not a tombstone, so a member added yesterday never opens a conversation to a
+        four-figure badge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatReadUpdate" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatReadState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/messages/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    patch:
+      tags: [chat]
+      summary: Edit your own message
+      description: >-
+        Your own only, with **no time limit**. Sets `edited_at`; the bubble renders
+        *upraveno*.
+
+        ⚠ **No edit history is kept anywhere** (PRD D225). The only store in Home that holds
+        before-and-after values is the audit spine, and D231 keeps message text out of it by
+        writing no message events at all. Building a second such store for chat alone would
+        be a private, unsearchable, un-redactable copy of every message ever revised.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatMessageUpdate" }
+      responses:
+        "200":
+          description: Edited
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatMessage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Not a member of the conversation, below the caller's floor, or not the caller's
+            own message. All three are the same response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [chat]
+      summary: Delete your own message
+      description: >-
+        A SOFT delete leaving a tombstone — *"Zpráva byla smazána"* with the author and the
+        time (PRD D223).
+
+        ⚠ **It blanks the body in place.** `deleted_at IS NOT NULL` is not sufficient:
+        `chat_messages_fts` is external-content, so a body left in the table is a body still
+        returned by search. The delete sets `body = ''` in the same statement and removes
+        the FTS row, and does the same to `original_filename` on any attachments it takes
+        with it. Their objects are queued for the drain.
+
+        ⚠ No audit event (D231): a deleted message leaves no trace beyond its tombstone.
+        That cost is stated in the PRD rather than softened.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/chat/attachments/{id}/raw:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [chat]
+      summary: Stream an attachment's bytes
+      description: >-
+        Members of the attachment's conversation, above their `effective_from`. Supports
+        HTTP Range, so video plays inline without downloading whole. `?download=true` sets
+        an attachment Content-Disposition; there is no separate `/download` path, because
+        only one of three kinds ever needs one.
+
+        ⚠ **The membership load runs BEFORE the `If-None-Match` branch.** Otherwise a stale
+        ETag earns a non-member a **304** — *"yes, and it hasn't changed"* — for something
+        they may not read. v9 found this exact bug in `documents` (§V9-12); it is the same
+        shape in a new module, and it has its own acceptance criterion.
+
+        ⚠ **`Cache-Control` is `private, no-cache, must-revalidate` — ALWAYS, and never
+        `immutable`** (PRD D229). v9's shared branch is safe because shared bytes stay
+        shared; **chat membership can be REVOKED**, and a year-long cache entry is a copy
+        that outlives the revocation on a device nobody can reach. The ETag is kept on both
+        the 200 and the 304, so a repeat view is still a cheap revalidation rather than a
+        re-download.
+      parameters:
+        - name: download
+          in: query
+          schema: { type: boolean, default: false }
+        - name: Range
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: The file
+          headers:
+            ETag: { schema: { type: string }, description: The attachment's SHA-256 checksum. }
+            Cache-Control: { schema: { type: string }, description: "Always `private, no-cache, must-revalidate` — never `immutable` (D229)." }
+            Accept-Ranges: { schema: { type: string }, description: "bytes" }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "206": { description: Partial content (Range request) }
+        "304": { description: "Not modified — reachable ONLY by a member above their floor." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Not a member, below the floor, in the koš, or the attachment has been removed or
+            moved. On GET and on HEAD alike — a HEAD-only oracle is still an oracle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/chat/attachments/{id}/thumbnail:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [chat]
+      summary: An image attachment's thumbnail
+      description: >-
+        `image` attachments only; `404` for `video` and `file`, which have none — v10
+        generates no video poster frame and runs no preview pipeline (PRD D227). Same
+        membership rule, same floor, same 304 ordering and the same visibility-independent
+        `no-cache` header as `/raw`.
+      responses:
+        "200":
+          description: The thumbnail (image/webp)
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
+        "304": { description: Not modified }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/chat/attachments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    delete:
+      tags: [chat]
+      summary: Odstranit — remove an attachment's bytes from the clean-up page
+      description: >-
+        Sets `state='removed'`, records who and when, and **keeps `original_filename` and
+        `byte_size` for display** (PRD D243), so the bubble can render an epitaph the thread
+        still makes sense around:
+
+        `📄 smlouva-2026.pdf · 2,4 MB — Soubor odstraněn při úklidu úložiště · Karel, 25. 8. 2026`
+
+        ⚠ **This path deletes the object INLINE** rather than queueing it (D247), and it is
+        the only one that does. The clean-up workflow is *clean until the number goes down*,
+        and a figure lagging fifteen minutes behind the button makes the page unusable. On a
+        failure it falls back to the queue. Conversation purge and message delete enqueue
+        instead, because four hundred objects is not a thing to do inside a request.
+
+        Gated **member ∧ (`editor` | `admin`)** (D241). Audited as
+        `chat.attachment.removed`.
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: A member without `editor`/`admin`. The reason is named in Czech.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: The attachment is already `removed` or `moved`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/chat/attachments/{id}/move:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [chat]
+      summary: Přesunout do Dokumentů — hand custody of the bytes to `documents`
+      description: >-
+        ⚠ **A MOVE IS A PUBLISH.** The file becomes readable by **every household member,
+        including people who are not in this conversation** (PRD D245). That is inherent in
+        the requirement that a moved file stay visible in the thread: its members must be
+        able to read it, and the only place in Home where that is true without inventing a
+        third `visibility` is the shared tree. The UI states it in words before confirming.
+        Three alternatives were considered and declined — Všichni-only moves, no move at
+        all, and conversation-scoped documents.
+
+        ⚠ **A PRIVATE v9 folder is refused with 422**, not offered and greyed out. A private
+        target would make the file unreadable to the conversation's other members, which is
+        the opposite of what the move is for.
+
+        `chat` may not import `documents`, so this is a CUSTODY TRANSFER brokered through
+        `platform/storage`'s `BlobSink` (D238) — the first verb in a catalog that has so far
+        carried only projections. The ordering is fixed and not negotiable:
+
+        1. validate the target is shared and writable · 2. `blobstore.Copy` (server-side in
+        R2; nothing streams through the app) · 3. insert the `documents` row with its own
+        audit event and `meta.via: "chat"` · 4. mark the attachment `moved` ·
+        **5. delete the chat object LAST.**
+
+        No transaction covers all five and none can — two SQLite writes and two object-store
+        calls. The order is chosen so every crash point leaves bytes **over-counted rather
+        than lost**, and every intermediate state is re-runnable. Never delete before the
+        copy is confirmed; never mark `moved` before the document row exists.
+
+        Afterwards the attachment still renders in the thread from `document_path`, no
+        longer counts toward either threshold (the bytes left the `chat/` prefix — by
+        construction, not by bookkeeping) and is gone from the clean-up listing (D246).
+
+        Gated **member ∧ (`editor` | `admin`)** (D241). Audited as `chat.attachment.moved`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatAttachmentMove" }
+      responses:
+        "200":
+          description: Moved — the attachment now points at a document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatAttachment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: >-
+            A private or unknown target folder, or an attachment that is already `moved` or
+            `removed`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "501":
+          description: >-
+            ⚠ No `BlobSink` is configured, so `documents` cannot accept custody. The move is
+            UNAVAILABLE and the UI renders no button — it does **not** fall back to delete
+            (D239). A capability that silently becomes a different, destructive capability is
+            worse than one that is plainly absent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Object storage unreachable — nothing marked, nothing deleted, safe to retry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/chat/search:
+    get:
+      tags: [chat]
+      summary: Full-text search across the caller's conversations
+      description: >-
+        One FTS5 `MATCH` over `chat_messages_fts`, **joined to `chat_members` on the caller,
+        with `created_at >= effective_from`, tombstones excluded and the koš excluded — all
+        INSIDE the query, before rank and snippet** (PRD D251).
+
+        ⚠ That placement is the requirement, not an optimisation. FTS5 ranks over what it
+        matched, so a membership filter applied to the result set leaves an ordering
+        computed from other people's messages — and a snippet **is** a message body by
+        another name.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: conversation_id
+          in: query
+          description: Restrict to one conversation the caller is a member of.
+          schema: { type: string }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: OK — always an array, never null (D174).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatSearchPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/storage:
+    get:
+      tags: [chat]
+      summary: The caller's chat storage picture and the two thresholds
+      description: >-
+        What the in-module warning renders. The module TOTAL is the whole household's live
+        chat attachment bytes — everyone sees the same figure, because the `chat.total`
+        threshold is about the household's bucket — while the per-conversation rows cover
+        **only conversations the caller belongs to** (PRD D237, D241).
+
+        Both thresholds are **WARN ONLY**. No upload is ever refused, there is no quota and
+        there is no new 413 anywhere in the app because of them — §V9's D196 rule, restated
+        for a second register.
+
+        ⚠ Conversations in the koš are included in `total_bytes` (D254). Their bytes are
+        still in R2, and the figures on this page have to sum.
+
+        This is a SUM over an index, not a bucket listing: it is on a member-facing path and
+        is computed per request without a cache. The admin snapshot keeps v9's 60-second
+        cache and its `List`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatStorage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/chat/cleanup:
+    get:
+      tags: [chat]
+      summary: Úklid úložiště chatu — the clean-up listing
+      description: >-
+        Live attachments from **the caller's own conversations, above their floor, koš
+        excluded, `state='live'` only** (PRD D241). There is no blind-triage mode and no
+        admin override: a member can only clean what they can already see.
+
+        ⚠ Gated **member ∧ (`editor` | `admin`)** — Karel's "any editor or admin user"
+        intersected with his later scoping. The consequence is recorded rather than
+        resolved: **a `reader` can fill storage they can never clean**, and an `editor` in
+        the same conversation has to do it for them.
+
+        A member of no conversation at all gets an **empty page, not a 403** — the gate
+        passed; there is simply nothing for them to clean.
+
+        A moved or removed row is **gone from this listing on the next load** (D246), not
+        struck through and not greyed: the listing is *what still counts*.
+
+        ⚠ *Ponechat* is not an action here and never will be. It is what happens when
+        nothing is clicked, which is what "not every document has to be dealt with at that
+        moment" actually asks for (D242).
+      parameters:
+        - name: conversation_id
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          description: >-
+            `recent` is newest-first by id and is the only ordering the UUIDv7 `cursor` can
+            resume. ⚠ `size` (largest-first, which is how a space problem is actually read)
+            is therefore SINGLE-PAGE — the §V9 `private-items` precedent, and refused rather
+            than silently ignored if a cursor accompanies it.
+          schema: { type: string, enum: [recent, size], default: size }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: OK — always an array, never null (D174).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatCleanupPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/chat/directory:
+    get:
+      tags: [chat]
+      summary: The household directory, for the add-member picker
+      description: >-
+        ⚠ **The first surface in Home that shows the member directory to a NON-ADMIN.**
+        `push.Member` carries `email` and `roles`; **neither is serialised here** (PRD
+        D230). User id and display name, and nothing else.
+
+        ⚠ The directory is a LOGIN HISTORY. Home has no `users` table — it is projected from
+        `sessions`, newest identity per user — so **a person who has never logged in cannot
+        be added to a conversation**, and a display name changed in the auth service arrives
+        on that member's next login and not before. The picker's empty and stale states say
+        so rather than looking broken.
+      responses:
+        "200":
+          description: OK — always an array, never null (D174).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatDirectory" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/admin/storage/thresholds:
+    put:
+      tags: [admin-storage]
+      summary: Set the chat storage thresholds (v10)
+      description: >-
+        Writes `chat.total` and `chat.conversation` into the platform-owned
+        `storage_thresholds` table (PRD D236). Admin only. Audited as
+        `chat.settings.updated`. The current values ride `GET /api/admin/storage`, so there
+        is deliberately no GET here.
+
+        The table is **platform-owned** because `admin` writes these and `chat` reads them,
+        and neither module may import the other. It is keyed rather than columned, so a
+        later threshold is an INSERT and not a migration.
+
+        ⚠ **v9's `HOME_STORAGE_WARN_TOTAL_MB` remains an environment variable.** Home now
+        has two threshold mechanisms — one in Coolify for the whole application, two in the
+        database for chat. The inconsistency is RECORDED rather than hidden: migrating a
+        live operator setting into a table is a change with its own failure mode, and it is
+        v11's.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StorageThresholdsUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageThresholds" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: A value below 1 MB, or an unknown key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -4556,6 +5385,31 @@ components:
         `finance`) uses 50/200 with a clamp, and nothing should be built on the
         difference.
       schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+    ConversationState:
+      name: state
+      in: query
+      description: >-
+        Which conversations to list (v10). `active` is the default; `trash` lists the
+        caller's own conversations in the KOŠ — soft-deleted, still recoverable, and still
+        counted against both storage thresholds until they are actually purged (PRD D253,
+        D254).
+
+        The koš is a STATE, not a second collection: one path, one predicate, one shape. A
+        trashed conversation is invisible to every other read in the module — thread, search,
+        unread count, clean-up listing — so this parameter is the only way to see one at all.
+      schema: { type: string, enum: [active, trash], default: active }
+    MessageDirection:
+      name: direction
+      in: query
+      description: >-
+        Which way to page from `cursor` (v10). A thread is read BACKWARDS from the newest
+        message and then forwards as new ones arrive, which is why this exists — and why the
+        `electricity` `DateCursor` does not apply here: chat messages are ordered by UUIDv7
+        id, which IS their creation order, so the house `Cursor` locates a position exactly.
+
+        `older` (the default) walks toward the start of the conversation and stops at the
+        caller's `effective_from`, no matter how far a client keeps paging (PRD D218).
+      schema: { type: string, enum: [older, newer], default: older }
 
   responses:
     Unauthorized:
@@ -5734,11 +6588,12 @@ components:
         enabled: { type: boolean, description: Master switch }
         categories:
           type: object
-          required: [broadcast, triggers, summaries]
+          required: [broadcast, triggers, summaries, chat]
           properties:
             broadcast: { type: boolean }
             triggers: { type: boolean }
             summaries: { type: boolean }
+            chat: { type: boolean, description: "New in v10 \u2014 the global switch for chat message pushes. Per-conversation mute lives on the membership row (PRD D248)." }
         updated_at: { type: [string, "null"], format: date-time }
 
     PushTestResult:
@@ -5763,6 +6618,7 @@ components:
             broadcast: { type: boolean }
             triggers: { type: boolean }
             summaries: { type: boolean }
+            chat: { type: boolean }
 
     Audience:
       type: object
@@ -7934,6 +8790,7 @@ components:
         replica: { $ref: "#/components/schemas/StorageReplica" }
         backup: { $ref: "#/components/schemas/StorageBackup" }
         warning: { $ref: "#/components/schemas/StorageWarning" }
+        chat: { $ref: "#/components/schemas/StorageChat" }
     StorageDatabase:
       type: object
       required: [total_bytes, wal_bytes, bytes_available, modules]
@@ -8135,6 +8992,484 @@ components:
           items: { $ref: "#/components/schemas/PrivateItem" }
         next_cursor: { type: [string, "null"] }
         total_bytes: { type: [integer, "null"], description: "Sum across ALL matching items, not only this page — the figure the screen exists to act on." }
+
+    Conversation:
+      type: object
+      required: [id, kind, name, created_at, updated_at, member_count, unread_count, bytes, muted, effective_from]
+      description: >-
+        A room. ⚠ It is addressed by its UUIDv7 `id` and has NO SLUG (PRD D220) — the house
+        `freeSlug` pattern appends `-2` on a sibling collision, which here would disclose a
+        conversation the caller may not see.
+
+        `unread_count`, `muted` and `effective_from` are THE CALLER'S: this schema is never
+        rendered for anybody else, and there is no route that would.
+      properties:
+        id: { type: string }
+        kind:
+          type: string
+          enum: [default, group]
+          description: >-
+            `default` is **Všichni**, the household room — exactly one exists, created by the
+            migration, everyone auto-joined at first sight. It is renameable and refuses
+            delete and leave with 422 (D219).
+        name: { type: string, maxLength: 80 }
+        created_by: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+          description: Non-null ⇔ in the koš. Present only under `?state=trash` (D253).
+        purge_after:
+          type: [string, "null"]
+          format: date-time
+          description: When the drain will destroy this conversation's bytes. Null unless trashed.
+        member_count: { type: integer }
+        unread_count:
+          type: integer
+          description: >-
+            The CALLER'S unread: messages after `MAX(last_read_at, effective_from)`, not
+            their own, not tombstones (D250). A member added yesterday never opens a
+            conversation to a four-figure badge.
+        muted: { type: boolean, description: The caller's own per-conversation push mute (D248). }
+        effective_from:
+          type: string
+          format: date-time
+          description: >-
+            ⚠ **The caller's read floor** — the instant from which this conversation is
+            theirs to read (PRD D218). NOT "when they joined": for **Všichni** it is the
+            conversation's own `created_at`, so a member the app sees for the first time in
+            2028 reads the household room in full (D258). For a group it is the moment they
+            were added.
+
+            The exemption is a VALUE, not a branch: no read path anywhere in the module
+            tests `kind == "default"` to decide what history to show, and a test asserts it.
+        bytes:
+          type: [integer, "null"]
+          description: Live attachment bytes in this conversation. Null when it could not be measured — never 0 (the D161 principle).
+        over_conversation_limit:
+          type: boolean
+          description: "`bytes` exceeds the `chat.conversation` threshold. Computed for the caller rather than left to be inferred (D237)."
+
+    ConversationPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/Conversation" }
+        next_cursor: { type: [string, "null"] }
+
+    ConversationCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        member_ids:
+          type: array
+          description: >-
+            Added with `effective_from = now`, like every group add — nobody joins a new
+            conversation with history behind them. The creator is always a member and need
+            not be listed. Ids must be known to the directory (D230).
+          items: { type: string }
+
+    ConversationUpdate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+
+    ConversationMember:
+      type: object
+      required: [user_id, display_name, effective_from]
+      description: >-
+        ⚠ **Display name only.** `push.Member` also carries `email` and `roles`; neither is
+        serialised anywhere in `chat` (PRD D230).
+      properties:
+        user_id: { type: string }
+        display_name: { type: string }
+        effective_from:
+          type: string
+          format: date-time
+          description: >-
+            This member's read floor. Shown in the members panel so the app can say plainly
+            that somebody added yesterday cannot read last week — a fact the floor makes
+            true and that nothing else in the UI would explain (D218).
+        added_by: { type: [string, "null"] }
+        muted:
+          type: [boolean, "null"]
+          description: Present only on the caller's own row; null for everyone else's. Mute is nobody else's business.
+
+    ConversationMemberList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/ConversationMember" }
+
+    ConversationMemberAdd:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: string }
+
+    ConversationMemberSelfUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        muted: { type: boolean }
+
+    ChatMessage:
+      type: object
+      required: [id, conversation_id, author_id, author_label, body, attachments, created_at, deleted]
+      description: >-
+        ⚠ A message mutation writes **no audit event** (PRD D231) — chat is the first module
+        in Home whose primary mutation writes none, deliberately, guarded by
+        `TestChatMessagesAreNotAudited`. Its attachments ARE audited: the bytes are what the
+        storage half of v10 exists for.
+      properties:
+        id: { type: string, description: UUIDv7 — also the thread's ordering key. }
+        conversation_id: { type: string }
+        author_id: { type: string }
+        author_label: { type: string, description: Display name at render time, from the session-projected directory (D230). }
+        body:
+          type: string
+          description: >-
+            Up to 8 000 characters. **Empty on a tombstone**, because the delete blanks it in
+            place — `chat_messages_fts` is external-content and a body left in the table is a
+            body still returned by search (D223).
+        reply_to: { $ref: "#/components/schemas/ChatMessageQuote" }
+        attachments:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/ChatAttachment" }
+        created_at: { type: string, format: date-time }
+        edited_at:
+          type: [string, "null"]
+          format: date-time
+          description: Non-null ⇒ the bubble renders *upraveno*. ⚠ There is no record of what it said before (D225).
+        deleted: { type: boolean, description: "A tombstone — *Zpráva byla smazána* — kept so replies do not point at nothing (D223)." }
+
+    ChatMessageQuote:
+      type: object
+      required: [available]
+      description: >-
+        The quoted parent of a reply. ⚠ **It is a READ of the parent, not denormalised data
+        belonging to the child** — which is why it goes through the same membership-and-floor
+        predicate as everything else, and why it is the leak the floor most easily misses
+        (PRD D226).
+      properties:
+        available:
+          type: boolean
+          description: >-
+            False when the parent is below the caller's `effective_from`. Every other field
+            is then absent and the UI renders *"Zpráva mimo vaši historii"* — no author, no
+            date, no excerpt.
+        id: { type: string }
+        author_label: { type: string }
+        excerpt: { type: string, description: First line or so. Absent when `available` is false. }
+        created_at: { type: string, format: date-time }
+        deleted: { type: boolean, description: The parent is a tombstone; the quote renders as one.  }
+
+    ChatMessagePage:
+      type: object
+      required: [items]
+      description: >-
+        ⚠ `next_cursor` and `has_more` are computed from the SAME predicate that produced
+        `items` — membership, floor, koš. A post-filter would leak what it removed through
+        exactly these two fields even with the rows gone, which is why the acceptance
+        criteria assert them and not only the visible rows (PRD D218).
+      properties:
+        items:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/ChatMessage" }
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    ChatMessageCreate:
+      type: object
+      description: JSON body — a message with no attachments.
+      properties:
+        body: { type: string, maxLength: 8000 }
+        reply_to_id: { type: [string, "null"], description: Must name a message in the same conversation; otherwise 422. }
+
+    ChatMessageUpload:
+      type: object
+      required: [files]
+      description: >-
+        multipart/form-data — a message that carries files. **One request, not an
+        upload-then-reference pair** (PRD D224): a two-step flow orphans an object every
+        time the second step never happens, and chat has no reconciliation pass to find one.
+      properties:
+        body: { type: string, maxLength: 8000, description: May be empty when at least one file is present. }
+        reply_to_id: { type: string }
+        files:
+          type: array
+          maxItems: 10
+          description: >-
+            Up to ten. Each is sniffed SERVER-SIDE for its MIME type and classified `image`,
+            `video` or `file` — the client's claim is never trusted (D48). Per-file cap is
+            `HOME_DOCS_MAX_UPLOAD_MB`, shared with Dokumenty so that every chat attachment is
+            movable into Dokumenty by construction (D228).
+          items: { type: string, format: binary }
+
+    ChatMessageUpdate:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 8000 }
+
+    ChatAttachment:
+      type: object
+      required: [id, kind, state, original_filename, content_type, byte_size, created_at, uploaded_by]
+      description: >-
+        ⚠ **Three states, and the bubble renders each differently.** `live` shows the file;
+        `removed` shows an epitaph built from `original_filename`, `byte_size`,
+        `cleaned_by_label` and `cleaned_at` (PRD D243); `moved` shows the file, sourced from
+        Dokumenty via `document_path`, with a marker saying where it now lives (D246).
+      properties:
+        id: { type: string }
+        kind:
+          type: string
+          enum: [image, video, file]
+          description: >-
+            Server-sniffed, never the client's claim. `image` gets a thumbnail and recorded
+            dimensions; `video` is stored as uploaded with **no transcoding and no poster
+            frame**; `file` is a download, and a PDF opens in the browser's own viewer. There
+            is no preview pipeline in chat (D227).
+        state:
+          type: string
+          enum: [live, moved, removed]
+          description: >-
+            Only `live` counts toward either threshold and only `live` appears on the
+            clean-up page. `moved` bytes left the `chat/` prefix, so they leave both
+            thresholds by construction rather than by bookkeeping that can drift.
+        original_filename: { type: string, description: Blanked when the parent message is deleted, alongside its body. }
+        content_type: { type: string }
+        byte_size: { type: integer, description: Retained on `removed` so the epitaph can state it. }
+        width: { type: [integer, "null"], description: "`image` only — recorded so the thread does not reflow as images load." }
+        height: { type: [integer, "null"] }
+        has_thumbnail: { type: boolean }
+        document_id:
+          type: [string, "null"]
+          description: Set when `state=moved`. ⚠ It resolves to a SHARED Dokumenty item, readable by the whole household (D245).
+        document_path:
+          type: [string, "null"]
+          description: What the bubble renders after a move — the documents content URL returned by the sink.
+        uploaded_by: { type: string }
+        created_at: { type: string, format: date-time }
+        cleaned_by_label: { type: [string, "null"] }
+        cleaned_at: { type: [string, "null"], format: date-time }
+
+    ChatAttachmentMove:
+      type: object
+      required: [folder_id]
+      properties:
+        folder_id:
+          type: string
+          description: >-
+            ⚠ A **SHARED** Dokumenty folder. A private v9 folder is refused with 422 — a
+            private target would make the file unreadable to the conversation's other
+            members, which is the opposite of what the move is for (PRD D245).
+
+    ChatReadUpdate:
+      type: object
+      required: [until_message_id]
+      properties:
+        until_message_id: { type: string }
+
+    ChatReadState:
+      type: object
+      required: [conversation_id, unread_count]
+      properties:
+        conversation_id: { type: string }
+        last_read_at: { type: [string, "null"], format: date-time }
+        unread_count: { type: integer, description: After the update. Advancing is idempotent and never moves backwards (D250). }
+
+    ChatSearchHit:
+      type: object
+      required: [message_id, conversation_id, conversation_name, author_label, snippet, created_at]
+      properties:
+        message_id: { type: string }
+        conversation_id: { type: string }
+        conversation_name: { type: string }
+        author_label: { type: string }
+        snippet:
+          type: string
+          description: >-
+            ⚠ A snippet **is** a message body by another name, which is why the membership
+            join and the floor ride inside the `MATCH` query rather than filtering its
+            results (PRD D251).
+        created_at: { type: string, format: date-time }
+
+    ChatSearchPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/ChatSearchHit" }
+        next_cursor: { type: [string, "null"] }
+
+    ChatStorage:
+      type: object
+      required: [total_bytes, threshold_total_mb, total_exceeded, threshold_conversation_mb, conversations]
+      description: >-
+        What the in-module warning renders. Both thresholds are **WARN ONLY** — no upload is
+        ever refused, there is no quota and no new 413 anywhere in the app (PRD D237, §V9
+        D196).
+      properties:
+        total_bytes:
+          type: [integer, "null"]
+          description: >-
+            The whole household's live chat attachment bytes — the same figure for every
+            member, because `chat.total` is about the bucket. ⚠ **Conversations in the koš
+            are included** (D254): their bytes are still in R2, and these figures have to sum.
+        threshold_total_mb: { type: integer }
+        total_exceeded: { type: boolean }
+        threshold_conversation_mb: { type: integer, description: One number applied to every conversation — there is no per-room override (D237). }
+        conversations:
+          type: array
+          description: >-
+            **Only conversations the caller belongs to.** ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/ChatStorageConversation" }
+
+    ChatStorageConversation:
+      type: object
+      required: [id, name, bytes, objects, over_limit]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        bytes: { type: [integer, "null"] }
+        objects: { type: [integer, "null"] }
+        over_limit: { type: boolean }
+
+    ChatCleanupItem:
+      type: object
+      required: [attachment, conversation_id, conversation_name, uploaded_by_label, conversation_over_limit]
+      description: >-
+        One row of Úklid úložiště chatu. ⚠ **Only `state='live'` attachments, only from the
+        caller's own conversations, only above their floor, koš excluded** (PRD D241).
+      properties:
+        attachment: { $ref: "#/components/schemas/ChatAttachment" }
+        conversation_id: { type: string }
+        conversation_name: { type: string }
+        conversation_over_limit: { type: boolean, description: Flags the rooms that raised the per-conversation warning, so cleaning can start where it pays. }
+        uploaded_by_label: { type: string }
+
+    ChatCleanupPage:
+      type: object
+      required: [items, total_bytes]
+      properties:
+        items:
+          type: array
+          description: ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/ChatCleanupItem" }
+        next_cursor:
+          type: [string, "null"]
+          description: >-
+            ⚠ Null under `sort=size`, which is SINGLE-PAGE — a keyset cursor is an id, and an
+            id does not locate a position in a size ordering. The §V9 `private-items`
+            precedent, refused rather than silently ignored.
+        total_bytes:
+          type: [integer, "null"]
+          description: Across ALL matching items, not only this page — the figure the screen exists to act on.
+
+    ChatDirectoryEntry:
+      type: object
+      required: [user_id, display_name]
+      description: >-
+        ⚠ Display name only. `push.Member` also carries `email` and `roles`, and this is the
+        first surface in Home that shows the directory to a non-admin (PRD D230).
+      properties:
+        user_id: { type: string }
+        display_name: { type: string }
+
+    ChatDirectory:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: >-
+            ALWAYS an array, never null (D174). ⚠ It is a LOGIN HISTORY projected from
+            `sessions` — Home has no `users` table — so somebody who has never logged in is
+            simply not here and cannot be added to a conversation (D230).
+          items: { $ref: "#/components/schemas/ChatDirectoryEntry" }
+
+    StorageChat:
+      type: object
+      required: [total_bytes, threshold_total_mb, exceeded, threshold_conversation_mb, mirrored, conversations]
+      description: >-
+        The chat block of the Úložiště snapshot (v10). ⚠ **There is no way in from here.** No
+        thread, no message, no attachment list, no clean-up page and no link: an admin sees
+        which room is heavy and asks its members, because the clean-up page is member-scoped
+        (PRD D240, D241). The only two chat verbs an admin has over a conversation they are
+        not in are restore and purge, and neither opens it (D255).
+
+        Conversation names and rough membership therefore become admin-visible. That is the
+        price of a module-level warning somebody can act on, and it is a decision rather than
+        an oversight.
+      properties:
+        total_bytes: { type: [integer, "null"] }
+        threshold_total_mb: { type: integer }
+        exceeded: { type: boolean }
+        threshold_conversation_mb: { type: integer }
+        mirrored:
+          type: boolean
+          description: >-
+            ⚠ **Always false, and deliberately so** (PRD D229). Chat blobs are NOT copied to
+            the backup bucket: they are the most disposable bytes in the application and the
+            module exists under a storage warning, so doubling them into the mirror would be
+            the one place in Home where a background job undermines a threshold. The page
+            renders *Nezálohováno* rather than leaving a gap that reads as zero.
+        conversations:
+          type: array
+          description: Every conversation, trashed ones included. ALWAYS an array, never null (D174).
+          items: { $ref: "#/components/schemas/StorageChatConversation" }
+
+    StorageChatConversation:
+      type: object
+      required: [id, name, members, bytes, objects, over_limit]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        members: { type: integer, description: A count. Never the names — an admin sees that a room is heavy, not who is in it. }
+        bytes: { type: [integer, "null"] }
+        objects: { type: [integer, "null"] }
+        over_limit: { type: boolean }
+        trashed_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            Non-null ⇒ in the koš, and ⚠ **still counted in `total_bytes`** (PRD D254). An
+            admin chasing an overrun needs to know that 200 MB is spoken for but not yet gone.
+        purge_after: { type: [string, "null"], format: date-time }
+
+    StorageThresholds:
+      type: object
+      required: [chat_total_mb, chat_conversation_mb]
+      description: >-
+        The DB-backed chat thresholds (PRD D236). ⚠ v9's `HOME_STORAGE_WARN_TOTAL_MB` is NOT
+        here and remains an environment variable — two threshold mechanisms now exist, the
+        inconsistency is recorded rather than hidden, and reconciling them is v11's.
+      properties:
+        chat_total_mb: { type: integer, minimum: 1 }
+        chat_conversation_mb: { type: integer, minimum: 1 }
+        updated_at: { type: [string, "null"], format: date-time }
+        updated_by: { type: [string, "null"] }
+
+    StorageThresholdsUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        chat_total_mb: { type: integer, minimum: 1 }
+        chat_conversation_mb: { type: integer, minimum: 1 }
 
 security:
   - sessionCookie: []
