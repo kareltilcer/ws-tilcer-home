@@ -16,6 +16,7 @@ import { DocumentPermalinkPage } from '@/routes/dokumenty/DocumentPermalinkPage'
 import { FinancePage } from '@/routes/finance/FinancePage'
 import { GardenPage } from '@/modules/garden/GardenPage'
 import { ElectricityPage } from '@/modules/electricity/ElectricityPage'
+import { ChatPage } from '@/modules/chat/ChatPage'
 import { LogPage } from '@/routes/log/LogPage'
 import { AdministracePage } from '@/modules/admin/AdministracePage'
 import { NastaveniPage } from '@/platform/settings/NastaveniPage'
@@ -61,6 +62,17 @@ export default function App() {
                     gate anywhere in the module (D151): a reader sees every
                     number and can change nothing. */}
                 <Route path={`${routes.elektrina}/*`} element={<ElectricityPage />} />
+                {/* v10: Chat — the list and one thread under one prefix.
+                    ⚠ THERE IS NO NAV ENTRY FOR IT IN THIS RELEASE, and that is
+                    deliberate rather than forgotten: the module ships without
+                    attachments, so the household meets it when PR 3 lands them and
+                    Chat takes a thumb tab (D260). Registering the route now is what
+                    makes /chat and the push deep link /chat/{id} work for the people
+                    testing it.
+                    ⚠ And there is NO RequireWrite here or anywhere in the module: a
+                    `reader` writes in chat (D222), which is a first for Home. The
+                    gate is membership, enforced in SQL. */}
+                <Route path={`${routes.chat}/*`} element={<ChatPage />} />
                 <Route
                   path={routes.log}
                   element={

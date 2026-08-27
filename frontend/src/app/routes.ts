@@ -26,6 +26,11 @@ export const routes = {
   // Note that /elektrina/cenik is SINGULAR: the PRD's spelling wins over the
   // build brief's /ceniky, while the tab LABEL stays "Ceníky a poplatky".
   elektrina: '/elektrina',
+  // v10: Chat. ⚠ THE ROUTE EXISTS AND THE NAV ENTRY DOES NOT — see AppShell. The
+  // module is reachable by typing /chat and by the deep link a push carries, and it
+  // takes a thumb tab (with Okno do budoucnosti moving into "Více", D260) when PR 3
+  // lands attachments. `/chat/{id}` renders the list AND the thread at ≥1024.
+  chat: '/chat',
 } as const
 
 // There is deliberately no permalink helper here: /d/{id} (D42) is minted by the

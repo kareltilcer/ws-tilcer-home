@@ -65,4 +65,11 @@ export const PLURAL = {
   // `days` above already covers; these two are the module's own nouns.
   readings: ['odečet', 'odečty', 'odečtů'],
   tariffs: ['ceník', 'ceníky', 'ceníků'],
+  // v10 — Chat. `days` above already covers the koš countdown; these are the
+  // module's own nouns. ⚠ `members` is distinct from `people`: a conversation has
+  // členy, and the household has lidi — the members panel and the directory picker
+  // sit next to each other and would otherwise read as the same list.
+  messages: ['zpráva', 'zprávy', 'zpráv'],
+  conversations: ['konverzace', 'konverzace', 'konverzací'],
+  members: ['člen', 'členové', 'členů'],
 } satisfies Record<string, PluralForms>

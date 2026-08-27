@@ -1367,4 +1367,143 @@ export const cs = {
     purged: 'Trvale smazáno',
     purgeError: 'Smazání se nepodařilo',
   },
+
+  // v10 — Chat (PRD §V10-7). The vocabulary in `word` is FIXED by the spec and used
+  // verbatim on the screens and in the Log, so a person reads the same noun
+  // everywhere.
+  //
+  // ⚠ THE HARDEST SENTENCE IN v10 IS `floorLine`. It has to say that earlier
+  // messages are not part of this person's history without implying a fault, a
+  // permission problem, or something recoverable — a thread that simply STARTS
+  // somewhere with no explanation reads as data loss, and one that apologises on
+  // every screen reads as broken. It is stated once, calmly, and it is TRUE rather
+  // than reassuring, because the history genuinely is not coming back.
+  chat: {
+    title: 'Chat',
+    lede: 'Konverzace domácnosti — a skupiny, které si založíte sami.',
+
+    word: {
+      conversation: 'Konverzace',
+      newConversation: 'Nová konverzace',
+      members: 'Členové',
+      addMember: 'Přidat člena',
+      removeMember: 'Odebrat z konverzace',
+      deleteConversation: 'Smazat konverzaci',
+      trash: 'Koš',
+      restore: 'Obnovit',
+      purge: 'Smazat natrvalo',
+      reply: 'Odpovědět',
+      edit: 'Upravit',
+      deleteMessage: 'Smazat zprávu',
+      edited: 'upraveno',
+      deleted: 'Zpráva byla smazána',
+      outsideHistory: 'Zpráva mimo vaši historii',
+      newMessages: 'Nové zprávy',
+      mute: 'Ztlumit konverzaci',
+      unmute: 'Zrušit ztlumení',
+      everyone: 'Všichni',
+    },
+
+    // ---- the conversation list ----
+    listTitle: 'Konverzace',
+    emptyTitle: 'Zatím žádné konverzace',
+    emptyBody:
+      'Píšete v konverzaci Všichni, kde je celá domácnost. Vlastní skupinu si můžete kdykoliv založit.',
+    unreadLabel: 'nepřečtené zprávy',
+    pickPrompt: 'Vyberte konverzaci vlevo.',
+
+    // ---- the thread ----
+    threadEmpty: 'Zatím tu nikdo nic nenapsal.',
+    threadEmptyHint: 'Napište první zprávu.',
+    loadOlder: 'Načíst starší',
+
+    /**
+     * ⚠ The floor line — a quiet, PERMANENT line at the top of a thread, never a
+     * dismissible banner. It appears only in created groups and NEVER in Všichni,
+     * where every member reads the whole history (D258); a mock that shows it there
+     * has misread the decision.
+     */
+    floorLine: 'Historie konverzace před vaším přidáním pro vás není dostupná.',
+    floorLineFrom: 'Vidíte zprávy od',
+
+    // ---- the composer ----
+    composerPlaceholder: 'Napište zprávu…',
+    send: 'Odeslat',
+    cancelEdit: 'Zrušit úpravy',
+    replyingTo: 'Odpovídáte na',
+    tooLong: 'Zpráva může mít nejvýše 8 000 znaků.',
+
+    // ---- members ----
+    membersTitle: 'Členové konverzace',
+    memberSince: 'Vidí zprávy od',
+    memberSinceBeginning: 'Vidí celou historii',
+    directoryEmpty: 'Zatím se nikdo další nepřihlásil.',
+    /**
+     * ⚠ The directory is a LOGIN HISTORY projected from sessions — Home has no user
+     * table — so somebody who has never logged in cannot be added. The picker says
+     * so rather than looking broken.
+     */
+    directoryHint: 'V seznamu jsou lidé, kteří se už někdy přihlásili.',
+    addMemberPlaceholder: 'Koho přidat?',
+    leave: 'Opustit konverzaci',
+
+    /**
+     * ⚠ The removal dialog HAS to mention the gap, because nothing afterwards will
+     * explain it: re-adding writes a new floor, so a removed-and-re-added member
+     * has a permanent hole in the middle of a conversation they otherwise read in
+     * full (D218).
+     */
+    removeTitle: 'Odebrat člena z konverzace?',
+    removeBody:
+      'Zprávy, které napsal, zůstanou. Když ho přidáte zpátky, uvidí až zprávy od té chvíle — v konverzaci mu natrvalo zůstane mezera.',
+    leaveTitle: 'Opustit konverzaci?',
+    leaveBody:
+      'Vaše zprávy zůstanou ostatním. Pokud vás někdo přidá zpátky, uvidíte až zprávy od té chvíle.',
+    everyoneCannotLeave: 'Konverzaci Všichni nelze opustit ani smazat.',
+
+    // ---- the koš ----
+    trashSectionTitle: 'Koš',
+    /** Deleting frees the space in seven days; purging frees it now (D254). */
+    trashDaysLeft: 'Soubory se smažou za',
+    deleteTitle: 'Smazat konverzaci?',
+    deleteBody:
+      'Konverzace zmizí všem členům a přesune se do koše. Odtud ji lze obnovit, dokud se nesmažou její soubory.',
+    deleteConfirmPrompt: 'Pro potvrzení opište název konverzace:',
+    purgeTitle: 'Smazat konverzaci natrvalo?',
+    purgeBody:
+      'Zpátky to nejde. Soubory se uvolní hned, místo aby se smazaly až po uplynutí lhůty v koši.',
+    restored: 'Konverzace obnovena',
+    trashEmpty: 'V koši nic není.',
+
+    // ---- search ----
+    searchPlaceholder: 'Hledat ve zprávách…',
+    searchEmpty: 'Nic nenalezeno.',
+    /** Relevance ordering is single-page, and the screen says so rather than
+     *  offering a Load-more that would not work. */
+    searchSinglePage: 'Výsledky se řadí podle shody a nestránkují se.',
+
+    // ---- offline ----
+    /**
+     * ⚠ Chat is excluded from the PWA persister entirely, so this is not the usual
+     * "data may be older" banner — there is no cached thread at all. The copy has to
+     * read as a deliberate choice rather than as a failure to load.
+     */
+    offlineTitle: 'Chat vyžaduje připojení',
+    offlineBody:
+      'Zprávy se do zařízení neukládají, takže je offline nelze zobrazit. Jakmile budete online, načtou se.',
+
+    // ---- shared actions ----
+    // Owned here rather than in cs.common, following every other module: the
+    // wording of a confirm button belongs beside the sentence it confirms.
+    cancel: 'Zrušit',
+    create: 'Vytvořit',
+    save: 'Uložit',
+    confirmDelete: 'Smazat',
+    close: 'Zavřít',
+
+    // ---- errors ----
+    notFound: 'Konverzace nebyla nalezena.',
+    sendFailed: 'Zprávu se nepodařilo odeslat',
+    genericError: 'Něco se nepovedlo',
+  },
 } as const
