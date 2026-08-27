@@ -3,7 +3,6 @@ package ws_test
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -21,7 +20,7 @@ import (
 // production handler reads the session cookie; the test stubs the decision).
 func newServer(t *testing.T, authOK bool) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
@@ -83,15 +82,14 @@ func poll(t *testing.T, get func() int, ok func(int) bool, want, what string) {
 	t.Fatalf("%s = %d, %s", what, last, want)
 }
 
-// The log sink and the two loggers live in testsupport: the mutex-guarded buffer
-// was already written verbatim in documents' preview tests, and asserting on a
-// log line is not a ws-specific need. captureLogger is for the handler's warnings
-// about connections that are a BUG STATE rather than a policy — they change no
-// observable behaviour, so the log line is the only thing that can be asserted,
-// and without asserting it the branch can be deleted whole.
-func discardLogger() *slog.Logger { return testsupport.DiscardLogger() }
-
-func captureLogger() (*slog.Logger, *testsupport.SyncBuffer) { return testsupport.CaptureLogger() }
+// The log sink and the two loggers live in testsupport and are called from there
+// directly: the mutex-guarded buffer was already written verbatim in documents'
+// preview tests, and asserting on a log line is not a ws-specific need, so a
+// package-local alias for them would just fork the naming again.
+// testsupport.CaptureLogger is for the handler's warnings about connections that
+// are a BUG STATE rather than a policy — they change no observable behaviour, so
+// the log line is the only thing that can be asserted, and without asserting it
+// the branch can be deleted whole.
 
 func waitCount(t *testing.T, hub *ws.Hub, want int) {
 	t.Helper()

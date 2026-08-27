@@ -23,6 +23,7 @@ import (
 
 	cws "github.com/coder/websocket"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
 
@@ -35,7 +36,7 @@ import (
 // dialAsSession opens a distinct one, which is what the revocation tests need.
 func newIdentityServer(t *testing.T) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
 		Authenticate: func(r *http.Request) (ws.Upgrade, bool) {
@@ -281,7 +282,7 @@ func TestPublishStillReachesEveryClient(t *testing.T) {
 // Authenticate — the branch production takes, and the one that warns — is a
 // different code path with its own test: TestAuthenticatedActorWithNoUserIDIsBroadcastOnly.
 func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{}}))
 	srv := httptest.NewServer(mux)
@@ -328,7 +329,7 @@ func TestAnonymousClientIsBroadcastOnly(t *testing.T) {
 // principals, so an authenticated connection carrying no id is reachable the day
 // a non-user principal opens a socket, and it must be broadcast-only there too.
 func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
-	logger, logs := captureLogger()
+	logger, logs := testsupport.CaptureLogger()
 	hub := ws.NewHub(logger)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
@@ -399,7 +400,7 @@ func TestAuthenticatedActorWithNoUserIDIsBroadcastOnly(t *testing.T) {
 // not refused — that would take out live boards over a revocation-plumbing
 // problem — but the half that can leak is dropped.
 func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
-	logger, logs := captureLogger()
+	logger, logs := testsupport.CaptureLogger()
 	hub := ws.NewHub(logger)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
@@ -460,7 +461,7 @@ func TestAuthenticatedConnectionWithoutASessionOrTokenIsLogged(t *testing.T) {
 // TestBypassActorRegistersUnderItsID: with a dev actor id configured, targeted
 // pushes DO arrive, so a developer running under the bypass sees chat work.
 func TestBypassActorRegistersUnderItsID(t *testing.T) {
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-1"}}))
 	srv := httptest.NewServer(mux)
@@ -494,7 +495,7 @@ func TestBypassActorRegistersUnderItsID(t *testing.T) {
 // pinned here so nobody reads the anonymous test above and concludes the bypass is
 // broadcast-only.
 func TestBypassRegistersEveryClientUnderOneID(t *testing.T) {
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{BypassActor: &reqctx.Actor{UserID: "dev-user"}}))
 	srv := httptest.NewServer(mux)
@@ -676,7 +677,7 @@ func TestRevalidationRunsImmediatelyOnConnect(t *testing.T) {
 // forever, at a Lookup and possibly a Mint per cycle.
 func TestRevalidationKeepsAnIdentifiedlessConnection(t *testing.T) {
 	var calls atomic.Int32
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
@@ -777,7 +778,7 @@ func TestRevalidationKeepsASocketWhenTheVerdictResolvesNoID(t *testing.T) {
 // pump is keyed by session, so it is asserted rather than assumed.
 func TestOnePumpPerSessionNotPerSocket(t *testing.T) {
 	var calls atomic.Int32
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
 		Authenticate: func(r *http.Request) (ws.Upgrade, bool) {
@@ -869,7 +870,7 @@ func TestSocketsThatDisagreeGetSeparatePumps(t *testing.T) {
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			var nth atomic.Int32
-			hub := ws.NewHub(discardLogger())
+			hub := ws.NewHub(testsupport.DiscardLogger())
 			mux := http.NewServeMux()
 			// One SESSION throughout; only the user id and the token vary, and only
 			// on the second dial.
@@ -1013,7 +1014,7 @@ func newRevalidatingServer(t *testing.T, revalidate func(context.Context, string
 
 func newRevalidatingServerEvery(t *testing.T, every time.Duration, revalidate func(context.Context, string) (string, ws.Revalidation)) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
@@ -1035,7 +1036,7 @@ func newRevalidatingServerEvery(t *testing.T, every time.Duration, revalidate fu
 // connect-time and recurring checks, either of which may be nil.
 func newTwoSeamServer(t *testing.T, recheck, revalidate ws.RevalidateFunc, every time.Duration) (*ws.Hub, string) {
 	t.Helper()
-	hub := ws.NewHub(discardLogger())
+	hub := ws.NewHub(testsupport.DiscardLogger())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.Handler(ws.Config{
 		Authenticate: func(*http.Request) (ws.Upgrade, bool) {
