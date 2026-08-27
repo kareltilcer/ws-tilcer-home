@@ -234,6 +234,15 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
+		// ⚠ DEFERRED, not merely called on the way out below. Everything from here
+		// down owns something the process cannot reclaim on its own — this context,
+		// the hijacked TCP connection, three index entries — and net/http does NOT
+		// close a hijacked connection when it recovers a panic. So a panic in the
+		// write pump, or a return added between here and it one day, would leak the
+		// socket's file descriptor for the process's lifetime. The whole unwind is
+		// deferred for that reason; cancel is idempotent, so the ordinary path costs
+		// nothing.
+		defer cancel()
 		// ⚠ THE READ PUMP GETS ITS OWN CONTEXT, and it must not be this one. A
 		// coder/websocket Read whose context is cancelled ABORTS the connection
 		// rather than closing it, so a read pump sharing ctx tears the socket down
@@ -246,13 +255,31 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 		defer cancelRead()
 		c := &client{conn: conn, send: make(chan []byte, sendBuffer), cancel: cancel, userID: userID, sessionID: sessionID}
 		h.add(c)
-		// ⚠ Deferred AS WELL AS called explicitly below. h.add files this client in
-		// THREE maps and only the ordinary path unwinds through the explicit
-		// remove, so a panic in the write pump — or a return added between add and
+		// ⚠ A REVOCATION IS NOT A RESTART, and the close code is the only place
+		// that distinction survives to the browser. Closed as StatusNormalClosure,
+		// a socket dropped because its session is gone is indistinguishable from a
+		// deploy, so the client reconnects — onto an upgrade that will 401 for the
+		// rest of the tab's life, once every backoff cap, forever. The policy code
+		// is what lets it stop and send the member to the login screen instead.
+		//
+		// Registered BEFORE the remove below so that it runs AFTER it (defers are
+		// LIFO): the disconnect line reports the count with this client already
+		// gone, as it always did.
+		defer func() {
+			status, reason := websocket.StatusNormalClosure, ""
+			if c.revoked.Load() {
+				status, reason = websocket.StatusPolicyViolation, "session revoked"
+			}
+			_ = conn.Close(status, reason)
+			logger.Info("ws disconnected", "user", userID, "session", sessionID, "clients", h.Count())
+		}()
+		// ⚠ Deferred, not called on the way out. h.add files this client in THREE
+		// maps and only the ordinary path would unwind through an explicit remove,
+		// so a panic in the write pump — or a return added between add and
 		// writePump one day — would otherwise leave a dead *client in byUser and
 		// bySession for the process's lifetime, holding a 32-slot channel and a
 		// cancel func, and found by every later DisconnectSession for that session.
-		// remove is idempotent, so the second call costs nothing.
+		// remove is idempotent, so the connect-time check's own call costs nothing.
 		defer h.remove(c)
 		// The id is logged on both ends: "did that member's socket register, and
 		// under what?" is the first question a missing targeted push raises, and
@@ -279,7 +306,17 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 			// the CHEAP half of the decision: see Config.Recheck for why the
 			// Mint-capable one must not run once per socket.
 			go func() {
-				if !revalidateOnce(ctx, recheck, token, userID, sessionID, logger) {
+				if !revalidateOnce(ctx, recheck, sessionCheck{token: token, openedAs: userID, sessionID: sessionID}, logger) {
+					// ⚠ UNINDEX BEFORE CANCELLING, exactly as DisconnectSession does and
+					// for the same reason. Cancelling alone leaves this client in byUser
+					// until its write pump unwinds and the deferred remove runs, and in
+					// that window a concurrent PublishTo still finds it, queues a message
+					// BODY on its send channel, and the write pump — in a select with
+					// ctx.Done() AND c.send both ready, which Go picks between at random —
+					// can put that private payload on the wire of a session this check
+					// has just established is gone. remove is idempotent, so the deferred
+					// one still costs nothing.
+					h.remove(c)
 					c.revoke()
 				}
 			}()
@@ -296,22 +333,9 @@ func (h *Hub) Handler(cfg Config) http.HandlerFunc {
 				defer h.releaseSessionPump(p)
 			}
 		}
+		// The unwind — remove, close with the right status, cancel — is entirely
+		// deferred above, so it runs on a panic as well as on the ordinary return.
 		h.writePump(ctx, c)
-
-		h.remove(c)
-		cancel()
-		// ⚠ A REVOCATION IS NOT A RESTART, and the close code is the only place
-		// that distinction survives to the browser. Closed as StatusNormalClosure,
-		// a socket dropped because its session is gone is indistinguishable from a
-		// deploy, so the client reconnects — onto an upgrade that will 401 for the
-		// rest of the tab's life, once every backoff cap, forever. The policy code
-		// is what lets it stop and send the member to the login screen instead.
-		status, reason := websocket.StatusNormalClosure, ""
-		if c.revoked.Load() {
-			status, reason = websocket.StatusPolicyViolation, "session revoked"
-		}
-		_ = conn.Close(status, reason)
-		logger.Info("ws disconnected", "user", userID, "session", sessionID, "clients", h.Count())
 	}
 }
 
@@ -347,7 +371,7 @@ func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, token string, 
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if !revalidateOnce(ctx, revalidate, token, openedAs, sessionID, h.logger) {
+			if !revalidateOnce(ctx, revalidate, sessionCheck{token: token, openedAs: openedAs, sessionID: sessionID}, h.logger) {
 				// ⚠ RETIRE BEFORE DISCONNECTING, not after. Retiring second left a
 				// window in which a socket that connected after DisconnectSession
 				// snapshotted bySession still found this pump registered, joined it,
@@ -365,14 +389,32 @@ func (h *Hub) runSessionPump(ctx context.Context, p *sessionPump, token string, 
 	}
 }
 
+// sessionCheck is what one re-check is taken against: the opaque token to re-take
+// the decision from, the member the connection opened as, and the session it was
+// authorised by.
+//
+// ⚠ IT IS A STRUCT SO THE TOKEN CANNOT BE PASSED AS AN ID. As three adjacent
+// string parameters a transposition compiled silently, and two of the three are
+// LOGGED — so swapping token and sessionID put a live session cookie, valid for
+// the whole TTL (90 days by default), into the log stream under the key
+// "session", with every test still green because nothing asserts that field's
+// value. It is the same hazard pumpKey avoids by holding a digest rather than the
+// token; named fields close it here.
+type sessionCheck struct {
+	token     string
+	openedAs  string
+	sessionID string
+}
+
 // revalidateOnce re-takes the decision once and reports whether the connections
 // it covers live on. It closes nothing itself: the caller decides whether that
 // means one socket (the connect-time check) or a whole session (the pump).
 //
 // ⚠ ONLY RevalidationGone CLOSES. "I could not tell" keeps the connection: see
 // RevalidationUnknown.
-func revalidateOnce(ctx context.Context, revalidate RevalidateFunc, token, openedAs, sessionID string, logger *slog.Logger) bool {
-	userID, verdict := revalidate(ctx, token)
+func revalidateOnce(ctx context.Context, revalidate RevalidateFunc, chk sessionCheck, logger *slog.Logger) bool {
+	openedAs, sessionID := chk.openedAs, chk.sessionID
+	userID, verdict := revalidate(ctx, chk.token)
 	switch {
 	case verdict == RevalidationGone:
 		logger.Info("ws: session revoked or expired — closing the socket",
