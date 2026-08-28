@@ -42,3 +42,83 @@ export const routes = {
 // backend and handed to the client as `urls.permalink` on the document detail, so
 // that HOME_DOCS_PUBLIC_BASE_URL can absolutise it. Building it client-side would
 // bypass that setting. The route itself is registered in App.tsx.
+
+/**
+ * The order the DESKTOP side nav lists its destinations in (design/v10, the side
+ * nav at lines 828–842 of Home.dc.html).
+ *
+ * ⚠ IT IS NOT THE THUMB BAR'S ORDER, AND THE DIFFERENCE IS THE POINT. The phone bar
+ * is ordered by REACH — four tabs plus *Více*, with the one entry carrying an unread
+ * count in the middle slot, which is the easiest one to hit. A sidebar has no reach
+ * to trade on, so the artboards order it by REASON TO LOOK: Chat leads, because it
+ * is the only entry that can be waiting for you, and Okno do budoucnosti keeps the
+ * fourth slot it has always had here — D260 took its THUMB TAB, not its place in a
+ * list that has room for everything. Deriving this list from the two nav tables is
+ * what had Chat fourth and Okno fifth.
+ *
+ * ⚠ EVERY NAV ENTRY HAS TO APPEAR HERE. AppShell sorts by this list and appends
+ * whatever it does not name, so a module added to the nav and forgotten here lands
+ * at the bottom of the sidebar rather than vanishing from it — and nav.test.ts
+ * fails, which is the intended way to find that out.
+ */
+export const DESKTOP_NAV_ORDER: readonly string[] = [
+  routes.chat,
+  routes.nastenka,
+  routes.ukoly,
+  routes.okno,
+  routes.poznamky,
+  routes.dokumenty,
+  routes.finance,
+  routes.zahrada,
+  routes.elektrina,
+  routes.log,
+  routes.administrace,
+  routes.nastaveni,
+]
+
+/** What AppShell hands down through its `<Outlet>`: the layout it already decided. */
+export interface ShellLayout {
+  /** True when `<main>` gave this route its content box unpadded (isFullBleedRoute). */
+  fullBleed: boolean
+}
+
+/**
+ * Whether a path owns the shell's whole content box rather than sitting inside its
+ * padding (design/v10, desktop and 375 px frames).
+ *
+ * ⚠ CHAT IS THE ONLY ONE, AND IT IS NOT A STYLE PREFERENCE. Every other module is a
+ * document that scrolls: the shell's `px-4 py-5 pb-24 md:px-8 md:py-8 md:pb-8` is
+ * its margin and the page grows as tall as it needs. The chat list and thread are
+ * PANES — each one a fixed-height flex column with its own scroll box — so the
+ * padding is not a margin around them, it is height subtracted from an element that
+ * has already been sized to the full viewport. Below 768 that arithmetic ran twice and
+ * the page gained 49 px it could scroll and no content to put there, with the
+ * composer sitting above a dead strip; the artboards draw the two panes flush to
+ * the shell on both frames, with no card frame around them.
+ *
+ * ⚠ `/chat/uklid` IS NOT FULL-BLEED, and that is the design too (D241): the
+ * clean-up screen is an ordinary scrolling document, like the ten modules either
+ * side of it. Excluding it is safe for the same reason the route tree is:
+ * `uklid` is a reserved word under `/chat` and a conversation is addressed by
+ * UUIDv7 (D220 — no slugs anywhere in the module), so no room can ever claim it.
+ *
+ * ⚠ IT HAS TO MATCH EXACTLY WHAT THE ROUTER MATCHES, which is looser than an `===`
+ * on a route constant in three ways. Anything the router sends to a chat screen and
+ * this function says no to gets the shell's padding on top of a viewport-sized pane,
+ * which is the bug this whole predicate exists to remove.
+ */
+export function isFullBleedRoute(pathname: string): boolean {
+  // 1. React Router matches route paths CASE-INSENSITIVELY unless a route opts in
+  //    (`caseSensitive`), and nothing in App.tsx does — so `/CHAT` really does
+  //    render the module, and a lowercase-only comparison would pad it.
+  // 2. It treats `/chat/uklid/` as the same location as `/chat/uklid`, so one stray
+  //    trailing slash must not unpad the one chat screen that needs the padding.
+  const lower = pathname.toLowerCase()
+  const path = lower.length > 1 ? lower.replace(/\/+$/, '') : lower
+  // 3. The clean-up screen is excluded WITH ANYTHING UNDER IT. `uklid` has no
+  //    sub-routes today, so this is about the day it grows one: an exact-match
+  //    exclusion would quietly hand that sub-page the full-bleed box and put its
+  //    heading against the shell's edge.
+  if (path === routes.chatUklid || path.startsWith(routes.chatUklid + '/')) return false
+  return path === routes.chat || path.startsWith(routes.chat + '/')
+}
