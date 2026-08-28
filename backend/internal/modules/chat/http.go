@@ -248,17 +248,33 @@ func (h *Handler) directory(w http.ResponseWriter, r *http.Request) {
 // spelling strconv.ParseBool accepts (`true`, `1`, `T`, `True`…), plus the bare
 // `?flag` form, which ParseBool refuses because its value is the empty string.
 // Anything else is false — for `hard` that is the reversible direction.
+//
+// ⚠ AN EMPTY VALUE IS NOT THE BARE FLAG (v10 review). url.Values cannot tell
+// `?hard` from `?hard=`: both decode to [""], so reading the bare form as "the key
+// is present with an empty value" made `?hard=` a PURGE — and `?hard=${flag}` is
+// what any client emits when its variable is empty. That spelling destroyed a
+// conversation and every message in it with no koš row and no seven-day window.
+// The bare flag is therefore read from RawQuery, where the two forms differ.
 func queryBool(r *http.Request, name string) bool {
-	values, present := r.URL.Query()[name]
-	if !present {
-		return false
-	}
 	raw := strings.TrimSpace(r.URL.Query().Get(name))
 	if raw == "" {
-		return len(values) > 0
+		return hasBareFlag(r.URL.RawQuery, name)
 	}
 	v, err := strconv.ParseBool(raw)
 	return err == nil && v
+}
+
+// hasBareFlag reports whether the raw query carries `name` written with no `=` at
+// all — the one spelling url.Values cannot distinguish from an empty value.
+func hasBareFlag(rawQuery, name string) bool {
+	for rawQuery != "" {
+		var segment string
+		segment, rawQuery, _ = strings.Cut(rawQuery, "&")
+		if segment == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- rendering ----

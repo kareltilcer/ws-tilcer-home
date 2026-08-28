@@ -452,12 +452,23 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
     // "this conversation is no longer yours", and for an added one is a room that
     // was not in their list a moment ago.
     //
-    // ⚠ Three keys, not the `['chat']` prefix. The thread is deliberately absent:
+    // ⚠ Three keys, not the `['chat']` prefix. The thread is never INVALIDATED:
     // a member who just lost the room must not refetch its messages, and one who
     // just gained it has no thread cached to refresh.
     void qc.invalidateQueries({ queryKey: qk.chatConversation(ev.conversation_id) })
     void qc.invalidateQueries({ queryKey: qk.chatMembers(ev.conversation_id) })
     invalidateLists(qc)
+    if (ev.removed) {
+      // ⚠ BUT A REMOVAL DROPS WHAT THIS TAB IS HOLDING (v10 review), the way the
+      // `gone` branch above does and for a sharper reason. Not invalidating is not
+      // the same as not keeping: the thread stayed in the cache with a live
+      // observer, so a member removed and RE-ADDED an hour later — who now has a
+      // NEW floor and may read none of it (D218) — had the whole pre-removal thread
+      // rendered straight back at them the moment the conversation query succeeded,
+      // and it stood until something happened to refocus the window. The permanent
+      // gap the removal dialog promises was invisible.
+      qc.removeQueries({ queryKey: qk.chatMessages(ev.conversation_id) })
+    }
     return
   }
 

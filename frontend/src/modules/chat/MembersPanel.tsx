@@ -49,6 +49,13 @@ export function MembersPanel({
   const isDefault = conversation.data?.kind === 'default'
   const present = new Set((members.data?.items ?? []).map((m) => m.user_id))
   const addable = (directory.data?.items ?? []).filter((d) => !present.has(d.user_id))
+  // ⚠ THE LAST MEMBER CANNOT LEAVE, AND THE SERVER IS THE GUARD (v10 review) — this
+  // is only what stops somebody meeting it as an error message, exactly as hiding
+  // Všichni's delete entry does one file over. A group emptied of members is a live
+  // row that has left every read there is: not trashed, so absent from the koš, and
+  // every listing is a membership join, so nobody — not even an admin — can reach
+  // it again. Deleting the conversation is the verb that was wanted.
+  const soleMember = (members.data?.items.length ?? 0) <= 1
 
   return (
     <>
@@ -65,15 +72,12 @@ export function MembersPanel({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-semibold">{m.display_name}</span>
                 <span className="mt-0.5 block truncate text-xs text-muted">
-                  <FloorLabel
-                    effectiveFrom={m.effective_from}
-                    conversationCreatedAt={conversation.data?.created_at}
-                  />
+                  <FloorLabel member={m} />
                 </span>
               </span>
               {/* ⚠ Nobody is removed from Všichni and nobody leaves it (D219): it is
                   the one conversation whose membership IS the household. */}
-              {!isDefault && (
+              {!isDefault && !soleMember && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -100,7 +104,12 @@ export function MembersPanel({
                   key={d.user_id}
                   size="sm"
                   variant="secondary"
-                  loading={add.isPending}
+                  // ⚠ THE ONE THAT WAS PRESSED, not all of them (v10 review). Every
+                  // button read the shared mutation's isPending, so adding one person
+                  // put the whole picker into the loading state and the member could
+                  // not tell which add was in flight. `variables` is the id this
+                  // mutation was called with.
+                  loading={add.isPending && add.variables === d.user_id}
                   onClick={() => add.mutate(d.user_id)}
                 >
                   {d.display_name}
@@ -148,19 +157,18 @@ export function MembersPanel({
  * everyone in Všichni, and everyone who was present when a group was created — so
  * they get a different sentence rather than a date that means nothing to them.
  */
-function FloorLabel({
-  effectiveFrom,
-  conversationCreatedAt,
-}: {
-  effectiveFrom: string
-  conversationCreatedAt?: string
-}) {
-  if (conversationCreatedAt && effectiveFrom <= conversationCreatedAt) {
+function FloorLabel({ member }: { member: ConversationMember }) {
+  // ⚠ THE SERVER ANSWERS THIS; IT IS NOT DERIVED FROM THE TIMESTAMPS (v10 review).
+  // The floor is an id bound, and comparing `effective_from` to the room's
+  // `created_at` was a second spelling of it that disagreed — somebody added to a
+  // room with no messages yet gets `effective_from = now` over an EMPTY bound, so
+  // the clock claimed a gap where the server says they read all of it.
+  if (member.reads_from_beginning) {
     return <>{cs.chat.memberSinceBeginning}</>
   }
   return (
     <>
-      {cs.chat.memberSince} {dateFmt.format(new Date(effectiveFrom))}
+      {cs.chat.memberSince} {dateFmt.format(new Date(member.effective_from))}
     </>
   )
 }

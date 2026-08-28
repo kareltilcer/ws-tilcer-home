@@ -35,9 +35,25 @@ export interface Conversation {
    * household room in full (D258).
    */
   effective_from: string
+  /**
+   * True when the caller's floor IS the conversation's beginning, so nothing is
+   * being withheld.
+   *
+   * ⚠ BRANCH ON THIS, NEVER ON `effective_from` AGAINST `created_at`. The server's
+   * floor is an id bound, and re-deriving it from the clock here is a second
+   * spelling of one access rule — the thing floor.go forbids, one layer up. The two
+   * disagree: adding somebody to a room that has no messages yet writes
+   * `effective_from = now` over an empty bound, so the timestamps claim history was
+   * withheld when none existed.
+   */
+  reads_from_beginning: boolean
   /** Live attachment bytes. Null when unmeasured — never 0 (the D161 principle). */
   bytes: number | null
-  over_conversation_limit: boolean
+  /**
+   * ⚠ Nullable for the reason `bytes` is: it is a verdict about `bytes`, so it
+   * cannot be more certain than the figure it judges. Null until PR 3 measures.
+   */
+  over_conversation_limit: boolean | null
 }
 
 export interface ConversationPage {
@@ -59,6 +75,12 @@ export interface ConversationMember {
    * would explain.
    */
   effective_from: string
+  /**
+   * True when this member's floor IS the conversation's beginning, so they read all
+   * of it — see the same field on `Conversation` for why the panel branches on this
+   * rather than on the two timestamps.
+   */
+  reads_from_beginning: boolean
   added_by: string | null
   /** Present only on the caller's own row. Mute is nobody else's business. */
   muted: boolean | null

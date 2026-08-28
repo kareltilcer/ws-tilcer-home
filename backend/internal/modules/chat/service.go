@@ -566,7 +566,10 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 	if _, ok := labels[in.UserID]; !ok {
 		return ConversationMemberList{}, httpx.ErrUnprocessable("Tento člen není v adresáři domácnosti.")
 	}
-	var added bool
+	var (
+		added    bool
+		audience []string
+	)
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		sc, err := s.store.memberScope(ctx, tx, actor, id)
 		if err != nil {
@@ -591,6 +594,17 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 			// Already in the room. Nothing changed, so nothing is recorded.
 			return nil
 		}
+		// ⚠ THE REST OF THE ROOM IS TOLD TOO (v10 review) — resolved here, inside the
+		// writing transaction, like every other audience in this module (D233). The
+		// added member gets their own frame below; everybody else needs one because
+		// the members panel and the room's member_count are theirs as well, and
+		// without it they hold a list that is one person out of date until something
+		// happens to refocus the window. It is the same defect publishConversation
+		// was added for one verb up — a membership change is a structural verb.
+		audience, err = s.store.MemberIDs(ctx, tx, sc.ConversationID)
+		if err != nil {
+			return err
+		}
 		return s.record(ctx, tx, "member.added", sc.ConversationID,
 			"Do konverzace „"+name+"“ přidán člen "+label(labels, in.UserID), nil)
 	})
@@ -607,6 +621,10 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 		s.notifyTo(ctx, []string{in.UserID}, "chat_membership.changed", MembershipEvent{
 			ConversationID: id, UserID: in.UserID, Removed: false,
 		})
+		// Everybody who was already here gets the room's own frame instead: their
+		// membership did not change, the room's roster did. The added member is
+		// excluded because the frame above already refetches the same keys for them.
+		s.publishConversation(ctx, withoutMember(audience, in.UserID), id, false)
 	}
 	// The projection this request already built, rather than a third one.
 	return s.listMembersWith(ctx, id, labels)
@@ -625,8 +643,9 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 func (s *Service) RemoveMember(ctx context.Context, id, userID string) error {
 	actor := actorID(ctx)
 	var (
-		removed bool
-		labels  map[string]string
+		removed  bool
+		audience []string
+		labels   map[string]string
 	)
 	labels, err := s.labels(ctx)
 	if err != nil {
@@ -642,6 +661,29 @@ func (s *Service) RemoveMember(ctx context.Context, id, userID string) error {
 			// (D219): it is the one conversation whose membership is the household.
 			return httpx.ErrUnprocessable("Z konverzace „Všichni“ nelze nikoho odebrat.")
 		}
+		// ⚠ THE LAST MEMBER MAY NOT LEAVE, AND THE ROOM IS WHY (v10 review). A group
+		// emptied of members is not deleted — it is a live row that has left every
+		// read there is: the koš lists only TRASHED conversations, and every listing
+		// is a membership join, so neither its former member nor an admin can ever
+		// see it again. Its bytes go on counting against chat.total with nothing that
+		// could free them. Deleting the conversation is the verb that was wanted, and
+		// the koš is what makes that survivable.
+		//
+		// ⚠ THE COUNT IS ONLY CONSULTED WHEN THE TARGET IS THE CALLER. memberScope has
+		// already proved the caller is in the room, so a single-member room's one
+		// member IS the caller: refusing on the count alone would answer 422 where a
+		// non-member target must get the same 404 an unknown id gets, and that
+		// difference is a membership oracle.
+		if userID == actor {
+			n, err := s.store.CountMembers(ctx, tx, sc.ConversationID)
+			if err != nil {
+				return err
+			}
+			if n <= 1 {
+				return httpx.ErrUnprocessable(
+					"Poslední člen nemůže konverzaci opustit — smažte ji místo toho.")
+			}
+		}
 		name, err := s.store.ConversationName(ctx, tx, sc.ConversationID)
 		if err != nil {
 			return err
@@ -655,6 +697,15 @@ func (s *Service) RemoveMember(ctx context.Context, id, userID string) error {
 			// that reported "they were not in it" would be a membership oracle.
 			return ErrNotMember
 		}
+		// ⚠ WHO IS LEFT, read after the DELETE and inside the transaction (v10
+		// review). The removed member is told separately below; the ones still here
+		// need the room's own frame, because the panel and the member_count are
+		// theirs too — and a stale panel goes on offering a remove button for
+		// somebody who has already gone, whose click answers 404.
+		audience, err = s.store.MemberIDs(ctx, tx, sc.ConversationID)
+		if err != nil {
+			return err
+		}
 		return s.record(ctx, tx, "member.removed", sc.ConversationID,
 			"Z konverzace „"+name+"“ odebrán člen "+label(labels, userID), nil)
 	})
@@ -664,7 +715,22 @@ func (s *Service) RemoveMember(ctx context.Context, id, userID string) error {
 	s.notifyTo(ctx, []string{userID}, "chat_membership.changed", MembershipEvent{
 		ConversationID: id, UserID: userID, Removed: true,
 	})
+	// The DELETE has already run, so `audience` cannot contain the removed member —
+	// no exclusion is needed here, unlike the add.
+	s.publishConversation(ctx, audience, id, false)
 	return nil
+}
+
+// withoutMember returns ids minus one. It exists so AddMember can tell the room
+// without telling the added member twice.
+func withoutMember(ids []string, exclude string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != exclude {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // UpdateSelf sets the caller's own per-conversation mute (D248).

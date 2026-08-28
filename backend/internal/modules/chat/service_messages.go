@@ -346,6 +346,20 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 			Attachments: []Attachment{}, CreatedAt: row.CreatedAt,
 			EditedAt: ptr(now), Deleted: false,
 		}
+		// ⚠ THE QUOTE IS RE-RENDERED, BECAUSE THE FRAME REPLACES THE WHOLE MESSAGE
+		// (v10 review). replaceMessage swaps the cached object outright, so a field
+		// this struct omits is a field that DISAPPEARS from every client's bubble
+		// until something refetches the thread — and an edit that silently unquoted
+		// its own reply is the shape that found it. Read through the caller's own
+		// scope, like every other read of a parent: an edit is not a reason to widen
+		// the floor (D226). PR 3's attachments belong here for the same reason.
+		if row.ReplyToID.Valid {
+			quote, err := s.store.Quote(ctx, tx, sc, row.ReplyToID.String, labels)
+			if err != nil {
+				return err
+			}
+			out.ReplyTo = quote
+		}
 		return nil
 	})
 	if err != nil {

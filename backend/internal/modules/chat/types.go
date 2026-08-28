@@ -33,13 +33,31 @@ type Conversation struct {
 	// ⚠ The caller's read floor (D218) — NOT "when they joined". For Všichni it is
 	// the conversation's own created_at (D258).
 	EffectiveFrom string `json:"effective_from"`
+	// ReadsFromBeginning is `effective_from_id = ''` — the floor IS the conversation's
+	// beginning, so nothing is being withheld.
+	//
+	// ⚠ IT IS PUBLISHED BECAUSE THE UI WAS DERIVING IT FROM THE CLOCK (v10 review).
+	// The floor line and the members panel decided "history was withheld" by comparing
+	// effective_from against created_at, which is a SECOND SPELLING of a rule the
+	// server states as an id bound — the exact thing floor.go forbids, one layer up.
+	// The two disagree: adding somebody to a room with no messages yet writes
+	// At = now and ID = "" (MAX(id) over an empty table), so the timestamps say
+	// "withheld" over history that never existed. The id bound itself stays off the
+	// wire — it names a message the caller may not read — so the ANSWER travels
+	// rather than the bound.
+	ReadsFromBeginning bool `json:"reads_from_beginning"`
 
 	// Live attachment bytes. NULL when it could not be measured, never 0 — the
 	// D161 principle: an unmeasured figure that renders as zero is a lie the page
 	// cannot distinguish from an empty room. PR 3 fills it; until then it is null
 	// everywhere and the frontend renders the unmeasured state.
-	Bytes                 *int64 `json:"bytes"`
-	OverConversationLimit bool   `json:"over_conversation_limit"`
+	Bytes *int64 `json:"bytes"`
+	// ⚠ A POINTER FOR THE REASON Bytes IS ONE (v10 review). It is a verdict ABOUT
+	// Bytes, so it cannot be more certain than Bytes is: shipped as a plain bool it
+	// serialised `false` on every room while `bytes` was still null, which is the
+	// D161 lie one field up in boolean form — a definite "under the limit" derived
+	// from a figure nobody has measured. Null until PR 3 sums the bytes.
+	OverConversationLimit *bool `json:"over_conversation_limit"`
 }
 
 // ConversationPage is the list response. Items is ALWAYS an array, never null (D174).
@@ -63,11 +81,15 @@ type ConversationUpdate struct {
 // for everyone else's: mute is nobody else's business, and a bool would serialise
 // somebody else's silence as `false`.
 type ConversationMember struct {
-	UserID        string  `json:"user_id"`
-	DisplayName   string  `json:"display_name"`
-	EffectiveFrom string  `json:"effective_from"`
-	AddedBy       *string `json:"added_by"`
-	Muted         *bool   `json:"muted"`
+	UserID        string `json:"user_id"`
+	DisplayName   string `json:"display_name"`
+	EffectiveFrom string `json:"effective_from"`
+	// ReadsFromBeginning is this member's floor answered rather than implied — see
+	// Conversation.ReadsFromBeginning for why the panel may not work it out from
+	// effective_from itself.
+	ReadsFromBeginning bool    `json:"reads_from_beginning"`
+	AddedBy            *string `json:"added_by"`
+	Muted              *bool   `json:"muted"`
 }
 
 type ConversationMemberList struct {

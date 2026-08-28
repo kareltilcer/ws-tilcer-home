@@ -97,7 +97,7 @@ func (s *Store) ListConversations(ctx context.Context, actor, state, cursor stri
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.kind, c.name, c.created_by, c.created_at, c.updated_at,
 		       c.deleted_at,
-		       m.effective_from, m.muted,
+		       m.effective_from, m.effective_from_id = '', m.muted,
 		       (SELECT COUNT(*) FROM chat_members mm WHERE mm.conversation_id = c.id),
 		       (SELECT COUNT(*) FROM chat_messages x
 		         WHERE x.conversation_id = c.id
@@ -120,21 +120,22 @@ func (s *Store) ListConversations(ctx context.Context, actor, state, cursor stri
 	out := []Conversation{}
 	for rows.Next() {
 		var (
-			r        conversationRow
-			effFrom  string
-			mutedInt int
-			members  int
-			unread   int
+			r         conversationRow
+			effFrom   string
+			fromStart bool
+			mutedInt  int
+			members   int
+			unread    int
 		)
 		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
-			&r.DeletedAt, &effFrom, &mutedInt, &members, &unread); err != nil {
+			&r.DeletedAt, &effFrom, &fromStart, &mutedInt, &members, &unread); err != nil {
 			return nil, false, err
 		}
 		c := Conversation{
 			ID: r.ID, Kind: r.Kind, Name: r.Name,
 			CreatedBy: nullStr(r.CreatedBy), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 			MemberCount: members, UnreadCount: unread, Muted: mutedInt != 0,
-			EffectiveFrom: effFrom,
+			EffectiveFrom: effFrom, ReadsFromBeginning: fromStart,
 			// Bytes stays null until PR 3 measures it — never 0. The D161 principle:
 			// an unmeasured figure rendered as zero is indistinguishable from an
 			// empty room, and the storage half exists to be believed.
@@ -181,15 +182,16 @@ func decodeConversationCursor(cursor string) (updatedAt, id string, ok bool) {
 // non-member, so this is a plain row read.
 func (s *Store) GetConversation(ctx context.Context, q querier, actor string, sc Scope) (Conversation, error) {
 	var (
-		r        conversationRow
-		effFrom  string
-		mutedInt int
-		members  int
-		unread   int
+		r         conversationRow
+		effFrom   string
+		fromStart bool
+		mutedInt  int
+		members   int
+		unread    int
 	)
 	err := q.QueryRowContext(ctx, `
 		SELECT c.id, c.kind, c.name, c.created_by, c.created_at, c.updated_at,
-		       m.effective_from, m.muted,
+		       m.effective_from, m.effective_from_id = '', m.muted,
 		       (SELECT COUNT(*) FROM chat_members mm WHERE mm.conversation_id = c.id),
 		       (SELECT COUNT(*) FROM chat_messages x
 		         WHERE x.conversation_id = c.id
@@ -202,7 +204,7 @@ func (s *Store) GetConversation(ctx context.Context, q querier, actor string, sc
 		 WHERE m.conversation_id = ? AND m.user_id = ?`,
 		actor, sc.ConversationID, actor).
 		Scan(&r.ID, &r.Kind, &r.Name, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
-			&effFrom, &mutedInt, &members, &unread)
+			&effFrom, &fromStart, &mutedInt, &members, &unread)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, ErrNotMember
 	}
@@ -213,7 +215,7 @@ func (s *Store) GetConversation(ctx context.Context, q querier, actor string, sc
 		ID: r.ID, Kind: r.Kind, Name: r.Name,
 		CreatedBy: nullStr(r.CreatedBy), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		MemberCount: members, UnreadCount: unread, Muted: mutedInt != 0,
-		EffectiveFrom: effFrom, Bytes: nil,
+		EffectiveFrom: effFrom, ReadsFromBeginning: fromStart, Bytes: nil,
 	}, nil
 }
 
@@ -301,7 +303,7 @@ func (s *Store) PurgeConversationRows(ctx context.Context, q querier, id string)
 // and a bool on every row would publish who has silenced the conversation.
 func (s *Store) ListMembers(ctx context.Context, q querier, conversationID, actor string, labels map[string]string) ([]ConversationMember, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT user_id, effective_from, added_by, muted
+		SELECT user_id, effective_from, effective_from_id = '', added_by, muted
 		  FROM chat_members WHERE conversation_id = ?
 		 ORDER BY effective_from, user_id`, conversationID)
 	if err != nil {
@@ -316,7 +318,8 @@ func (s *Store) ListMembers(ctx context.Context, q querier, conversationID, acto
 			addedBy  sql.NullString
 			mutedInt int
 		)
-		if err := rows.Scan(&m.UserID, &m.EffectiveFrom, &addedBy, &mutedInt); err != nil {
+		if err := rows.Scan(&m.UserID, &m.EffectiveFrom, &m.ReadsFromBeginning,
+			&addedBy, &mutedInt); err != nil {
 			return nil, err
 		}
 		m.AddedBy = nullStr(addedBy)
@@ -436,6 +439,23 @@ func (s *Store) InsertMember(ctx context.Context, q querier, conversationID, use
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// CountMembers is how many people are in a room.
+//
+// ⚠ IT EXISTS FOR THE LAST-MEMBER GUARD (v10 review), not for the member_count on
+// the wire — that one rides the list and get queries as a subquery, so it costs
+// nothing there. Removing the last member left a conversation row with no members
+// at all: not trashed, so absent from the koš; and every listing is a membership
+// JOIN, so absent from every member's list AND from an admin's. The only remaining
+// door was conversationForDestructiveVerb's admin fallback, which needs an id
+// nothing would ever show. PR 3's attachments would then count against
+// `chat.total` forever with no surface that could free them.
+func (s *Store) CountMembers(ctx context.Context, q querier, conversationID string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM chat_members WHERE conversation_id = ?`, conversationID).Scan(&n)
+	return n, err
 }
 
 // RemoveMember deletes the row.

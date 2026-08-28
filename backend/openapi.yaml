@@ -4648,19 +4648,26 @@ paths:
         D253). Membership, messages and attachments were never touched, so this is the state
         before the delete — **not a reconstruction**. Available to its members and to an
         `admin` who is not one (D255). Audited as `chat.conversation.restored`.
+
+        ⚠ **Restoring a conversation that is not in the koš does nothing, silently, and
+        answers 200.** It is idempotent rather than 422: the UPDATE already lands on a live
+        row without changing it, so the only thing a refusal would add is an error over a
+        double tap on *Obnovit* that has plainly got what it asked for. No
+        `chat.conversation.restored` event is written for a restore that restored nothing.
       responses:
         "200":
-          description: Restored
+          description: Restored — the conversation, as a MEMBER may see it.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Conversation" }
+        "204":
+          description: >-
+            Restored by an **`admin` who is not a member** (D255) — no body, deliberately.
+            The restore is a storage verb they have; the conversation is a read they do not,
+            and `GET` of this same id still answers them 404. Handing it back in the
+            response body would be exactly the read the next request correctly refuses.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "422":
-          description: The conversation is not in the koš.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
   /api/chat/conversations/{id}/members:
     parameters:
       - $ref: "#/components/parameters/PathId"
@@ -4697,14 +4704,22 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/ConversationMemberAdd" }
       responses:
-        "201":
-          description: Added
+        "200":
+          description: >-
+            Added — and the response is the WHOLE members list, not the row that was
+            written, because the panel that made this call renders the list.
+
+            ⚠ **200 rather than 201, and no 409.** Adding somebody already in the room is
+            idempotent and SILENT: the write is `ON CONFLICT DO NOTHING`, because re-running
+            it would move an existing member's `effective_from` forward and cut them off
+            from history they can already read — so no audit event and no `/ws` frame go out
+            either. A double tap has plainly got what it asked for, which is
+            `RestoreConversation`'s precedent one verb over.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ConversationMember" }
+              schema: { $ref: "#/components/schemas/ConversationMemberList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
         "422":
           description: >-
             An unknown user id, or any membership change on `kind=default` — Všichni's
@@ -4757,10 +4772,14 @@ paths:
             schema: { $ref: "#/components/schemas/ConversationMemberSelfUpdate" }
       responses:
         "200":
-          description: OK
+          description: >-
+            OK — the CONVERSATION, not the membership row. `muted` is one of the three
+            fields on `Conversation` that are the caller's own rather than the room's, so
+            the room as this member now sees it is the whole of what changed, and the list
+            row and the thread header both read their state from that shape.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ConversationMember" }
+              schema: { $ref: "#/components/schemas/Conversation" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
@@ -5155,15 +5174,24 @@ paths:
           description: Restrict to one conversation the caller is a member of.
           schema: { type: string }
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: OK — always an array, never null (D174).
+          description: >-
+            OK — always an array, never null (D174). ⚠ **A SINGLE PAGE**: `next_cursor` is
+            always null here, and there is deliberately no `cursor` parameter above.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ChatSearchPage" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "422": { $ref: "#/components/responses/Unprocessable" }
+        "422":
+          description: >-
+            An empty `q` — or a `cursor`, which is **REFUSED RATHER THAN IGNORED**. The
+            ordering is `rank` and a keyset cursor is an id, which does not locate a
+            position in a relevance ordering; silently dropping it would return page one
+            forever and read as the end of the results (the v9 `private-items` precedent).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /api/chat/storage:
     get:
       tags: [chat]
@@ -9059,12 +9087,29 @@ components:
 
             The exemption is a VALUE, not a branch: no read path anywhere in the module
             tests `kind == "default"` to decide what history to show, and a test asserts it.
+        reads_from_beginning:
+          type: boolean
+          description: >-
+            True when the caller's floor IS the conversation's beginning — `effective_from_id`
+            is the empty string — so nothing is being withheld from them.
+
+            ⚠ **Read this rather than comparing `effective_from` to `created_at`.** The
+            server's floor is an ID BOUND and deriving it back from a clock is a second
+            spelling of one access rule (see `chat/floor.go`); the two disagree, because
+            adding somebody to a room that has no messages yet writes `effective_from = now`
+            with an empty bound — history was never withheld, and a timestamp comparison
+            claims it was. The bound itself stays off the wire: it names a message the
+            caller may not read, so the ANSWER travels and not the bound.
         bytes:
           type: [integer, "null"]
           description: Live attachment bytes in this conversation. Null when it could not be measured — never 0 (the D161 principle).
         over_conversation_limit:
-          type: boolean
-          description: "`bytes` exceeds the `chat.conversation` threshold. Computed for the caller rather than left to be inferred (D237)."
+          type: [boolean, "null"]
+          description: >-
+            `bytes` exceeds the `chat.conversation` threshold. Computed for the caller rather
+            than left to be inferred (D237). ⚠ **Null whenever `bytes` is null** — it is a
+            verdict ABOUT `bytes` and cannot be more certain than the figure it judges, the
+            same D161 principle one field up. PR 3 is what makes it a boolean.
 
     ConversationPage:
       type: object
@@ -9111,6 +9156,13 @@ components:
             This member's read floor. Shown in the members panel so the app can say plainly
             that somebody added yesterday cannot read last week — a fact the floor makes
             true and that nothing else in the UI would explain (D218).
+        reads_from_beginning:
+          type: boolean
+          description: >-
+            True when this member's floor IS the conversation's beginning, so they read all
+            of it. ⚠ The panel branches on THIS and not on `effective_from` against the
+            room's `created_at` — see the same field on `Conversation` for why the two
+            disagree.
         added_by: { type: [string, "null"] }
         muted:
           type: [boolean, "null"]

@@ -7,6 +7,7 @@ package chat_test
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
@@ -385,5 +386,218 @@ func TestBothDirectionsReturnNewestFirst(t *testing.T) {
 	}
 	if !back.HasMore || back.NextCursor == nil || *back.NextCursor != back.Items[len(back.Items)-1].ID {
 		t.Errorf("backward next_cursor = %v, want the oldest of the page", back.NextCursor)
+	}
+}
+
+// ---- the fourth review ----
+
+// ⚠ `?hard=` IS NOT `?hard`. url.Values decodes both to [""], so reading the bare
+// flag as "present with an empty value" made the two spellings one — and one of
+// them is an irreversible purge. `?hard=${flag}` is what any client emits when its
+// variable is empty, so the reversible verb and the destructive one were a template
+// substitution apart.
+func TestAnEmptyHardValueTrashesRatherThanPurges(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+
+	empty := hh.group(kaja, "Prázdná hodnota", andy)
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+empty.ID+"?hard=", ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rr.Code, rr.Body.String())
+	}
+	var trashed int
+	if err := hh.db.QueryRow(
+		`SELECT COUNT(*) FROM chat_conversations WHERE id = ? AND deleted_at IS NOT NULL`,
+		empty.ID).Scan(&trashed); err != nil {
+		t.Fatalf("read the koš: %v", err)
+	}
+	if trashed != 1 {
+		t.Errorf("?hard= left %d trashed rows, want 1 — an empty value purged the room", trashed)
+	}
+
+	// And the spellings that DO mean it still purge: the fix must not make
+	// Smazat natrvalo unreachable.
+	for _, spelling := range []string{"?hard=true", "?hard=1", "?hard"} {
+		room := hh.group(kaja, "Natrvalo "+spelling, andy)
+		if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID+spelling, ""); rr.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", spelling, rr.Code, rr.Body.String())
+		}
+		var left int
+		if err := hh.db.QueryRow(
+			`SELECT COUNT(*) FROM chat_conversations WHERE id = ?`, room.ID).Scan(&left); err != nil {
+			t.Fatalf("count rows: %v", err)
+		}
+		if left != 0 {
+			t.Errorf("%s left %d rows, want a purge", spelling, left)
+		}
+	}
+}
+
+// ⚠ AN EMPTIED GROUP IS NOT A DELETED ONE. It is a live row that has left every
+// read there is: not trashed, so absent from the koš, and every listing is a
+// membership join, so neither its former member nor an admin can reach it again.
+// Its bytes would go on counting against chat.total with nothing able to free them.
+//
+// ⚠ AND THE REFUSAL MUST NOT BECOME A MEMBERSHIP ORACLE. Removing somebody who is
+// not in a one-member room still has to answer the same 404 an unknown id gets —
+// which is why the count is consulted only when the target is the caller.
+func TestTheLastMemberOfAGroupCannotLeave(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	room := hh.group(kaja, "Sám")
+
+	rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID+"/members/"+kaja.id, "")
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("the last member leaving = %d, want 422 (%s)", rr.Code, rr.Body.String())
+	}
+	var n int
+	if err := hh.db.QueryRow(
+		`SELECT COUNT(*) FROM chat_members WHERE conversation_id = ?`, room.ID).Scan(&n); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("the room has %d members, want the one who could not leave", n)
+	}
+
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID+"/members/"+andy.id, ""); rr.Code != http.StatusNotFound {
+		t.Errorf("removing a non-member from a one-member room = %d, want 404 — a 422 here "+
+			"would say how many people are in a room the caller is asking about", rr.Code)
+	}
+
+	// With somebody else in it, leaving is ordinary again.
+	if _, err := hh.svc.AddMember(hh.ctx(kaja), room.ID,
+		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	if err := hh.svc.RemoveMember(hh.ctx(kaja), room.ID, kaja.id); err != nil {
+		t.Errorf("leaving a two-member room: %v", err)
+	}
+}
+
+// ⚠ THE FRAME REPLACES THE WHOLE MESSAGE, so a field the edit omits is a field that
+// DISAPPEARS from every client's bubble. replaceMessage swaps the cached object
+// outright; it does not merge. An edit that silently unquoted its own reply is what
+// found it.
+func TestAnEditStillCarriesItsQuote(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	room := hh.group(kaja, "Citace", andy)
+	parent := hh.send(kaja, room.ID, "otázka")
+
+	reply, err := hh.svc.SendMessage(hh.ctx(andy), room.ID,
+		chat.MessageCreate{Body: "odpověď", ReplyToID: &parent.ID})
+	if err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	edited, err := hh.svc.EditMessage(hh.ctx(andy), reply.ID, chat.MessageUpdate{Body: "opravená odpověď"})
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if edited.ReplyTo == nil {
+		t.Fatalf("the edit dropped reply_to entirely — the quote vanishes until a refetch")
+	}
+	if !edited.ReplyTo.Available || edited.ReplyTo.ID != parent.ID {
+		t.Errorf("the edit's quote = %+v, want the parent %q", edited.ReplyTo, parent.ID)
+	}
+}
+
+// ⚠ A MEMBERSHIP CHANGE IS A STRUCTURAL VERB, and the room hears about it — the
+// same defect publishConversation was added for on rename and trash. Without it the
+// other members hold a panel and a member_count one person out of date.
+//
+// The SPLIT is what keeps D221: the frame that names a person goes to that person
+// alone, and the room gets the frame that names nobody.
+func TestAddingAMemberTellsTheRestOfTheRoom(t *testing.T) {
+	hh := newHousehold(t, kaja, andy, quiet)
+	room := hh.group(kaja, "Skupina", quiet)
+
+	hh.notify.audiences, hh.notify.types, hh.notify.payloads = nil, nil, nil
+	if _, err := hh.svc.AddMember(hh.ctx(kaja), room.ID,
+		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	var toAdded, toRoom []string
+	for i, typ := range hh.notify.types {
+		switch typ {
+		case "chat_membership.changed":
+			toAdded = hh.notify.audiences[i]
+		case "chat_conversation.changed":
+			toRoom = hh.notify.audiences[i]
+		}
+	}
+	if len(toAdded) != 1 || toAdded[0] != andy.id {
+		t.Errorf("the membership frame went to %v, want only the added member", toAdded)
+	}
+	if len(toRoom) != 2 {
+		t.Errorf("the room's frame went to %v, want the two who were already in it", toRoom)
+	}
+	for _, id := range toRoom {
+		if id == andy.id {
+			t.Errorf("the added member is in the room's audience %v as well — the two frames "+
+				"refetch the same keys, so they would be told twice", toRoom)
+		}
+	}
+}
+
+// ⚠ THE FLOOR IS AN ID BOUND, AND THE UI MAY NOT RE-DERIVE IT FROM A CLOCK. The
+// floor line and the members panel used to compare effective_from against the room's
+// created_at — a second spelling of one access rule, which floor.go forbids, and one
+// that DISAGREES: adding somebody to a room with no messages yet writes
+// effective_from = now over an EMPTY bound, so the timestamps claimed history was
+// withheld where the server says they read all of it.
+func TestReadsFromBeginningIsAnsweredRatherThanInferred(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+
+	// A room with nothing in it: the floor id is '' however late the add lands.
+	empty := hh.group(kaja, "Prázdná")
+	if _, err := hh.svc.AddMember(hh.ctx(kaja), empty.ID,
+		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	got, err := hh.svc.GetConversation(hh.ctx(andy), empty.ID)
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if !got.ReadsFromBeginning {
+		t.Errorf("reads_from_beginning = false for a member added to an EMPTY room, who can "+
+			"read all of it (effective_from %s, created_at %s)", got.EffectiveFrom, got.CreatedAt)
+	}
+
+	// A room with history: the floor is real and has to say so.
+	busy := hh.group(kaja, "Plná")
+	hh.send(kaja, busy.ID, "tajemství")
+	if _, err := hh.svc.AddMember(hh.ctx(kaja), busy.ID,
+		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	if got, err = hh.svc.GetConversation(hh.ctx(andy), busy.ID); err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if got.ReadsFromBeginning {
+		t.Error("reads_from_beginning = true for a member added ABOVE real history")
+	}
+
+	// And per member in the panel: the founder reads all of it, the late arrival does not.
+	members, err := hh.svc.ListMembers(hh.ctx(andy), busy.ID)
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+	for _, m := range members.Items {
+		want := m.UserID == kaja.id
+		if m.ReadsFromBeginning != want {
+			t.Errorf("%s reads_from_beginning = %v, want %v", m.UserID, m.ReadsFromBeginning, want)
+		}
+	}
+}
+
+// ⚠ A VERDICT CANNOT BE MORE CERTAIN THAN THE FIGURE IT JUDGES (D161). `bytes` is
+// null until PR 3 measures it, so `over_conversation_limit` shipping a hard false
+// was the same lie one field up, in boolean form.
+func TestOverConversationLimitIsNullWhileBytesIs(t *testing.T) {
+	hh := newHousehold(t, kaja)
+	room := hh.group(kaja, "Neměřeno")
+	body := hh.as(kaja, "GET", "/api/chat/conversations/"+room.ID, "").Body.String()
+	if !strings.Contains(body, `"bytes":null`) {
+		t.Fatalf("bytes is no longer null, so this test no longer asks anything: %s", body)
+	}
+	if !strings.Contains(body, `"over_conversation_limit":null`) {
+		t.Errorf("over_conversation_limit is a verdict about an unmeasured figure: %s", body)
 	}
 }

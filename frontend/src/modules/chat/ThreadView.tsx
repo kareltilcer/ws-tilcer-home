@@ -64,12 +64,26 @@ export function ThreadView({ conversationID, onOpenMembers }: {
    */
   const scrollRef = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
-  const onScroll = () => {
+  /**
+   * showingNewest MEASURES THE BOX. One spelling, two consumers: the `atBottom` ref
+   * that decides whether to follow a live message down, and the read marker below.
+   *
+   * ⚠ AN UNMOUNTED BOX IS `false`, AND THAT IS THE WHOLE POINT (v10 review). The
+   * marker used to read `atBottom.current`, whose initial value is an optimistic
+   * `true` — so on a cold load, where the thread query resolves while the
+   * conversation query is still pending and this component is still returning the
+   * spinner, the marker fired against a scroll box that did not exist yet. Nothing
+   * had been on screen to be read, and `MAX(last_read_id, ?)` made it permanent.
+   */
+  const showingNewest = () => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el) return false
     // A slack of one line, so a fractional scrollTop or a rounding difference does
     // not read as "they have scrolled away".
-    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 24
+  }
+  const onScroll = () => {
+    atBottom.current = showingNewest()
   }
   useEffect(() => {
     const el = scrollRef.current
@@ -140,7 +154,10 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   const marked = useRef<string>('')
   useEffect(() => {
     if (!newest || marked.current === newest.id) return
-    if (!atBottom.current || document.visibilityState !== 'visible') return
+    // ⚠ MEASURED, NOT ASSUMED. showingNewest() answers false while the scroll box is
+    // unmounted and false while the member is scrolled back through history, which
+    // are the two ways a marker can run ahead of what anybody has actually seen.
+    if (!showingNewest() || document.visibilityState !== 'visible') return
     marked.current = newest.id
     advanceRead.mutate(newest.id)
     // advanceRead is a stable mutation object; including it would re-fire on every
@@ -158,10 +175,23 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     const catchUp = () => {
       const latest = thread.data?.items[0]
       if (!latest || marked.current === latest.id) return
-      if (!atBottom.current || document.visibilityState !== 'visible') return
+      if (!showingNewest() || document.visibilityState !== 'visible') return
       marked.current = latest.id
       advanceRead.mutate(latest.id)
     }
+    // ⚠ IT RUNS ONCE HERE TOO, NOT ONLY ON A LISTENER (v10 review). The effect above
+    // fires while the scroll box may still be unmounted and then never re-fires,
+    // because its dep is the newest message id and that does not change again — so
+    // a thread short enough to be wholly visible would never be marked read at all,
+    // there being no scroll to catch it up.
+    //
+    // ⚠ WHICH IS WHY `conversation.data` IS A DEP. The box appears on the commit
+    // where the LAST of the two queries resolves, and when that is the conversation
+    // rather than the thread, nothing about the thread changed to re-run this. With
+    // it, the first commit at which the box exists is where a wholly-visible thread
+    // gets marked — and a taller one still correctly waits for the scroll that
+    // reaches its end, because showingNewest() measures.
+    catchUp()
     const el = scrollRef.current
     el?.addEventListener('scroll', catchUp, { passive: true })
     document.addEventListener('visibilitychange', catchUp)
@@ -170,7 +200,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
       document.removeEventListener('visibilitychange', catchUp)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thread.data])
+  }, [thread.data, conversation.data])
 
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [editing, setEditing] = useState<ChatMessage | null>(null)
@@ -233,7 +263,15 @@ export function ThreadView({ conversationID, onOpenMembers }: {
                 mine={m.author_id === me}
                 conversationID={conversationID}
                 onReply={() => setReplyTo(m)}
-                onEdit={() => setEditing(m)}
+                // ⚠ STARTING AN EDIT DROPS A PENDING REPLY (v10 review). The composer
+                // hides the reply chip while an edit is open, so a reply begun before
+                // it was invisible but still armed — and once the edit finished, the
+                // next ordinary message went out as a reply to a message nobody had
+                // looked at in a while, with no unsend behind it.
+                onEdit={() => {
+                  setReplyTo(null)
+                  setEditing(m)
+                }}
               />
             </li>
           ))}
@@ -485,7 +523,14 @@ function FloorLine({ conversation }: { conversation: Conversation }) {
   if (conversation.kind === 'default') return null
   // A member whose floor is the conversation's own start has no missing history to
   // explain: they were there from the beginning.
-  if (conversation.effective_from <= conversation.created_at) return null
+  //
+  // ⚠ THE SERVER ANSWERS THIS; IT IS NOT DERIVED FROM THE TWO TIMESTAMPS (v10
+  // review). The floor is an id bound, and `effective_from <= created_at` was a
+  // second spelling of it that disagreed — adding somebody to a room with no
+  // messages yet writes `effective_from = now` over an EMPTY bound, so the clock
+  // said "history withheld" and this permanent, non-dismissible line appeared over
+  // history that never existed.
+  if (conversation.reads_from_beginning) return null
   return (
     <p className="mb-4 border-b border-border pb-3 text-center text-xs text-muted text-pretty">
       {cs.chat.floorLine}{' '}
@@ -544,7 +589,14 @@ function Bubble({
         </div>
       </div>
 
-      <div className="flex flex-none items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+      {/* ⚠ THE `hover:none` ESCAPE IS LOAD-BEARING (v10 review). Tailwind v4 wraps
+          every hover variant in `@media (hover: hover)`, so on a phone —
+          the 375 px case this module is designed around — `group-hover:opacity-100`
+          is dead CSS and these controls stayed at opacity 0 permanently. They are
+          still in the layout and still clickable, so reply, edit and delete were
+          invisible targets a member had to find by tapping. Where there is no hover
+          to reveal them, they are simply always shown. */}
+      <div className="flex flex-none items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
         <button
           type="button"
           onClick={onReply}

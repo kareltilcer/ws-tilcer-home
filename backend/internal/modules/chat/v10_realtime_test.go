@@ -64,16 +64,50 @@ func TestRemovedMemberIsToldSpecifically(t *testing.T) {
 		t.Fatalf("remove member: %v", err)
 	}
 
-	if len(hh.notify.audiences) != 1 {
-		t.Fatalf("removing a member produced %d publishes, want 1", len(hh.notify.audiences))
+	// ⚠ TWO FRAMES, AND THE SPLIT IS THE WHOLE POINT (v10 review). The membership
+	// frame — the one that names a person — goes to the removed member ALONE.
+	// Telling the room WHO left would be a system message, and there are none
+	// (D221). What the room gets instead is the room's own frame, which names
+	// nobody: "this conversation changed, refetch through the membership join".
+	// Without it the remaining members hold a panel that still lists the person who
+	// has gone, and go on being offered a remove button whose click answers 404.
+	if len(hh.notify.audiences) != 2 {
+		t.Fatalf("removing a member produced %d publishes, want 2", len(hh.notify.audiences))
 	}
-	if hh.notify.types[0] != "chat_membership.changed" {
-		t.Errorf("published type %q, want chat_membership.changed", hh.notify.types[0])
+	membership, room := -1, -1
+	for i, typ := range hh.notify.types {
+		switch typ {
+		case "chat_membership.changed":
+			membership = i
+		case "chat_conversation.changed":
+			room = i
+		}
 	}
-	if len(hh.notify.audiences[0]) != 1 || hh.notify.audiences[0][0] != andy.id {
+	if membership < 0 || room < 0 {
+		t.Fatalf("published %v, want one chat_membership.changed and one chat_conversation.changed",
+			hh.notify.types)
+	}
+	if got := hh.notify.audiences[membership]; len(got) != 1 || got[0] != andy.id {
 		t.Errorf("the membership change went to %v, want only the removed member — "+
-			"telling the room who left is a system message, and there are none (D221)",
-			hh.notify.audiences[0])
+			"telling the room who left is a system message, and there are none (D221)", got)
+	}
+	// The room's frame reaches whoever is still in it, and never the person who left.
+	for _, id := range hh.notify.audiences[room] {
+		if id == andy.id {
+			t.Errorf("the removed member is still in the room's own audience %v",
+				hh.notify.audiences[room])
+		}
+	}
+	if len(hh.notify.audiences[room]) != 1 || hh.notify.audiences[room][0] != kaja.id {
+		t.Errorf("the room's frame went to %v, want the remaining member %s",
+			hh.notify.audiences[room], kaja.id)
+	}
+	// ⚠ AND IT NAMES NOBODY. A frame carrying the departed member's id would be the
+	// system message D221 refuses, in a payload instead of in the thread.
+	ev, ok := hh.notify.payloads[room].(chat.ConversationEvent)
+	if !ok || ev.ConversationID != c.ID || ev.Gone {
+		t.Errorf("room payload = %+v, want a plain changed frame for %s",
+			hh.notify.payloads[room], c.ID)
 	}
 
 	// And the bound: the next request 404s.
