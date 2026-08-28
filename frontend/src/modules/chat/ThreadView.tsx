@@ -24,7 +24,7 @@ import {
 } from './api/hooks'
 import type { ChatMessage, Conversation, MessageQuote } from './api/types'
 import { AttachmentView } from './AttachmentView'
-import { newMessagesIndex } from './when'
+import { newMessagesAnchor } from './when'
 
 /**
  * One conversation's thread.
@@ -267,6 +267,20 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     enteredUnread.current = conversation.data.unread_count
   }
 
+  /**
+   * The message the divider sits above, RESOLVED ONCE (see `newMessagesAnchor`).
+   *
+   * ⚠ AN ID, NOT A POSITION (v10 review). The position was recomputed every render
+   * as `loaded - unread`, which is stable under a prepend and moves under an append
+   * — so each arriving /ws message, and each message the member sent themselves,
+   * slid the line one row further down the thread. It ended up below messages that
+   * had already been read and eventually labelled their own newest message *Nové
+   * zprávy*, in the one place the room says where they left off.
+   *
+   * Wrapped in an object so a legitimately null anchor still counts as resolved.
+   */
+  const dividerAnchor = useRef<{ id: string | null } | null>(null)
+
   if (conversation.isPending || thread.isPending) {
     return <ThreadSkeleton />
   }
@@ -304,13 +318,20 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   }
 
   const room = conversation.data as Conversation
-  // Where the *Nové zprávy* line goes, counted from the END of the loaded page so
-  // that loading an older page above it does not move it. See `newMessagesIndex`.
-  const dividerAt = newMessagesIndex(
-    messages.length,
-    enteredUnread.current ?? 0,
-    thread.data?.has_more ?? false,
-  )
+  // Resolved on the first frame that has a thread to resolve it against — both
+  // queries have landed by here — and never again, so neither an older page above
+  // it nor an arriving message below it can move the line.
+  if (dividerAnchor.current === null && messages.length > 0) {
+    dividerAnchor.current = {
+      id: newMessagesAnchor(
+        messages,
+        enteredUnread.current ?? 0,
+        thread.data?.has_more ?? false,
+        me,
+      ),
+    }
+  }
+  const dividerID = dividerAnchor.current?.id ?? null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -351,7 +372,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
         )}
 
         <ul className="flex flex-col gap-2.5">
-          {messages.map((m, i) => (
+          {messages.map((m) => (
             <Fragment key={m.id}>
               {/* The *Nové zprávy* line — accent, because unread is a reason to look
                   rather than a warning, and drawn as a rule THROUGH the thread so it
@@ -360,7 +381,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
                   review). Nested, a screen reader read the line out as part of that
                   one message — the opposite of "a position in the thread" — and the
                   list carried one item fewer than it had messages. */}
-              {i === dividerAt && (
+              {m.id === dividerID && (
                 <li className="my-2 flex items-center gap-2.5">
                   <span className="h-px flex-1 bg-accent" />
                   <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-accent">
@@ -583,10 +604,17 @@ function ThreadHeader({
           <>
             {/* ⚠ A MENU NEEDS A WAY OUT THAT IS NOT THE MENU. Without this the only
                 way to dismiss it was to press the trigger again — on a phone, where
-                the obvious gesture is to tap the thread and have it go away. */}
+                the obvious gesture is to tap the thread and have it go away.
+
+                ⚠ AND IT IS A POINTER TARGET ONLY (v10 review). Announced and in the
+                tab order, it was an invisible full-viewport control called *Zrušit*
+                sitting between the trigger and the first menu entry — met by exactly
+                the two people who cannot see what it is for. Keyboard loses nothing:
+                Shift+Tab returns to the trigger, which closes the menu. */}
             <button
               type="button"
-              aria-label={cs.chat.cancel}
+              tabIndex={-1}
+              aria-hidden
               className="fixed inset-0 z-10 cursor-default"
               onClick={() => setMenuOpen(false)}
             />
@@ -1145,7 +1173,10 @@ function Composer({
               the list it heads, in the one place a member checks what is about to
               be sent. */}
           <div className="font-mono text-[10.5px] text-subtle">
-            {cs.chat.composerFileCount(count(files.length + rejected.length, PLURAL.files))}
+            {cs.chat.composerFileCount(
+              count(files.length + rejected.length, PLURAL.files),
+              MAX_FILES,
+            )}
           </div>
           <ul className="flex flex-col gap-1.5">
             {files.map((f, i) => (
@@ -1223,6 +1254,7 @@ function Composer({
                   .filter((r) => r.why === 'count')
                   .map((r) => r.name)
                   .join(', '),
+                count(MAX_FILES, PLURAL.files),
               )}
             </p>
           )}
@@ -1301,7 +1333,12 @@ function Composer({
           )}
           loading={busy}
           onClick={submit}
-          disabled={!body.trim() && files.length === 0}
+          // ⚠ AN EDIT IS A BODY AND NOTHING ELSE (D225), so staged files must not
+          // arm *Uložit* (v10 review). They did: the test read `files.length` in
+          // both modes, while `submit`'s edit branch returns on an empty body — so
+          // clearing the text with a file staged left a live button that did
+          // nothing at all when pressed.
+          disabled={editing ? !body.trim() : !body.trim() && files.length === 0}
           aria-label={editing ? cs.chat.save : cs.chat.send}
           title={editing ? cs.chat.save : cs.chat.send}
         >
@@ -1315,7 +1352,10 @@ function Composer({
           the minutes this check exists to save. */}
       {!editing && (
         <p className="text-[11px] leading-normal text-subtle text-pretty">
-          {cs.chat.composerHint(Math.round(maxBytes / (1024 * 1024)))}
+          {cs.chat.composerHint(
+            Math.round(maxBytes / (1024 * 1024)),
+            count(MAX_FILES, PLURAL.files),
+          )}
         </p>
       )}
     </div>

@@ -1549,10 +1549,16 @@ export const cs = {
      * rather than discovered by being refused. The per-file limit is the server's
      * (`max_upload_mb`), which is Dokumenty's on purpose (D228) — the sentence says
      * why, because that shared number is what makes every attachment movable.
+     *
+     * ⚠ AND BOTH CAPS ARE PARAMETERS. `maxFiles` arrives already declined, from the
+     * module's own `MAX_FILES` — the numeral used to be typed into this sentence and
+     * into the two below, so raising D224's ten would have changed what the composer
+     * keeps while three strings went on promising ten.
      */
-    composerHint: (limitMB: number) =>
-      `Přetažením, vložením ze schránky nebo výběrem. Nejvýš 10 souborů na zprávu, každý do ${limitMB} MB — stejný limit jako v Dokumentech, aby se každá příloha dala přesunout.`,
-    composerFileCount: (files: string) => `${files} · nejvýš 10 na zprávu`,
+    composerHint: (limitMB: number, maxFiles: string) =>
+      `Přetažením, vložením ze schránky nebo výběrem. Nejvýš ${maxFiles} na zprávu, každý do ${limitMB} MB — stejný limit jako v Dokumentech, aby se každá příloha dala přesunout.`,
+    composerFileCount: (files: string, maxFiles: number) =>
+      `${files} · nejvýš ${maxFiles} na zprávu`,
     /** The staged row's own refusal marker, beside the file it names. */
     fileRefused: 'Odmítnuto',
 
@@ -1674,8 +1680,8 @@ export const cs = {
      * names the MB cap — telling somebody a 400 kB photo is over a 50 MB limit is
      * exactly the kind of wrong number this module goes to lengths to avoid.
      */
-    filesOverCount: (names: string) =>
-      `Nepřipojeno: ${names}. Jedna zpráva unese nejvýš 10 souborů.`,
+    filesOverCount: (names: string, maxFiles: string) =>
+      `Nepřipojeno: ${names}. Jedna zpráva unese nejvýš ${maxFiles}.`,
     /**
      * ⚠ The unplayable video. There is no transcoding in v10 and no plan for one
      * (D227), so this is a designed state and not an apology: an iPhone .mov stores

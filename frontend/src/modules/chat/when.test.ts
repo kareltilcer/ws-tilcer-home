@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmtWhen, newMessagesIndex } from './when'
+import { fmtWhen, newMessagesAnchor, type DividerCandidate } from './when'
 
 // The conversation row's timestamp and the *Nové zprávy* divider's position — the
 // two pieces of the v10 chat design that are decisions rather than markup.
@@ -35,42 +35,79 @@ describe('fmtWhen — the row shortens towards today', () => {
   })
 })
 
-describe('newMessagesIndex — where the Nové zprávy line goes', () => {
+describe('newMessagesAnchor — which message the Nové zprávy line sits above', () => {
+  const ME = 'u_me'
+  /** `n` messages from somebody else, oldest first, ids m0…m{n-1}. */
+  const theirs = (n: number, from = 0): DividerCandidate[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `m${from + i}`,
+      author_id: 'u_other',
+      deleted: false,
+    }))
+
   it('counts back from the newest message', () => {
-    // 10 loaded, 3 unread → the line sits above the 8th (index 7).
-    expect(newMessagesIndex(10, 3, false)).toBe(7)
+    // 10 loaded, 3 unread → the line sits above the 8th, m7.
+    expect(newMessagesAnchor(theirs(10), 3, false, ME)).toBe('m7')
   })
 
   it('draws nothing when everything has been read', () => {
-    expect(newMessagesIndex(10, 0, false)).toBeNull()
+    expect(newMessagesAnchor(theirs(10), 0, false, ME)).toBeNull()
   })
 
   it('draws nothing in an empty thread', () => {
-    expect(newMessagesIndex(0, 4, false)).toBeNull()
+    expect(newMessagesAnchor([], 4, false, ME)).toBeNull()
   })
 
   // ⚠ THE HONEST CASE. More unread than loaded means the real boundary is above the
-  // top of the page — putting the line at index 0 would claim the oldest LOADED
-  // message is the first unread one, which is a different and false statement.
+  // top of the page — anchoring to the oldest LOADED message would claim it is the
+  // first unread one, which is a different and false statement.
   it('withholds the line when the boundary is above the loaded page', () => {
-    expect(newMessagesIndex(50, 62, true)).toBeNull()
+    expect(newMessagesAnchor(theirs(50), 62, true, ME)).toBeNull()
   })
 
-  // ...unless there is nothing above it, in which case index 0 means what it says.
+  // ...unless there is nothing above it, in which case the top means what it says.
   it('puts it at the top when the whole thread is loaded and all of it is unread', () => {
-    expect(newMessagesIndex(6, 6, false)).toBe(0)
-    expect(newMessagesIndex(6, 9, false)).toBe(0)
+    expect(newMessagesAnchor(theirs(6), 6, false, ME)).toBe('m0')
+    expect(newMessagesAnchor(theirs(6), 9, false, ME)).toBe('m0')
   })
 
-  // ⚠ PREPENDING AN OLDER PAGE MUST NOT MOVE IT. The index is counted from the end
-  // precisely so that *Načíst starší* adds messages above the line rather than
-  // sliding the line down through the thread the member is reading.
+  // ⚠ PREPENDING AN OLDER PAGE MUST NOT MOVE IT. *Načíst starší* adds messages above
+  // the line rather than sliding the line down through the thread being read.
   it('keeps the same message under the line after an older page is loaded', () => {
-    const before = newMessagesIndex(20, 4, true)
-    const after = newMessagesIndex(70, 4, true)
-    expect(before).toBe(16)
-    expect(after).toBe(66)
-    // Same distance from the newest message in both cases — the same message.
-    expect(20 - (before as number)).toBe(70 - (after as number))
+    const page = theirs(20, 50)
+    const withOlder = [...theirs(50), ...page]
+    expect(newMessagesAnchor(page, 4, true, ME)).toBe('m66')
+    expect(newMessagesAnchor(withOlder, 4, true, ME)).toBe('m66')
+  })
+
+  // ⚠ AND AN ARRIVING MESSAGE IS WHY IT IS AN ID. A position counted from the end
+  // moves under an APPEND — which is what every /ws frame and every send does — so
+  // the line slid one row down per message and ended up below what had already been
+  // read. An id resolved once on entry survives the same append untouched; the
+  // caller is what must resolve it only once (see ThreadView's `dividerAnchor`).
+  it('names a message, so an arrival cannot move a line already resolved', () => {
+    const before = theirs(10)
+    const anchor = newMessagesAnchor(before, 3, false, ME)
+    expect(anchor).toBe('m7')
+
+    const after = [...before, { id: 'm10', author_id: 'u_other', deleted: false }]
+    expect(after.findIndex((m) => m.id === anchor)).toBe(7)
+    // What the position this replaced would have said on the very same render.
+    expect(after.length - 3).toBe(8)
+  })
+
+  // ⚠ THE BADGE NEVER COUNTED THESE ROWS. UnreadCount is "not mine, not a tombstone",
+  // and the thread renders both like any other message — so counting back over every
+  // row put the line one position too low for each of them.
+  it('skips tombstones and the caller own messages while counting back', () => {
+    const messages: DividerCandidate[] = [
+      ...theirs(7),
+      { id: 'm7', author_id: 'u_other', deleted: false },
+      { id: 'm8', author_id: 'u_other', deleted: true },
+      { id: 'm9', author_id: ME, deleted: false },
+      { id: 'm10', author_id: 'u_other', deleted: false },
+    ]
+    // The server counts two: m7 and m10. The line belongs above m7, not above m9.
+    expect(newMessagesAnchor(messages, 2, false, ME)).toBe('m7')
   })
 })

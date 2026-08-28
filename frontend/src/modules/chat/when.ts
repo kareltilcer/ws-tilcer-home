@@ -37,13 +37,34 @@ function daysBetween(d: Date, now: Date): number {
   return Math.round((b - a) / 86_400_000)
 }
 
+/** What the divider needs off a loaded message, and nothing more. */
+export interface DividerCandidate {
+  id: string
+  author_id: string
+  deleted: boolean
+}
+
 /**
- * newMessagesIndex places the *Nové zprávy* divider (§V10-7, fixed vocabulary).
+ * newMessagesAnchor names the message the *Nové zprávy* divider sits ABOVE
+ * (§V10-7, fixed vocabulary).
  *
- * It answers ONE question: before which loaded message does the divider go? The
- * thread is rendered oldest-first, the unread messages are the newest ones, so the
- * boundary is counted from the END — which is also what keeps it still while older
- * pages are prepended above it.
+ * It answers ONE question: which loaded message is the oldest unread one? The
+ * thread is rendered oldest-first and the unread messages are the newest, so the
+ * walk goes backwards from the end.
+ *
+ * ⚠ IT RETURNS AN ID, NOT AN INDEX (v10 review). An index counted from the end is
+ * stable under a PREPEND — which is what *Načíst starší* does — and moves under an
+ * APPEND, which is what every arriving message does. So a divider placed at
+ * `loaded - unread` and re-evaluated each render slid one row further down for each
+ * message that arrived while the thread was open, ending up below messages the
+ * member had already read and eventually labelling their own just-sent message
+ * *Nové zprávy*. An id cannot drift under either operation; the caller resolves it
+ * once, on entry, and renders it wherever that message ends up.
+ *
+ * ⚠ AND THE WALK SKIPS WHAT THE SERVER DID NOT COUNT. `unread_count` is "above my
+ * floor, after my read marker, NOT MINE, NOT A TOMBSTONE" (messages.go, D250), while
+ * the thread renders tombstones and own messages like any other row — so counting
+ * back over every row put the line one position too low for each of them.
  *
  * ⚠ `unread` MUST BE THE COUNT SNAPSHOTTED WHEN THE THREAD WAS OPENED. The read
  * marker advances as soon as the newest message is on screen, so a divider driven
@@ -52,20 +73,28 @@ function daysBetween(d: Date, now: Date): number {
  *
  * ⚠ AND A BOUNDARY THAT IS NOT IN THE LOADED PAGE IS NOT DRAWN. When more unread
  * messages exist than have been loaded, the true boundary is above the top of the
- * page — putting the divider at index 0 would claim the oldest LOADED message is
- * the first unread one, which is a different and false statement. Only when the
- * whole thread is loaded (`hasMore` false) does index 0 mean what it says.
+ * page — anchoring to the oldest LOADED message would claim it is the first unread
+ * one, which is a different and false statement. Only when the whole thread is
+ * loaded (`hasMore` false) does the top of the page mean what it says.
  *
  * Returns null when there is no divider to draw.
  */
-export function newMessagesIndex(
-  loaded: number,
+export function newMessagesAnchor(
+  messages: readonly DividerCandidate[],
   unread: number,
   hasMore: boolean,
-): number | null {
-  if (unread <= 0 || loaded <= 0) return null
-  const i = loaded - unread
-  if (i > 0) return i
+  me: string,
+): string | null {
+  if (unread <= 0 || messages.length === 0) return null
+  let remaining = unread
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    // A tombstone and one of my own messages are rows the badge never counted, so
+    // neither may consume one of its units.
+    if (m.deleted || m.author_id === me) continue
+    remaining--
+    if (remaining === 0) return m.id
+  }
   // Everything loaded is unread. Honest only when there is nothing above it.
-  return hasMore ? null : 0
+  return hasMore ? null : messages[0].id
 }
