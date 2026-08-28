@@ -1454,20 +1454,51 @@ export const cs = {
       deleted: 'Zpráva byla smazána',
       outsideHistory: 'Zpráva mimo vaši historii',
       mute: 'Ztlumit konverzaci',
+      unmute: 'Zrušit ztlumení',
+      /** The clean-up row's verb. In the fixed vocabulary (§V10-7), so it is this
+       *  word and not `confirmDelete`'s *Smazat*: what happens to an attachment is
+       *  not what happens to a conversation. */
+      remove: 'Odstranit',
+      moveToDocuments: 'Přesunout do Dokumentů',
     },
 
     // ---- the conversation list ----
     listTitle: 'Konverzace',
+    /**
+     * ⚠ The pane's own heading, distinct from `listTitle` above — which is the
+     * back link's accessible name on the phone, where the destination is the list
+     * of konverzace rather than the module. The design gives the pane the module's
+     * name and a line saying what a conversation in it is.
+     */
+    listHeading: 'Chat',
+    listSubtitle: 'Konverzace, které čtou lidé v nich',
+    /**
+     * ⚠ Všichni's marker on its own row. It is the one conversation whose
+     * membership IS the household, so the row says so rather than making a member
+     * open it to find out — and it is what makes the absence of a floor line inside
+     * (D258) read as a decision rather than as a missing element.
+     */
+    everyoneMark: 'celá domácnost',
     emptyTitle: 'Zatím žádné konverzace',
     emptyBody:
       'Píšete v konverzaci Všichni, kde je celá domácnost. Vlastní skupinu si můžete kdykoliv založit.',
     // The unread badge's accessible name lives in PLURAL.unreadMessages, not here:
     // it counts, and a count label that is a fixed phrase cannot decline (D20).
-    pickPrompt: 'Vyberte konverzaci vlevo.',
+    /**
+     * The desktop's second pane before a room is chosen. ⚠ It says what the module
+     * IS, not only what to press — at 1440 this is the first thing a member ever
+     * sees of chat, and *"Vyberte konverzaci vlevo"* alone is an instruction with no
+     * subject.
+     */
+    emptyAllTitle: 'Tady se domácnost baví',
+    pickPrompt:
+      'Vyberte konverzaci vlevo. Ve Všichni je celá domácnost; vlastní skupinu si můžete kdykoliv založit.',
 
     // ---- the thread ----
     threadEmpty: 'Zatím tu nikdo nic nenapsal.',
     threadEmptyHint: 'Napište první zprávu.',
+    /** The skeleton's accessible name — the bars themselves are `aria-hidden`. */
+    loadingThread: 'Načítání zpráv',
     loadOlder: 'Načíst starší',
     // The conversation LIST's own paging, distinct from the thread's `loadOlder`:
     // the server pages both listings at fifty, and a list that shows page one and
@@ -1482,15 +1513,56 @@ export const cs = {
      */
     floorLine: 'Historie konverzace před vaším přidáním pro vás není dostupná.',
     floorLineFrom: 'Vidíte zprávy od',
+    /**
+     * ⚠ Fixed vocabulary (§V10-7) and a designed state of the thread — the line a
+     * member returns to a busy room for. It marks where their last read ended, so
+     * it is placed from the unread count SNAPSHOTTED ON ENTRY: the read marker
+     * advances the moment the thread is on screen, and a divider that follows the
+     * live count would vanish while it is being read.
+     */
+    newMessagesDivider: 'Nové zprávy',
+    /**
+     * ⚠ The delete confirmation, and it names what SURVIVES. A delete blanks the
+     * body in place and leaves *Zpráva byla smazána* where the message was (D223) —
+     * so the room does not forget that something was said there, which is the part
+     * people expect a delete to undo and it does not.
+     */
+    deleteMessageBody:
+      'Text zprávy se smaže. Ve vlákně po ní zůstane řádek „Zpráva byla smazána“, který uvidí všichni členové. Vrátit to nejde.',
 
     // ---- the composer ----
     composerPlaceholder: 'Napište zprávu…',
+    /** The composer names the room it will post into — there is no unsend. */
+    composerPlaceholderIn: (room: string) => `Napsat do ${room}…`,
     send: 'Odeslat',
     cancelEdit: 'Zrušit úpravy',
     replyingTo: 'Odpovídáte na',
+    /**
+     * ⚠ The three ways in, and both caps, stated where the files are attached
+     * rather than discovered by being refused. The per-file limit is the server's
+     * (`max_upload_mb`), which is Dokumenty's on purpose (D228) — the sentence says
+     * why, because that shared number is what makes every attachment movable.
+     */
+    composerHint: (limitMB: number) =>
+      `Přetažením, vložením ze schránky nebo výběrem. Nejvýš 10 souborů na zprávu, každý do ${limitMB} MB — stejný limit jako v Dokumentech, aby se každá příloha dala přesunout.`,
+    composerFileCount: (files: string) => `${files} · nejvýš 10 na zprávu`,
+    /** The staged row's own refusal marker, beside the file it names. */
+    fileRefused: 'Odmítnuto',
 
     // ---- members ----
-    membersTitle: 'Členové konverzace',
+    /**
+     * ⚠ The panel's lead, and it says a DIFFERENT thing in Všichni. The household
+     * room has everybody from its beginning, so a date beside each name would
+     * suggest a floor that is not there (D258); a created group is where
+     * `effective_from` earns its place, and the sentence is the second of the
+     * floor's three surfaces.
+     */
+    membersLeadEveryone:
+      'Konverzaci Všichni má každý člen domácnosti od začátku — proto tu u nikoho není datum přidání. Odejít z ní ani smazat ji nejde.',
+    membersLeadGroup:
+      'U každého je vidět, od kdy konverzaci čte. Kdo byl přidán později, starší zprávy nemá a nikdy mít nebude.',
+    /** The member's own row, so nobody removes themselves by mistake. */
+    membersYou: 'vy',
     memberSince: 'Vidí zprávy od',
     memberSinceBeginning: 'Vidí celou historii',
     directoryEmpty: 'Zatím se nikdo další nepřihlásil.',
@@ -1515,11 +1587,29 @@ export const cs = {
     leaveBody:
       'Vaše zprávy zůstanou ostatním. Pokud vás někdo přidá zpátky, uvidíte až zprávy od té chvíle.',
     everyoneCannotLeave: 'Konverzaci Všichni nelze opustit ani smazat.',
+    /**
+     * ⚠ Stated, not offered as a disabled button (D219). The service answers 422
+     * and a greyed control invites exactly the press that meets it, so the header
+     * says the fact and the title attribute carries the reason.
+     */
+    deleteUnavailable: 'Smazat konverzaci — nelze',
 
     // ---- the koš ----
     trashSectionTitle: 'Koš',
-    /** Deleting frees the space in seven days; purging frees it now (D254). */
-    trashDaysLeft: 'Soubory se smažou za',
+    /**
+     * The countdown on the koš card. ⚠ WITHOUT the design mock's "Smazal Petr"
+     * beside it: `deleted_by` is a column on the row and is not on the wire, so the
+     * card says the part that is true.
+     */
+    trashUntilPurge: 'do trvalého smazání',
+    /**
+     * ⚠ The relationship, spelled out under the section (D254). Its bytes go on
+     * counting against BOTH thresholds until something really purges them, which is
+     * honest and looks like a bug — so the section says why, and names the verb that
+     * ends it.
+     */
+    trashNote:
+      'Smazání uvolní místo za sedm dní. Smazat natrvalo ho uvolní teď — do té doby se bajty počítají do obou limitů, protože v R2 opravdu leží.',
     deleteTitle: 'Smazat konverzaci?',
     deleteBody:
       'Konverzace zmizí všem členům a přesune se do koše. Odtud ji lze obnovit, dokud se nesmažou její soubory.',
@@ -1554,6 +1644,7 @@ export const cs = {
     // Owned here rather than in cs.common, following every other module: the
     // wording of a confirm button belongs beside the sentence it confirms.
     cancel: 'Zrušit',
+    close: 'Zavřít',
     create: 'Vytvořit',
     save: 'Uložit',
     confirmDelete: 'Smazat',
@@ -1561,8 +1652,6 @@ export const cs = {
     // ---- attachments (PR 3) ----
     attachFiles: 'Připojit soubory',
     removeFile: 'Odebrat soubor',
-    /** The clean-up row's destructive action, as an accessible name. */
-    wordRemoveFile: 'Odstranit soubor',
     uploading: 'Nahrávání souborů',
     download: 'Stáhnout',
     /**
@@ -1579,6 +1668,12 @@ export const cs = {
      * next instead of what went wrong.
      */
     videoUnplayable: 'Tohle video prohlížeč nepřehraje. Stáhněte si ho a otevřete v přehrávači.',
+    /**
+     * ⚠ The PDF affordance, said rather than implied. Chat runs no preview pipeline
+     * (D227), so the row promises what actually happens — the browser's own viewer,
+     * in another tab — instead of looking like a preview that never opens.
+     */
+    fileOpensInBrowser: 'otevře se v prohlížeči',
     /** The epitaph (D243). A settled absence, not an error. */
     attachmentRemoved: 'Soubor odstraněn při úklidu úložiště',
     /** The moved marker (D246). A fact, not a warning. */
@@ -1593,6 +1688,15 @@ export const cs = {
     storageOverTotal: (used: string, limit: string) => `Chat zabírá ${used} z limitu ${limit}`,
     storageOverConversation: (name: string, used: string, limit: string) =>
       `Konverzace „${name}“ zabírá ${used} z limitu ${limit}`,
+    /** The warning's own word — the fixed vocabulary's *Nad limitem*, not "chyba". */
+    storageWarnWord: 'Nad limitem',
+    /**
+     * ⚠ The tail is the half that makes the register right. `--attention` says
+     * "look at this"; this sentence says nothing is broken, which is the difference
+     * between this warning and a quota.
+     */
+    storageWarnTail:
+      'Nic se tím neblokuje — nahrávání funguje dál a žádná kvóta neexistuje.',
     /**
      * ⚠ The link is NOT rendered for a member who cannot use it (D241) — the server
      * answers that in `can_clean_up`. What a reader sees instead is this sentence,
@@ -1612,14 +1716,34 @@ export const cs = {
      */
     cleanupKeepExplainer:
       'Co necháte být, zůstane. Nic se neukládá na potom a zavřít stránku je v pořádku.',
+    /**
+     * ⚠ The empty page is not the reader's 403 (D241). The gate passed and there is
+     * simply nothing here, so it gets a heading that says so — an unheaded paragraph
+     * on a working screen reads as a screen that failed to load its work.
+     */
+    cleanupEmptyTitle: 'Nic k úklidu',
     cleanupEmpty: 'V konverzacích, ve kterých jste, nejsou žádné soubory.',
     cleanupEmptyNoRooms:
       'Zatím nejste v žádné konverzaci se soubory, takže tu není co uklízet.',
     /** A reader's 403 — the recorded asymmetry (D241), stated plainly. */
+    cleanupForbiddenLabel: '403 · nedostupné',
     cleanupForbidden: 'Na úklid úložiště potřebujete právo zápisu.',
     cleanupForbiddenHint:
       'Soubory můžete nahrávat, ale odstranit nebo přesunout je musí někdo z konverzace, kdo má právo zápisu.',
-    cleanupTotal: 'Celkem k úklidu',
+    /** The breadcrumb and the way out, so the working screen is plainly a sub-page
+     *  of the module rather than somewhere a member has landed. */
+    cleanupBack: 'Zpět do konverzací',
+    cleanupTotalLine: (used: string, limit: string) => `Chat celkem ${used} z limitu ${limit}`,
+    /** One group's weight: what this view lists, against what the room actually holds. */
+    cleanupGroupSum: (shown: string, room: string) =>
+      `${shown} v tomto pohledu · konverzace ${room}`,
+    /**
+     * ⚠ *Ponechat* is not a button (D242) and leaving is not blocked (D244) — so the
+     * exit is offered as an ordinary control, and when nothing is over the limit the
+     * screen says the confirmation will not happen rather than staying silent.
+     */
+    cleanupLeavePage: 'Odejít ze stránky',
+    cleanupLeaveFree: 'Pod limitem — odejít se dá bez ptaní.',
     cleanupSortSize: 'Podle velikosti',
     cleanupSortRecent: 'Od nejnovějších',
     /** Sorting by size is single-page, and the screen says so honestly. */
@@ -1635,6 +1759,9 @@ export const cs = {
     cleanupLeaveTitle: 'Odejít z úklidu?',
     cleanupLeaveOver: (used: string, limit: string) =>
       `Chat je stále nad limitem (${used} / ${limit}).`,
+    /** The other threshold, named when it is the one still overflowing (D244). */
+    cleanupLeaveOverConversation: (name: string, used: string, limit: string) =>
+      `Konverzace „${name}“ je stále nad limitem (${used} / ${limit}).`,
     cleanupLeaveBody: 'Můžete se sem kdykoliv vrátit — nic se neztratí.',
     cleanupLeaveConfirm: 'Přesto odejít',
     cleanupStay: 'Zůstat',

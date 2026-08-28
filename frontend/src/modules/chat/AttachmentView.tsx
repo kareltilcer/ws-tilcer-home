@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { Download, FileText, Film, Image as ImageIcon } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Download, FileText, Film, Image as ImageIcon, Ban } from 'lucide-react'
 import { cs } from '@/i18n/cs'
 import { fmtBytes, fmtDate } from '@/i18n/format'
 import { attachmentURL, thumbnailURL } from './api/endpoints'
@@ -31,6 +30,23 @@ export function AttachmentView({ attachment: a }: { attachment: Attachment }) {
 }
 
 /**
+ * The caption under a picture or a video — filename and size, in mono.
+ *
+ * ⚠ IT IS NOT DECORATION. Every other state of an attachment names the file: the
+ * epitaph keeps the name so somebody can ask for it again, the moved card keeps it
+ * so the thread still reads. A live image that showed only pixels would be the one
+ * attachment nobody can refer to by name, in the module whose clean-up screen lists
+ * files by exactly that.
+ */
+function Caption({ attachment: a }: { attachment: Attachment }) {
+  return (
+    <div className="mt-1 truncate font-mono text-[10.5px] text-subtle">
+      {a.original_filename} · <span className="tabular-nums">{fmtBytes(a.byte_size)}</span>
+    </div>
+  )
+}
+
+/**
  * ⚠ THE FALLBACK STEPS DOWN TWICE, and collapsing it to one step lost an image that
  * was perfectly readable. A missing THUMBNAIL and a missing ORIGINAL are different
  * failures: the first happens whenever cwebp was unavailable at upload, or the
@@ -44,28 +60,31 @@ function ImageAttachment({ attachment: a }: { attachment: Attachment }) {
   )
   if (step === 'gone') return <FileAttachment attachment={a} />
   return (
-    <a
-      href={attachmentURL(a.id)}
-      target="_blank"
-      rel="noreferrer"
-      className="block overflow-hidden rounded-md border border-border/60 bg-s2"
-      // ⚠ THE RESERVED BOX. Without the ratio the bubble is 0 px tall until the
-      // image decodes and the whole thread jumps under the reader's finger.
-      style={a.width && a.height ? { aspectRatio: `${a.width} / ${a.height}` } : undefined}
-    >
-      <img
-        // `key` forces a fresh element on the step down, so the browser actually
-        // re-requests instead of keeping the errored one and never firing load.
-        key={step}
-        src={step === 'thumb' ? thumbnailURL(a.id) : attachmentURL(a.id)}
-        alt={a.original_filename}
-        loading="lazy"
-        width={a.width ?? undefined}
-        height={a.height ?? undefined}
-        onError={() => setStep((s) => (s === 'thumb' ? 'full' : 'gone'))}
-        className="h-full w-full object-cover"
-      />
-    </a>
+    <div>
+      <a
+        href={attachmentURL(a.id)}
+        target="_blank"
+        rel="noreferrer"
+        className="block w-full max-w-[340px] overflow-hidden rounded-[11px] border border-border bg-s2"
+        // ⚠ THE RESERVED BOX. Without the ratio the bubble is 0 px tall until the
+        // image decodes and the whole thread jumps under the reader's finger.
+        style={a.width && a.height ? { aspectRatio: `${a.width} / ${a.height}` } : undefined}
+      >
+        <img
+          // `key` forces a fresh element on the step down, so the browser actually
+          // re-requests instead of keeping the errored one and never firing load.
+          key={step}
+          src={step === 'thumb' ? thumbnailURL(a.id) : attachmentURL(a.id)}
+          alt={a.original_filename}
+          loading="lazy"
+          width={a.width ?? undefined}
+          height={a.height ?? undefined}
+          onError={() => setStep((s) => (s === 'thumb' ? 'full' : 'gone'))}
+          className="h-full w-full object-cover"
+        />
+      </a>
+      <Caption attachment={a} />
+    </div>
   )
 }
 
@@ -79,33 +98,40 @@ function VideoAttachment({ attachment: a }: { attachment: Attachment }) {
   const [unplayable, setUnplayable] = useState(false)
   if (unplayable) {
     return (
-      <div className="rounded-md border border-border/60 bg-s2 p-3">
-        <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-          <Film size={16} className="flex-none text-muted" aria-hidden />
-          <span className="min-w-0 truncate">{a.original_filename}</span>
+      <div className="flex items-start gap-2.5 rounded-[10px] border border-border bg-s1 px-3 py-2.5">
+        <Ban size={15} className="mt-0.5 flex-none text-muted" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs leading-normal text-pretty">{cs.chat.videoUnplayable}</p>
+          <div className="mt-1 truncate font-mono text-[10.5px] text-subtle">
+            {a.original_filename} · <span className="tabular-nums">{fmtBytes(a.byte_size)}</span>
+          </div>
         </div>
-        <p className="mb-2 text-xs text-muted text-pretty">{cs.chat.videoUnplayable}</p>
         <DownloadLink attachment={a} />
       </div>
     )
   }
   return (
-    <video
-      controls
-      preload="metadata"
-      onError={() => setUnplayable(true)}
-      className="max-h-80 w-full rounded-md border border-border/60 bg-black"
-    >
-      <source src={attachmentURL(a.id)} type={a.content_type} />
-    </video>
+    <div>
+      <video
+        controls
+        preload="metadata"
+        onError={() => setUnplayable(true)}
+        className="max-h-80 w-full max-w-[340px] rounded-[11px] border border-border bg-black"
+        style={a.width && a.height ? { aspectRatio: `${a.width} / ${a.height}` } : undefined}
+      >
+        <source src={attachmentURL(a.id)} type={a.content_type} />
+      </video>
+      <Caption attachment={a} />
+    </div>
   )
 }
 
 /**
- * Icon, filename, size, download.
+ * Icon, filename, size, and what pressing it does.
  *
  * ⚠ A PDF OPENS IN THE BROWSER'S OWN VIEWER — there is no preview pipeline in chat
- * (D227) — so the affordance is "opens elsewhere" rather than a preview pane.
+ * (D227) — so the row SAYS "otevře se v prohlížeči" rather than offering an
+ * affordance that looks like a preview pane and then opens a tab.
  */
 function FileAttachment({ attachment: a }: { attachment: Attachment }) {
   const Icon = a.kind === 'video' ? Film : a.kind === 'image' ? ImageIcon : FileText
@@ -114,14 +140,20 @@ function FileAttachment({ attachment: a }: { attachment: Attachment }) {
       href={attachmentURL(a.id)}
       target="_blank"
       rel="noreferrer"
-      className="flex items-center gap-2.5 rounded-md border border-border/60 bg-s2 px-3 py-2 hover:border-accent/50"
+      className="flex min-h-11 items-center gap-2.5 rounded-[10px] border border-border bg-s1 px-3 py-2.5 hover:border-border-strong"
     >
-      <Icon size={18} className="flex-none text-muted" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold">{a.original_filename}</span>
-        <span className="block text-[11px] tabular-nums text-muted">{fmtBytes(a.byte_size)}</span>
+      <span className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[7px] bg-s3 text-muted">
+        <Icon size={14} aria-hidden />
       </span>
-      <Download size={15} className="flex-none text-muted" aria-hidden />
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold">
+        {a.original_filename}
+      </span>
+      <span className="flex-none font-mono text-[11.5px] tabular-nums text-muted">
+        {fmtBytes(a.byte_size)}
+      </span>
+      <span className="hidden flex-none font-mono text-[10px] text-subtle sm:inline">
+        {cs.chat.fileOpensInBrowser}
+      </span>
     </a>
   )
 }
@@ -130,7 +162,7 @@ function DownloadLink({ attachment: a }: { attachment: Attachment }) {
   return (
     <a
       href={attachmentURL(a.id, { download: true })}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-semibold hover:bg-s3"
+      className="inline-flex min-h-8 flex-none items-center gap-1.5 rounded-lg border border-border-strong bg-s2 px-2.5 text-[11.5px] font-semibold hover:bg-s3"
     >
       <Download size={13} aria-hidden />
       {cs.chat.download}
@@ -144,26 +176,25 @@ function DownloadLink({ attachment: a }: { attachment: Attachment }) {
  * ⚠ IT KEEPS THE FILENAME AND THE SIZE ON PURPOSE, and names who removed it and
  * when. The thread stays legible, a member can ask for the file again knowing
  * exactly what it was, and the clean-up is attributed. Only the bytes went.
+ *
+ * ⚠ DASHED OUTLINE, NO SURFACE, ITALIC — and the FILENAME stays upright inside it.
+ * The italic carries "this is a sentence about a file that is gone"; a filename set
+ * in italic reads as a different filename, which is the one thing this row exists to
+ * keep exact.
  */
 function RemovedAttachment({ attachment: a }: { attachment: Attachment }) {
   return (
-    <div
-      className={cn(
-        'flex items-start gap-2.5 rounded-md border border-dashed border-border px-3 py-2',
-        'text-att-removed',
-      )}
-    >
-      <FileText size={16} className="mt-0.5 flex-none" aria-hidden />
-      <div className="min-w-0 text-xs text-pretty">
-        <span className="font-semibold">{a.original_filename}</span>
+    <div className="flex items-start gap-2.5 rounded-[10px] border border-dashed border-border-strong px-3 py-2.5 text-att-removed">
+      <FileText size={14} className="mt-0.5 flex-none" aria-hidden />
+      <p className="min-w-0 text-xs italic leading-normal text-pretty">
+        <span className="not-italic">{a.original_filename}</span>
         {' · '}
-        <span className="tabular-nums">{fmtBytes(a.byte_size)}</span>
-        <span className="block">
-          {cs.chat.attachmentRemoved}
-          {a.cleaned_by_label && ` · ${a.cleaned_by_label}`}
-          {a.cleaned_at && `, ${fmtDate(new Date(a.cleaned_at))}`}
-        </span>
-      </div>
+        <span className="tabular-nums not-italic">{fmtBytes(a.byte_size)}</span>
+        {' — '}
+        {cs.chat.attachmentRemoved}
+        {a.cleaned_by_label && ` · ${a.cleaned_by_label}`}
+        {a.cleaned_at && `, ${fmtDate(new Date(a.cleaned_at))}`}
+      </p>
     </div>
   )
 }
@@ -179,21 +210,28 @@ function RemovedAttachment({ attachment: a }: { attachment: Attachment }) {
 function MovedAttachment({ attachment: a }: { attachment: Attachment }) {
   const href = a.document_path ?? undefined
   return (
-    <div className="rounded-md border border-border/60 bg-s2 px-3 py-2">
+    <div className="rounded-[10px] border border-border bg-s1 px-3 py-2.5">
       <a
         href={href}
         target="_blank"
         rel="noreferrer"
-        className={cn('flex items-center gap-2.5', !href && 'pointer-events-none opacity-70')}
+        className={
+          href
+            ? 'flex min-h-9 items-center gap-2.5'
+            : 'pointer-events-none flex min-h-9 items-center gap-2.5 opacity-70'
+        }
       >
-        <FileText size={18} className="flex-none text-muted" aria-hidden />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{a.original_filename}</span>
-          <span className="block text-[11px] tabular-nums text-muted">{fmtBytes(a.byte_size)}</span>
+        <span className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[7px] bg-s3 text-muted">
+          <FileText size={14} aria-hidden />
         </span>
-        <Download size={15} className="flex-none text-muted" aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold">
+          {a.original_filename}
+        </span>
+        <span className="flex-none font-mono text-[11.5px] tabular-nums text-muted">
+          {fmtBytes(a.byte_size)}
+        </span>
       </a>
-      <p className="mt-1.5 text-[11px] text-muted">{cs.chat.attachmentMoved}</p>
+      <p className="mt-1.5 text-[11.5px] text-muted">{cs.chat.attachmentMoved}</p>
     </div>
   )
 }

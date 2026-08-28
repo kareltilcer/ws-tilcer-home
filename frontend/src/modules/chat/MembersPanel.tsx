@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { UserMinus } from 'lucide-react'
+import * as Dialog from '@radix-ui/react-dialog'
+import { Plus, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
+import { count, PLURAL } from '@/i18n/plural'
 import { fmtDate } from '@/i18n/format'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
+import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { useAuth } from '@/app/auth'
 import {
   useAddMember,
@@ -12,16 +16,20 @@ import {
   useDirectory,
   useMembers,
   useRemoveMember,
-  useSetMuted,
 } from './api/hooks'
 import type { ConversationMember } from './api/types'
 
 /**
- * The members panel — a sheet on mobile, a dialog on desktop.
+ * The members panel — a right-hand drawer at the desk, a sheet under a thumb.
  *
  * ⚠ NOT A THIRD COLUMN (D262). The list is consulted when somebody is added or when
  * the floor needs explaining, not read continuously, and a permanent column would
  * cost the thread the width it actually needs at 1024.
+ *
+ * ⚠ AND NOT A CENTRED DIALOG EITHER. It is a list ABOUT the thread behind it — who
+ * is in this room, and since when — so it is drawn beside the thread rather than
+ * over the middle of it, and the thread stays legible while it is open. That is what
+ * lets somebody check a date against the messages they are looking at.
  *
  * ⚠ EVERY ROW SHOWS `effective_from`, which is the second of the floor's three
  * surfaces. It is what lets the app say plainly that somebody added yesterday cannot
@@ -39,13 +47,20 @@ export function MembersPanel({
 }) {
   const conversation = useConversation(conversationID)
   const members = useMembers(open ? conversationID : undefined)
-  const directory = useDirectory(open)
+  const [adding, setAdding] = useState(false)
+  const directory = useDirectory(open && adding)
   const add = useAddMember(conversationID)
-  const setMuted = useSetMuted(conversationID)
   const { identity } = useAuth()
   const me = identity?.userId ?? ''
+  const desktop = useIsDesktop()
 
   const [removing, setRemoving] = useState<ConversationMember | null>(null)
+
+  // The picker is closed again whenever the panel is: leaving it open would reopen
+  // the panel already unfolded onto a list nobody asked for.
+  useEffect(() => {
+    if (!open) setAdding(false)
+  }, [open])
 
   const isDefault = conversation.data?.kind === 'default'
   const present = new Set((members.data?.items ?? []).map((m) => m.user_id))
@@ -57,89 +72,151 @@ export function MembersPanel({
   // every listing is a membership join, so nobody — not even an admin — can reach
   // it again. Deleting the conversation is the verb that was wanted.
   const soleMember = (members.data?.items.length ?? 0) <= 1
+  const total = members.data?.items.length ?? conversation.data?.member_count ?? 0
 
   return (
     <>
-      <ResponsiveModal open={open} onOpenChange={onOpenChange} title={cs.chat.membersTitle}>
-        {members.isPending && (
-          <div className="grid place-items-center py-8 text-muted">
-            <Spinner />
-          </div>
-        )}
-
-        <ul className="flex flex-col gap-1">
-          {members.data?.items.map((m) => (
-            <li key={m.user_id} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-s2">
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold">{m.display_name}</span>
-                <span className="mt-0.5 block truncate text-xs text-muted">
-                  <FloorLabel member={m} />
-                </span>
-              </span>
-              {/* ⚠ Nobody is removed from Všichni and nobody leaves it (D219): it is
-                  the one conversation whose membership IS the household. */}
-              {!isDefault && !soleMember && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setRemoving(m)}
-                  aria-label={m.user_id === me ? cs.chat.leave : cs.chat.word.removeMember}
-                >
-                  <UserMinus size={14} aria-hidden />
-                </Button>
-              )}
-            </li>
-          ))}
-        </ul>
-
-        {!isDefault && (
-          <div className="mt-5 border-t border-border pt-4">
-            <div className="mb-2 text-sm font-semibold">{cs.chat.word.addMember}</div>
-            {directory.isPending && <Spinner />}
-            {!directory.isPending && addable.length === 0 && (
-              <p className="text-sm text-muted text-pretty">{cs.chat.directoryEmpty}</p>
+      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+          <Dialog.Content
+            className={cn(
+              'fixed z-50 flex flex-col bg-s1 text-fg shadow-[var(--shadow)] focus:outline-none',
+              desktop
+                ? 'bottom-0 right-0 top-0 w-[min(340px,92vw)] border-l border-border-strong'
+                : 'inset-x-0 bottom-0 top-14 rounded-t-[20px] border-t border-border-strong',
             )}
-            <div className="flex flex-wrap gap-2">
-              {addable.map((d) => (
-                <Button
-                  key={d.user_id}
-                  size="sm"
-                  variant="secondary"
-                  // ⚠ THE ONE THAT WAS PRESSED, not all of them (v10 review). Every
-                  // button read the shared mutation's isPending, so adding one person
-                  // put the whole picker into the loading state and the member could
-                  // not tell which add was in flight. `variables` is the id this
-                  // mutation was called with.
-                  loading={add.isPending && add.variables === d.user_id}
-                  onClick={() => add.mutate(d.user_id)}
-                >
-                  {d.display_name}
-                </Button>
-              ))}
+          >
+            <div className="flex flex-none items-center gap-2.5 border-b border-border px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <Dialog.Title className="truncate text-base font-extrabold">
+                  {cs.chat.word.members}
+                </Dialog.Title>
+                <p className="truncate text-[11.5px] text-muted">
+                  {count(total, PLURAL.members)}
+                </p>
+              </div>
+              <Dialog.Close
+                aria-label={cs.chat.close}
+                className="grid h-11 w-11 flex-none place-items-center rounded-[11px] border border-border bg-s2 text-muted hover:text-fg lg:h-8 lg:w-8 lg:rounded-[9px]"
+              >
+                <X size={16} aria-hidden />
+              </Dialog.Close>
             </div>
-            {/* ⚠ The directory is a LOGIN HISTORY projected from sessions — Home has
-                no user table — so somebody who has never logged in is simply not
-                here. The hint says so rather than letting the gap look like a bug. */}
-            <p className="mt-2 text-xs text-muted text-pretty">{cs.chat.directoryHint}</p>
-          </div>
-        )}
 
-        <div className="mt-5 border-t border-border pt-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={conversation.data?.muted ?? false}
-              onChange={(e) => setMuted.mutate(e.target.checked)}
-              className="h-4 w-4 accent-[var(--accent)]"
-            />
-            {cs.chat.word.mute}
-          </label>
-        </div>
+            {/* ⚠ THE LEAD SAYS A DIFFERENT THING IN VŠICHNI. The household room has
+                everybody from its beginning (D258), so a date beside each name would
+                imply a floor that is not there — and the sentence explains the
+                absence of one rather than leaving it to be noticed. */}
+            <p className="flex-none border-b border-border px-4 py-3 text-[12.5px] leading-relaxed text-muted text-pretty">
+              {isDefault ? cs.chat.membersLeadEveryone : cs.chat.membersLeadGroup}
+            </p>
 
-        {isDefault && (
-          <p className="mt-4 text-xs text-muted text-pretty">{cs.chat.everyoneCannotLeave}</p>
-        )}
-      </ResponsiveModal>
+            <div className="min-h-0 flex-1 overflow-y-auto om-scroll px-2.5 py-2">
+              {members.isPending && (
+                <div className="grid place-items-center py-8 text-muted">
+                  <Spinner />
+                </div>
+              )}
+              <ul className="flex flex-col gap-0.5">
+                {members.data?.items.map((m) => (
+                  <li
+                    key={m.user_id}
+                    className="flex min-h-14 items-center gap-3 rounded-[10px] px-2 py-2"
+                  >
+                    <span className="grid h-[34px] w-[34px] flex-none place-items-center rounded-full bg-s3 text-[13px] font-bold text-muted lg:h-[30px] lg:w-[30px] lg:text-xs">
+                      {initial(m.display_name)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="min-w-0 truncate text-[13.5px] font-bold">
+                          {m.display_name}
+                        </span>
+                        {m.user_id === me && (
+                          <span className="flex-none font-mono text-[9.5px] uppercase text-subtle">
+                            {cs.chat.membersYou}
+                          </span>
+                        )}
+                      </span>
+                      <span className="mt-0.5 block truncate font-mono text-[10.5px] text-muted">
+                        <FloorLabel member={m} />
+                      </span>
+                    </span>
+                    {/* ⚠ Nobody is removed from Všichni and nobody leaves it (D219):
+                        it is the one conversation whose membership IS the household. */}
+                    {!isDefault && !soleMember && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="min-h-11 flex-none border-border lg:min-h-7"
+                        onClick={() => setRemoving(m)}
+                      >
+                        {m.user_id === me ? cs.chat.leave : cs.chat.word.removeMember}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {!isDefault && (
+              <div className="flex flex-none flex-col gap-2.5 border-t border-border px-4 pb-5 pt-3">
+                {!adding ? (
+                  <Button
+                    variant="primary"
+                    className="min-h-12 w-full lg:min-h-10"
+                    onClick={() => setAdding(true)}
+                  >
+                    <Plus size={16} aria-hidden />
+                    {cs.chat.word.addMember}
+                  </Button>
+                ) : (
+                  <>
+                    {directory.isPending && <Spinner />}
+                    {!directory.isPending && addable.length === 0 && (
+                      <p className="text-sm text-muted text-pretty">{cs.chat.directoryEmpty}</p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {addable.map((d) => (
+                        <Button
+                          key={d.user_id}
+                          size="sm"
+                          variant="secondary"
+                          className="min-h-11 lg:min-h-8"
+                          // ⚠ THE ONE THAT WAS PRESSED, not all of them (v10 review).
+                          // Every button read the shared mutation's isPending, so
+                          // adding one person put the whole picker into the loading
+                          // state and the member could not tell which add was in
+                          // flight. `variables` is the id this mutation was called
+                          // with.
+                          loading={add.isPending && add.variables === d.user_id}
+                          onClick={() => add.mutate(d.user_id)}
+                        >
+                          {d.display_name}
+                        </Button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {/* ⚠ The directory is a LOGIN HISTORY projected from sessions — Home
+                    has no user table — so somebody who has never logged in is simply
+                    not here. The note says so rather than letting the gap look like a
+                    bug, and it is visible BEFORE the picker opens, where it answers
+                    "who can I add" instead of explaining a short list after the fact. */}
+                <p className="text-[11.5px] leading-relaxed text-muted text-pretty">
+                  {cs.chat.directoryHint}
+                </p>
+              </div>
+            )}
+
+            {isDefault && (
+              <p className="flex-none border-t border-border px-4 pb-5 pt-3 text-[11.5px] text-muted text-pretty">
+                {cs.chat.everyoneCannotLeave}
+              </p>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <RemoveDialog
         conversationID={conversationID}
@@ -149,6 +226,11 @@ export function MembersPanel({
       />
     </>
   )
+}
+
+/** The row's mark. Not a photo — Home has no user table and no avatars (D230). */
+function initial(name: string): string {
+  return [...name.trim()].slice(0, 1).join('').toUpperCase()
 }
 
 /**
