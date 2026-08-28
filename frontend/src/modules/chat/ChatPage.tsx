@@ -7,6 +7,8 @@ import { useOnline } from '@/platform/pwa/offline'
 import { ConversationList } from './ConversationList'
 import { ThreadView } from './ThreadView'
 import { MembersPanel } from './MembersPanel'
+import { StorageWarning } from './StorageWarning'
+import { UklidPage } from './UklidPage'
 import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
 
 /**
@@ -16,10 +18,16 @@ import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
  * so a member never loses the unread counts to read a message; below 1024 the thread
  * is a route push and browser-back returns to the list.
  *
- * ⚠ AND THIS MODULE IS NOT IN THE NAV YET. The route is registered so `/chat` works,
- * but AppShell keeps its four thumb tabs until PR 3 lands attachments — a chat the
- * household meets before it can send a photo is a chat they will try to send a photo
- * with. The demotion of Okno do budoucnosti (D260) rides with that same PR.
+ * ⚠ AND IT IS IN THE NAV NOW. PR 2 deliberately left it off — a chat the household
+ * meets before it can send a photo is a chat they will try to send a photo with —
+ * so the tab and the demotion of Okno do budoucnosti (D260) land here, with the
+ * attachments.
+ *
+ * ⚠ `/chat/uklid` IS MATCHED BEFORE `/chat/:id`. React Router picks the more
+ * specific route regardless of order, but the order is written that way anyway:
+ * `uklid` is a reserved word in this route tree, and a conversation is addressed by
+ * UUIDv7 (D220 — no slugs anywhere in the module), so the two can never actually
+ * collide.
  */
 export function ChatPage() {
   useChatLiveSync()
@@ -30,6 +38,7 @@ export function ChatPage() {
   return (
     <Routes>
       <Route index element={<ChatLayout />} />
+      <Route path="uklid" element={<UklidPage />} />
       <Route path=":id" element={<ChatLayout />} />
     </Routes>
   )
@@ -64,11 +73,20 @@ function ChatLayout() {
             was never smaller than what it held: the newest messages and the
             composer were simply cut off the bottom of the page, with no scrollbar
             to say so. The two panes are where the height has to stop. */}
-        <aside className={id ? 'hidden min-h-0 lg:block lg:border-r lg:border-border' : 'block min-h-0 lg:border-r lg:border-border'}>
-          <ConversationList activeID={id} />
+        <aside className={id ? 'hidden min-h-0 lg:flex lg:flex-col lg:border-r lg:border-border' : 'flex min-h-0 flex-col lg:border-r lg:border-border'}>
+          {/* ⚠ THE MODULE-TOTAL WARNING SITS ON THE LIST, NOT IN A THREAD. It is
+              about the household's bucket, so a member meets it where they choose a
+              room rather than inside one — and it never appears beside the
+              per-conversation warning, because two banners about the same bytes is
+              one banner too many (StorageWarning decides which). */}
+          <StorageWarning />
+          <div className="min-h-0 flex-1">
+            <ConversationList activeID={id} />
+          </div>
         </aside>
 
-        <main className={id ? 'block min-h-0 min-w-0' : 'hidden min-h-0 min-w-0 lg:block'}>
+        <main className={id ? 'flex min-h-0 min-w-0 flex-col' : 'hidden min-h-0 min-w-0 lg:flex lg:flex-col'}>
+          {id && <StorageWarning conversationID={id} />}
           {id ? (
             /* ⚠ `key` IS LOAD-BEARING, NOT A LIST HINT (v10 review). At ≥1024 both
                panes are on screen, so /chat/a → /chat/b matches the SAME `:id`
@@ -82,9 +100,15 @@ function ChatLayout() {
                its oldest loaded message — the bug the pane heights were fixed for,
                by another route. Keying on the id makes a different conversation a
                different component, which is what it is. */
-            <ThreadView key={id} conversationID={id} onOpenMembers={() => setMembersOpen(true)} />
+            /* ⚠ `min-h-0 flex-1` RATHER THAN `h-full`. The banner above is a
+               sibling now, so a child sized to the FULL pane would overflow it by
+               exactly the banner's height — and the thread's own scroll box is
+               inside, so the overflow would land on the composer. */
+            <div className="min-h-0 flex-1">
+              <ThreadView key={id} conversationID={id} onOpenMembers={() => setMembersOpen(true)} />
+            </div>
           ) : (
-            <div className="grid h-full place-items-center p-6 text-center">
+            <div className="grid h-full flex-1 place-items-center p-6 text-center">
               <p className="max-w-xs text-sm text-muted text-pretty">{cs.chat.pickPrompt}</p>
             </div>
           )}

@@ -42,6 +42,16 @@ type ChatStorage struct {
 	// THEM. The rule is an intersection of a role and a membership and the client
 	// holds only half of it, so the banner asks rather than guesses.
 	CanCleanUp bool `json:"can_clean_up"`
+	// MaxUploadMB is the per-file cap the composer refuses against BEFORE uploading
+	// (D228 — it is HOME_DOCS_MAX_UPLOAD_MB, shared with Dokumenty).
+	//
+	// ⚠ IT RIDES THIS PAYLOAD SO THE CLIENT NEVER HARD-CODES IT. An operator who
+	// raises the cap for Dokumenty raises it for chat, and a composer carrying a
+	// stale 50 would refuse files the server would happily take — with a message
+	// naming a limit that is not the limit. `documents` publishes the same number on
+	// its own tree; chat republishes it rather than fetching another module's tree
+	// to find out its own cap.
+	MaxUploadMB int `json:"max_upload_mb"`
 }
 
 // ConversationStorage is one room's line.
@@ -79,6 +89,7 @@ func (s *Service) Storage(ctx context.Context) (ChatStorage, error) {
 		ThresholdConversationMB: th.Conversation.ValueMB,
 		Conversations:           make([]ConversationStorage, 0, len(rooms)),
 		CanCleanUp:              writeAllowedCtx(ctx),
+		MaxUploadMB:             int(s.upload.MaxBytes >> 20),
 	}
 	for _, r := range rooms {
 		bytes, objects := r.Bytes, r.Objects

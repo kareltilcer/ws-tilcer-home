@@ -7,6 +7,7 @@ import {
   ListTodo,
   LogOut,
   Megaphone,
+  MessageSquare,
   MoreHorizontal,
   Moon,
   NotebookText,
@@ -22,12 +23,14 @@ import {
 import { Toaster } from 'sonner'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
+import { count, PLURAL } from '@/i18n/plural'
 import { useTheme } from '@/theme/theme'
 import { useAuth } from '@/app/auth'
 import { routes } from '@/app/routes'
 import { useLiveSync } from '@/api/ws'
 import { useOnline } from '@/platform/pwa/offline'
 import { usePushKeepalive } from '@/platform/push/usePush'
+import { useUnreadTotal } from '@/modules/chat/api/hooks'
 
 interface NavItem {
   to: string
@@ -35,13 +38,23 @@ interface NavItem {
   icon: LucideIcon
   desc?: string
   adminOnly?: boolean
+  /** v10: the chat tab's unread count. Undefined everywhere else. */
+  badge?: number
 }
 
 // The four daily, thumb-reachable destinations — always shown on the mobile tab bar.
+//
+// ⚠ v10 IS THE FIRST TIME A MODULE IS DEMOTED TO MAKE ROOM (D260). Four tabs plus
+// *Více* is the shape that works at 375 px and a fifth makes six slots, so Chat
+// takes a tab and **Okno do budoucnosti moves into the overflow**. Okno is the
+// least-daily of the four and the only one whose signal already arrives elsewhere —
+// two Nástěnka widgets and four metrics — while chat is the one screen in the app
+// carrying an unread count, which is a reason to open something rather than a place
+// to end up. Nothing about Okno changes except where its link lives.
 const PRIMARY: NavItem[] = [
   { to: routes.nastenka, label: cs.nav.nastenka, icon: LayoutDashboard },
   { to: routes.ukoly, label: cs.nav.ukoly, icon: ListTodo },
-  { to: routes.okno, label: cs.nav.oknoShort, icon: CalendarClock },
+  { to: routes.chat, label: cs.nav.chat, icon: MessageSquare },
   { to: routes.poznamky, label: cs.nav.poznamky, icon: NotebookText },
 ]
 
@@ -66,7 +79,12 @@ const PRIMARY: NavItem[] = [
 // surface whatsoever (D147) and no notification of any kind, so this nav entry
 // is quite literally the only way anyone will ever find it — which is why the
 // description has to say what the module answers, not what it contains.
+//
+// v10 puts Okno do budoucnosti at the TOP of it, with its full name (D260) — it is
+// a demotion, not a removal, and burying a daily-ish destination at the bottom of a
+// sheet beside the admin-only entries would be a third thing nobody decided.
 const OVERFLOW: NavItem[] = [
+  { to: routes.okno, label: cs.nav.okno, icon: CalendarClock, desc: cs.nav.oknoDesc },
   { to: routes.dokumenty, label: cs.nav.dokumenty, icon: Files, desc: cs.nav.dokumentyDesc },
   { to: routes.finance, label: cs.nav.finance, icon: Wallet, desc: cs.nav.financeDesc },
   { to: routes.zahrada, label: cs.nav.zahrada, icon: Sprout, desc: cs.nav.zahradaDesc },
@@ -87,8 +105,15 @@ export function AppShell() {
   // opens Nastavení to fix a problem they cannot see.
   usePushKeepalive()
 
+  const unread = useUnreadTotal()
+  // ⚠ THE BADGE IS ATTACHED HERE RATHER THAN DECLARED IN PRIMARY, because PRIMARY is
+  // a module-level constant and the count is a live query. Matching on the route
+  // keeps the one dynamic field out of the static table.
+  const primaryItems = PRIMARY.map((item) =>
+    item.to === routes.chat ? { ...item, badge: unread } : item,
+  )
   const overflowItems = OVERFLOW.filter((item) => !item.adminOnly || isAdmin)
-  const desktopItems = [...PRIMARY, ...overflowItems]
+  const desktopItems = [...primaryItems, ...overflowItems]
   // The "Více" tab lights up when the open route lives behind it.
   const overflowActive = overflowItems.some(
     (item) => location.pathname === item.to || location.pathname.startsWith(item.to + '/'),
@@ -153,7 +178,7 @@ export function AppShell() {
           every member has something behind "Více" (Dokumenty), so the tab is no
           longer admin-only (D49). */}
       <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-s1 md:hidden">
-        {PRIMARY.map((item) => (
+        {primaryItems.map((item) => (
           <TabLink key={item.to} item={item} />
         ))}
         {overflowItems.length > 0 && (
@@ -263,6 +288,11 @@ function SideLink({ item, admin }: { item: NavItem; admin?: boolean }) {
     >
       <Icon size={18} aria-hidden />
       <span className="truncate">{item.label}</span>
+      {item.badge !== undefined && item.badge > 0 && (
+        <span className="ml-auto">
+          <UnreadBadge count={item.badge} />
+        </span>
+      )}
       {admin && (
         <span className="ml-auto font-mono text-[9.5px] uppercase tracking-wide text-subtle" aria-hidden>
           admin
@@ -285,9 +315,40 @@ function TabLink({ item }: { item: NavItem }) {
         )
       }
     >
-      <Icon size={20} aria-hidden />
+      <span className="relative">
+        <Icon size={20} aria-hidden />
+        {item.badge !== undefined && item.badge > 0 && (
+          <span className="absolute -right-2.5 -top-1.5">
+            <UnreadBadge count={item.badge} />
+          </span>
+        )}
+      </span>
       <span className="truncate px-1">{item.label}</span>
     </NavLink>
+  )
+}
+
+/**
+ * The unread badge (D260).
+ *
+ * ⚠ IT USES THE ACCENT, NOT THE ATTENTION FAMILY. Unread is not a warning — it is a
+ * reason to open something — and borrowing the warning register for it would make
+ * every unread message look like a problem.
+ *
+ * ⚠ AND IT IS MONO AND TABULAR so 3 and 40 occupy the same width: a bar whose tabs
+ * shift sideways as messages arrive is a bar whose targets move under a thumb.
+ *
+ * The accessible name counts, so it declines (PLURAL.unreadMessages) — a fixed
+ * phrase beside a number is the one thing D20 rules out.
+ */
+function UnreadBadge({ count: n }: { count: number }) {
+  return (
+    <span
+      className="grid h-[18px] min-w-[18px] place-items-center rounded-full bg-accent px-1 font-mono text-[10px] font-bold tabular-nums text-accent-fg"
+      aria-label={count(n, PLURAL.unreadMessages)}
+    >
+      {n > 99 ? '99+' : n}
+    </span>
   )
 }
 

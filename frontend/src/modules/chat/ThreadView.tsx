@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BellOff, CornerUpLeft, MoreHorizontal, Users } from 'lucide-react'
+import { ArrowLeft, BellOff, CornerUpLeft, MoreHorizontal, Paperclip, Users, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
-import { fmtDate, fmtTime } from '@/i18n/format'
+import { fmtBytes, fmtDate, fmtTime } from '@/i18n/format'
 import { Button, Input, Spinner, Textarea } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { useAuth } from '@/app/auth'
 import {
   useAdvanceRead,
+  useChatStorage,
   useConversation,
   useDeleteConversation,
   useDeleteMessage,
@@ -18,8 +19,10 @@ import {
   useMessages,
   useRenameConversation,
   useSendMessage,
+  useUploadMessage,
 } from './api/hooks'
 import type { ChatMessage, Conversation, MessageQuote } from './api/types'
+import { AttachmentView } from './AttachmentView'
 
 /**
  * One conversation's thread.
@@ -650,7 +653,19 @@ function Bubble({
           <div className="mb-0.5 text-xs font-bold text-bub-label">{message.author_label}</div>
         )}
         {message.reply_to && <Quote quote={message.reply_to} />}
-        <div className="whitespace-pre-wrap break-words text-sm">{message.body}</div>
+        {/* ⚠ THE ATTACHMENTS COME BEFORE THE BODY, which is the order every chat
+            uses and the order a caption reads in. An image with a caption under it
+            is a photo; a caption with an image under it is a document. */}
+        {message.attachments.length > 0 && (
+          <div className="mb-1.5 flex flex-col gap-1.5">
+            {message.attachments.map((a) => (
+              <AttachmentView key={a.id} attachment={a} />
+            ))}
+          </div>
+        )}
+        {message.body && (
+          <div className="whitespace-pre-wrap break-words text-sm">{message.body}</div>
+        )}
         <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
           <time dateTime={message.created_at}>{fmtTime(message.created_at)}</time>
           {message.edited_at && <span>· {cs.chat.word.edited}</span>}
@@ -743,11 +758,16 @@ function Quote({ quote }: { quote: MessageQuote }) {
 }
 
 /**
- * The composer.
+ * The composer: drag-and-drop, paste and a picker, up to ten files (D224).
  *
- * ⚠ TEXT ONLY IN PR 2. Drag-and-drop, paste, the file picker, the per-file progress
- * rows and the over-cap refusal all arrive with the bytes in PR 3 — an attachment
- * button that opens a picker whose upload 404s is worse than no button.
+ * ⚠ AN OVER-CAP FILE IS REFUSED BEFORE IT IS UPLOADED, naming the limit in MB. The
+ * server enforces the same cap and answers 413 — that is the authority — but making
+ * a member watch a 60 MB video upload to be told no at the end is the failure this
+ * check exists to avoid, on a household connection where that is minutes.
+ *
+ * ⚠ AND EDITING NEVER CARRIES FILES. An edit changes a body and nothing else (D225);
+ * attaching to an edit would need an attachment-add path that does not exist, so the
+ * picker is hidden while editing rather than offered and refused.
  */
 function Composer({
   conversationID,
@@ -763,9 +783,16 @@ function Composer({
   onClearEdit: () => void
 }) {
   const [body, setBody] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [rejected, setRejected] = useState<string[]>([])
+  const [progress, setProgress] = useState<number | null>(null)
+  const [dragging, setDragging] = useState(false)
   const send = useSendMessage(conversationID)
+  const upload = useUploadMessage(conversationID)
   const edit = useEditMessage(conversationID)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const picker = useRef<HTMLInputElement>(null)
+  const maxBytes = useMaxUploadBytes()
 
   useEffect(() => {
     if (editing) {
@@ -774,10 +801,36 @@ function Composer({
     }
   }, [editing])
 
+  /**
+   * accept applies both caps and reports what it dropped.
+   *
+   * ⚠ THE PARTIAL FAILURE IS THE DESIGNED CASE, not the exception: a phone photo
+   * roll is what produces "nine files up, one rejected", so the nine are kept and
+   * the one is named. Silently dropping it would be the same bug as silently
+   * truncating a paste.
+   */
+  const accept = (incoming: File[]) => {
+    if (incoming.length === 0) return
+    const tooBig: string[] = []
+    const kept: File[] = []
+    for (const f of incoming) {
+      if (f.size > maxBytes) tooBig.push(f.name)
+      else kept.push(f)
+    }
+    setRejected(tooBig)
+    setFiles((current) => {
+      const room = MAX_FILES - current.length
+      if (kept.length > room) {
+        setRejected((r) => [...r, ...kept.slice(room).map((f) => f.name)])
+      }
+      return [...current, ...kept.slice(0, Math.max(0, room))]
+    })
+  }
+
   const submit = () => {
     const text = body.trim()
-    if (!text) return
     if (editing) {
+      if (!text) return
       edit.mutate(
         { id: editing.id, body: text },
         {
@@ -789,21 +842,48 @@ function Composer({
       )
       return
     }
-    send.mutate(
-      { body: text, replyToID: replyTo?.id },
-      {
-        onSuccess: () => {
-          setBody('')
-          onClearReply()
-        },
-      },
-    )
+    // ⚠ A MESSAGE NEEDS A BODY **OR** AN ATTACHMENT (D224), which is why this is not
+    // `if (!text) return`: sending a photo with no caption is the ordinary case.
+    if (!text && files.length === 0) return
+    const done = () => {
+      setBody('')
+      setFiles([])
+      setRejected([])
+      setProgress(null)
+      onClearReply()
+    }
+    if (files.length > 0) {
+      setProgress(0)
+      upload.mutate(
+        { body: text, replyToID: replyTo?.id, files, onProgress: setProgress },
+        { onSuccess: done, onError: () => setProgress(null) },
+      )
+      return
+    }
+    send.mutate({ body: text, replyToID: replyTo?.id }, { onSuccess: done })
   }
 
-  const busy = send.isPending || edit.isPending
+  const busy = send.isPending || edit.isPending || upload.isPending
 
   return (
-    <div className="border-t border-border px-3 py-2.5 lg:px-4">
+    <div
+      className={cn(
+        'border-t border-border px-3 py-2.5 lg:px-4',
+        dragging && 'bg-accent-soft outline-2 -outline-offset-2 outline-dashed outline-accent',
+      )}
+      onDragOver={(e) => {
+        if (editing) return
+        e.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        if (editing) return
+        e.preventDefault()
+        setDragging(false)
+        accept(Array.from(e.dataTransfer.files))
+      }}
+    >
       {replyTo && !editing && (
         <div className="mb-2 flex items-center gap-2 rounded-md bg-s2 px-2.5 py-1.5 text-xs">
           <span className="min-w-0 flex-1 truncate text-muted">
@@ -829,7 +909,83 @@ function Composer({
           </button>
         </div>
       )}
+      {/* The staged files, with their sizes — so "why is this taking so long" has an
+          answer on screen before the upload starts. */}
+      {files.length > 0 && (
+        <ul className="mb-2 flex flex-col gap-1">
+          {files.map((f, i) => (
+            <li
+              key={`${f.name}-${i}`}
+              className="flex items-center gap-2 rounded-md bg-s2 px-2.5 py-1.5 text-xs"
+            >
+              <Paperclip size={13} className="flex-none text-muted" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{f.name}</span>
+              <span className="flex-none tabular-nums text-muted">{fmtBytes(f.size)}</span>
+              {progress === null && (
+                <button
+                  type="button"
+                  aria-label={`${cs.chat.removeFile} ${f.name}`}
+                  onClick={() => setFiles((cur) => cur.filter((_, j) => j !== i))}
+                  className="flex-none text-muted hover:text-fg"
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              )}
+            </li>
+          ))}
+          {progress !== null && (
+            <li className="px-0.5">
+              {/* ⚠ ONE BAR FOR THE REQUEST, NOT ONE PER FILE. The upload IS one
+                  request (D224), so per-file bars would be an invented breakdown of
+                  a number the browser reports once. */}
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(progress * 100)}
+                aria-label={cs.chat.uploading}
+                className="h-1.5 overflow-hidden rounded-full bg-s3"
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width]"
+                  style={{ width: `${Math.round(progress * 100)}%` }}
+                />
+              </div>
+            </li>
+          )}
+        </ul>
+      )}
+      {rejected.length > 0 && (
+        <p className="mb-2 rounded-md bg-attention-soft px-2.5 py-1.5 text-xs text-attention text-pretty">
+          {cs.chat.filesRejected(rejected.join(', '), Math.round(maxBytes / (1024 * 1024)))}
+        </p>
+      )}
+
       <div className="flex items-end gap-2">
+        {!editing && (
+          <>
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                accept(Array.from(e.target.files ?? []))
+                // Reset, or picking the same file twice in a row does nothing.
+                e.target.value = ''
+              }}
+            />
+            <Button
+              variant="ghost"
+              aria-label={cs.chat.attachFiles}
+              title={cs.chat.attachFiles}
+              disabled={files.length >= MAX_FILES || progress !== null}
+              onClick={() => picker.current?.click()}
+            >
+              <Paperclip size={16} aria-hidden />
+            </Button>
+          </>
+        )}
         <Textarea
           ref={ref}
           rows={1}
@@ -839,6 +995,16 @@ function Composer({
           aria-label={cs.chat.composerPlaceholder}
           className="max-h-40 min-h-10 resize-y"
           onChange={(e) => setBody(e.target.value)}
+          onPaste={(e) => {
+            if (editing) return
+            // ⚠ A PASTED SCREENSHOT ARRIVES AS A FILE ITEM WITH NO NAME. Taking it
+            // only when there are files keeps an ordinary text paste untouched.
+            const pasted = Array.from(e.clipboardData.files)
+            if (pasted.length > 0) {
+              e.preventDefault()
+              accept(pasted)
+            }
+          }}
           onKeyDown={(e) => {
             // Enter sends, Shift+Enter breaks the line — the shape every chat uses,
             // and the one a household will already have in their fingers.
@@ -848,12 +1014,39 @@ function Composer({
             }
           }}
         />
-        <Button variant="primary" loading={busy} onClick={submit} disabled={!body.trim()}>
+        <Button
+          variant="primary"
+          loading={busy}
+          onClick={submit}
+          disabled={!body.trim() && files.length === 0}
+        >
           {editing ? cs.chat.save : cs.chat.send}
         </Button>
       </div>
     </div>
   )
+}
+
+/** D224's ten. */
+const MAX_FILES = 10
+
+/**
+ * useMaxUploadBytes is the per-file cap the composer refuses against.
+ *
+ * ⚠ IT COMES FROM THE SERVER (`/api/chat/storage`), NOT FROM A CONSTANT. It is
+ * Dokumenty's cap, shared on purpose (D228), so an operator who raises
+ * `HOME_DOCS_MAX_UPLOAD_MB` raises it here too — and a hard-coded 50 would refuse
+ * files the server would happily take while naming a limit that is not the limit.
+ *
+ * The server is still the authority: this check exists so a member does not spend
+ * minutes of a household uplink on a file that will be refused, and the 413 is what
+ * actually decides. The fallback while the query is in flight is the documented
+ * default, which errs toward letting the request through to a 413 that explains
+ * itself rather than refusing something valid with no server involved.
+ */
+function useMaxUploadBytes(): number {
+  const storage = useChatStorage()
+  return (storage.data?.max_upload_mb ?? 50) * 1024 * 1024
 }
 
 // ---- formatting ----

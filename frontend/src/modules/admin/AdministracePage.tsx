@@ -46,8 +46,9 @@ import { ScheduleBuilder } from './ScheduleBuilder'
 import { ConditionsBuilder, conditionsForSave, conditionsPhrase, conditionsValid } from './ConditionsBuilder'
 import { StorageTab } from './StorageTab'
 import { PrivateItemsTab } from './PrivateItemsTab'
+import { LimitsTab } from './LimitsTab'
 
-type Tab = 'send' | 'rules' | 'summaries' | 'deliveries' | 'storage' | 'private'
+type Tab = 'send' | 'rules' | 'summaries' | 'deliveries' | 'storage' | 'private' | 'limits'
 
 /**
  * Administrace's navigation, at six tabs (v9).
@@ -63,7 +64,10 @@ type Tab = 'send' | 'rules' | 'summaries' | 'deliveries' | 'storage' | 'private'
  */
 const TAB_GROUPS = [
   { key: 'notif', label: 'Notifikace', tabs: ['send', 'rules', 'summaries', 'deliveries'] },
-  { key: 'store', label: 'Správa úložiště', tabs: ['storage', 'private'] },
+  // v10 (D263): a third sub-tab, because the two chat thresholds are now EDITABLE
+  // rather than environment variables — and an operator setting that has to be
+  // changed in Coolify is not editable in Administrace, which is what D236 answers.
+  { key: 'store', label: 'Správa úložiště', tabs: ['storage', 'private', 'limits'] },
 ] as const satisfies readonly { key: string; label: string; tabs: readonly Tab[] }[]
 
 /** Mirrors maxCoalesceWindowSeconds in admin/service.go — the editor must not be
@@ -82,6 +86,7 @@ const TAB_LABELS: Record<Tab, string> = {
   deliveries: cs.admin.tabDeliveries,
   storage: cs.storage.title,
   private: cs.privateItems.title,
+  limits: cs.storage.limitsTab,
 }
 
 export function AdministracePage() {
@@ -159,6 +164,7 @@ export function AdministracePage() {
       {tab === 'deliveries' && <DeliveriesTab />}
       {tab === 'storage' && <StorageTab />}
       {tab === 'private' && <PrivateItemsTab />}
+      {tab === 'limits' && <LimitsTab />}
     </div>
   )
 }

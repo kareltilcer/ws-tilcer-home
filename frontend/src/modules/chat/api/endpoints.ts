@@ -1,13 +1,11 @@
-// Chat (v10) — the module's API surface (openapi.yaml 0.12.0).
-//
-// ⚠ THE ATTACHMENT, STORAGE, CLEAN-UP AND MOVE PATHS ARE ABSENT HERE ON PURPOSE.
-// The served contract describes them because it is the whole v10 spec, and PR 3
-// implements them. A client function for a route that 404s would be found by
-// somebody calling it, not by reading the spec.
+// Chat (v10) — the module's API surface (openapi.yaml 0.12.1).
 
-import { apiFetch } from '@/api/client'
+import { apiFetch, apiUpload } from '@/api/client'
 import type {
+  Attachment,
   ChatMessage,
+  ChatStorage,
+  CleanupPage,
   Conversation,
   ConversationCreate,
   ConversationMemberList,
@@ -146,4 +144,92 @@ export function searchMessages(q: string, conversationID?: string): Promise<Sear
 
 export function getDirectory(): Promise<Directory> {
   return apiFetch(`${base}/directory`)
+}
+
+// ---- PR 3: attachments, storage, clean-up ----
+
+/**
+ * Send a message carrying files.
+ *
+ * ⚠ ONE REQUEST, NEVER AN UPLOAD-THEN-REFERENCE PAIR (D224). A two-step flow
+ * orphans an object every time the second step does not happen, and chat has no
+ * reconciliation pass to find one — Dokumenty has a mirror job that sweeps its
+ * prefix and chat deliberately has neither.
+ *
+ * ⚠ AND IT GOES THROUGH apiUpload RATHER THAN apiFetch, because fetch has no upload
+ * progress event and the composer shows a per-file progress row. The same reason
+ * Dokumenty's queue does.
+ */
+export function sendMessageWithFiles(
+  id: string,
+  input: { body: string; replyToID?: string; files: File[] },
+  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<ChatMessage> {
+  const form = new FormData()
+  if (input.body) form.set('body', input.body)
+  if (input.replyToID) form.set('reply_to_id', input.replyToID)
+  for (const file of input.files) form.append('files', file, file.name)
+  return apiUpload(`${base}/conversations/${id}/messages`, form, opts)
+}
+
+/**
+ * The URL a bubble renders an attachment from.
+ *
+ * ⚠ IT IS BUILT HERE AND NOWHERE ELSE, and it is a BACKEND path rather than a
+ * presigned link: content is always served through the session (D33/D42), so every
+ * view re-resolves membership. `?download=true` forces the attachment disposition;
+ * there is no separate `/download` route because only one of the three kinds ever
+ * needs one.
+ */
+export function attachmentURL(id: string, opts: { download?: boolean } = {}): string {
+  return `${base}/attachments/${id}/raw${opts.download ? '?download=true' : ''}`
+}
+
+/** An image attachment's thumbnail. 404 for video and file kinds, which have none. */
+export function thumbnailURL(id: string): string {
+  return `${base}/attachments/${id}/thumbnail`
+}
+
+export function chatStorage(): Promise<ChatStorage> {
+  return apiFetch(`${base}/storage`)
+}
+
+/**
+ * ⚠ `sort=size` IS SINGLE-PAGE AND THE SERVER REFUSES A CURSOR WITH IT — a keyset
+ * cursor is an id, and an id does not locate a position in a size ordering. The
+ * screen says so rather than offering a Load-more that would not work.
+ */
+export function chatCleanup(
+  opts: { conversationID?: string; sort?: 'size' | 'recent'; cursor?: string; limit?: number } = {},
+): Promise<CleanupPage> {
+  return apiFetch(
+    `${base}/cleanup${qs({
+      conversation_id: opts.conversationID,
+      sort: opts.sort,
+      cursor: opts.cursor,
+      limit: opts.limit,
+    })}`,
+  )
+}
+
+/**
+ * Odstranit — removes the bytes and keeps the epitaph (D243).
+ *
+ * ⚠ IT DELETES THE OBJECT INLINE server-side, which is what makes the figure fall
+ * immediately. Every other destructive path in chat enqueues for a 15-minute drain.
+ */
+export function removeAttachment(id: string): Promise<void> {
+  return apiFetch(`${base}/attachments/${id}`, { method: 'DELETE' })
+}
+
+/**
+ * Přesunout do Dokumentů — a custody transfer, and ⚠ A PUBLISH (D245): the file
+ * becomes readable by every household member, including people who are not in this
+ * conversation. The dialog says so in words before this is called.
+ */
+export function moveAttachment(id: string, folderID: string): Promise<Attachment> {
+  return apiFetch(`${base}/attachments/${id}/move`, {
+    method: 'POST',
+    body: { folder_id: folderID },
+  })
 }

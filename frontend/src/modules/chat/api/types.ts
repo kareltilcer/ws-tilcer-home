@@ -227,3 +227,66 @@ export interface ConversationEvent {
   conversation_id: string
   gone: boolean
 }
+
+// ---- PR 3: attachments, storage, clean-up ----
+
+/**
+ * The caller's chat storage picture (`GET /api/chat/storage`).
+ *
+ * ⚠ THE TOTAL IS THE HOUSEHOLD'S AND THE ROWS ARE THE CALLER'S. Everyone sees the
+ * same `total_bytes`, because `chat.total` is a threshold about the bucket and a
+ * warning nobody can see is not a warning; the per-conversation rows cover only
+ * conversations the caller belongs to.
+ *
+ * ⚠ AND CONVERSATIONS IN THE KOŠ ARE COUNTED. Their bytes are still in R2, and
+ * these figures have to sum — which is why *Smazat natrvalo* exists at all.
+ */
+export interface ChatStorage {
+  total_bytes: number | null
+  threshold_total_mb: number
+  total_exceeded: boolean
+  threshold_conversation_mb: number
+  conversations: ChatStorageConversation[]
+  /**
+   * D241's gate, answered by the server rather than re-derived here.
+   *
+   * ⚠ BRANCH THE WARNING'S LINK ON THIS. The rule is member ∧ (editor|admin) and
+   * the client holds only half of it, so a banner that guessed would offer a reader
+   * a link that 403s them — the one thing the copy is explicitly not allowed to do.
+   */
+  can_clean_up: boolean
+  /**
+   * The per-file cap in MB — Dokumenty's, shared on purpose (D228).
+   *
+   * ⚠ THE COMPOSER REFUSES AGAINST THIS RATHER THAN AGAINST A CONSTANT. An operator
+   * who raises HOME_DOCS_MAX_UPLOAD_MB raises it for chat too, and a hard-coded 50
+   * here would refuse files the server would take, naming a limit that is not the
+   * limit.
+   */
+  max_upload_mb: number
+}
+
+export interface ChatStorageConversation {
+  id: string
+  name: string
+  bytes: number | null
+  objects: number | null
+  over_limit: boolean
+}
+
+/** One row of Úklid úložiště chatu. */
+export interface CleanupItem {
+  attachment: Attachment
+  conversation_id: string
+  conversation_name: string
+  conversation_over_limit: boolean
+  uploaded_by_label: string
+}
+
+export interface CleanupPage {
+  items: CleanupItem[]
+  /** ⚠ Always null under `sort=size`, which is single-page by construction. */
+  next_cursor: string | null
+  /** Across ALL matching items, not this page — the figure the screen acts on. */
+  total_bytes: number | null
+}

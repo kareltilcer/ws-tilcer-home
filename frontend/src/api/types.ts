@@ -870,6 +870,8 @@ export interface StorageSnapshot {
   replica: StorageReplica
   backup: StorageBackup
   warning: StorageWarning
+  /** v10. Absent when no module reports storage groups (a build without chat). */
+  chat?: StorageChat
 }
 
 export interface StorageDatabase {
@@ -1028,4 +1030,58 @@ export interface PrivateItemPage {
   next_cursor: string | null
   /** Covers ALL matching items, not just this page — the figure the screen acts on. */
   total_bytes: number | null
+}
+
+// ---- v10: the Úložiště chat block and the two thresholds ----
+
+/**
+ * The chat block of the storage snapshot (FR-V10-16, D240/D254).
+ *
+ * ⚠ THERE IS NO WAY IN FROM HERE, AND THE ABSENCE IS THE SPECIFICATION. No thread,
+ * no message, no attachment list, no clean-up page and no link: an admin sees which
+ * room is heavy and asks its members, because clean-up is member-scoped (D241) and
+ * the only two chat verbs an admin has over a room they are not in are restore and
+ * purge — neither of which opens it (D255). Do not add a link here.
+ */
+export interface StorageChat {
+  total_bytes: number | null
+  threshold_total_mb: number
+  exceeded: boolean
+  threshold_conversation_mb: number
+  thresholds_updated_at: string | null
+  thresholds_updated_by: string | null
+  /**
+   * ⚠ Always false, deliberately (D229). Chat blobs are NOT copied to the backup
+   * bucket — they are the most disposable bytes in the application and the module
+   * exists under a storage warning, so doubling them into the mirror would be the
+   * one place in Home where a background job undermines a threshold. The page
+   * renders *Nezálohováno* rather than leaving a gap that reads as zero.
+   */
+  mirrored: boolean
+  conversations: StorageChatConversation[]
+}
+
+export interface StorageChatConversation {
+  id: string
+  name: string
+  /** A COUNT. Never the names — an admin sees that a room is heavy, not who is in it. */
+  members: number
+  bytes: number | null
+  objects: number | null
+  over_limit: boolean
+  /** Non-null ⇒ in the koš, and ⚠ still counted in `total_bytes` (D254). */
+  trashed_at: string | null
+  purge_after: string | null
+}
+
+export interface StorageThresholds {
+  chat_total_mb: number
+  chat_conversation_mb: number
+  updated_at: string | null
+  updated_by: string | null
+}
+
+export interface StorageThresholdsUpdate {
+  chat_total_mb?: number
+  chat_conversation_mb?: number
 }
