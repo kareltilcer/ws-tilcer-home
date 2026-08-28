@@ -876,6 +876,10 @@ function DeliveriesTab() {
             ['trigger', cs.admin.kindTrigger],
             ['schedule', cs.admin.kindSchedule],
             ['test', cs.admin.kindTest],
+            // v10. Widening notification_deliveries' CHECK (08003) was done so the
+            // log could answer "did the chat push go out?" separately from "did the
+            // rule fire?" — which needs the filter that asks it.
+            ['chat', cs.admin.kindChat],
           ]}
         />
         <FilterSelect
@@ -1043,7 +1047,10 @@ function kindLabel(kind: string): string {
     trigger: cs.admin.kindTrigger,
     schedule: cs.admin.kindSchedule,
     test: cs.admin.kindTest,
+    chat: cs.admin.kindChat,
   }
+  // The fallback prints the raw key, which is English in a Czech-only column — it
+  // is a backstop for a kind this build has not heard of, not a place to leave one.
   return map[kind] ?? kind
 }
 

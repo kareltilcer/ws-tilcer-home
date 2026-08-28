@@ -110,4 +110,44 @@ export const qk = {
     ['electricity', 'history', from ?? '', to ?? ''] as const,
   /** The prefix every electricity mutation invalidates. */
   electricityAll: ['electricity'] as const,
+
+  // v10 — Chat.
+  //
+  // ⚠ EVERY KEY BELOW THAT DESCRIBES CONVERSATION CONTENT CARRIES THE CONVERSATION
+  // ID AS ITS OWN SEGMENT. This is the v9 `scope` lesson in a module where the
+  // payload IS the content: a key shared across two conversations looks fine until
+  // the moment somebody switches rooms and TanStack serves the other thread from
+  // cache — which here means other people's messages under a heading that names
+  // yours. The compiler is what enforces it: none of these functions is callable
+  // without the id.
+  //
+  // ⚠ AND NONE OF IT IS PERSISTED. Chat is excluded from the PWA persister
+  // entirely (platform/pwa/persist.ts) — the route renders an offline state rather
+  // than a stale thread, because message bodies and other members' names on a
+  // shared laptop's disk are worth less than the offline convenience.
+  // ⚠ THE RESOURCE COMES BEFORE THE ID, AND THAT IS NOT COSMETIC. The obvious
+  // nesting — ['chat','conversation',id,'messages'] — makes chatConversation(id) a
+  // PREFIX of chatMessages(id), and TanStack invalidates by prefix: advancing the
+  // read marker would then refetch the entire thread, on every message, in every
+  // open tab. It was found by counting requests in the browser, and it is invisible
+  // in code review because both keys look correct on their own.
+  chatConversations: (state?: string) => ['chat', 'conversations', state ?? 'active'] as const,
+  chatConversation: (id: string) => ['chat', 'conversation', id] as const,
+  chatMessages: (id: string) => ['chat', 'messages', id] as const,
+  chatMembers: (id: string) => ['chat', 'members', id] as const,
+  chatSearch: (q: string, conversationID?: string) =>
+    ['chat', 'search', q, conversationID ?? ''] as const,
+  chatDirectory: ['chat', 'directory'] as const,
+  /**
+   * ⚠ NOT AN INVALIDATION TARGET, AND NO CHAT MUTATION MAY USE IT. It is the
+   * common prefix the key-shape test asserts every chat key hangs off, and the
+   * prefix persist.ts refuses to write to disk — nothing more.
+   *
+   * Invalidating `['chat']` refetches every open thread — each at `limit = held`,
+   * so every page of history the member loaded is re-fetched — plus the directory
+   * and every cached search result the session has accumulated. That was the
+   * default once; `invalidateLists` in modules/chat/api/hooks.ts is what replaced
+   * it, and it names the two listings a room's own state can actually change.
+   */
+  chatAll: ['chat'] as const,
 }

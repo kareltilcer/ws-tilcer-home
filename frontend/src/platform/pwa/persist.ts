@@ -32,6 +32,43 @@ function isPrivateItemsKey(queryKey: readonly unknown[]): boolean {
   return qk.adminPrivateItemsAll.every((segment, i) => queryKey[i] === segment)
 }
 
+/**
+ * mayPersistKey decides whether one query is allowed to reach the disk.
+ *
+ * ⚠ EXPORTED SO IT CAN BE ASSERTED (v10, leak table row 20). It was an inline
+ * closure until the chat exclusion arrived, at which point "chat is not persisted"
+ * became a claim nothing could check — and an offline-storage rule that only exists
+ * as a comment is the kind that survives a refactor in name only.
+ */
+export function mayPersistKey(queryKey: readonly unknown[]): boolean {
+  const key = String(queryKey[0] ?? '')
+  // Never persist auth/session state or push registration: both are online-only by
+  // design, and a stale "you are logged in" is a bug.
+  if (key === 'session' || key === 'auth' || key === 'push') return false
+  // ⚠ NOR ANY CHAT QUERY, AND THIS IS A DELIBERATE DEPARTURE FROM EVERY OTHER
+  // MODULE (v10). Everything else in Home renders read-only from cache when the
+  // network is gone; chat renders an OFFLINE STATE instead. Message bodies and
+  // other members' display names on a shared laptop's disk are worth less than the
+  // offline convenience, and v9 already established the threat model — a laptop in
+  // the kitchen gets used by more than one person.
+  //
+  // ⚠ The whole PREFIX, not a list of chat keys. A key added later — a pinned
+  // message list, a draft — would otherwise reach disk because nobody remembered to
+  // extend an allow-list, which is the failure mode this file has been bitten by
+  // once already.
+  if (key === 'chat') return false
+  // ⚠ NOR the purge listing (v9, D198). Opening Soukromé položky writes
+  // `admin.private_items.view` — the only READ in Home that is audited — and
+  // PrivateItemsTab suppresses every automatic refetch precisely so that "a page
+  // load is a person choosing to look". Persisting it defeats both: the list
+  // rehydrates from IndexedDB days later with no request and therefore no audit
+  // event, and other members' private item ids sit on a shared laptop's disk
+  // between sessions. It is the one query whose value is strictly worse offline
+  // than absent.
+  if (isPrivateItemsKey(queryKey)) return false
+  return true
+}
+
 let activeUser: string | null = null
 let unsubscribe: (() => void) | null = null
 
@@ -78,22 +115,8 @@ export async function startPersisting(client: QueryClient, userID: string): Prom
     maxAge: MAX_AGE,
     buster: CACHE_BUSTER,
     dehydrateOptions: {
-      shouldDehydrateQuery: (query) => {
-        const key = String(query.queryKey[0] ?? '')
-        // Never persist auth/session state or push registration: both are
-        // online-only by design, and a stale "you are logged in" is a bug.
-        if (key === 'session' || key === 'auth' || key === 'push') return false
-        // ⚠ NOR the purge listing (v9, D198). Opening Soukromé položky writes
-        // `admin.private_items.view` — the only READ in Home that is audited — and
-        // PrivateItemsTab suppresses every automatic refetch precisely so that "a
-        // page load is a person choosing to look". Persisting it defeats both: the
-        // list rehydrates from IndexedDB days later with no request and therefore
-        // no audit event, and other members' private item ids sit on a shared
-        // laptop's disk between sessions. It is the one query whose value is
-        // strictly worse offline than absent.
-        if (isPrivateItemsKey(query.queryKey)) return false
-        return query.state.status === 'success'
-      },
+      shouldDehydrateQuery: (query) =>
+        mayPersistKey(query.queryKey) && query.state.status === 'success',
     },
   })
   unsubscribe = detach

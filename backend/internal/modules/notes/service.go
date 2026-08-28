@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
@@ -1814,21 +1813,12 @@ func splitPath(p string) []string {
 // token becomes a quoted prefix term so punctuation can't break the FTS syntax.
 // Returns "" when the query has no searchable tokens (e.g. punctuation-only) — the
 // caller must treat that as "matches nothing" and skip the MATCH entirely.
-func ftsQuery(q string) string {
-	fields := strings.Fields(q)
-	terms := make([]string, 0, len(fields))
-	for _, f := range fields {
-		f = strings.ReplaceAll(f, `"`, "")
-		// A token with no letters/digits (e.g. "#" or "!!!") tokenizes to zero
-		// terms; a prefix '*' on that empty phrase is an FTS5 syntax error, so
-		// drop it — it can't match anything anyway.
-		if !strings.ContainsFunc(f, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
-			continue
-		}
-		terms = append(terms, `"`+f+`"*`)
-	}
-	return strings.Join(terms, " ")
-}
+//
+// ⚠ IT IS appdb.FTSQuery AND NOT A COPY OF IT (v10 review). This module,
+// `documents` and v10's `chat` carried three byte-identical spellings of it; the
+// next FTS5 metacharacter somebody discovers has to reach every search box in the
+// house, and under three spellings it reaches one.
+func ftsQuery(q string) string { return appdb.FTSQuery(q) }
 
 // ---- Inline-image helpers ----
 

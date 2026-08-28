@@ -133,6 +133,21 @@ export function useLiveSync(): void {
             payload?: { private?: string }
           }
           if (!msg.type) return
+          // ⚠ CHAT LEAVES HERE AND NEVER REACHES applyChange (v10). Two reasons,
+          // and both are decisions rather than shortcuts. Its frame carries the
+          // message, so the chat module applies it into the thread cache itself
+          // instead of invalidating and refetching what it was just handed. And
+          // applyChange ALWAYS invalidates the dashboard — correct for the ten
+          // modules that publish widgets, wrong for the one that publishes none
+          // (D252): it would refetch Nástěnka on every message in a busy room, for
+          // a tile that does not exist.
+          //
+          // The toast is skipped for the same kind of reason: "Chat byl změněn
+          // jinde" over a message already rendering in the thread is noise.
+          if (msg.type.startsWith('chat')) {
+            dispatchFrame(msg as LiveFrame)
+            return
+          }
           // Classify the change once and thread the module through cache
           // invalidation, route matching, and the toast — no repeated prefix scans.
           const mod = classify(msg.type)
@@ -263,6 +278,44 @@ const electricityModule: LiveModule = {
   route: routes.elektrina,
   keys: [['electricity']],
   toast: { id: 'live-electricity', message: cs.live.electricityUpdated },
+}
+
+// ---- v10: frames that carry their own payload ----
+
+/**
+ * A subscriber that wants the FRAME, not merely the signal that something changed.
+ *
+ * ⚠ CHAT IS THE FIRST AND ONLY CALLER, and this exists so its semantics live in the
+ * chat module rather than in this file. Every other module's live-sync is one line
+ * — "invalidate this prefix" — because the payload is a notification; chat's payload
+ * IS the message, and the rules around it (apply into the thread cache, compare
+ * `prev_message_id`, refetch the tail exactly once on a gap) are the module's, not
+ * the platform's.
+ *
+ * The ten existing modules are untouched: classify/applyChange below still run for
+ * every non-chat frame exactly as they did.
+ */
+export type LiveFrame = { type: string; origin?: string; payload?: unknown }
+type FrameHandler = (frame: LiveFrame) => void
+
+const frameHandlers = new Set<FrameHandler>()
+
+/** subscribeToFrames registers a handler and returns its unsubscribe. */
+export function subscribeToFrames(fn: FrameHandler): () => void {
+  frameHandlers.add(fn)
+  return () => {
+    frameHandlers.delete(fn)
+  }
+}
+
+function dispatchFrame(frame: LiveFrame): void {
+  for (const fn of frameHandlers) {
+    try {
+      fn(frame)
+    } catch {
+      // A subscriber that throws must not kill the socket's message loop.
+    }
+  }
 }
 
 // classify maps a change type to the module it belongs to, or null for types no

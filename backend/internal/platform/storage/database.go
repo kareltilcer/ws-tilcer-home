@@ -347,6 +347,12 @@ var PlatformTables = []string{
 	"push_subscriptions",
 	"notification_preferences",
 	"audit_notify_cursor",
+	// v10 (D236). ⚠ storage_thresholds belongs to NEITHER module that uses it:
+	// `admin` writes the two values and `chat` reads them, and the two may not
+	// import each other — the same constraint that put notification_preferences
+	// in this block rather than in `admin`. It is created by 02004, so it must be
+	// declared here or the completeness guard fails the moment v10 migrates.
+	"storage_thresholds",
 	// Not created by any migration.
 	"goose_db_version",
 	"sqlite_sequence",

@@ -33,17 +33,23 @@ export function CardDetail({
     void qc.invalidateQueries({ queryKey: ['board'] })
     void qc.invalidateQueries({ queryKey: qk.dashboard })
   }
-  const mutate = <A, R>(fn: (a: A) => Promise<R>) =>
+  // ⚠ NAMED `use…` BECAUSE IT IS ONE. It calls useMutation, so it is a hook, and
+  // the eight calls below are hook calls that must stay unconditional and in a
+  // fixed order. Under its old name (`mutate`) eslint could not see that: it
+  // reported the useMutation inside as a rules-of-hooks violation and, worse,
+  // could not check the CALL SITES at all — a later `cond ? mutate(…) : null`
+  // would have desynced every mutation after it with nothing going red.
+  const useInvalidatingMutation = <A, R>(fn: (a: A) => Promise<R>) =>
     useMutation({ mutationFn: fn, onSuccess: invalidate })
 
-  const mUpdate = mutate((body: Parameters<typeof api.updateCard>[1]) => api.updateCard(cardId, body))
-  const mAddLink = mutate((b: { url: string; title?: string }) => api.addCardLink(cardId, b))
-  const mDelLink = mutate((id: string) => api.deleteCardLink(id))
-  const mAddChk = mutate((text: string) => api.addChecklistItem(cardId, { text }))
-  const mSetChk = mutate((v: { id: string; done: boolean }) => api.updateChecklistItem(v.id, { done: v.done }))
-  const mDelChk = mutate((id: string) => api.deleteChecklistItem(id))
-  const mAttach = mutate((labelId: string) => api.attachLabel(cardId, labelId))
-  const mDetach = mutate((labelId: string) => api.detachLabel(cardId, labelId))
+  const mUpdate = useInvalidatingMutation((body: Parameters<typeof api.updateCard>[1]) => api.updateCard(cardId, body))
+  const mAddLink = useInvalidatingMutation((b: { url: string; title?: string }) => api.addCardLink(cardId, b))
+  const mDelLink = useInvalidatingMutation((id: string) => api.deleteCardLink(id))
+  const mAddChk = useInvalidatingMutation((text: string) => api.addChecklistItem(cardId, { text }))
+  const mSetChk = useInvalidatingMutation((v: { id: string; done: boolean }) => api.updateChecklistItem(v.id, { done: v.done }))
+  const mDelChk = useInvalidatingMutation((id: string) => api.deleteChecklistItem(id))
+  const mAttach = useInvalidatingMutation((labelId: string) => api.attachLabel(cardId, labelId))
+  const mDetach = useInvalidatingMutation((labelId: string) => api.detachLabel(cardId, labelId))
 
   const c = card.data
   const title = c?.title ?? '…'

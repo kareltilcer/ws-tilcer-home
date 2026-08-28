@@ -68,6 +68,10 @@
   --color-attention-soft: var(--attention-soft);
   --color-vis-private: var(--vis-private);
   --color-vis-private-soft: var(--vis-private-soft);
+  /* v10 chat aliases — no new colour; see :root. */
+  --color-bub-mine: var(--bub-mine);
+  --color-bub-theirs: var(--bub-theirs);
+  --color-bub-label: var(--bub-label);
 
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 4px);
@@ -209,6 +213,39 @@
      sometimes "not visible to others" destroys both meanings. */
   --vis-private: var(--info);
   --vis-private-soft: var(--info-soft);
+
+  /* ---- v10: Chat introduces NO NEW COLOUR ----
+
+     Three aliases over surfaces and families that already exist. The reason is
+     recorded rather than assumed: measured on the canvas in sRGB, --bub-mine
+     against --bub-theirs is 1.55:1 in dark and 1.16:1 in light — DELIBERATELY
+     below 3:1, because the own-versus-others distinction must NOT rest on colour.
+     Alignment and the author label carry it; the tint only reinforces.
+
+     ⚠ DECLARED ONCE, exactly like v9's --vis-private above. An earlier version
+     restated all three under .light and claimed that as protection against a
+     nested surface redefining --s2; it is not. .light sits on the SAME root
+     element, so both declarations substitute the same computed value and the
+     second is simply dead — and a nested redefinition of --s2 cannot reach a
+     --bub-theirs already computed at the root either way. The theme swap works
+     because --accent-soft, --s2 and --muted are themselves redefined under .light,
+     which is the whole mechanism the alias pattern relies on. */
+  --bub-mine: var(--accent-soft);
+  --bub-theirs: var(--s2);
+  /* The author label inside a FOREIGN bubble. ⚠ --muted, not --subtle: measured on
+     --s2 in the light theme, --subtle falls to 4.04:1, under the AA bar. */
+  --bub-label: var(--muted);
+
+  /* ⚠ DECLARED, because ChatPage READS IT. `h-[calc(100dvh-var(--chat-chrome))]` is
+     what stops the two panes growing to their content, and it was running on an
+     inline 8rem fallback that no stylesheet defined — a magic number wearing a
+     variable's clothes. It is the app chrome above and below the chat viewport
+     below 1024: the header plus the thumb-tab bar. ⚠ IT CHANGES WHEN AppShell
+     GAINS CHAT'S TAB (D260), and this is the one place that has to be edited —
+     get it wrong and the thread either leaves a gap or pushes the composer back
+     under the fold, which is the bug the pane heights were just fixed for. */
+  --chat-chrome: 8rem;
+
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;
   --font: 'Hanken Grotesk', system-ui, sans-serif;
@@ -276,6 +313,9 @@
   --info-soft: oklch(0.955 0.014 256);
   /* Darkened from the design's 0.640 for the same reason as its dark twin. */
   --unmeasured: oklch(0.545 0.018 264);
+  /* v10's three bubble tokens are NOT restated here — see the :root block. They
+     alias --accent-soft / --s2 / --muted, all three of which this block redefines,
+     so they follow the theme on their own. */
   --shadow: 0 1px 2px oklch(0.2 0.02 264 / 0.10), 0 2px 8px oklch(0.2 0.02 264 / 0.06);
 }
 

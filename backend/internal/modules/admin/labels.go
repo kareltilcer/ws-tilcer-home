@@ -145,6 +145,21 @@ var actionLabels = map[string]string{
 	// other members' private items is recorded, because "who looked" is the answer
 	// the household is owed for a screen that exists at all (D198).
 	"admin.private_items.view": "Když správce otevře seznam soukromých položek",
+
+	// chat (Chat) — v10. ⚠ SEVEN STRUCTURAL VERBS AND NO MESSAGE VERB (D231).
+	// Sending, editing and deleting a message write nothing to the Log, so there is
+	// deliberately no "Když někdo pošle zprávu" here to bind a rule to. The gap is
+	// asserted by TestChatMessagesAreNotAudited rather than only described.
+	//
+	// The three chat.attachment.* verbs and chat.threshold.update arrive with the
+	// code that emits them, in PR 3.
+	"chat.conversation.created":  "Když někdo vytvoří konverzaci",
+	"chat.conversation.renamed":  "Když někdo přejmenuje konverzaci",
+	"chat.conversation.deleted":  "Když někdo přesune konverzaci do koše",
+	"chat.conversation.restored": "Když někdo obnoví konverzaci z koše",
+	"chat.conversation.purged":   "Když někdo smaže konverzaci natrvalo",
+	"chat.member.added":          "Když někdo přidá člena do konverzace",
+	"chat.member.removed":        "Když někdo odebere člena z konverzace",
 }
 
 // ActionLabel returns the human Czech phrase for an action, falling back to the

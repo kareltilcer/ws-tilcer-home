@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
@@ -999,12 +1000,10 @@ func (s *Store) CountPinnedFor(ctx context.Context, userID string) (int, error) 
 
 // ---- small SQL helpers ----
 
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
-}
+// placeholders is appdb.Placeholders — one implementation, five call sites (v10
+// review). It was copied into this module, `documents`, `garden`, `todo` and
+// `platform/push` before platform/db grew the shared one.
+func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func toArgs(ids []string) []any {
 	args := make([]any, len(ids))

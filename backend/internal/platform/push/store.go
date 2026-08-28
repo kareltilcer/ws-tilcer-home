@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 )
 
@@ -47,12 +48,16 @@ type Categories struct {
 	Broadcast bool `json:"broadcast"`
 	Triggers  bool `json:"triggers"`
 	Summaries bool `json:"summaries"`
+	// Chat is v10's fourth bucket (D248). Defaults ON like the other three: a
+	// missing preferences row means all-on, so a member who has never opened the
+	// panel still hears about a message addressed to them.
+	Chat bool `json:"chat"`
 }
 
 // DefaultPreferences is what a member who has never opened the panel gets:
 // everything on. Consent is the browser permission; these are only mutes.
 func DefaultPreferences() Preferences {
-	return Preferences{Enabled: true, Categories: Categories{Broadcast: true, Triggers: true, Summaries: true}}
+	return Preferences{Enabled: true, Categories: Categories{Broadcast: true, Triggers: true, Summaries: true, Chat: true}}
 }
 
 // PreferencesPatch is a partial update; nil fields are left alone.
@@ -61,6 +66,7 @@ type PreferencesPatch struct {
 	Broadcast *bool `json:"-"`
 	Triggers  *bool `json:"-"`
 	Summaries *bool `json:"-"`
+	Chat      *bool `json:"-"`
 }
 
 // ---- subscriptions ----
@@ -247,6 +253,8 @@ func categoryColumn(category string) (string, error) {
 		return "cat_triggers", nil
 	case CategorySummaries:
 		return "cat_summaries", nil
+	case CategoryChat:
+		return "cat_chat", nil
 	default:
 		return "", fmt.Errorf("push: unknown category %q", category)
 	}
@@ -270,15 +278,15 @@ func (s *Store) Preferences(ctx context.Context, userID string) (Preferences, er
 
 func (s *Store) preferences(ctx context.Context, q rowQuerier, userID string) (Preferences, error) {
 	var (
-		p                  Preferences
-		enabled, b, t, sum int
-		updated            sql.NullString
-		err                error
+		p                       Preferences
+		enabled, b, t, sum, cht int
+		updated                 sql.NullString
+		err                     error
 	)
 	err = q.QueryRowContext(ctx,
-		`SELECT enabled, cat_broadcast, cat_triggers, cat_summaries, updated_at
+		`SELECT enabled, cat_broadcast, cat_triggers, cat_summaries, cat_chat, updated_at
 		   FROM notification_preferences WHERE user_id = ?`, userID).
-		Scan(&enabled, &b, &t, &sum, &updated)
+		Scan(&enabled, &b, &t, &sum, &cht, &updated)
 	if err == sql.ErrNoRows {
 		return DefaultPreferences(), nil
 	}
@@ -286,7 +294,7 @@ func (s *Store) preferences(ctx context.Context, q rowQuerier, userID string) (P
 		return Preferences{}, err
 	}
 	p.Enabled = enabled == 1
-	p.Categories = Categories{Broadcast: b == 1, Triggers: t == 1, Summaries: sum == 1}
+	p.Categories = Categories{Broadcast: b == 1, Triggers: t == 1, Summaries: sum == 1, Chat: cht == 1}
 	if updated.Valid {
 		ts := parseTS(updated.String)
 		p.UpdatedAt = &ts
@@ -313,17 +321,20 @@ func (s *Store) UpdatePreferences(ctx context.Context, tx *sql.Tx, userID string
 	if patch.Summaries != nil {
 		next.Categories.Summaries = *patch.Summaries
 	}
+	if patch.Chat != nil {
+		next.Categories.Chat = *patch.Chat
+	}
 
 	ts := now.UTC().Format(tsFormat)
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO notification_preferences (user_id, enabled, cat_broadcast, cat_triggers, cat_summaries, updated_at)
-		 VALUES (?,?,?,?,?,?)
+		`INSERT INTO notification_preferences (user_id, enabled, cat_broadcast, cat_triggers, cat_summaries, cat_chat, updated_at)
+		 VALUES (?,?,?,?,?,?,?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   enabled = excluded.enabled, cat_broadcast = excluded.cat_broadcast,
 		   cat_triggers = excluded.cat_triggers, cat_summaries = excluded.cat_summaries,
-		   updated_at = excluded.updated_at`,
+		   cat_chat = excluded.cat_chat, updated_at = excluded.updated_at`,
 		userID, b2i(next.Enabled), b2i(next.Categories.Broadcast), b2i(next.Categories.Triggers),
-		b2i(next.Categories.Summaries), ts); err != nil {
+		b2i(next.Categories.Summaries), b2i(next.Categories.Chat), ts); err != nil {
 		return Preferences{}, err
 	}
 	at := now.UTC()
@@ -517,9 +528,10 @@ func parseTS(s string) time.Time {
 	return t
 }
 
-func placeholders(n int) string {
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
-}
+// placeholders is appdb.Placeholders — one implementation, five call sites (v10
+// review). It was copied into this package, `notes`, `documents`, `garden` and
+// `todo` before platform/db grew the shared one.
+func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func b2i(b bool) int {
 	if b {

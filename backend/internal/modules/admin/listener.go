@@ -383,6 +383,15 @@ func (l *listener) send(ctx context.Context, r Rule, e audit.Entry, changes []au
 	if private {
 		e, changes = audit.RedactRendered(e, changes, "")
 	}
+	// ⚠ AND CHAT IS REDACTED TOO, BY A SECOND RULE (v10). Not because a chat event
+	// is private — its Log row is deliberately unredacted for admins (leak row 12) —
+	// but because a conversation NAME is readable by that conversation's members,
+	// and THIS audience is chosen by role. Without it, a rule on
+	// chat.conversation.renamed with the default audience and the default body
+	// template banners `Konverzace „Dovolená s Petrou" přejmenována` onto every
+	// device in the household. inAppURL's chat case already withholds the id; this
+	// withholds the name, which is the larger of the two.
+	e, changes = audit.RedactMemberScoped(e, changes)
 	// The render context exists BEFORE the condition check so condition values
 	// seed it: a key both gated on and printed costs one read, and the text can
 	// never contradict the gate that let it through.
@@ -637,6 +646,13 @@ func inAppURL(e audit.Entry) string {
 		return "/zahrada"
 	case audit.ModuleElectricity:
 		return "/elektrina"
+	case audit.ModuleChat:
+		// ⚠ THE LIST, NEVER THE CONVERSATION. Documents get /d/{id} because a
+		// document is readable by the household; a conversation is readable by its
+		// members, and a trigger rule's audience is chosen by ROLE. Deep-linking
+		// /chat/{id} here would send an admin's rule at somebody who then 404s —
+		// and the id in the notification would itself be the disclosure.
+		return "/chat"
 	default:
 		return "/"
 	}

@@ -3251,7 +3251,7 @@ This is the requirement, not a summary of it. Each row is a place where membersh
 
 ⚠ **`02004` and `08003` are out-of-order goose versions** — numerically below `11001`, which is already applied on the live database. v9 shipped exactly this shape with `01002`, `06004` and `07004`, so the runner tolerates it; **verify that before writing them, not after.**
 
-⚠ **`08003` is the only v10 migration that touches an existing table with live data.** SQLite cannot alter a CHECK, so widening `notification_deliveries.kind` to include `'chat'` and `.category` likewise is a **table rebuild**: create, copy, drop, rename, re-create the three indexes. It is small, operational, non-audit data, and it wants the care §V9-12 gave the `soukrome` backfill — a down migration that survives, and a run against a restored copy of production.
+⚠ **`08003` is the only v10 migration that touches an existing table with live data.** SQLite cannot alter a CHECK, so widening `notification_deliveries.kind` to include `'chat'` and `.category` likewise is a **table rebuild**: create, copy, drop, rename, re-create the **four** indexes (`_ts`, `_kind_ts`, `_rule_ts`, `_status_ts` — this section originally said three; the v10 build counted them). It is small, operational, non-audit data, and it wants the care §V9-12 gave the `soukrome` backfill — a down migration that survives, and a run against a restored copy of production.
 
 **`chat_conversations`**
 
@@ -3594,3 +3594,117 @@ Surfaced by working the build guide against this spec before a line of v10 was w
 - [ ] **Chat renders an offline state, not a stale thread**, and no chat data is written to the persisted cache (row 20).
 - [ ] Every chat query key carries the **conversation id** as a segment.
 - [ ] Accessibility pass at 375/1440 in both themes: the composer and the members panel are keyboard-operable, the unread divider is announced, the two warning registers pass AA, and the delete-conversation confirmation is reachable and reversible by keyboard.
+
+---
+
+## V10-12. As built — PR 2, chat core (built 2026-08-27, OpenAPI 0.11.0 → **0.12.0**)
+
+> **Read this before trusting §V10-1…§V10-11 on the points below.** PR 1 (`platform/ws`) shipped as [#23](https://github.com/kareltilcer/ws-tilcer-home/pull/23); PR 2 is chat core — schema, membership, messages, search, realtime, push and the screens. **PR 3 is unbuilt**: attachments, the two thresholds, `/chat/uklid`, the move to Dokumenty, the drain and the Administrace storage block.
+>
+> Six things shipped differently from the spec, none accidentally. Two of them are corrections to facts the spec asserts.
+>
+> ⚠ **A review pass then found fifteen more, and four of them were UI that this section's own "deliberately does not ship" list did not name** — see *What the review found* below. The list was not exhaustive when it was written, and it is now.
+
+### The floor is anchored on a message id, not on a timestamp (supersedes the §V10-5 column list)
+
+`chat_members` carries **`effective_from_id`** beside `effective_from`, and every read path compares `id > effective_from_id`. HANDOFF-12 §7's own search SQL already assumed such a column; §V10-5's table did not list it.
+
+⚠ **It is NOT `effective_from` converted into a UUIDv7, and that was the first implementation.** Deriving the bound from the timestamp — build the lowest UUIDv7 for its millisecond, compare `id >= that` — is **wrong by up to one millisecond in the leaking direction**: a message minted in the *same* millisecond somebody was added has a larger random suffix than the synthetic bound, so it sorts above it and the new member reads it. It is a one-millisecond window, it is real, and **the first adversarial test written against the floor found it**. Anchoring on the id of the newest message the member may not read removes the clock entirely; the empty string, written for Všichni, means "the conversation's beginning".
+
+This also makes **D258 fall out rather than branch**: the household room's floor is a *value* (`''`), not a special case, and `TestDefaultConversationHasNoHistoryBranch` walks the module's Go files to keep it that way.
+
+### `POST /conversations/{id}/restore` answers **204** for an admin who is not a member (supersedes §V10-6)
+
+The spec has it returning the `Conversation`. It cannot, for the one caller D255 exists for: the restore is a storage verb an admin legitimately has over a room they are not in, but **the conversation is a read they do not have** — and handing it back in the response body is exactly what the very next `GET` correctly refuses them. A member still gets 200 and the room. `TestAdminMayPurgeAConversationTheyCannotOpen` asserts both halves together.
+
+### Seven audit actions in PR 2, not eleven (defers part of §V10-5)
+
+`chat.attachment.uploaded/.removed/.moved` and the threshold verb belong to the code that emits them, which is PR 3. A declared action that can never fire is a dead entry in the trigger composer's picker — an admin offered a rule that will never run.
+
+⚠ **And the threshold verb is `chat.threshold.update`, not `chat.settings.updated`** (D263, from the design bundle, which is later than this PRD and wins). `backend/openapi.yaml` will record that at **0.12.1** in PR 3, with a note saying it supersedes the 0.12.0 spec copy on that point.
+
+### `notification_deliveries` has **four** indexes, not three
+
+Corrected in §V10-5 and HANDOFF-12 §9.2 above. `_ts`, `_kind_ts`, `_rule_ts` and `_status_ts` have all existed since `08001`. A rebuild that re-creates three of them leaves the delivery log's status filter on a full scan — nothing fails, it just gets slower every month.
+
+### `storage_thresholds` joins `storage.PlatformTables` in **PR 2**, not PR 3
+
+`02004` creates the table here, and `TestEveryTableIsDeclaredByExactlyOneModule` fails the moment a table exists that nobody declares. The same applies to `"chat_messages_fts": "chat"` in the completeness test's FTS map. Both were planned for PR 3 and had to move.
+
+### Search refuses a cursor rather than ignoring one (narrows §V10-6)
+
+The ordering is `rank` and a keyset cursor is an id, which does not locate a position in a relevance ordering. Silently ignoring the parameter returns page one forever and reads as the end of the results — so it is **422**, following the v9 `private-items` precedent this spec already invokes for the clean-up page's `sort=size`.
+
+⚠ **The conversation list takes the opposite branch of the same rule, and for the first build it took neither.** `GET /api/chat/conversations` declares `limit` and `cursor` and returns `next_cursor`, and the first implementation honoured none of the three: every room came back, `next_cursor` was always null, and a client paging the endpoint the spec describes got page one forever — the exact failure search refuses one file away. It is now a real keyset over the ordering it already had, `(updated_at, id)` descending, which is why the cursor carries **both**: `updated_at` alone is not unique, a send bumps it, and two rooms bumped in the same millisecond would page over each other. A cursor this endpoint did not mint is **422**, not ignored.
+
+### Two frontend defects found by counting requests, not by reading code
+
+Both were invisible in review because each piece looked correct on its own:
+
+1. **The query keys nested messages under the conversation.** `qk.chatConversation(id)` was a **prefix** of `qk.chatMessages(id)`, and TanStack invalidates by prefix — so advancing the read marker refetched the entire thread, on every message, in every open tab. The keys now put the resource before the id, and a test asserts no chat key is a prefix of another.
+2. **The gap check kept its own "newest held" map beside the cache**, seeded from the thread query. The seed re-ran on every cache mutation and moved the marker the incoming frame was about to be compared against. The cache is now the single source of truth, and our own echo is never gap-checked at all.
+
+`gap.test.ts` pins both properties D259 actually claims: the check **detects** a dropped frame, and it **terminates** — a member added to a busy conversation refetches exactly once.
+
+### What the review found
+
+A review pass over the finished branch raised **fifteen** findings; all fifteen are fixed in this PR. Four are worth reading as decisions rather than as bugs, and four more were **gaps in the list below** — UI that was simply missing, not deferred.
+
+**The one that was a 500 on ordinary Czech.** `Store.Search` bound the raw query into `chat_messages_fts MATCH ?`. Bound raw, ordinary message text is FTS5 *syntax*: `mama's` and `co?` are "fts5: syntax error", `9:30` and `a-b` are "no such column", a lone `"` is "unterminated string". Every one of them was a 500 from `/api/chat/search`, and the endpoint's own tests never typed an apostrophe. `notes`, `documents` and `logging` had each already grown an `ftsQuery` for exactly this; chat was the fifth FTS5 index in Home and the only one without one. A query with nothing searchable left in it is now an **empty page**, never a `MATCH` on the empty string.
+
+**The id was minted outside the transaction.** `SendMessage` called `idgen.New()` and `nowUTC()` before `WithTx`, so a UUIDv7 ordered by *when the handler reached that line* rather than by *when the row committed*. The pool is capped at one connection, so a request that minted its id and then waited could commit after a request whose id was larger — and the message would then sort **below** one already delivered. Two consequences, both silent: the thread reorders on the next refetch, and because `created_at` was minted with it, a reader whose marker had passed the other message never counts the new one as unread. Both are now minted inside the tx, beside the `MAX(id)` read that was already there.
+
+**The push renderer leaked conversation names, and the existing guard was on the smaller half.** `inAppURL` had already learned to answer `/chat` rather than `/chat/{id}` because "the id in the notification would itself be the disclosure" — while the default body template *is* the audit summary, which reads `Konverzace „Dovolená s Petrou" přejmenována`. A trigger rule with the default audience would banner a group's name onto every device in the household. There is now a **second redaction rule** beside v9's, `audit.RedactMemberScoped`: chat entries are not *private* in the v9 sense and their Log rows stay unredacted for admins (leak row 12 — the Log is admin-only), but a conversation name is readable by that conversation's **members**, and a trigger's audience is chosen by **role**. **D264 — chat keeps its seven verbs in the trigger composer, and they deliver the redacted phrase.** *(Karel, 2026-08-28, on the review's question.)*
+
+⚠ **The cost is real and is accepted.** A rule on a chat action now banners `Změna v konverzaci — podrobnosti skryty`: you learn that *something* changed in *some* conversation, not which or what. Two alternatives were put and declined:
+
+- **Drop chat's verbs from the composer's picker.** Nobody is then offered a rule that can only produce a vague buzz — but the verbs stay in the Log filter, where the names are correct and admin-only, so the module would be offering an action in one screen and hiding it in the next for a reason neither screen states. Declined: an empty picker section is not more honest than a working rule that says little.
+- **Render the notification per recipient**, so a conversation's members get the real name and everybody else gets nothing. This is the genuinely right answer and it is not a chat change: the coalescing window deliberately builds **one** envelope per rule, *before* `ResolveAudience` runs, which is the property D189 relies on for private items too. Reworking that to be per-recipient is a platform change with its own leak surface, bought for a notification nobody asked for — nobody has ever wanted to be told that a chat was renamed.
+
+So the rules stay, and they stay vague. If somebody builds one and finds it useless they will delete it, which costs a minute; the alternative costs a release. ⚠ **What must NOT happen is the obvious "fix"** — un-redacting the summary because the notification looks unhelpful. That is the leak, and `TestRedactMemberScopedStripsTheConversationName` is what fails if anybody tries.
+
+**The directory could render an email address.** `types.go` argued the projection was safe *by construction* — chat's wire types have no email field to fill in. True of the shape, and beside the point: `push.Store.Members` substitutes the **email into `DisplayName`** when `sessions.display_name` is NULL, so the address arrived inside the one field chat does copy, and would have shown in the add-member picker, on every members-panel row and as the author label on every message that member ever sent. D230 makes `/api/chat/directory` the first surface in Home to show the directory to a non-admin, which is precisely the audience. Chat now detects that one known substitution exactly (`DisplayName == Email`) and falls back to the id, the way `label()` already did.
+
+Also fixed: a soft delete of a room **already in the koš** used to succeed — the `UPDATE` was a no-op but the request still wrote a second "přesunuta do koše" to the Log and re-queued every object key with a fresh `purge_after`, so the countdown on screen and the deadline the drain holds drifted apart by a whole retention window each time (`hard` is deliberately *not* refused: *Smazat natrvalo* is reached **from** the koš). Restoring a live room is now silently idempotent instead of logging a restore that restored nothing. `placeholders()` moved to `appdb.Placeholders` rather than becoming its fourth copy in the repo.
+
+### What PR 2 deliberately does not ship
+
+⚠ **This list is exhaustive as of the review pass.** It was not before: four things were absent from the build *and* absent from this list, which meant nobody had decided to defer them — they were simply missing. All four now ship.
+
+- **The nav entry.** `AppShell` keeps its four thumb tabs and Okno do budoucnosti stays primary; `/chat` is routed and reachable by typing it. The demotion (D260) lands with PR 3, so the household meets chat when it can send a photo. `platform/widgets/registry.tsx` is untouched for the third version running.
+- **The koš purge job.** `chat_deleted_keys` exists and the delete paths enqueue into it; the drain is PR 3's. In PR 2 there are no attachments, so nothing is ever queued.
+- **The composer's attachment half** — drag-and-drop, paste, the picker, progress rows and the over-cap refusal.
+
+**The four that were missing rather than deferred, and now ship:**
+
+- **Thread paging.** `useMessages` fetched fifty and nothing consumed `has_more` or `next_cursor`, so the newest fifty messages were the only ones a conversation had — reachable by any room used for a week — and the floor line at the top of the thread explained the truncation as the *membership floor*, which is a different and much worse thing to tell somebody. *Načíst starší* was already in `cs.ts`, waiting for a caller. Older messages append to the **tail** of the newest-first page, which is what keeps `items[0]` the newest and leaves the gap check reading what it always read.
+- **Rename and delete.** `useDeleteConversation` and `useRenameConversation` were exported and imported nowhere, so a room created by mistake was permanent from the UI — and the koš section below the list, with its working *Obnovit*, could only ever be empty. The whole confirmation copy was already written (`deleteTitle`, `deleteBody`, `deleteConfirmPrompt`, `purgeBody`). Both verbs now hang off a menu in the thread header, delete behind the typed-name confirmation D253 asks for, with *Smazat natrvalo* beside it. Rename is offered for Všichni and delete is not (D219).
+- **Search.** `useChatSearch` and `searchMessages` were imported nowhere either, so D251's one carefully-built `MATCH` — membership join and per-row floor inside it — had no entry point in the app. There is now a field above the conversation list; it replaces the list with hits while it has text, and `searchSinglePage` explains the absent Load-more.
+- **The `cat_chat` toggle.** The category shipped end to end in the backend — column, constant, patch field, delivery-log kind — and `PushCategories` in the frontend had no `chat` field and Nastavení had no fourth row, so the app-wide mute existed only in the API. `push.go` stated the design as fact while it was unreachable: *"a member who turned chat off v Nastavení hears about none of them"*.
+
+⚠ **One efficiency fix rides with them:** the koš listing was fetched on every mount and on every `chatAll` invalidation, for a section that renders only when it is non-empty. It is now a collapsed section that fetches when it is opened — which is also what makes it discoverable now that a member can actually put something in it.
+
+### The production rehearsal was declined, and what replaced it
+
+⚠ **The acceptance criteria asked for `08003` to be run against a Litestream-restored copy of production. It was not, and Karel declined it deliberately** (2026-08-27): the point of a restore rehearsal is confidence about a table rebuild, and the rehearsal itself copies every message, document title and audit row the household owns onto a second machine. Paying that to test a nine-column operational table is the wrong trade.
+
+What replaced it is `bootstrap/v10_rebuild_test.go`, which covers the three things a restored copy would actually have told us:
+
+- **Scale.** 50 000 delivery rows rebuilt in **~750 ms**. `notification_deliveries` is pruned on every boot at `HOME_NOTIF_DELIVERY_RETENTION_DAYS` (default 30), so the live table is orders of magnitude smaller — the boot-time question is settled with room to spare.
+- **Shape.** Every kind × category × status, both NULL states of every nullable, and the values most likely to break a hand-built copy: quotes, newlines, long non-ASCII error bodies. Plus `TestRebuildCopiesEveryColumn`, which derives the column set from the schema at runtime — so a column added by a **later** migration and forgotten in `08003`'s named copy list fails the build instead of being silently dropped for every row.
+- **Atomicity, and this is the one that matters.** `TestRebuildRollsBackAfterTheDrop` replays the whole Up section inside one transaction, lets every destructive step succeed — copy, drop, rename, all four indexes — proves the widened CHECK is live mid-transaction, then **rolls back** and asserts the original table, its rows, its indexes and its narrow CHECK all return. `TestRebuildIsNotMarkedNoTransaction` asserts goose is still being asked to wrap it.
+
+⚠ **Why that is the right substitute rather than a weaker one.** A rehearsal answers *does it work on the real data*; atomicity answers *what happens when it does not* — which is the question the rehearsal was a proxy for, because migrations run at boot and a failure there crash-loops the container. With the rollback proven, the worst case of shipping this unrehearsed is **a deploy that has to be rolled back, not a delivery log that is gone**.
+
+⚠ **What none of it covers: schema drift.** If `notification_deliveries` has been ALTERed on the droplet by hand, outside a migration, the copy step would not match and the rebuild would fail — safely, per the above, but it would fail. That is a claim about the droplet rather than about the code, and no test in this repo can see it. The mitigation is that Home has never performed manual DDL in production.
+
+### Outstanding before merge
+- [ ] Playwright + axe at 375 and 1440 in both themes — outstanding since v5, and chat is the densest screen in the app.
+- [ ] A click-through **with a second member's session**. Everything verified live so far ran under one dev-bypass actor, so the adversarial half is covered by tests alone. §V9-12 records six frontend bugs no test caught.
+- [x] ~~`npm run lint` fails on `src/components/common/CardDetail.tsx:37`~~ — **fixed here.** It predated v10 (it failed identically on `main`) but the PR body had claimed lint was green, so it is repaired rather than merely disclosed. `CardDetail` built its eight mutations through a local helper called `mutate`, which calls `useMutation` and is therefore a hook wearing a name that does not say so. Renaming it `useInvalidatingMutation` is not a way of silencing the rule: under the old name eslint could not see the **call sites** as hook calls at all, so a later `cond ? mutate(…) : null` would have desynced every mutation after it with nothing going red. Behaviour is unchanged — the eight calls were already unconditional and in fixed order.
+
+### A note on what the tests were worth
+
+Every one of the fifteen review findings shipped **green**: `go build`, `go vet`, `go test ./...`, `tsc`, `vitest` and `vite build` all passed with the search 500, the paging that stopped at fifty, the unreachable delete and the email in the directory all present. The suites were not weak — they were pointed at the decisions, and the module's decisions are genuinely well covered. What they never did was *type an apostrophe into the search box, scroll to the top of a long thread, or look for a button*.
+
+The fixes carry their own regressions (`chat/v10_review_test.go`, `audit/v10_member_scoped_test.go`), and two of them were **watched failing** against the unfixed code first: the search test reports the five 500s, and the directory test renders `u-nameless@example.test` in all three places. The remaining gap is the one the checkbox above names — a browser driving the screens, which is where all four of the missing-UI findings actually lived.
