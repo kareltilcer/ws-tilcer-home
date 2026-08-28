@@ -80,6 +80,19 @@ func (s *Store) Thread(ctx context.Context, q querier, sc Scope, direction, curs
 	if hasMore {
 		out = out[:limit]
 	}
+	// ⚠ A PAGE IS NEWEST-FIRST WHICHEVER WAY IT WAS WALKED (v10 review). `forward`
+	// has to READ ascending — that is what makes `id > cursor` and the LIMIT take the
+	// rows just after the cursor rather than the newest ones — but returning them in
+	// that order would hand the same endpoint two opposite contracts. Everything
+	// downstream is built on one: `items[0]` is the newest message, which is what the
+	// gap check compares, what a live message is unshifted in front of, and what
+	// `Načíst starší` appends behind. Trim first, then reverse, so `hasMore` still
+	// describes the direction of travel.
+	if order == "ASC" {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
 	return out, hasMore, nil
 }
 
@@ -274,35 +287,44 @@ func (s *Store) SoftDeleteMessage(ctx context.Context, q querier, id, author, no
 // UnreadCount is the caller's badge for one conversation.
 //
 // Unread is "above my floor, after my read marker, not mine, not a tombstone"
-// (D250) — and the floor half is the ID BOUND rather than the timestamp, so the
-// badge counts exactly the messages the thread will show. A count taken against
-// `effective_from` as a timestamp can differ from the thread by a message minted in
-// the same millisecond somebody was added, which reads as a badge that will not
-// clear.
+// (D250) — and BOTH bounds are ID BOUNDS rather than timestamps, so the badge
+// counts exactly the messages the thread will show.
+//
+// ⚠ THE MARKER HALF IS AN ID FOR THE REASON THE FLOOR HALF IS (v10 review). A count
+// taken against a TIMESTAMP differs from the thread by any message minted in the
+// same millisecond as the bound — for the floor that is a message somebody was
+// added beside, for the marker it is the message after the one you just read. The
+// second case is worse: `created_at > last_read_at` excludes it, and because the
+// marker only ever moves forward, no later read can ever bring it back. It is a
+// message that is silently unreadable-as-unread for the life of the conversation.
+// Ids are unique and totally ordered, so there is no tie to lose.
 func (s *Store) UnreadCount(ctx context.Context, q querier, sc Scope, actor string) (int, error) {
-	last := ""
-	if sc.LastReadAt != nil {
-		last = *sc.LastReadAt
-	}
 	var n int
 	err := q.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM chat_messages
 		 WHERE conversation_id = ? AND deleted_at IS NULL AND author_id <> ?
-		   AND id > ? AND created_at > ?`,
-		sc.ConversationID, actor, sc.Floor.ID, last).Scan(&n)
+		   AND id > ? AND id > ?`,
+		sc.ConversationID, actor, sc.Floor.ID, sc.LastReadID).Scan(&n)
 	return n, err
 }
 
-// AdvanceRead moves the caller's marker to the named message's timestamp.
+// AdvanceRead moves the caller's marker to the named message.
 //
 // ⚠ IDEMPOTENT AND NEVER BACKWARDS (D250). A client that replays an older marker —
 // a queued request arriving late, a tab restored from history — must not un-read a
-// conversation. `MAX(COALESCE(last_read_at, ''), ?)` is the whole mechanism, and it
-// is in the statement so no caller can skip it.
-func (s *Store) AdvanceRead(ctx context.Context, q querier, conversationID, actor, at string) error {
+// conversation. `MAX(…, ?)` is the whole mechanism, and it is in the statement so no
+// caller can skip it.
+//
+// ⚠ BOTH COLUMNS MOVE TOGETHER, and `last_read_id` is the one that counts. The
+// timestamp is kept because it is the human-facing value the wire carries, exactly
+// as `effective_from` is kept beside `effective_from_id`; the monotonic guard is
+// applied to each in its own ordering, which agrees because a UUIDv7 sorts by the
+// clock that minted it in the same transaction.
+func (s *Store) AdvanceRead(ctx context.Context, q querier, conversationID, actor, at, id string) error {
 	_, err := q.ExecContext(ctx, `
 		UPDATE chat_members
-		   SET last_read_at = MAX(COALESCE(last_read_at, ''), ?)
-		 WHERE conversation_id = ? AND user_id = ?`, at, conversationID, actor)
+		   SET last_read_at = MAX(COALESCE(last_read_at, ''), ?),
+		       last_read_id = MAX(last_read_id, ?)
+		 WHERE conversation_id = ? AND user_id = ?`, at, id, conversationID, actor)
 	return err
 }

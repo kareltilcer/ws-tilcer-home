@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
 // THE SHARED KNOWLEDGE-BASE COLUMNS.
@@ -273,13 +275,11 @@ func jsonIssues(v sql.NullString) []PestIssue {
 	return out
 }
 
-// placeholders returns "?, ?, ?" for n binds.
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat("?, ", n-1) + "?"
-}
+// placeholders is appdb.Placeholders — one implementation, five call sites (v10
+// review). It was copied into this module, `notes`, `documents`, `todo` and
+// `platform/push` before platform/db grew the shared one. The shared spelling has
+// no space after the comma; nothing here reads the generated SQL, only SQLite does.
+func placeholders(n int) string { return appdb.Placeholders(n) }
 
 // assignments returns "col = ?, col = ?" for a column list, for UPDATE.
 func assignments(columns string) string {

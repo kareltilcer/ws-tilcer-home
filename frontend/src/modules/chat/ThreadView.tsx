@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, BellOff, CornerUpLeft, MoreHorizontal, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
+import { count, PLURAL } from '@/i18n/plural'
 import { Button, Input, Spinner, Textarea } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { useAuth } from '@/app/auth'
@@ -49,6 +50,64 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   const messages = useMemo(() => [...(thread.data?.items ?? [])].reverse(), [thread.data])
   const newest = thread.data?.items[0]
 
+  /**
+   * ⚠ A THREAD OPENS AT ITS NEWEST MESSAGE, AND NOTHING MADE IT (v10 review). The
+   * list renders oldest-first into a scroll box that starts at the top, so a room
+   * with more than a screenful opened on the OLDEST message of the loaded page — a
+   * 62-message room opened at message 13 — and every message that then arrived
+   * landed below the fold while the read marker cleared its badge. A member watched
+   * a conversation they could not see being marked read.
+   *
+   * ⚠ AND IT ONLY FOLLOWS SOMEBODY ALREADY AT THE BOTTOM. Yanking the view down
+   * while they are reading history is the other half of the same bug; `atBottom` is
+   * what separates "keep up with the conversation" from "interrupt me".
+   */
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(true)
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    // A slack of one line, so a fractional scrollTop or a rounding difference does
+    // not read as "they have scrolled away".
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+  }
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !newest || !atBottom.current) return
+    el.scrollTop = el.scrollHeight
+    // The trigger is the IDENTITY of the newest message, not the object: an edit or
+    // a tombstone rewrites `newest` without extending the thread, and following that
+    // down would move the view for a change that happened where they already are.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newest?.id, conversationID])
+
+  /**
+   * Loading older messages PREPENDS above the viewport, so without an anchor the
+   * content under the member's eyes jumps down by the height of the page they just
+   * asked for — they press *Načíst starší* and lose their place, which is the one
+   * thing the button exists to help with.
+   *
+   * ⚠ THE ANCHOR IS DISTANCE FROM THE BOTTOM, RESTORED IN A LAYOUT EFFECT. Measuring
+   * the height delta in the mutation's callback does not work: React has not
+   * committed the taller list yet, so `scrollHeight` still reads the old value and
+   * the correction is zero. Distance-from-bottom is invariant under a prepend, and
+   * useLayoutEffect runs after the DOM grows and before the browser paints, so the
+   * restore is never visible as a jump.
+   */
+  const anchor = useRef<number | null>(null)
+  const oldest = messages[0]?.id
+  const loadOlder = () => {
+    const el = scrollRef.current
+    if (el) anchor.current = el.scrollHeight - el.scrollTop
+    older.mutate()
+  }
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el || anchor.current === null) return
+    el.scrollTop = el.scrollHeight - anchor.current
+    anchor.current = null
+  }, [oldest])
+
   // Advancing the read marker is idempotent and never moves backwards (D250), so
   // firing it whenever the newest message changes is safe — a replayed older marker
   // could not un-read the room even if this raced.
@@ -86,7 +145,11 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     <div className="flex h-full min-h-0 flex-col">
       <ThreadHeader conversation={room} onOpenMembers={onOpenMembers} />
 
-      <div className="min-h-0 flex-1 overflow-y-auto om-scroll px-4 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-y-auto om-scroll px-4 py-4"
+      >
         {/* ⚠ ABOVE the floor line, and only when there IS more. The two say
             different things and the order matters: "there is older history you can
             load" sits above "and beyond that, history that is not yours". A thread
@@ -94,7 +157,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
             explained the truncation as the membership floor. */}
         {thread.data?.has_more && (
           <div className="mb-4 flex justify-center">
-            <Button size="sm" variant="secondary" loading={older.isPending} onClick={() => older.mutate()}>
+            <Button size="sm" variant="secondary" loading={older.isPending} onClick={loadOlder}>
               {cs.chat.loadOlder}
             </Button>
           </div>
@@ -165,8 +228,10 @@ function ThreadHeader({
       </Link>
       <div className="min-w-0 flex-1">
         <h2 className="truncate text-base font-bold tracking-tight">{conversation.name}</h2>
+        {/* The declined noun, not the section label: `count` is what the
+            conversation list uses for this same number one file away. */}
         <p className="truncate text-xs text-muted">
-          {conversation.member_count} · {cs.chat.word.members}
+          {count(conversation.member_count, PLURAL.members)}
         </p>
       </div>
       {conversation.muted && (

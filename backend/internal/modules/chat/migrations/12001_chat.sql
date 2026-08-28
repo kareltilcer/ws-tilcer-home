@@ -84,6 +84,15 @@ CREATE INDEX idx_chat_conv_active ON chat_conversations (deleted_at);
 -- the removal dialog because nothing afterwards would explain it. Their messages
 -- stay: authorship does not depend on membership.
 -- +goose StatementBegin
+-- ⚠ THE READ MARKER CARRIES BOTH FORMS TOO, FOR THE FLOOR'S OWN REASON. A marker
+-- kept only as `last_read_at` compares against `created_at`, which has millisecond
+-- resolution — so a message committing in the SAME millisecond as the one somebody
+-- marked read is excluded by `created_at > last_read_at` and can never be counted
+-- unread again. That is the same clock bug `effective_from_id` exists to remove,
+-- one column over. `last_read_id` is the id of the newest message this member has
+-- read; the empty string means "nothing yet", and every unread count compares ids.
+-- `last_read_at` stays as the human-facing value, exactly as `effective_from` does
+-- beside `effective_from_id`.
 CREATE TABLE chat_members (
     conversation_id   TEXT NOT NULL REFERENCES chat_conversations (id) ON DELETE CASCADE,
     user_id           TEXT NOT NULL,
@@ -92,6 +101,7 @@ CREATE TABLE chat_members (
     added_by          TEXT,
     muted             INTEGER NOT NULL DEFAULT 0,
     last_read_at      TEXT,
+    last_read_id      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (conversation_id, user_id)
 );
 -- +goose StatementEnd

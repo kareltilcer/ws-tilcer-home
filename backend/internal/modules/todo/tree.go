@@ -3,6 +3,8 @@ package todo
 import (
 	"context"
 	"strings"
+
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
 // Tree returns the board read model: columns in position order, each with its
@@ -205,12 +207,10 @@ func (s *Store) fillLinkCounts(ctx context.Context, cardIDs []string, cards []Ca
 	return rows.Err()
 }
 
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
-}
+// placeholders is appdb.Placeholders — one implementation, five call sites (v10
+// review). It was copied into this module, `notes`, `documents`, `garden` and
+// `platform/push` before platform/db grew the shared one.
+func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func toArgs(ss []string) []any {
 	args := make([]any, len(ss))

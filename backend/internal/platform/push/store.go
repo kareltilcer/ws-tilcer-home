@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 )
 
@@ -527,9 +528,10 @@ func parseTS(s string) time.Time {
 	return t
 }
 
-func placeholders(n int) string {
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
-}
+// placeholders is appdb.Placeholders — one implementation, five call sites (v10
+// review). It was copied into this package, `notes`, `documents`, `garden` and
+// `todo` before platform/db grew the shared one.
+func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func b2i(b bool) int {
 	if b {

@@ -41,9 +41,18 @@ func (s *Service) Thread(ctx context.Context, conversationID, direction, cursor 
 	// They are derived here from `rows`, which was already bounded by the floor in
 	// SQL — never from a count taken before filtering, which is the shape that
 	// leaks what it removed even with every offending row gone (D218).
+	// ⚠ THE CURSOR IS THE FAR END IN THE DIRECTION OF TRAVEL, and the page is always
+	// newest-first (Store.Thread), so the two directions take opposite ends of the
+	// same slice: backward continues from the OLDEST row it returned, forward from
+	// the NEWEST. Reading `items[len-1]` unconditionally would walk a forward page
+	// straight back over ground it had already covered.
 	page := MessagePage{Items: items, HasMore: hasMore}
 	if hasMore && len(items) > 0 {
-		page.NextCursor = ptr(items[len(items)-1].ID)
+		if direction == directionForward {
+			page.NextCursor = ptr(items[0].ID)
+		} else {
+			page.NextCursor = ptr(items[len(items)-1].ID)
+		}
 	}
 	return page, nil
 }
@@ -438,7 +447,7 @@ func (s *Service) AdvanceRead(ctx context.Context, conversationID string, in Rea
 		if err != nil {
 			return err
 		}
-		if err := s.store.AdvanceRead(ctx, tx, sc.ConversationID, actor, row.CreatedAt); err != nil {
+		if err := s.store.AdvanceRead(ctx, tx, sc.ConversationID, actor, row.CreatedAt, row.ID); err != nil {
 			return err
 		}
 		// Re-read the scope so the count below uses the marker just written rather

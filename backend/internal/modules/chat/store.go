@@ -58,9 +58,11 @@ type conversationRow struct {
 // query with the koš predicate inverted — a trashed conversation is listed only
 // here, and only for its own members.
 //
-// The unread count is computed in SQL against MAX(last_read_at, effective_from) so
-// that a member added yesterday never opens a conversation to a four-figure badge
-// (D250). COALESCE, not a branch: last_read_at is NULL until they first read.
+// The unread count is computed in SQL against BOTH id bounds — the floor and the
+// read marker — so that a member added yesterday never opens a conversation to a
+// four-figure badge (D250). ⚠ Ids, never timestamps: `created_at` has millisecond
+// resolution and a message sharing a millisecond with the marker would be excluded
+// permanently, since the marker only moves forward. See UnreadCount.
 //
 // ⚠ IT IS PAGED, AND `limit`/`cursor` ARE HONOURED RATHER THAN ACCEPTED AND
 // DROPPED. The spec has declared both since 0.12.0 along with `next_cursor`, and a
@@ -102,7 +104,7 @@ func (s *Store) ListConversations(ctx context.Context, actor, state, cursor stri
 		           AND x.deleted_at IS NULL
 		           AND x.author_id <> ?
 		           AND x.id > m.effective_from_id
-		           AND x.created_at > COALESCE(m.last_read_at, ''))
+		           AND x.id > m.last_read_id)
 		  FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
 		 WHERE m.user_id = ? AND `+koš+keyset+`
@@ -194,7 +196,7 @@ func (s *Store) GetConversation(ctx context.Context, q querier, actor string, sc
 		           AND x.deleted_at IS NULL
 		           AND x.author_id <> ?
 		           AND x.id > m.effective_from_id
-		           AND x.created_at > COALESCE(m.last_read_at, ''))
+		           AND x.id > m.last_read_id)
 		  FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
 		 WHERE m.conversation_id = ? AND m.user_id = ?`,
@@ -364,17 +366,26 @@ func (s *Store) PushRecipients(ctx context.Context, q querier, conversationID, a
 // and a caller that composed them separately could write a floor half the read
 // paths cannot see. Nothing about the conversation's KIND is consulted here: the
 // Všichni exemption is the VALUE the caller passes, not a branch (D258).
-func (s *Store) InsertMember(ctx context.Context, q querier, conversationID, userID, addedBy string, f floor) error {
+// ⚠ IT REPORTS WHETHER A ROW WAS ACTUALLY WRITTEN, and callers must act on that
+// (v10 review). `DO NOTHING` makes re-adding somebody already in the room a silent
+// no-op — which is the right write, and exactly the wrong thing to then narrate as
+// "přidán člen" in the Log or to publish over /ws. RemoveMember has always returned
+// this; the two verbs now say the same thing about a change that did not happen.
+func (s *Store) InsertMember(ctx context.Context, q querier, conversationID, userID, addedBy string, f floor) (bool, error) {
 	var by any
 	if addedBy != "" {
 		by = addedBy
 	}
-	_, err := q.ExecContext(ctx, `
+	res, err := q.ExecContext(ctx, `
 		INSERT INTO chat_members (conversation_id, user_id, effective_from, effective_from_id, added_by)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (conversation_id, user_id) DO NOTHING`,
 		conversationID, userID, f.At, f.ID, by)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // RemoveMember deletes the row.
@@ -452,7 +463,8 @@ func (s *Store) EnsureDefaultMembership(ctx context.Context, actor string) error
 	if err != nil {
 		return err
 	}
-	return s.InsertMember(ctx, s.db, convID, actor, "", f)
+	_, err = s.InsertMember(ctx, s.db, convID, actor, "", f)
+	return err
 }
 
 // ---- directory ----

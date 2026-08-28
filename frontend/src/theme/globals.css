@@ -72,7 +72,6 @@
   --color-bub-mine: var(--bub-mine);
   --color-bub-theirs: var(--bub-theirs);
   --color-bub-label: var(--bub-label);
-  --color-att-removed: var(--att-removed);
 
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 4px);
@@ -217,13 +216,13 @@
 
   /* ---- v10: Chat introduces NO NEW COLOUR ----
 
-     Four aliases over surfaces and families that already exist. The reason is
+     Three aliases over surfaces and families that already exist. The reason is
      recorded rather than assumed: measured on the canvas in sRGB, --bub-mine
      against --bub-theirs is 1.55:1 in dark and 1.16:1 in light — DELIBERATELY
      below 3:1, because the own-versus-others distinction must NOT rest on colour.
      Alignment and the author label carry it; the tint only reinforces.
 
-     ⚠ THESE FOUR ARE WRITTEN OUT IN BOTH BLOCKS, unlike v9's aliases above. A
+     ⚠ THESE THREE ARE WRITTEN OUT IN BOTH BLOCKS, unlike v9's aliases above. A
      var() alias declared only here re-resolves under .light on the SAME element,
      which is how --vis-private gets away with it — but the moment one of these is
      wanted on a nested surface, or somebody restates --s2 locally, the alias
@@ -234,10 +233,6 @@
   /* The author label inside a FOREIGN bubble. ⚠ --muted, not --subtle: measured on
      --s2 in the light theme, --subtle falls to 4.04:1, under the AA bar. */
   --bub-label: var(--muted);
-  /* A removed attachment's epitaph (D243) — a SETTLED ABSENCE, not an error. It is
-     --unmeasured promoted to a second meaning of the same idea: a figure, or a
-     file, that is no longer there to be read. Used from PR 3. */
-  --att-removed: var(--unmeasured);
 
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;
@@ -306,13 +301,12 @@
   --info-soft: oklch(0.955 0.014 256);
   /* Darkened from the design's 0.640 for the same reason as its dark twin. */
   --unmeasured: oklch(0.545 0.018 264);
-  /* v10's four aliases, restated rather than inherited — see the :root block for
-     why. The values are the light theme's own accent-soft / s2 / muted /
-     unmeasured, so this moves nothing on screen. */
+  /* v10's three aliases, restated rather than inherited — see the :root block for
+     why. The values are the light theme's own accent-soft / s2 / muted, so this
+     moves nothing on screen. */
   --bub-mine: var(--accent-soft);
   --bub-theirs: var(--s2);
   --bub-label: var(--muted);
-  --att-removed: var(--unmeasured);
   --shadow: 0 1px 2px oklch(0.2 0.02 264 / 0.10), 0 2px 8px oklch(0.2 0.02 264 / 0.06);
 }
 

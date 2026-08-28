@@ -186,3 +186,204 @@ func TestDirectoryFallsBackToTheIdRatherThanTheEmail(t *testing.T) {
 		t.Errorf("author label is %q, want no address", msg.AuthorLabel)
 	}
 }
+
+// ---- the second review pass ----
+
+// ⚠ THE DIRECTORY AND THE MEMBERSHIP GATE ARE ONE SET, OR THEY ARE A DEAD BUTTON.
+// The first review narrowed labels() to keep push.Store.Members' email substitution
+// out of chat — correctly — and left that same map serving as "who is in the
+// directory". A member whose sessions.display_name is NULL then appeared in the
+// picker under their id and answered every click with 422.
+func TestAMemberTheDirectoryListsCanBeAdded(t *testing.T) {
+	nameless := member{"u-nameless", "u-nameless@example.test", []string{"editor"}}
+	hh := newHousehold(t, kaja, nameless)
+	hh.join(kaja)
+
+	dir := decode[chat.Directory](t, hh.as(kaja, "GET", "/api/chat/directory", ""))
+	listed := false
+	for _, e := range dir.Items {
+		if e.UserID == nameless.id {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Fatal("the fixture is wrong: the nameless member is not in the directory at all")
+	}
+
+	room := hh.group(kaja, "Skupina")
+	if rr := hh.as(kaja, "POST", "/api/chat/conversations/"+room.ID+"/members",
+		`{"user_id":"u-nameless"}`); rr.Code != http.StatusOK {
+		t.Errorf("adding a member the directory lists returned %d %s — the picker renders "+
+			"exactly these rows, so this is a button that cannot work", rr.Code, rr.Body.String())
+	}
+	// The same set, through the other door.
+	if rr := hh.as(kaja, "POST", "/api/chat/conversations",
+		`{"name":"Druhá","member_ids":["u-nameless"]}`); rr.Code != http.StatusCreated {
+		t.Errorf("creating a conversation with them returned %d %s", rr.Code, rr.Body.String())
+	}
+	// And still no address anywhere: the id is the fallback, not the email.
+	if body := hh.as(kaja, "GET", "/api/chat/directory", "").Body.String(); indexOf(body, "@example.test") >= 0 {
+		t.Errorf("widening the gate reintroduced the email leak:\n%s", body)
+	}
+}
+
+// ⚠ THE READ MARKER IS AN ID FOR THE REASON THE FLOOR IS. Against `created_at`, a
+// message committing in the same millisecond as the one somebody marked read is
+// excluded by `created_at > last_read_at` — and because the marker only ever moves
+// forward, no later read can bring it back. It is unread that can never be counted.
+func TestUnreadSurvivesTwoMessagesInOneMillisecond(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	hh.join(kaja)
+	hh.join(andy)
+	room := hh.group(kaja, "Skupina", andy)
+
+	first := hh.send(andy, room.ID, "první")
+	second := hh.send(andy, room.ID, "druhá")
+	// Force the tie a burst of sends produces on its own: nowUTC has millisecond
+	// resolution and the pool is capped at one connection.
+	if _, err := hh.db.Exec(`UPDATE chat_messages SET created_at = ? WHERE id IN (?, ?)`,
+		first.CreatedAt, first.ID, second.ID); err != nil {
+		t.Fatalf("tie the timestamps: %v", err)
+	}
+
+	state, err := hh.svc.AdvanceRead(hh.ctx(kaja), room.ID, chat.ReadUpdate{UntilMessageID: first.ID})
+	if err != nil {
+		t.Fatalf("advance read: %v", err)
+	}
+	if state.UnreadCount != 1 {
+		t.Errorf("unread_count = %d, want 1 — %s shares a millisecond with the marker and "+
+			"a timestamp comparison loses it permanently", state.UnreadCount, second.ID)
+	}
+	// The list agrees with the badge: both bounds are the same two columns.
+	page, err := hh.svc.ListConversations(hh.ctx(kaja), "", "", 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, c := range page.Items {
+		if c.ID == room.ID && c.UnreadCount != 1 {
+			t.Errorf("the list says %d unread where the badge says 1", c.UnreadCount)
+		}
+	}
+}
+
+// ⚠ ADDING SOMEBODY ALREADY IN THE ROOM IS A NO-OP, AND IT MUST NARRATE ITSELF AS
+// ONE. InsertMember's ON CONFLICT discards the write — correctly, since re-running
+// it would push an existing member's floor forward and cut them off from history
+// they can already read — but the audit event and the /ws frame went out anyway, so
+// the Log recorded an addition that never happened.
+func TestReAddingAnExistingMemberRecordsNothing(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	hh.join(kaja)
+	hh.join(andy)
+	room := hh.group(kaja, "Skupina", andy)
+	hh.send(kaja, room.ID, "zpráva, kterou Andy vidí")
+
+	var floorBefore string
+	if err := hh.db.QueryRow(
+		`SELECT effective_from_id FROM chat_members WHERE conversation_id = ? AND user_id = ?`,
+		room.ID, andy.id).Scan(&floorBefore); err != nil {
+		t.Fatalf("read floor: %v", err)
+	}
+	events, frames := auditCount(t, hh.db), len(hh.notify.types)
+
+	if rr := hh.as(kaja, "POST", "/api/chat/conversations/"+room.ID+"/members",
+		`{"user_id":"u-andy"}`); rr.Code != http.StatusOK {
+		t.Fatalf("re-adding an existing member returned %d, want 200 (idempotent)", rr.Code)
+	}
+
+	if n := auditCount(t, hh.db); n != events {
+		t.Errorf("audit rows %d → %d: the Log recorded an addition that did not happen", events, n)
+	}
+	if n := len(hh.notify.types); n != frames {
+		t.Errorf("%d /ws frames for a membership that did not change", n-frames)
+	}
+	var floorAfter string
+	_ = hh.db.QueryRow(
+		`SELECT effective_from_id FROM chat_members WHERE conversation_id = ? AND user_id = ?`,
+		room.ID, andy.id).Scan(&floorAfter)
+	if floorAfter != floorBefore {
+		t.Errorf("the existing member's floor moved from %q to %q — re-adding must never "+
+			"cut somebody off from history they can already read", floorBefore, floorAfter)
+	}
+}
+
+// ⚠ THE ADDED MEMBER IS TOLD, exactly as the removed one is. MembershipEvent
+// declared a `Removed` bool and only ever published the true case, so the frame
+// applyChatFrame already handles never arrived for an add — the new member's tab
+// held a conversation list without the room and had no reason to refetch.
+func TestAddedMemberIsToldOverTheSocket(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	hh.join(kaja)
+	hh.join(andy)
+	room := hh.group(kaja, "Skupina")
+
+	before := len(hh.notify.types)
+	if _, err := hh.svc.AddMember(hh.ctx(kaja), room.ID,
+		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	found := false
+	for i := before; i < len(hh.notify.types); i++ {
+		if hh.notify.types[i] != "chat_membership.changed" {
+			continue
+		}
+		found = true
+		// ⚠ TO THEM SPECIFICALLY. Nobody else's list changes shape, and the audience
+		// for a membership change is the person it happened to.
+		if got := hh.notify.audiences[i]; len(got) != 1 || got[0] != andy.id {
+			t.Errorf("membership frame went to %v, want only %s", got, andy.id)
+		}
+		ev, ok := hh.notify.payloads[i].(chat.MembershipEvent)
+		if !ok || ev.Removed || ev.ConversationID != room.ID {
+			t.Errorf("payload = %+v, want the add case for %s", hh.notify.payloads[i], room.ID)
+		}
+	}
+	if !found {
+		t.Error("adding a member published no chat_membership.changed frame")
+	}
+}
+
+// ⚠ A PAGE IS NEWEST-FIRST WHICHEVER WAY IT WAS WALKED. `forward` has to READ
+// ascending, but returning it that way gives one endpoint two contracts — and every
+// client invariant is built on one: items[0] is the newest message, which is what
+// the gap check compares and what a live message is unshifted in front of.
+func TestBothDirectionsReturnNewestFirst(t *testing.T) {
+	hh := newHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Skupina")
+	var ids []string
+	for _, body := range []string{"a", "b", "c", "d"} {
+		ids = append(ids, hh.send(kaja, room.ID, body).ID)
+	}
+	newest := ids[len(ids)-1]
+
+	for _, direction := range []string{"backward", "forward", ""} {
+		page, err := hh.svc.Thread(hh.ctx(kaja), room.ID, direction, "", 10)
+		if err != nil {
+			t.Fatalf("thread %q: %v", direction, err)
+		}
+		if len(page.Items) == 0 || page.Items[0].ID != newest {
+			t.Errorf("direction=%q put %q at items[0], want the newest message %q",
+				direction, page.Items[0].ID, newest)
+		}
+	}
+
+	// And the cursor still points the way it is travelling: forward continues from
+	// the newest row it returned, backward from the oldest.
+	fwd, err := hh.svc.Thread(hh.ctx(kaja), room.ID, "forward", "", 2)
+	if err != nil {
+		t.Fatalf("forward page: %v", err)
+	}
+	if !fwd.HasMore || fwd.NextCursor == nil || *fwd.NextCursor != fwd.Items[0].ID {
+		t.Errorf("forward next_cursor = %v, want the newest of the page (%q) — reading the "+
+			"far end of the slice walks back over ground already covered",
+			fwd.NextCursor, fwd.Items[0].ID)
+	}
+	back, err := hh.svc.Thread(hh.ctx(kaja), room.ID, "backward", "", 2)
+	if err != nil {
+		t.Fatalf("backward page: %v", err)
+	}
+	if !back.HasMore || back.NextCursor == nil || *back.NextCursor != back.Items[len(back.Items)-1].ID {
+		t.Errorf("backward next_cursor = %v, want the oldest of the page", back.NextCursor)
+	}
+}

@@ -1384,9 +1384,6 @@ export const cs = {
   // every screen reads as broken. It is stated once, calmly, and it is TRUE rather
   // than reassuring, because the history genuinely is not coming back.
   chat: {
-    title: 'Chat',
-    lede: 'Konverzace domácnosti — a skupiny, které si založíte sami.',
-
     word: {
       conversation: 'Konverzace',
       newConversation: 'Nová konverzace',
@@ -1395,7 +1392,6 @@ export const cs = {
       addMember: 'Přidat člena',
       removeMember: 'Odebrat z konverzace',
       deleteConversation: 'Smazat konverzaci',
-      trash: 'Koš',
       restore: 'Obnovit',
       purge: 'Smazat natrvalo',
       reply: 'Odpovědět',
@@ -1404,10 +1400,7 @@ export const cs = {
       edited: 'upraveno',
       deleted: 'Zpráva byla smazána',
       outsideHistory: 'Zpráva mimo vaši historii',
-      newMessages: 'Nové zprávy',
       mute: 'Ztlumit konverzaci',
-      unmute: 'Zrušit ztlumení',
-      everyone: 'Všichni',
     },
 
     // ---- the conversation list ----
@@ -1437,7 +1430,6 @@ export const cs = {
     send: 'Odeslat',
     cancelEdit: 'Zrušit úpravy',
     replyingTo: 'Odpovídáte na',
-    tooLong: 'Zpráva může mít nejvýše 8 000 znaků.',
 
     // ---- members ----
     membersTitle: 'Členové konverzace',
@@ -1450,7 +1442,6 @@ export const cs = {
      * so rather than looking broken.
      */
     directoryHint: 'V seznamu jsou lidé, kteří se už někdy přihlásili.',
-    addMemberPlaceholder: 'Koho přidat?',
     leave: 'Opustit konverzaci',
 
     /**
@@ -1475,10 +1466,8 @@ export const cs = {
     deleteBody:
       'Konverzace zmizí všem členům a přesune se do koše. Odtud ji lze obnovit, dokud se nesmažou její soubory.',
     deleteConfirmPrompt: 'Pro potvrzení opište název konverzace:',
-    purgeTitle: 'Smazat konverzaci natrvalo?',
     purgeBody:
       'Zpátky to nejde. Soubory se uvolní hned, místo aby se smazaly až po uplynutí lhůty v koši.',
-    restored: 'Konverzace obnovena',
     trashEmpty: 'V koši nic není.',
 
     // ---- search ----
@@ -1505,11 +1494,8 @@ export const cs = {
     create: 'Vytvořit',
     save: 'Uložit',
     confirmDelete: 'Smazat',
-    close: 'Zavřít',
 
     // ---- errors ----
     notFound: 'Konverzace nebyla nalezena.',
-    sendFailed: 'Zprávu se nepodařilo odeslat',
-    genericError: 'Něco se nepovedlo',
   },
 } as const

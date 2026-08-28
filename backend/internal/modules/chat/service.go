@@ -51,6 +51,9 @@ type Service struct {
 	directory DirectorySource
 	trashDays int
 	logger    *slog.Logger
+	// dir memoises the directory projection for directoryTTL — see push.go. It is
+	// why a Service must never be copied.
+	dir directoryCache
 }
 
 func NewService(db *sql.DB, sink audit.Sink, notifyTo TargetedNotifier, pusher push.Sender, directory DirectorySource, opts Options) *Service {
@@ -227,14 +230,14 @@ func (s *Service) CreateConversation(ctx context.Context, in ConversationCreate)
 		if err := s.store.InsertConversation(ctx, tx, id, name, actor, now); err != nil {
 			return err
 		}
-		if err := s.store.InsertMember(ctx, tx, id, actor, actor, f); err != nil {
+		if _, err := s.store.InsertMember(ctx, tx, id, actor, actor, f); err != nil {
 			return err
 		}
 		for _, m := range in.MemberIDs {
 			if m == actor {
 				continue
 			}
-			if err := s.store.InsertMember(ctx, tx, id, m, actor, f); err != nil {
+			if _, err := s.store.InsertMember(ctx, tx, id, m, actor, f); err != nil {
 				return err
 			}
 		}
@@ -289,7 +292,10 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 	actor := actorID(ctx)
 	now := nowUTC()
 	return mapScopeErr(appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		kind, trashed, memberErr := s.conversationForDestructiveVerb(ctx, tx, actor, id)
+		// ⚠ `hard` is what opens the admin door, and only `hard`. Purging frees the
+		// bytes an admin is answerable for; moving a room to the koš frees nothing,
+		// so a non-member admin gets the same 404 there that GET already gives them.
+		kind, trashed, memberErr := s.conversationForDestructiveVerb(ctx, tx, actor, id, hard)
 		if memberErr != nil {
 			return memberErr
 		}
@@ -348,7 +354,7 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversation, error) {
 	actor := actorID(ctx)
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		_, trashed, err := s.conversationForDestructiveVerb(ctx, tx, actor, id)
+		_, trashed, err := s.conversationForDestructiveVerb(ctx, tx, actor, id, true)
 		if err != nil {
 			return err
 		}
@@ -408,7 +414,15 @@ func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversa
 // the three verbs needs a different answer to that: a soft delete refuses, a purge
 // proceeds (that is Smazat natrvalo, reached FROM the koš), and a restore of a live
 // room does nothing at all.
-func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx, actor, id string) (kind string, trashed bool, err error) {
+//
+// ⚠ `adminMayAct` IS PER VERB, AND ONLY restore AND purge PASS true (v10 review).
+// The admin fallback is justified by STORAGE — a room that is costing the household
+// money — so it covers the two verbs that free bytes and the SOFT DELETE IS NOT ONE
+// OF THEM: it frees nothing, it is reversible, and letting it through here meant an
+// admin could make a conversation vanish for all its members while GET of that same
+// room still, correctly, 404'd for them. That is not the D255 asymmetry; it is the
+// asymmetry leaking into a third verb because one helper served all three.
+func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx, actor, id string, adminMayAct bool) (kind string, trashed bool, err error) {
 	// memberScope excludes a trashed conversation, which is right for every read
 	// and wrong for exactly these three verbs — restore and purge act ON the koš.
 	// So membership is asked without the koš predicate here.
@@ -422,7 +436,7 @@ func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", false, err
 	}
-	if !isAdminCtx(ctx) {
+	if !adminMayAct || !isAdminCtx(ctx) {
 		return "", false, ErrNotMember
 	}
 	return s.store.adminScope(ctx, tx, id)
@@ -478,6 +492,14 @@ func (s *Service) ListMembers(ctx context.Context, id string) (ConversationMembe
 // one person's decision about another person's access to a THIRD person's history,
 // so the new member starts reading from the moment they were added and never sees
 // what came before (D218).
+//
+// ⚠ ADDING SOMEBODY ALREADY IN THE ROOM CHANGES NOTHING AND SAYS NOTHING (v10
+// review). InsertMember's ON CONFLICT makes the write a no-op — correctly, since
+// re-running it would move an existing member's floor forward and cut them off from
+// history they can already read — but the audit event and the /ws frame used to go
+// out anyway, so the Log recorded an addition that never happened. Idempotent rather
+// than 422, on RestoreConversation's precedent one file up: a double tap has plainly
+// got what it asked for.
 func (s *Service) AddMember(ctx context.Context, id string, in ConversationMemberAdd) (ConversationMemberList, error) {
 	actor := actorID(ctx)
 	if strings.TrimSpace(in.UserID) == "" {
@@ -490,6 +512,7 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 	if _, ok := labels[in.UserID]; !ok {
 		return ConversationMemberList{}, httpx.ErrUnprocessable("Tento člen není v adresáři domácnosti.")
 	}
+	var added bool
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		sc, err := s.store.memberScope(ctx, tx, actor, id)
 		if err != nil {
@@ -506,14 +529,30 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 		if err != nil {
 			return err
 		}
-		if err := s.store.InsertMember(ctx, tx, sc.ConversationID, in.UserID, actor, f); err != nil {
+		added, err = s.store.InsertMember(ctx, tx, sc.ConversationID, in.UserID, actor, f)
+		if err != nil {
 			return err
+		}
+		if !added {
+			// Already in the room. Nothing changed, so nothing is recorded.
+			return nil
 		}
 		return s.record(ctx, tx, "member.added", sc.ConversationID,
 			"Do konverzace „"+name+"“ přidán člen "+label(labels, in.UserID), nil)
 	})
 	if err != nil {
 		return ConversationMemberList{}, mapScopeErr(err)
+	}
+	if added {
+		// ⚠ THE ADDED MEMBER IS TOLD, exactly as the removed one is (v10 review).
+		// Their client is holding a conversation list that does not contain this room
+		// and has no reason to refetch — MembershipEvent's `Removed: false` case was
+		// declared and then never published, so the frame the receiving half already
+		// handles simply never arrived. Addressed TO THEM: nobody else's list changes
+		// shape, and the audience for a membership change is the person it happened to.
+		s.notifyTo(ctx, []string{in.UserID}, "chat_membership.changed", MembershipEvent{
+			ConversationID: id, UserID: in.UserID, Removed: false,
+		})
 	}
 	return s.ListMembers(ctx, id)
 }

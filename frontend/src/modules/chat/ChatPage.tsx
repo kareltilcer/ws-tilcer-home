@@ -43,12 +43,20 @@ function ChatLayout() {
       <div className="grid h-full min-h-0 overflow-hidden rounded-lg border border-border bg-s1 lg:grid-cols-[320px_1fr]">
         {/* Below 1024 exactly one pane is on screen: the list, or the thread. The
             hidden pane is not rendered at all rather than hidden with CSS, so a
-            phone never fetches a thread nobody is looking at. */}
-        <aside className={id ? 'hidden lg:block lg:border-r lg:border-border' : 'block lg:border-r lg:border-border'}>
+            phone never fetches a thread nobody is looking at.
+
+            ⚠ `min-h-0` ON BOTH PANES IS LOAD-BEARING (v10 review). A grid item
+            defaults to `min-height: auto`, so each pane grew to its CONTENT — 3426
+            px of thread inside a 656 px grid — and `overflow-hidden` clipped the
+            difference. The inner `overflow-y-auto` box never scrolled because it
+            was never smaller than what it held: the newest messages and the
+            composer were simply cut off the bottom of the page, with no scrollbar
+            to say so. The two panes are where the height has to stop. */}
+        <aside className={id ? 'hidden min-h-0 lg:block lg:border-r lg:border-border' : 'block min-h-0 lg:border-r lg:border-border'}>
           <ConversationList activeID={id} />
         </aside>
 
-        <main className={id ? 'block min-w-0' : 'hidden min-w-0 lg:block'}>
+        <main className={id ? 'block min-h-0 min-w-0' : 'hidden min-h-0 min-w-0 lg:block'}>
           {id ? (
             <ThreadView conversationID={id} onOpenMembers={() => setMembersOpen(true)} />
           ) : (

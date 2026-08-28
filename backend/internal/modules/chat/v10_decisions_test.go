@@ -300,9 +300,21 @@ func TestAdminMayPurgeAConversationTheyCannotOpen(t *testing.T) {
 		}
 	}
 
-	// Half two: the same admin may trash it, restore it and purge it.
-	if rr := hh.as(boss, "DELETE", "/api/chat/conversations/"+c.ID, ""); rr.Code != http.StatusNoContent {
-		t.Fatalf("an admin trashing a conversation returned %d, want 204 (D255)", rr.Code)
+	// ⚠ Half one and a half: THE SOFT DELETE IS NOT ONE OF THE TWO VERBS (v10
+	// review). The admin fallback is justified by storage — a room that is costing
+	// the household money — and moving one to the koš frees nothing and is
+	// reversible, so it stays on the read side of the line and answers 404 like the
+	// GETs above. This assertion is the difference between "an admin may act on the
+	// bytes" and "an admin may make a conversation disappear for the people in it".
+	if rr := hh.as(boss, "DELETE", "/api/chat/conversations/"+c.ID, ""); rr.Code != http.StatusNotFound {
+		t.Fatalf("an admin trashing a conversation they are not in returned %d, want 404 — "+
+			"restore and purge are the two verbs, and a soft delete is neither (D255)", rr.Code)
+	}
+
+	// Half two: a MEMBER puts it in the koš, and the same admin may restore it and
+	// purge it from there.
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+c.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("a member trashing their own conversation returned %d, want 204", rr.Code)
 	}
 	// ⚠ 204, NOT 200 WITH THE ROOM. The restore is a verb the admin has; the
 	// conversation is a read they do not. Returning it in the response body would

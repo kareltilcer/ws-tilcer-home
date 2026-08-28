@@ -49,11 +49,17 @@ type Scope struct {
 	Kind string
 	// Floor bounds every read of this conversation's messages.
 	Floor floor
-	// Muted and LastReadAt are the caller's own row, loaded here because every
-	// caller of memberScope needs at least one of them and a second query for a
-	// column already on the joined row is pure cost.
+	// Muted, LastReadAt and LastReadID are the caller's own row, loaded here because
+	// every caller of memberScope needs at least one of them and a second query for
+	// a column already on the joined row is pure cost.
 	Muted      bool
 	LastReadAt *string
+	// LastReadID is the id of the newest message this member has read, and it — not
+	// LastReadAt — is what every unread count compares against. The empty string
+	// means "nothing yet", so every id sorts above it, the same convention Floor.ID
+	// uses and for the same reason: a timestamp comparison loses a message minted in
+	// the same millisecond as the marker.
+	LastReadID string
 }
 
 // querier is satisfied by both *sql.DB and *sql.Tx.
@@ -87,11 +93,12 @@ func (s *Store) memberScope(ctx context.Context, q querier, actor, conversationI
 		lastReadAt sql.NullString
 	)
 	err := q.QueryRowContext(ctx, `
-		SELECT c.kind, m.effective_from, m.effective_from_id, m.muted, m.last_read_at
+		SELECT c.kind, m.effective_from, m.effective_from_id, m.muted,
+		       m.last_read_at, m.last_read_id
 		  FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
 		 WHERE m.conversation_id = ? AND m.user_id = ? AND c.deleted_at IS NULL`,
-		conversationID, actor).Scan(&sc.Kind, &effFrom, &effID, &mutedInt, &lastReadAt)
+		conversationID, actor).Scan(&sc.Kind, &effFrom, &effID, &mutedInt, &lastReadAt, &sc.LastReadID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Scope{}, ErrNotMember
 	}

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import {
   useMutation,
   useQuery,
@@ -49,11 +49,38 @@ export function useConversation(id: string | undefined) {
   })
 }
 
+/** THREAD_PAGE is one page of the thread, and the floor of every refetch. */
+const THREAD_PAGE = 50
+/** The server clamps `limit` at 200 (NormalizeLimit), so asking for more is a lie. */
+const THREAD_MAX = 200
+
+/**
+ * useMessages holds the thread.
+ *
+ * ⚠ A REFETCH RE-REQUESTS WHAT THIS TAB IS HOLDING, NOT ONE PAGE (v10 review).
+ * `Načíst starší` grows the cached page in place, so a plain `limit: 50` queryFn
+ * silently threw that away every time anything invalidated the key — a message
+ * delete, a gap-check repair, or any of the mutations that touch the list. The
+ * member watched two hundred messages collapse back to fifty and the scroll jump,
+ * for an operation that had nothing to do with the history they had loaded.
+ *
+ * Reading the held count inside the queryFn is what keeps ONE cache entry: widening
+ * the key by a page count would make every load-older a cache miss, which is the
+ * cost this module split its key namespace to avoid. Beyond THREAD_MAX the server
+ * will not answer in one page and the tail is dropped — a bound worth having in one
+ * place rather than a partial restore nobody can predict.
+ */
 export function useMessages(id: string | undefined) {
   const online = useOnline()
+  const qc = useQueryClient()
   return useQuery({
     queryKey: qk.chatMessages(id ?? ''),
-    queryFn: () => api.listMessages(id as string, { limit: 50 }),
+    queryFn: () => {
+      const held = qc.getQueryData<MessagePage>(qk.chatMessages(id as string))?.items.length ?? 0
+      return api.listMessages(id as string, {
+        limit: Math.min(Math.max(THREAD_PAGE, held), THREAD_MAX),
+      })
+    },
     enabled: online && !!id,
   })
 }
@@ -82,7 +109,7 @@ export function useLoadOlderMessages(conversationID: string) {
       return api.listMessages(conversationID, {
         cursor: page.next_cursor,
         direction: 'backward',
-        limit: 50,
+        limit: THREAD_PAGE,
       })
     },
     onSuccess: (older) => {
@@ -120,12 +147,36 @@ export function useDirectory(enabled = true) {
   })
 }
 
+/** SEARCH_DEBOUNCE_MS is how long typing has to pause before a MATCH is worth running. */
+const SEARCH_DEBOUNCE_MS = 250
+
+/** useDebounced trails a value, so a fast typist produces one of it rather than eight. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return settled
+}
+
+/**
+ * useChatSearch runs the one MATCH that carries membership and the per-row floor.
+ *
+ * ⚠ THE QUERY IS DEBOUNCED, AND THE DEBOUNCE IS IN HERE (v10 review). Keyed on the
+ * raw input, every keystroke was its own request: `dovolená` ran eight FTS5 matches
+ * with eight snippet() passes joined against chat_members and chat_conversations,
+ * seven of them for prefixes nobody asked for, each cached under its own key for the
+ * rest of the session. It sits in the hook rather than in the input so no future
+ * call site can reintroduce it by binding straight to a `value`.
+ */
 export function useChatSearch(q: string, conversationID?: string) {
   const online = useOnline()
+  const settled = useDebounced(q.trim(), SEARCH_DEBOUNCE_MS)
   return useQuery({
-    queryKey: qk.chatSearch(q, conversationID),
-    queryFn: () => api.searchMessages(q, conversationID),
-    enabled: online && q.trim().length > 0,
+    queryKey: qk.chatSearch(settled, conversationID),
+    queryFn: () => api.searchMessages(settled, conversationID),
+    enabled: online && settled.length > 0,
   })
 }
 
@@ -167,13 +218,27 @@ export function useDeleteMessage(conversationID: string) {
   })
 }
 
+/**
+ * invalidateLists marks BOTH conversation listings stale and nothing else.
+ *
+ * ⚠ IT EXISTS BECAUSE `qk.chatAll` WAS THE DEFAULT (v10 review). `['chat']` is a
+ * prefix of every key in the module, so renaming one room refetched every open
+ * thread, the directory and every search result the session had accumulated — and
+ * each of those thread refetches also paid for the whole history the member had
+ * loaded. The narrow form was already in this file (useSetMuted); it just was not
+ * the habit. A room's name, its koš state and its existence all change what the two
+ * lists say, and nothing more.
+ */
+function invalidateLists(qc: QueryClient): void {
+  void qc.invalidateQueries({ queryKey: qk.chatConversations('active') })
+  void qc.invalidateQueries({ queryKey: qk.chatConversations('trash') })
+}
+
 export function useCreateConversation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: api.createConversation,
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.chatAll })
-    },
+    onSuccess: () => invalidateLists(qc),
   })
 }
 
@@ -182,7 +247,10 @@ export function useRenameConversation(id: string) {
   return useMutation({
     mutationFn: (name: string) => api.renameConversation(id, name),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.chatAll })
+      // The header reads the name off the conversation, the rows read it off the
+      // list. The thread is untouched — a rename does not change a message.
+      void qc.invalidateQueries({ queryKey: qk.chatConversation(id) })
+      invalidateLists(qc)
     },
   })
 }
@@ -192,8 +260,9 @@ export function useDeleteConversation() {
   return useMutation({
     mutationFn: (input: { id: string; hard?: boolean }) =>
       api.deleteConversation(input.id, input.hard),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.chatAll })
+    onSuccess: (_data, input) => {
+      void qc.invalidateQueries({ queryKey: qk.chatConversation(input.id) })
+      invalidateLists(qc)
     },
   })
 }
@@ -202,8 +271,9 @@ export function useRestoreConversation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.restoreConversation(id),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.chatAll })
+    onSuccess: (_data, id) => {
+      void qc.invalidateQueries({ queryKey: qk.chatConversation(id) })
+      invalidateLists(qc)
     },
   })
 }
@@ -223,8 +293,13 @@ export function useRemoveMember(id: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (userID: string) => api.removeMember(id, userID),
+    // The panel, the member count on the room, and the lists — because removing
+    // YOURSELF is how leaving works, and the room then leaves your list. Still not
+    // the thread: the messages of somebody who left stay exactly where they were.
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.chatAll })
+      void qc.invalidateQueries({ queryKey: qk.chatMembers(id) })
+      void qc.invalidateQueries({ queryKey: qk.chatConversation(id) })
+      invalidateLists(qc)
     },
   })
 }
@@ -293,11 +368,18 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
   if (frame.type === 'chat_membership.changed') {
     const ev = frame.payload as ChatMembershipEvent | undefined
     if (!ev) return
-    // The one chat frame that invalidates rather than patches: the caller may have
-    // just LOST the conversation, and the right next state is whatever the server
-    // now says — which for a removed member is the 404 the route renders as "this
-    // conversation is no longer yours".
-    void qc.invalidateQueries({ queryKey: qk.chatAll })
+    // The one chat frame that invalidates rather than patches: the caller has just
+    // GAINED or LOST the conversation, and the right next state is whatever the
+    // server now says — which for a removed member is the 404 the route renders as
+    // "this conversation is no longer yours", and for an added one is a room that
+    // was not in their list a moment ago.
+    //
+    // ⚠ Three keys, not the `['chat']` prefix. The thread is deliberately absent:
+    // a member who just lost the room must not refetch its messages, and one who
+    // just gained it has no thread cached to refresh.
+    void qc.invalidateQueries({ queryKey: qk.chatConversation(ev.conversation_id) })
+    void qc.invalidateQueries({ queryKey: qk.chatMembers(ev.conversation_id) })
+    invalidateLists(qc)
     return
   }
 
@@ -370,10 +452,4 @@ function replaceMessage(qc: QueryClient, conversationID: string, msg: ChatMessag
     if (!old) return old
     return { ...old, items: old.items.map((m) => (m.id === msg.id ? msg : m)) }
   })
-}
-
-/** unreadTotal is the nav badge's number: every conversation's unread, summed. */
-export function unreadTotal(conversations: Conversation[] | undefined): number {
-  if (!conversations) return 0
-  return conversations.reduce((sum, c) => sum + c.unread_count, 0)
 }

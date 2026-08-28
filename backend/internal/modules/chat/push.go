@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 )
@@ -104,28 +106,77 @@ type DirectorySource interface {
 	Members(ctx context.Context) ([]push.Member, error)
 }
 
+// directoryTTL is how long one directory projection is reused.
+//
+// ⚠ IT IS A CACHE BECAUSE labels() IS ON EVERY PATH IN THE MODULE (v10 review).
+// push.Store.Members is a self-join over `sessions` with a correlated COUNT over
+// push_subscriptions, and chat asked for it on every send, edit, delete, thread
+// read, search and member list — against a pool capped at ONE connection, which
+// makes it the dominant read on the module's hottest path. The directory only
+// changes when somebody logs in or renames themselves, so a few seconds of
+// staleness costs a member added in that window one retry and nothing else.
+const directoryTTL = 15 * time.Second
+
+// directoryCache memoises the projection. The lock is held ACROSS the query on
+// purpose: concurrent requests then collapse into one read rather than each
+// starting their own against the single connection.
+type directoryCache struct {
+	mu      sync.Mutex
+	at      time.Time
+	members []push.Member
+	loaded  bool
+}
+
+func (s *Service) directoryMembers(ctx context.Context) ([]push.Member, error) {
+	if s.directory == nil {
+		return nil, nil
+	}
+	s.dir.mu.Lock()
+	defer s.dir.mu.Unlock()
+	if s.dir.loaded && time.Since(s.dir.at) < directoryTTL {
+		return s.dir.members, nil
+	}
+	members, err := s.directory.Members(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.dir.members, s.dir.at, s.dir.loaded = members, time.Now(), true
+	return members, nil
+}
+
 // labels builds the id → display name map every render path uses.
 //
 // ⚠ THE PROJECTION HAPPENS HERE AND IT DISCARDS EMAIL AND ROLES. push.Member
 // carries both; `/api/chat/directory` is the first surface in Home that shows the
 // directory to a NON-ADMIN (D230), so the narrowing is done once, at the boundary,
 // rather than trusted to each handler's choice of fields.
+//
+// ⚠ EVERY DIRECTORY ROW IS IN THE MAP, INCLUDING THE NAMELESS ONES (v10 review).
+// It is not only a render table: CreateConversation and AddMember use it as the
+// "is this person in the directory" set. An earlier version dropped a member whose
+// `sessions.display_name` is NULL — which fixed the email leak and, because
+// Directory() still listed them under their id, put a button in the add-member
+// picker that answered every click with 422. One projection, one membership of it:
+// directoryName is what both call.
 func (s *Service) labels(ctx context.Context) (map[string]string, error) {
-	out := map[string]string{}
-	if s.directory == nil {
-		return out, nil
-	}
-	members, err := s.directory.Members(ctx)
+	members, err := s.directoryMembers(ctx)
 	if err != nil {
 		return nil, err
 	}
+	out := make(map[string]string, len(members))
 	for _, m := range members {
-		if !isRealDisplayName(m) {
-			continue
-		}
-		out[m.UserID] = m.DisplayName
+		out[m.UserID] = directoryName(m)
 	}
 	return out, nil
+}
+
+// directoryName is the ONE name chat ever shows for a member: their own if they
+// chose one, their id otherwise — never the email push.Store.Members substitutes.
+func directoryName(m push.Member) string {
+	if isRealDisplayName(m) {
+		return m.DisplayName
+	}
+	return m.UserID
 }
 
 // isRealDisplayName reports whether a directory row carries a name somebody chose,
@@ -149,22 +200,16 @@ func isRealDisplayName(m push.Member) bool {
 // nothing else.
 func (s *Service) Directory(ctx context.Context) (Directory, error) {
 	out := Directory{Items: []DirectoryEntry{}}
-	if s.directory == nil {
-		return out, nil
-	}
-	members, err := s.directory.Members(ctx)
+	members, err := s.directoryMembers(ctx)
 	if err != nil {
 		return Directory{}, err
 	}
 	for _, m := range members {
 		// The id, never the email — see isRealDisplayName. label()'s reasoning
 		// applies here too: one raw id somebody can look up beats an address the
-		// member never agreed to publish to the household.
-		name := m.UserID
-		if isRealDisplayName(m) {
-			name = m.DisplayName
-		}
-		out.Items = append(out.Items, DirectoryEntry{UserID: m.UserID, DisplayName: name})
+		// member never agreed to publish to the household. ⚠ And it is the SAME
+		// call labels() makes, so what this lists is exactly what AddMember accepts.
+		out.Items = append(out.Items, DirectoryEntry{UserID: m.UserID, DisplayName: directoryName(m)})
 	}
 	return out, nil
 }
