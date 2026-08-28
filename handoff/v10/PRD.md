@@ -3694,7 +3694,7 @@ What replaced it is `bootstrap/v10_rebuild_test.go`, which covers the three thin
 ### Outstanding before merge
 - [ ] Playwright + axe at 375 and 1440 in both themes — outstanding since v5, and chat is the densest screen in the app.
 - [ ] A click-through **with a second member's session**. Everything verified live so far ran under one dev-bypass actor, so the adversarial half is covered by tests alone. §V9-12 records six frontend bugs no test caught.
-- [ ] ⚠ **`npm run lint` fails on `src/components/common/CardDetail.tsx:37`** (`react-hooks/rules-of-hooks`, `useMutation` inside a non-component callback). It fails identically on `main`, so it predates v10 and is **not** this PR's — but the PR body claimed lint was green, which was wrong, and it will stay wrong until somebody fixes that file.
+- [x] ~~`npm run lint` fails on `src/components/common/CardDetail.tsx:37`~~ — **fixed here.** It predated v10 (it failed identically on `main`) but the PR body had claimed lint was green, so it is repaired rather than merely disclosed. `CardDetail` built its eight mutations through a local helper called `mutate`, which calls `useMutation` and is therefore a hook wearing a name that does not say so. Renaming it `useInvalidatingMutation` is not a way of silencing the rule: under the old name eslint could not see the **call sites** as hook calls at all, so a later `cond ? mutate(…) : null` would have desynced every mutation after it with nothing going red. Behaviour is unchanged — the eight calls were already unconditional and in fixed order.
 
 ### A note on what the tests were worth
 
