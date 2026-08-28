@@ -189,3 +189,19 @@ export interface ChatMembershipEvent {
   user_id: string
   removed: boolean
 }
+
+/**
+ * A room's OWN state changed — renamed, moved to the koš, restored, purged.
+ *
+ * ⚠ IT CARRIES NO NAME. A conversation's name is readable by that conversation's
+ * members, so the frame says only that something moved and each client refetches
+ * through the membership join that is already the access rule.
+ *
+ * `gone` is the trash and the purge: the room has left every read its members
+ * have, so a client sitting on /chat/{id} leaves rather than staying on a thread
+ * whose composer still looks usable and whose next send 404s.
+ */
+export interface ConversationEvent {
+  conversation_id: string
+  gone: boolean
+}

@@ -11,6 +11,7 @@ import {
   useChatSearch,
   useConversations,
   useCreateConversation,
+  useLoadMoreConversations,
   useRestoreConversation,
 } from './api/hooks'
 import type { Conversation } from './api/types'
@@ -35,6 +36,8 @@ export function ConversationList({ activeID }: { activeID?: string }) {
   // justified by counting requests.
   const [trashOpen, setTrashOpen] = useState(false)
   const trashed = useConversations('trash', trashOpen)
+  const moreActive = useLoadMoreConversations('active')
+  const moreTrashed = useLoadMoreConversations('trash')
 
   const searching = query.trim().length > 0
 
@@ -92,6 +95,24 @@ export function ConversationList({ activeID }: { activeID?: string }) {
               ))}
             </ul>
 
+            {/* ⚠ THE LIST IS PAGED, AND SAYING SO IS THE POINT. The server clamps
+                `limit` to 50 and hands back a `next_cursor`; consuming neither made
+                the 51st room unreachable — no row, no unread badge, and nothing on
+                screen to say a page had been withheld. */}
+            {active.data?.next_cursor && (
+              <div className="px-2 pb-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="w-full"
+                  loading={moreActive.isPending}
+                  onClick={() => moreActive.mutate()}
+                >
+                  {cs.chat.loadMore}
+                </Button>
+              </div>
+            )}
+
             {/* The koš, as its own section (D253). A trashed conversation has left
                 every other surface entirely, so this is the only place it appears at
                 all — which is why the section header is always here to be opened,
@@ -123,6 +144,17 @@ export function ConversationList({ activeID }: { activeID?: string }) {
                       </li>
                     ))}
                   </ul>
+                  {trashed.data?.next_cursor && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mt-1 w-full"
+                      loading={moreTrashed.isPending}
+                      onClick={() => moreTrashed.mutate()}
+                    >
+                      {cs.chat.loadMore}
+                    </Button>
+                  )}
                 </>
               )}
             </div>

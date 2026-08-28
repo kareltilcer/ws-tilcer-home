@@ -256,6 +256,7 @@ func (s *Service) RenameConversation(ctx context.Context, id string, in Conversa
 	if err != nil {
 		return Conversation{}, err
 	}
+	var audience []string
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		sc, err := s.store.memberScope(ctx, tx, actor, id)
 		if err != nil {
@@ -268,6 +269,10 @@ func (s *Service) RenameConversation(ctx context.Context, id string, in Conversa
 		if err := s.store.RenameConversation(ctx, tx, sc.ConversationID, name, nowUTC()); err != nil {
 			return err
 		}
+		audience, err = s.store.MemberIDs(ctx, tx, sc.ConversationID)
+		if err != nil {
+			return err
+		}
 		// Renaming Všichni is allowed (D219): only delete and leave are refused.
 		return s.record(ctx, tx, "conversation.renamed", sc.ConversationID,
 			"Konverzace přejmenována na „"+name+"“",
@@ -276,7 +281,22 @@ func (s *Service) RenameConversation(ctx context.Context, id string, in Conversa
 	if err != nil {
 		return Conversation{}, mapScopeErr(err)
 	}
+	s.publishConversation(ctx, audience, id, false)
 	return s.GetConversation(ctx, id)
+}
+
+// publishConversation tells a room's members that the room itself changed.
+//
+// ⚠ THE FRAME CARRIES NO NAME (ConversationEvent). Every recipient refetches
+// through the membership join, so what they are told is only that something moved;
+// what they get back is whatever the access rule says they may have.
+func (s *Service) publishConversation(ctx context.Context, audience []string, id string, gone bool) {
+	if len(audience) == 0 {
+		return
+	}
+	s.notifyTo(ctx, audience, "chat_conversation.changed", ConversationEvent{
+		ConversationID: id, Gone: gone,
+	})
 }
 
 // DeleteConversation moves a room to the koš, or purges it (D253).
@@ -291,7 +311,8 @@ func (s *Service) RenameConversation(ctx context.Context, id string, in Conversa
 func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) error {
 	actor := actorID(ctx)
 	now := nowUTC()
-	return mapScopeErr(appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+	var audience []string
+	err := mapScopeErr(appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		// ⚠ `hard` is what opens the admin door, and only `hard`. Purging frees the
 		// bytes an admin is answerable for; moving a room to the koš frees nothing,
 		// so a non-member admin gets the same 404 there that GET already gives them.
@@ -319,6 +340,13 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 		if err != nil {
 			return err
 		}
+		// ⚠ THE AUDIENCE IS READ BEFORE THE ROWS GO. A purge cascades chat_members
+		// away, so resolving it afterwards would find nobody to tell that the room
+		// they have open no longer exists.
+		audience, err = s.store.MemberIDs(ctx, tx, id)
+		if err != nil {
+			return err
+		}
 		if hard {
 			if err := s.queuePurge(ctx, tx, id, now, now); err != nil {
 				return err
@@ -339,6 +367,13 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 		return s.record(ctx, tx, "conversation.deleted", id,
 			"Konverzace „"+name+"“ přesunuta do koše", nil)
 	}))
+	if err != nil {
+		return err
+	}
+	// Gone: the room has left every read its members have — the thread, the list,
+	// the search. Their tabs leave it rather than sitting on a thread that 404s.
+	s.publishConversation(ctx, audience, id, true)
+	return nil
 }
 
 // RestoreConversation brings a room back from the koš and withdraws the promise to
@@ -353,6 +388,7 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 // keeps those two answers consistent.
 func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversation, error) {
 	actor := actorID(ctx)
+	var audience []string
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		_, trashed, err := s.conversationForDestructiveVerb(ctx, tx, actor, id, true)
 		if err != nil {
@@ -374,12 +410,19 @@ func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversa
 		if err := s.store.RestoreConversation(ctx, tx, id, nowUTC()); err != nil {
 			return err
 		}
+		audience, err = s.store.MemberIDs(ctx, tx, id)
+		if err != nil {
+			return err
+		}
 		return s.record(ctx, tx, "conversation.restored", id,
 			"Konverzace „"+name+"“ obnovena z koše", nil)
 	})
 	if err != nil {
 		return nil, mapScopeErr(err)
 	}
+	// Empty when the restore was a no-op (the room was not in the koš), which is
+	// what keeps a double tap on Obnovit from publishing a second frame.
+	s.publishConversation(ctx, audience, id, false)
 	// The membership question is asked directly rather than inferred from a 404, so
 	// "the admin half of D255" is a branch on the access rule itself and not on the
 	// shape of an error some other code path might also produce.
@@ -470,14 +513,25 @@ func (s *Service) queuePurge(ctx context.Context, tx *sql.Tx, conversationID, qu
 // ---- membership ----
 
 func (s *Service) ListMembers(ctx context.Context, id string) (ConversationMemberList, error) {
+	labels, err := s.labels(ctx)
+	if err != nil {
+		return ConversationMemberList{}, err
+	}
+	return s.listMembersWith(ctx, id, labels)
+}
+
+// listMembersWith is ListMembers with the directory projection already built.
+//
+// ⚠ IT TAKES THE MAP RATHER THAN FETCHING ONE (v10 review). AddMember has already
+// built the projection twice — once for the directory gate and once for the audit
+// summary — and then returned ListMembers, which built a third and re-ran
+// memberScope. The directory cache exists because this module was measured asking
+// for the projection on every path; the fix belongs one level up from the SQL.
+func (s *Service) listMembersWith(ctx context.Context, id string, labels map[string]string) (ConversationMemberList, error) {
 	actor := actorID(ctx)
 	sc, err := s.store.memberScope(ctx, s.db, actor, id)
 	if err != nil {
 		return ConversationMemberList{}, mapScopeErr(err)
-	}
-	labels, err := s.labels(ctx)
-	if err != nil {
-		return ConversationMemberList{}, err
 	}
 	items, err := s.store.ListMembers(ctx, s.db, sc.ConversationID, actor, labels)
 	if err != nil {
@@ -554,7 +608,8 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 			ConversationID: id, UserID: in.UserID, Removed: false,
 		})
 	}
-	return s.ListMembers(ctx, id)
+	// The projection this request already built, rather than a third one.
+	return s.listMembersWith(ctx, id, labels)
 }
 
 // RemoveMember takes somebody out — including the caller themselves, which is how

@@ -3,6 +3,7 @@ package chat
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -116,8 +117,15 @@ func (h *Handler) renameConversation(w http.ResponseWriter, r *http.Request) {
 //
 // `?hard=true` exists so somebody deleting a heavy conversation TO FIX AN OVERRUN is
 // never told to come back in seven days (D253).
+//
+// ⚠ THE FLAG IS PARSED, NOT STRING-COMPARED (v10 review). The spec types it as a
+// boolean, so `?hard=1`, `?hard=True` and a bare `?hard` are all things a client
+// legitimately sends — and `== "true"` answered every one of them with a SOFT
+// delete plus a 204, telling somebody who deleted a room to free space to come back
+// in seven days for bytes they believe are already gone. An unparseable value is
+// the safe direction (false), which is what ParseBool's error branch leaves it as.
 func (h *Handler) deleteConversation(w http.ResponseWriter, r *http.Request) {
-	hard := r.URL.Query().Get("hard") == "true"
+	hard := queryBool(r, "hard")
 	respondNoContent(w, h.svc.DeleteConversation(r.Context(), chi.URLParam(r, "id"), hard))
 }
 
@@ -234,6 +242,23 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) directory(w http.ResponseWriter, r *http.Request) {
 	d, err := h.svc.Directory(r.Context())
 	respond(w, http.StatusOK, d, err)
+}
+
+// queryBool reads a boolean query parameter the way the spec declares it: any
+// spelling strconv.ParseBool accepts (`true`, `1`, `T`, `True`…), plus the bare
+// `?flag` form, which ParseBool refuses because its value is the empty string.
+// Anything else is false — for `hard` that is the reversible direction.
+func queryBool(r *http.Request, name string) bool {
+	values, present := r.URL.Query()[name]
+	if !present {
+		return false
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return len(values) > 0
+	}
+	v, err := strconv.ParseBool(raw)
+	return err == nil && v
 }
 
 // ---- rendering ----

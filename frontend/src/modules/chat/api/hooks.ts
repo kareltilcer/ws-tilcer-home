@@ -15,6 +15,8 @@ import type {
   ChatMessage,
   ChatMessageEvent,
   Conversation,
+  ConversationEvent,
+  ConversationPage,
   MessagePage,
 } from './types'
 
@@ -29,14 +31,68 @@ import type {
 // there is no cached thread to fall back on and a query firing offline would only
 // produce a spinner that never resolves. The route renders an offline state instead.
 
-// `enabled` is how the koš section pays for itself only when it is opened — the
-// key still carries the state, so the two listings never share a cache entry.
+/** CONVERSATION_PAGE is one page of a listing, and the floor of every refetch. */
+const CONVERSATION_PAGE = 50
+/** The server clamps `limit` at 200 (NormalizeLimit), so asking for more is a lie. */
+const CONVERSATION_MAX = 200
+
+/**
+ * `enabled` is how the koš section pays for itself only when it is opened — the key
+ * still carries the state, so the two listings never share a cache entry.
+ *
+ * ⚠ A REFETCH RE-REQUESTS WHAT THIS TAB IS HOLDING, exactly as useMessages does and
+ * for the same reason: `Načíst další` grows the cached page in place, and a plain
+ * one-page queryFn would throw that away on every invalidation — which here is every
+ * send, every read-marker advance and every membership frame.
+ */
 export function useConversations(state?: 'active' | 'trash', enabled = true) {
   const online = useOnline()
+  const qc = useQueryClient()
   return useQuery({
     queryKey: qk.chatConversations(state),
-    queryFn: () => api.listConversations(state),
+    queryFn: () => {
+      const held =
+        qc.getQueryData<ConversationPage>(qk.chatConversations(state))?.items.length ?? 0
+      return api.listConversations(state, {
+        limit: Math.min(Math.max(CONVERSATION_PAGE, held), CONVERSATION_MAX),
+      })
+    },
     enabled: online && enabled,
+  })
+}
+
+/**
+ * useLoadMoreConversations walks a listing's keyset, one page at a time.
+ *
+ * ⚠ WITHOUT IT THE LIST SIMPLY STOPPED AT FIFTY. The store clamps `limit` and
+ * returns a `next_cursor` that nothing consumed, so the 51st room could not be
+ * opened and its unread badge never appeared. The thread grew `Načíst starší` for
+ * this exact reason; the list is the same defect one pane over.
+ */
+export function useLoadMoreConversations(state?: 'active' | 'trash') {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const page = qc.getQueryData<ConversationPage>(qk.chatConversations(state))
+      if (!page?.next_cursor) return null
+      return api.listConversations(state, {
+        cursor: page.next_cursor,
+        limit: CONVERSATION_PAGE,
+      })
+    },
+    onSuccess: (more) => {
+      if (!more) return
+      qc.setQueryData<ConversationPage>(qk.chatConversations(state), (old) => {
+        if (!old) return old
+        // Idempotent by id, for the same reason appendMessage is: a page fetched
+        // twice (a double click, a retry) must not double the list.
+        const seen = new Set(old.items.map((c) => c.id))
+        return {
+          items: [...old.items, ...more.items.filter((c) => !seen.has(c.id))],
+          next_cursor: more.next_cursor,
+        }
+      })
+    },
   })
 }
 
@@ -365,6 +421,28 @@ export function useAdvanceRead(id: string) {
  * longer what we hold.
  */
 export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
+  if (frame.type === 'chat_conversation.changed') {
+    const ev = frame.payload as ConversationEvent | undefined
+    if (!ev) return
+    // ⚠ THE STRUCTURAL VERBS PUBLISH NOW (v10 review). A rename left every other
+    // member's header naming the old room; a trash left their thread rendering and
+    // their composer enabled over a room that had left every read, so their next
+    // send answered 404 with nothing on screen to explain it.
+    //
+    // Invalidated, not patched: the frame deliberately carries no name, because a
+    // name is member-scoped content. Each client refetches through the membership
+    // join and gets whatever the access rule says it may have — which for a gone
+    // room is the 404 the route renders as "this conversation is no longer yours".
+    void qc.invalidateQueries({ queryKey: qk.chatConversation(ev.conversation_id) })
+    invalidateLists(qc)
+    if (ev.gone) {
+      // Its thread is unreadable from here on, so drop what this tab holds rather
+      // than refetching a page that can only 404.
+      qc.removeQueries({ queryKey: qk.chatMessages(ev.conversation_id) })
+    }
+    return
+  }
+
   if (frame.type === 'chat_membership.changed') {
     const ev = frame.payload as ChatMembershipEvent | undefined
     if (!ev) return

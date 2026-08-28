@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { UserMinus } from 'lucide-react'
 import { cs } from '@/i18n/cs'
 import { Button, Spinner } from '@/components/ui/ui'
@@ -185,6 +186,16 @@ function RemoveDialog({
   onClose: () => void
 }) {
   const remove = useRemoveMember(conversationID)
+  const navigate = useNavigate()
+  // ⚠ LEAVING NAVIGATES AWAY, REMOVING SOMEBODY ELSE DOES NOT. The room is gone
+  // from every read the moment the removal commits, so staying on /chat/{id} leaves
+  // the member looking at a header, a thread and a usable composer belonging to a
+  // conversation that now 404s — with this panel open on top of a members list that
+  // is already stale. DeleteDialog takes the same exit for the same reason.
+  const done = () => {
+    onClose()
+    if (isSelf) navigate('/chat')
+  }
   return (
     <ResponsiveModal
       open={!!member}
@@ -198,7 +209,7 @@ function RemoveDialog({
           <Button
             variant="danger"
             loading={remove.isPending}
-            onClick={() => member && remove.mutate(member.user_id, { onSuccess: onClose })}
+            onClick={() => member && remove.mutate(member.user_id, { onSuccess: done })}
           >
             {isSelf ? cs.chat.leave : cs.chat.word.removeMember}
           </Button>

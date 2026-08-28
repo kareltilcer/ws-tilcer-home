@@ -469,6 +469,9 @@ export const cs = {
     kindTrigger: 'Pravidlo',
     kindSchedule: 'Souhrn',
     kindTest: 'Test',
+    // v10's fifth kind. Its own bucket, never 'Pravidlo': the delivery log exists
+    // to tell a chat push apart from a trigger that fired.
+    kindChat: 'Zpráva',
     statusSent: 'Odesláno',
     statusFailed: 'Nedoručeno',
     statusExpired: 'Vypršelo',
@@ -1415,6 +1418,10 @@ export const cs = {
     threadEmpty: 'Zatím tu nikdo nic nenapsal.',
     threadEmptyHint: 'Napište první zprávu.',
     loadOlder: 'Načíst starší',
+    // The conversation LIST's own paging, distinct from the thread's `loadOlder`:
+    // the server pages both listings at fifty, and a list that shows page one and
+    // says nothing is page one dressed as the whole result.
+    loadMore: 'Načíst další konverzace',
 
     /**
      * ⚠ The floor line — a quiet, PERMANENT line at the top of a thread, never a

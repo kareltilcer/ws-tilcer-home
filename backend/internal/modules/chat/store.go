@@ -254,12 +254,27 @@ func (s *Store) TrashConversation(ctx context.Context, q querier, id, actor, now
 // reconstructed and nothing was ever removed — the queue is a promise to delete
 // later, and restoring is what withdraws it. PR 2 queues nothing (there are no
 // attachments yet), so the DELETE is a no-op today and correct the day PR 3 lands.
+//
+// ⚠ IT WITHDRAWS ONLY WHAT THE CONVERSATION DELETE QUEUED (v10 review). A MESSAGE
+// delete also enqueues — that message's keys, with purge_after = now (see
+// SoftDeleteMessage) — and it does NOT move the attachment off `state = 'live'`,
+// so "every live key in this room" catches those too. A message deleted on Monday,
+// a room trashed on Tuesday and restored on Wednesday then left the message a
+// tombstone forever while its bytes were never destroyed: orphaned in R2 and still
+// counted against both thresholds. `m.deleted_at IS NULL` is the term that tells
+// the two enqueues apart, because a message delete is the only thing that sets it.
 func (s *Store) RestoreConversation(ctx context.Context, q querier, id, now string) error {
 	if _, err := q.ExecContext(ctx, `
 		DELETE FROM chat_deleted_keys
-		 WHERE key IN (SELECT storage_key FROM chat_attachments WHERE conversation_id = ?)
-		    OR key IN (SELECT thumbnail_key FROM chat_attachments
-		                WHERE conversation_id = ? AND thumbnail_key IS NOT NULL)`, id, id); err != nil {
+		 WHERE key IN (SELECT a.storage_key FROM chat_attachments a
+		                 JOIN chat_messages m ON m.id = a.message_id
+		                WHERE a.conversation_id = ? AND a.state = 'live'
+		                  AND m.deleted_at IS NULL)
+		    OR key IN (SELECT a.thumbnail_key FROM chat_attachments a
+		                 JOIN chat_messages m ON m.id = a.message_id
+		                WHERE a.conversation_id = ? AND a.state = 'live'
+		                  AND m.deleted_at IS NULL AND a.thumbnail_key IS NOT NULL)`,
+		id, id); err != nil {
 		return err
 	}
 	_, err := q.ExecContext(ctx, `
@@ -320,9 +335,44 @@ func (s *Store) ListMembers(ctx context.Context, q querier, conversationID, acto
 // ⚠ IT IS RESOLVED INSIDE THE WRITING TRANSACTION (D233). Resolving it after the
 // commit means a member removed in between still gets the payload — and in this
 // module the payload is the content.
+//
+// ⚠ IT IS THE AUDIENCE FOR A *NEW* MESSAGE ONLY, and that is the whole of why it
+// may ignore the floor: a message minted now sorts above every floor in the room,
+// so "every member" and "every member who may read it" are the same set. They are
+// NOT the same set for an edit or a delete of an OLD message — use
+// MemberIDsAbove for those.
 func (s *Store) MemberIDs(ctx context.Context, q querier, conversationID string) ([]string, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT user_id FROM chat_members WHERE conversation_id = ?`, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// MemberIDsAbove is the audience for an EXISTING message: the members whose floor
+// sits below it, which is exactly the set that may read it (D218/D226).
+//
+// ⚠ AN EDIT AND A DELETE MUST NOT USE MemberIDs (v10 review). A member added after
+// a message was written cannot read it — Thread, MessageByID, quoteMap and Search
+// all bound on `id > effective_from_id` — but the /ws frame was published to the
+// whole membership, so editing an old message pushed its full new body to the very
+// people the floor exists to keep it from. Nothing rendered it, because
+// replaceMessage finds no row to replace; it had already reached their browser.
+// The same predicate as every read path, in the one place the payload leaves.
+func (s *Store) MemberIDsAbove(ctx context.Context, q querier, conversationID, messageID string) ([]string, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT user_id FROM chat_members
+		  WHERE conversation_id = ? AND ? > effective_from_id`, conversationID, messageID)
 	if err != nil {
 		return nil, err
 	}

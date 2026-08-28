@@ -32,8 +32,18 @@ function qs(params: Record<string, string | number | undefined>): string {
 
 // ---- conversations ----
 
-export function listConversations(state?: 'active' | 'trash'): Promise<ConversationPage> {
-  return apiFetch(`${base}/conversations${qs({ state })}`)
+/**
+ * ⚠ IT PASSES `limit` AND `cursor`, BECAUSE THE SERVER HONOURS BOTH. Store's
+ * NormalizeLimit clamps an absent limit to 50 and returns a `next_cursor`; sending
+ * neither and consuming neither made the 51st room unreachable — no row, no unread
+ * badge, and no line of copy to say so. That is the shape the store refuses one
+ * file away: page one dressed as the whole result.
+ */
+export function listConversations(
+  state?: 'active' | 'trash',
+  opts: { cursor?: string; limit?: number } = {},
+): Promise<ConversationPage> {
+  return apiFetch(`${base}/conversations${qs({ state, ...opts })}`)
 }
 
 export function getConversation(id: string): Promise<Conversation> {

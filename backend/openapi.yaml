@@ -4867,12 +4867,18 @@ paths:
       tags: [chat]
       summary: Advance the caller's read marker
       description: >-
-        Sets `last_read_at` from the named message. **Idempotent, and never backwards** — a
-        client that replays an older marker cannot un-read a conversation (PRD D250).
+        Sets `last_read_id` — and `last_read_at` beside it, as the human-facing value —
+        from the named message. **Idempotent, and never backwards** — a client that replays
+        an older marker cannot un-read a conversation (PRD D250).
 
-        Unread is `created_at > MAX(last_read_at, effective_from)` AND not the caller's own
+        Unread is `id > effective_from_id AND id > last_read_id` AND not the caller's own
         AND not a tombstone, so a member added yesterday never opens a conversation to a
         four-figure badge.
+
+        ⚠ **Both bounds are message ids, never timestamps.** `created_at` has millisecond
+        resolution, so a message committing in the same millisecond as the marker is
+        excluded by `created_at > last_read_at` — and because the marker only ever moves
+        forward, no later read can bring it back.
       requestBody:
         required: true
         content:
@@ -5128,8 +5134,12 @@ paths:
       summary: Full-text search across the caller's conversations
       description: >-
         One FTS5 `MATCH` over `chat_messages_fts`, **joined to `chat_members` on the caller,
-        with `created_at >= effective_from`, tombstones excluded and the koš excluded — all
-        INSIDE the query, before rank and snippet** (PRD D251).
+        with `id > effective_from_id` per row, tombstones excluded and the koš excluded —
+        all INSIDE the query, before rank and snippet** (PRD D251).
+
+        ⚠ The floor is a bound on the message **id**, not on `created_at`, and it is a
+        COLUMN rather than an argument because every hit may sit in a different
+        conversation with a different floor.
 
         ⚠ That placement is the requirement, not an optimisation. FTS5 ranks over what it
         matched, so a membership filter applied to the result set leaves an ordering
@@ -5407,9 +5417,12 @@ components:
         `electricity` `DateCursor` does not apply here: chat messages are ordered by UUIDv7
         id, which IS their creation order, so the house `Cursor` locates a position exactly.
 
-        `older` (the default) walks toward the start of the conversation and stops at the
-        caller's `effective_from`, no matter how far a client keeps paging (PRD D218).
-      schema: { type: string, enum: [older, newer], default: older }
+        `backward` (the default) walks toward the start of the conversation and stops at the
+        caller's `effective_from_id`, no matter how far a client keeps paging (PRD D218);
+        `forward` walks toward the newest message. Both directions return the page
+        newest-first, so `items[0]` is the newest row whichever way it was walked, and
+        `next_cursor` is the far end in the direction of travel.
+      schema: { type: string, enum: [backward, forward], default: backward }
 
   responses:
     Unauthorized:
@@ -6985,8 +6998,8 @@ components:
       properties:
         id: { type: string }
         ts: { type: string, format: date-time }
-        kind: { type: string, enum: [broadcast, trigger, schedule, test] }
-        category: { type: string, enum: [broadcast, triggers, summaries] }
+        kind: { type: string, enum: [broadcast, trigger, schedule, test, chat] }
+        category: { type: string, enum: [broadcast, triggers, summaries, chat] }
         rule_id: { type: [string, "null"] }
         user_id: { type: string }
         user_label:
@@ -9028,9 +9041,11 @@ components:
         unread_count:
           type: integer
           description: >-
-            The CALLER'S unread: messages after `MAX(last_read_at, effective_from)`, not
-            their own, not tombstones (D250). A member added yesterday never opens a
-            conversation to a four-figure badge.
+            The CALLER'S unread: messages with `id > effective_from_id AND id >
+            last_read_id`, not their own, not tombstones (D250). ⚠ Ids, never timestamps —
+            a `created_at` comparison loses a message minted in the same millisecond as the
+            bound. A member added yesterday never opens a conversation to a four-figure
+            badge.
         muted: { type: boolean, description: The caller's own per-conversation push mute (D248). }
         effective_from:
           type: string

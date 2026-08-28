@@ -330,7 +330,13 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 		if !ok {
 			return errMessageNotFound
 		}
-		audience, err = s.store.MemberIDs(ctx, tx, sc.ConversationID)
+		// ⚠ THE FLOOR APPLIES TO THE AUDIENCE, NOT ONLY TO THE READ (v10 review).
+		// This is an OLD message, so "every member" is not "every member who may
+		// read it": somebody added after it was written is bounded off it by every
+		// read path, and publishing the edit to them would hand their socket the
+		// body the floor exists to withhold. MemberIDs is right for a send and
+		// wrong here, which is exactly why it reads safe.
+		audience, err = s.store.MemberIDsAbove(ctx, tx, sc.ConversationID, messageID)
 		if err != nil {
 			return err
 		}
@@ -380,7 +386,9 @@ func (s *Service) DeleteMessage(ctx context.Context, messageID string) error {
 		if !ok {
 			return errMessageNotFound
 		}
-		audience, err = s.store.MemberIDs(ctx, tx, sc.ConversationID)
+		// Below the floor a tombstone is still a disclosure — the id, the author
+		// and the time of a message somebody may not read. Same bound as the edit.
+		audience, err = s.store.MemberIDsAbove(ctx, tx, sc.ConversationID, messageID)
 		if err != nil {
 			return err
 		}

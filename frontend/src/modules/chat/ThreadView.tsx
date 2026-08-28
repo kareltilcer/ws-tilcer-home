@@ -99,7 +99,23 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   const loadOlder = () => {
     const el = scrollRef.current
     if (el) anchor.current = el.scrollHeight - el.scrollTop
-    older.mutate()
+    // ⚠ THE ANCHOR IS CLEARED ON SETTLE AS WELL AS ON RESTORE (v10 review). Two
+    // paths reach here without `oldest` changing — the mutationFn returns null once
+    // `has_more` is false, and onSuccess filters the page by id, so a page whose
+    // rows are all already held moves nothing. The layout effect below then never
+    // runs, the anchor stays set, and it fires on the NEXT unrelated change to the
+    // oldest message: a refetch after a message delete or a gap repair, which comes
+    // back at `limit = held` with a possibly different tail. The view then jumps by
+    // the difference between two unrelated layouts, with no button press to explain
+    // it. Whoever set it clears it.
+    const held = new Set(messages.map((m) => m.id))
+    older.mutate(undefined, {
+      onSettled: (page) => {
+        // Nothing new means `oldest` cannot change, which means the layout effect
+        // below will not run and will not clear this itself.
+        if (!page?.items.some((m) => !held.has(m.id))) anchor.current = null
+      },
+    })
   }
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -108,18 +124,53 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     anchor.current = null
   }, [oldest])
 
-  // Advancing the read marker is idempotent and never moves backwards (D250), so
-  // firing it whenever the newest message changes is safe — a replayed older marker
-  // could not un-read the room even if this raced.
+  /**
+   * Advancing the read marker is idempotent and never moves backwards (D250), so a
+   * replayed older marker could not un-read the room even if this raced.
+   *
+   * ⚠ BUT IT ONLY FIRES FOR A MESSAGE THAT WAS ACTUALLY ON SCREEN (v10 review).
+   * Monotonic is exactly what makes the mistake permanent: mark three messages read
+   * while the member is scrolled back through history — where `atBottom` is false
+   * precisely so the view does NOT follow them down — and `MAX(last_read_id, ?)`
+   * means no later read can ever count them again. A hidden tab is the same case
+   * with the whole window as the reason. It is the failure this PR already fixed
+   * once, in the shape where the thread could not scroll at all: a member watching
+   * a conversation they cannot see being marked read.
+   */
   const marked = useRef<string>('')
   useEffect(() => {
     if (!newest || marked.current === newest.id) return
+    if (!atBottom.current || document.visibilityState !== 'visible') return
     marked.current = newest.id
     advanceRead.mutate(newest.id)
     // advanceRead is a stable mutation object; including it would re-fire on every
     // render of a busy thread.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newest?.id])
+
+  /**
+   * Scrolling back to the bottom, or returning to the tab, is what catches the
+   * marker up — otherwise a member who read everything while the tab was hidden,
+   * or while scrolled up, would keep a badge over messages they have plainly seen.
+   * The `marked` guard makes the repeat free.
+   */
+  useEffect(() => {
+    const catchUp = () => {
+      const latest = thread.data?.items[0]
+      if (!latest || marked.current === latest.id) return
+      if (!atBottom.current || document.visibilityState !== 'visible') return
+      marked.current = latest.id
+      advanceRead.mutate(latest.id)
+    }
+    const el = scrollRef.current
+    el?.addEventListener('scroll', catchUp, { passive: true })
+    document.addEventListener('visibilitychange', catchUp)
+    return () => {
+      el?.removeEventListener('scroll', catchUp)
+      document.removeEventListener('visibilitychange', catchUp)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread.data])
 
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [editing, setEditing] = useState<ChatMessage | null>(null)

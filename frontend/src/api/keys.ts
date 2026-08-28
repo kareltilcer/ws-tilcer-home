@@ -138,6 +138,16 @@ export const qk = {
   chatSearch: (q: string, conversationID?: string) =>
     ['chat', 'search', q, conversationID ?? ''] as const,
   chatDirectory: ['chat', 'directory'] as const,
-  /** The prefix every chat mutation invalidates. */
+  /**
+   * ⚠ NOT AN INVALIDATION TARGET, AND NO CHAT MUTATION MAY USE IT. It is the
+   * common prefix the key-shape test asserts every chat key hangs off, and the
+   * prefix persist.ts refuses to write to disk — nothing more.
+   *
+   * Invalidating `['chat']` refetches every open thread — each at `limit = held`,
+   * so every page of history the member loaded is re-fetched — plus the directory
+   * and every cached search result the session has accumulated. That was the
+   * default once; `invalidateLists` in modules/chat/api/hooks.ts is what replaced
+   * it, and it names the two listings a room's own state can actually change.
+   */
   chatAll: ['chat'] as const,
 }

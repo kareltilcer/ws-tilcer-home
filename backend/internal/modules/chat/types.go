@@ -222,6 +222,28 @@ type MessageEvent struct {
 	PrevMessageID *string `json:"prev_message_id"`
 }
 
+// ConversationEvent is what rides /ws when a room's OWN state changes — renamed,
+// moved to the koš, restored, purged.
+//
+// ⚠ IT CARRIES NO NAME, AND THAT IS THE POINT. The name is member-scoped content
+// (audit.RedactMemberScoped exists for exactly that reason), so the frame says only
+// "this room changed" and lets each client refetch through the membership join that
+// is already the access rule. It is addressed to the room's members, resolved in
+// the writing transaction like every other audience here (D233).
+//
+// ⚠ AND IT EXISTS BECAUSE THE STRUCTURAL VERBS PUBLISHED NOTHING (v10 review).
+// Renaming a room left every other member's header naming the old one; trashing it
+// left their thread rendering, their composer enabled, and their next send
+// answering 404 from a predicate they had no way to see.
+//
+// `Gone` distinguishes "refetch this room" from "this room has left every read you
+// have" — the trash and the purge — so a client sitting on /chat/{id} can leave
+// rather than sit on a thread that will only ever 404.
+type ConversationEvent struct {
+	ConversationID string `json:"conversation_id"`
+	Gone           bool   `json:"gone"`
+}
+
 // MembershipEvent is published TO THE REMOVED MEMBER SPECIFICALLY so their client
 // can leave a thread that has quietly become forbidden.
 //

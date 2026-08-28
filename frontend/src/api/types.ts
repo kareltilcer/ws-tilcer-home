@@ -698,7 +698,8 @@ export interface NotificationSchedulePage {
   next_cursor: string | null
 }
 
-export type DeliveryKind = 'broadcast' | 'trigger' | 'schedule' | 'test'
+/** ⚠ `chat` is v10's fifth (08003 widens the table's CHECK to admit it). */
+export type DeliveryKind = 'broadcast' | 'trigger' | 'schedule' | 'test' | 'chat'
 export type DeliveryStatus = 'sent' | 'failed' | 'expired'
 
 export interface NotificationDelivery {

@@ -39,7 +39,9 @@ function ChatLayout() {
   const [membersOpen, setMembersOpen] = useState(false)
 
   return (
-    <div className="h-[calc(100dvh-var(--chat-chrome,8rem))] lg:h-[calc(100dvh-4rem)]">
+    /* --chat-chrome is declared in theme/globals.css, beside the other layout
+       tokens — it is the header plus the thumb-tab bar below 1024. */
+    <div className="h-[calc(100dvh-var(--chat-chrome))] lg:h-[calc(100dvh-4rem)]">
       <div className="grid h-full min-h-0 overflow-hidden rounded-lg border border-border bg-s1 lg:grid-cols-[320px_1fr]">
         {/* Below 1024 exactly one pane is on screen: the list, or the thread. The
             hidden pane is not rendered at all rather than hidden with CSS, so a
@@ -58,7 +60,19 @@ function ChatLayout() {
 
         <main className={id ? 'block min-h-0 min-w-0' : 'hidden min-h-0 min-w-0 lg:block'}>
           {id ? (
-            <ThreadView conversationID={id} onOpenMembers={() => setMembersOpen(true)} />
+            /* ⚠ `key` IS LOAD-BEARING, NOT A LIST HINT (v10 review). At ≥1024 both
+               panes are on screen, so /chat/a → /chat/b matches the SAME `:id`
+               route: React reconciles ThreadView instead of remounting it and every
+               piece of per-conversation state survives the switch. The composer's
+               draft is the one that costs — a half-typed message follows you into
+               the next room and Enter posts it there, with no unsend, because a
+               delete leaves a tombstone everybody has already seen. `replyTo` and
+               `editing` still point at the old room's messages, and `atBottom`
+               carries a scrolled-up thread's answer into a fresh one, so B opens at
+               its oldest loaded message — the bug the pane heights were fixed for,
+               by another route. Keying on the id makes a different conversation a
+               different component, which is what it is. */
+            <ThreadView key={id} conversationID={id} onOpenMembers={() => setMembersOpen(true)} />
           ) : (
             <div className="grid h-full place-items-center p-6 text-center">
               <p className="max-w-xs text-sm text-muted text-pretty">{cs.chat.pickPrompt}</p>
