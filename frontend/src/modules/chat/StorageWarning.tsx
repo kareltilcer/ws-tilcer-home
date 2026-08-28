@@ -28,11 +28,21 @@ export function StorageWarning({ conversationID }: { conversationID?: string }) 
   const room = conversationID
     ? data.conversations.find((c) => c.id === conversationID)
     : undefined
-  // Inside a thread, the room's own limit is the relevant one; on the list, the
-  // module total is. A member is never shown both at once — two warnings about the
-  // same bytes is one warning too many.
   const overRoom = room?.over_limit ?? false
-  if (!overRoom && !data.total_exceeded) return null
+
+  // ⚠ THE THREAD PANE SHOWS THE ROOM'S LIMIT AND NOTHING ELSE (FR-V10-12). The
+  // module total's homes are Administrace and the conversation list; falling
+  // through to it here put the SAME banner in both panes at ≥1024, side by side,
+  // about the same bytes — and the comment that used to sit here claimed a member is
+  // never shown both at once while the layout showed exactly that.
+  //
+  // Below 1024 the list is the route a member lands on, so the total still reaches
+  // them; a thread they opened is about that room.
+  if (conversationID) {
+    if (!overRoom) return null
+  } else if (!data.total_exceeded) {
+    return null
+  }
 
   const message = overRoom
     ? cs.chat.storageOverConversation(

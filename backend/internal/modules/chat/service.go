@@ -194,6 +194,31 @@ func (s *Service) ListConversations(ctx context.Context, state, cursor string, l
 			items[i].PurgeAfter = s.purgeAfter(items[i].DeletedAt)
 		}
 	}
+	// ⚠ THE VERDICT LIVES HERE, NOT IN THE STORE — the threshold comparison belongs
+	// to the consumer (D235's rule, which is why GroupSource reports bytes and
+	// nothing else). The store measures; this decides what the number means.
+	//
+	// ⚠ AND IT IS WHAT LETS THE LIST FLAG AN OVER-LIMIT ROOM AT ALL. Both fields
+	// shipped null from PR 2 with a note saying PR 3 would fill them, and PR 3
+	// nearly did not: a list permanently rendering *nezměřeno* beside every room,
+	// with no way to see which one is heavy, on the version whose second half is a
+	// storage register.
+	//
+	// A threshold read that fails leaves both verdicts null rather than false — the
+	// D161 shape one field up: an unmeasured verdict must not serialise as "under
+	// the limit".
+	if th, thErr := storage.LoadThresholds(ctx, s.db); thErr == nil {
+		limit := storage.MB(th.Conversation.ValueMB)
+		for i := range items {
+			if items[i].Bytes == nil {
+				continue
+			}
+			over := *items[i].Bytes > limit
+			items[i].OverConversationLimit = &over
+		}
+	} else {
+		s.logger.Warn("chat: could not read the conversation threshold for the list", "err", thErr)
+	}
 	page := ConversationPage{Items: items}
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]

@@ -231,8 +231,24 @@ function ConversationRow({ conversation, selected }: { conversation: Conversatio
         <span className={cn('block truncate text-sm', selected || unread > 0 ? 'font-bold text-fg' : 'font-medium')}>
           {conversation.name}
         </span>
-        <span className="mt-0.5 block truncate text-xs text-muted">
-          {count(conversation.member_count, PLURAL.members)}
+        <span className="mt-0.5 flex items-baseline gap-1.5 truncate text-xs text-muted">
+          <span className="truncate">{count(conversation.member_count, PLURAL.members)}</span>
+          {/* ⚠ THE FLAG IS THE POINT, NOT THE SIZE. HANDOFF-design §v10 lists "one
+              room over its limit" as a state of this list, and it is the only place
+              a member finds out WHICH of their rooms is heavy — the module warning
+              says the household is over, not where. The mark reuses `--attention`
+              (informational: nothing is blocked and nobody did anything wrong) and
+              carries a word, never colour alone.
+
+              ⚠ Rendered only when the verdict is a real `true`. It is a pointer for
+              the D161 reason: a verdict about an unmeasured figure cannot be more
+              certain than the figure, so `null` renders nothing rather than "under
+              the limit". */}
+          {conversation.over_conversation_limit === true && (
+            <span className="flex-none rounded-full bg-attention-soft px-1.5 py-px text-[10px] font-semibold text-attention">
+              {cs.chat.cleanupOverLimit}
+            </span>
+          )}
         </span>
       </span>
       {unread > 0 && (

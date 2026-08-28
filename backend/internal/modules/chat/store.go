@@ -104,7 +104,24 @@ func (s *Store) ListConversations(ctx context.Context, actor, state, cursor stri
 		           AND x.deleted_at IS NULL
 		           AND x.author_id <> ?
 		           AND x.id > m.effective_from_id
-		           AND x.id > m.last_read_id)
+		           AND x.id > m.last_read_id),
+		       -- v10 PR 3: the room's OWNED bytes — storage.go's rule, restated as a
+		       -- subquery because a GROUP BY here would have to carry every selected
+		       -- column while the two counts above are already subqueries.
+		       --
+		       -- ⚠ NOT THE CALLER'S FLOOR, deliberately. This is what the ROOM weighs,
+		       -- which is what its threshold is about and what the clean-up page and the
+		       -- Administrace block both report. A member added yesterday sees the room's
+		       -- real size and can still only clean their own share of it (D241).
+		       --
+		       -- ⚠ AND IT IS MEASURED, so it is 0 rather than null for an empty room.
+		       -- The D161 principle cuts both ways: a figure nobody measured must not
+		       -- render as zero, and a figure that IS zero must not render as unmeasured.
+		       (SELECT COALESCE(SUM(a.byte_size), 0)
+		          FROM chat_attachments a
+		          JOIN chat_messages am ON am.id = a.message_id
+		         WHERE a.conversation_id = c.id
+		           AND a.state = 'live' AND am.deleted_at IS NULL)
 		  FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
 		 WHERE m.user_id = ? AND `+koš+keyset+`
@@ -127,19 +144,24 @@ func (s *Store) ListConversations(ctx context.Context, actor, state, cursor stri
 			members   int
 			unread    int
 		)
+		var bytes int64
 		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
-			&r.DeletedAt, &effFrom, &fromStart, &mutedInt, &members, &unread); err != nil {
+			&r.DeletedAt, &effFrom, &fromStart, &mutedInt, &members, &unread, &bytes); err != nil {
 			return nil, false, err
 		}
+		measured := bytes
 		c := Conversation{
 			ID: r.ID, Kind: r.Kind, Name: r.Name,
 			CreatedBy: nullStr(r.CreatedBy), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 			MemberCount: members, UnreadCount: unread, Muted: mutedInt != 0,
 			EffectiveFrom: effFrom, ReadsFromBeginning: fromStart,
-			// Bytes stays null until PR 3 measures it — never 0. The D161 principle:
-			// an unmeasured figure rendered as zero is indistinguishable from an
-			// empty room, and the storage half exists to be believed.
-			Bytes: nil,
+			// ⚠ MEASURED FROM PR 3 ON. PR 2 left this null with a note saying PR 3
+			// would fill it — and it very nearly shipped still null, which would have
+			// left the conversation list rendering *nezměřeno* for every room, forever,
+			// on the module whose storage half this PR IS. `over_conversation_limit`
+			// goes with it: it is a verdict ABOUT this figure and cannot be more
+			// certain than the figure is, which is why both are pointers.
+			Bytes: &measured,
 		}
 		if trashed {
 			// PurgeAfter is derived by the service from deleted_at and

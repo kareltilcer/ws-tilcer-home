@@ -829,3 +829,75 @@ func TestCleanupFrameRespectsTheFloor(t *testing.T) {
 		}
 	}
 }
+
+// TestConversationListMeasuresItsRooms is the field PR 2 deferred and PR 3 nearly
+// forgot.
+//
+// ⚠ `bytes` AND `over_conversation_limit` SHIPPED NULL FROM PR 2 with a note in
+// types.go saying PR 3 would fill them. Left as they were, the conversation list
+// would render *nezměřeno* beside every room forever, with no way to see which one
+// is heavy — on the version whose entire second half is a storage register. This is
+// §V10-12's "missing rather than deferred" shape: the deferral was recorded, and the
+// PR that was supposed to close it did not.
+func TestConversationListMeasuresItsRooms(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Fotky")
+	hh.uploadOne(kaja, room.ID, "a.pdf", pdfBytes())
+
+	page := decode[chat.ConversationPage](t, hh.as(kaja, "GET", "/api/chat/conversations", ""))
+	var seen bool
+	for _, c := range page.Items {
+		if c.Bytes == nil {
+			t.Errorf("room %q reports bytes: null after PR 3 — the list can only render "+
+				"*nezměřeno*", c.Name)
+		}
+		if c.OverConversationLimit == nil {
+			t.Errorf("room %q reports over_conversation_limit: null — the list cannot flag "+
+				"an over-limit room", c.Name)
+		}
+		if c.ID != room.ID {
+			continue
+		}
+		seen = true
+		if *c.Bytes != int64(len(pdfBytes())) {
+			t.Errorf("room bytes = %d, want %d", *c.Bytes, len(pdfBytes()))
+		}
+		if *c.OverConversationLimit {
+			t.Error("a 43-byte room is flagged over the 128 MB limit")
+		}
+	}
+	if !seen {
+		t.Fatal("the room is missing from the list")
+	}
+
+	// ⚠ AND AN EMPTY ROOM IS A MEASURED ZERO, not an unmeasured null. The D161
+	// principle cuts both ways: a figure nobody measured must not render as zero, and
+	// a figure that IS zero must not render as unmeasured.
+	empty := hh.group(kaja, "Prázdná")
+	page = decode[chat.ConversationPage](t, hh.as(kaja, "GET", "/api/chat/conversations", ""))
+	for _, c := range page.Items {
+		if c.ID == empty.ID && (c.Bytes == nil || *c.Bytes != 0) {
+			t.Errorf("an empty room reports %v, want a measured 0", c.Bytes)
+		}
+	}
+}
+
+// TestConversationListExcludesDeletedMessagesBytes — the same owned-bytes rule as
+// every other figure, on the surface a member sees first.
+func TestConversationListExcludesDeletedMessagesBytes(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Smazané")
+	msg := hh.uploadOne(kaja, room.ID, "a.pdf", pdfBytes())
+	if rr := hh.as(kaja, "DELETE", "/api/chat/messages/"+msg.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", rr.Code)
+	}
+	page := decode[chat.ConversationPage](t, hh.as(kaja, "GET", "/api/chat/conversations", ""))
+	for _, c := range page.Items {
+		if c.ID == room.ID && (c.Bytes == nil || *c.Bytes != 0) {
+			t.Errorf("the list reports %v for a room whose only file is in a deleted "+
+				"message, want 0 — the same rule as every other figure", c.Bytes)
+		}
+	}
+}
