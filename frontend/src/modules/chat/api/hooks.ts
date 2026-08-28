@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   useMutation,
   useQuery,
@@ -562,6 +562,35 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
 export function useChatLiveSync(): void {
   const qc = useQueryClient()
   useEffect(() => subscribeToFrames((frame) => applyChatFrame(qc, frame)), [qc])
+}
+
+/**
+ * useLeaveWhenGone sends the member back to the list when the room they have OPEN
+ * leaves every read they have — the trash and the purge (D253).
+ *
+ * ⚠ IT IS THE HALF applyChatFrame CANNOT DO. That function is a pure operation over
+ * a QueryClient, deliberately, so it can be tested; navigation is not a cache
+ * effect and needs the router and the open id, which only the route knows. Dropping
+ * the thread cache without leaving the route left the member sitting on
+ * /chat/{id} rendering "Konverzace nebyla nalezena." — while ConversationEvent's own
+ * `gone` flag exists, in its words, "so a client sitting on /chat/{id} can leave".
+ * DeleteDialog and RemoveDialog already navigate when the caller is the one acting;
+ * this is the same exit for the case where somebody else acts.
+ *
+ * `leave` is held in a ref so the subscription is one per open room rather than one
+ * per render of the callback.
+ */
+export function useLeaveWhenGone(conversationID: string | undefined, leave: () => void): void {
+  const leaveRef = useRef(leave)
+  leaveRef.current = leave
+  useEffect(() => {
+    if (!conversationID) return
+    return subscribeToFrames((frame) => {
+      if (frame.type !== 'chat_conversation.changed') return
+      const ev = frame.payload as ConversationEvent | undefined
+      if (ev?.gone && ev.conversation_id === conversationID) leaveRef.current()
+    })
+  }, [conversationID])
 }
 
 /** newestInCache is what this tab currently holds for a conversation, or ''. */

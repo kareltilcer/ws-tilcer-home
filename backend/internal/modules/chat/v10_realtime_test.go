@@ -267,3 +267,71 @@ func TestPushGoesToEveryMemberButTheAuthorAndHonoursTheMute(t *testing.T) {
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+// TestEditAndDeleteReachOnlyTheMembersAboveWhoseFloorTheMessageSits is the floor
+// applied to the AUDIENCE rather than only to the read (D218/D226).
+//
+// ⚠ IT IS THE ONE AUDIENCE A CORRECT-LOOKING IMPLEMENTATION GETS WRONG. A SEND may
+// use MemberIDs, because a message minted now sorts above every floor in the room —
+// so "every member" and "every member who may read it" are the same set, and the
+// habit reads safe. They are NOT the same set for an EXISTING message: somebody
+// added afterwards is bounded off it by Thread, MessageByID, quoteMap and Search,
+// and publishing an edit to them hands their socket the full new body the floor
+// exists to withhold. Nothing renders it — replaceMessage finds no row to replace —
+// but it has already reached the browser.
+//
+// Both verbs are asserted, because they leak different things: the edit leaks the
+// body, the delete leaks the id, the author and the time of a message somebody may
+// not read. Swapping MemberIDsAbove back to MemberIDs must fail here.
+func TestEditAndDeleteReachOnlyTheMembersAboveWhoseFloorTheMessageSits(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	c := hh.group(kaja, "Historie")
+
+	// Written while Kája is alone in the room.
+	old := hh.send(kaja, c.ID, "tohle Andy nikdy neuvidí")
+
+	// Andy joins afterwards, so his floor sits ABOVE that message.
+	if _, err := hh.svc.AddMember(hh.ctx(kaja), c.ID,
+		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
+		t.Fatalf("add andy: %v", err)
+	}
+
+	for _, tc := range []struct {
+		verb string
+		typ  string
+		run  func() error
+	}{
+		{"edit", "chat_message.updated", func() error {
+			_, err := hh.svc.EditMessage(hh.ctx(kaja), old.ID,
+				chat.MessageUpdate{Body: "upravené tajemství"})
+			return err
+		}},
+		{"delete", "chat_message.deleted", func() error {
+			return hh.svc.DeleteMessage(hh.ctx(kaja), old.ID)
+		}},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			hh.notify.reset()
+			if err := tc.run(); err != nil {
+				t.Fatalf("%s: %v", tc.verb, err)
+			}
+			if len(hh.notify.audiences) != 1 {
+				t.Fatalf("%s produced %d publishes, want 1", tc.verb, len(hh.notify.audiences))
+			}
+			if hh.notify.types[0] != tc.typ {
+				t.Errorf("published type %q, want %q", hh.notify.types[0], tc.typ)
+			}
+			for _, id := range hh.notify.audiences[0] {
+				if id == andy.id {
+					t.Errorf("the %s of a message BELOW Andy's floor was published to him: %v.\n\n"+
+						"Every read path refuses him this message (D218); the one place the\n"+
+						"payload leaves must use the same predicate — Store.MemberIDsAbove,\n"+
+						"never MemberIDs.", tc.verb, hh.notify.audiences[0])
+				}
+			}
+			if len(hh.notify.audiences[0]) != 1 || hh.notify.audiences[0][0] != kaja.id {
+				t.Errorf("%s audience = %v, want only %s", tc.verb, hh.notify.audiences[0], kaja.id)
+			}
+		})
+	}
+}

@@ -212,6 +212,18 @@ func TestVsichniRefusesDeleteAndRemoval(t *testing.T) {
 	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+vsichni+"/members/"+andy.id, ""); rr.Code != http.StatusUnprocessableEntity {
 		t.Errorf("removing a member from Všichni returned %d, want 422 (D219)", rr.Code)
 	}
+	// ⚠ AND ADDING IS REFUSED TOO, which is the half that was missing (v10 review).
+	// Membership of the household room ACCRUES, with the conversation's own
+	// beginning as the floor (D258); AddMember writes floorNow() instead, and
+	// because removal from Všichni is refused two lines up, that wrong floor could
+	// never be deleted and the auto-join could never re-run — a member cut off from
+	// the household room's history for good, with FloorLine suppressed for
+	// kind='default' so nothing on screen would say why.
+	if rr := hh.as(kaja, "POST", "/api/chat/conversations/"+vsichni+"/members",
+		`{"user_id":"`+andy.id+`"}`); rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("adding a member to Všichni returned %d, want 422 — membership there "+
+			"accrues at first sight with the room's own beginning as the floor (D258)", rr.Code)
+	}
 	// Renaming it IS allowed — only delete and leave are refused.
 	if rr := hh.as(kaja, "PATCH", "/api/chat/conversations/"+vsichni, `{"name":"Domácnost"}`); rr.Code != http.StatusOK {
 		t.Errorf("renaming Všichni returned %d, want 200 — it is renameable (D219)", rr.Code)

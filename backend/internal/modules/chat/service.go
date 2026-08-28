@@ -601,6 +601,21 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 		if err != nil {
 			return err
 		}
+		if sc.Kind == kindDefault {
+			// ⚠ NOBODY IS ADDED TO VŠICHNI EITHER, AND THIS IS THE MIRROR OF
+			// RemoveMember's GUARD (D219/D258). Membership of the household room
+			// ACCRUES — EnsureDefaultMembership enrols each member at first sight
+			// with the conversation's own beginning as their floor, so they read all
+			// of it. This verb writes floorNow() instead, and it wrote it here with
+			// nothing to stop it: anybody could put a member into Všichni with a
+			// floor of "now", and because removal from Všichni is refused one
+			// function down, the row could never be deleted and the auto-join could
+			// never re-run. A member cut off from the household room's history,
+			// permanently, with FloorLine suppressed for kind='default' so nothing on
+			// screen would even say why.
+			return httpx.ErrUnprocessable(
+				"Do konverzace „Všichni“ nelze nikoho přidat — je v ní celá domácnost.")
+		}
 		name, err := s.store.ConversationName(ctx, tx, sc.ConversationID)
 		if err != nil {
 			return err

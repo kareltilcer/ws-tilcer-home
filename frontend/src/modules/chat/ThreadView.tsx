@@ -4,6 +4,7 @@ import { ArrowLeft, BellOff, CornerUpLeft, MoreHorizontal, Users } from 'lucide-
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
+import { fmtDate, fmtTime } from '@/i18n/format'
 import { Button, Input, Spinner, Textarea } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { useAuth } from '@/app/auth'
@@ -42,6 +43,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   const thread = useMessages(conversationID)
   const older = useLoadOlderMessages(conversationID)
   const advanceRead = useAdvanceRead(conversationID)
+  const remove = useDeleteMessage(conversationID)
   const { identity } = useAuth()
   const me = identity?.userId ?? ''
 
@@ -322,7 +324,13 @@ export function ThreadView({ conversationID, onOpenMembers }: {
               <Bubble
                 message={m}
                 mine={m.author_id === me}
-                conversationID={conversationID}
+                // ⚠ ONE MUTATION FOR THE THREAD, NOT ONE PER BUBBLE (v10 review).
+                // Bubble called useDeleteMessage itself, so a thread at the
+                // 200-message cap mounted two hundred mutation observers — for a
+                // verb at most one bubble at a time can use, and on messages whose
+                // menu is never even rendered. The composer's send and edit already
+                // live at this level for the same reason.
+                onDelete={() => remove.mutate(m.id)}
                 onReply={() => setReplyTo(m)}
                 // ⚠ STARTING AN EDIT DROPS A PENDING REPLY (v10 review). The composer
                 // hides the reply chip while an edit is open, so a reply begun before
@@ -596,7 +604,7 @@ function FloorLine({ conversation }: { conversation: Conversation }) {
     <p className="mb-4 border-b border-border pb-3 text-center text-xs text-muted text-pretty">
       {cs.chat.floorLine}{' '}
       <span className="whitespace-nowrap">
-        {cs.chat.floorLineFrom} {formatDate(conversation.effective_from)}.
+        {cs.chat.floorLineFrom} {fmtDate(new Date(conversation.effective_from))}.
       </span>
     </p>
   )
@@ -605,17 +613,16 @@ function FloorLine({ conversation }: { conversation: Conversation }) {
 function Bubble({
   message,
   mine,
-  conversationID,
   onReply,
   onEdit,
+  onDelete,
 }: {
   message: ChatMessage
   mine: boolean
-  conversationID: string
   onReply: () => void
   onEdit: () => void
+  onDelete: () => void
 }) {
-  const remove = useDeleteMessage(conversationID)
   const [menuOpen, setMenuOpen] = useState(false)
 
   if (message.deleted) {
@@ -645,7 +652,7 @@ function Bubble({
         {message.reply_to && <Quote quote={message.reply_to} />}
         <div className="whitespace-pre-wrap break-words text-sm">{message.body}</div>
         <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
-          <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
+          <time dateTime={message.created_at}>{fmtTime(message.created_at)}</time>
           {message.edited_at && <span>· {cs.chat.word.edited}</span>}
         </div>
       </div>
@@ -694,7 +701,7 @@ function Bubble({
                   className="block w-full rounded px-2 py-1.5 text-left text-sm text-danger hover:bg-danger/10"
                   onClick={() => {
                     setMenuOpen(false)
-                    remove.mutate(message.id)
+                    onDelete()
                   }}
                 >
                   {cs.chat.word.deleteMessage}
@@ -850,14 +857,9 @@ function Composer({
 }
 
 // ---- formatting ----
-
-const timeFmt = new Intl.DateTimeFormat('cs-CZ', { hour: '2-digit', minute: '2-digit' })
-const dateFmt = new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'long', year: 'numeric' })
-
-function formatTime(iso: string): string {
-  return timeFmt.format(new Date(iso))
-}
-
-function formatDate(iso: string): string {
-  return dateFmt.format(new Date(iso))
-}
+//
+// ⚠ THERE IS NONE HERE ANY MORE (v10 review). This file declared its own
+// Intl.DateTimeFormat pair and rendered `27. srpna 2026`, where PRD D20 fixes the
+// house shape at `d. M. yyyy` and i18n/format.ts is where every other module gets
+// it. The floor line is one of the three places v10 explains itself, so it is the
+// last place the date should disagree with the rest of the app.

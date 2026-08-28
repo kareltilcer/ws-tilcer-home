@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { Route, Routes, useParams } from 'react-router-dom'
+import { Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { WifiOff } from 'lucide-react'
 import { cs } from '@/i18n/cs'
+import { routes } from '@/app/routes'
 import { useOnline } from '@/platform/pwa/offline'
 import { ConversationList } from './ConversationList'
 import { ThreadView } from './ThreadView'
 import { MembersPanel } from './MembersPanel'
-import { useChatLiveSync } from './api/hooks'
+import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
 
 /**
  * Chat — the eleventh module, and the first one the household does not read in full.
@@ -37,6 +38,15 @@ export function ChatPage() {
 function ChatLayout() {
   const { id } = useParams<{ id: string }>()
   const [membersOpen, setMembersOpen] = useState(false)
+  const navigate = useNavigate()
+  // ⚠ The room this tab has open can be taken away by somebody else — trashed or
+  // purged — and `gone` is the frame that says so. Leaving the route is the point of
+  // that flag; dropping the thread cache and staying put left the member on a
+  // header, a composer and a "Konverzace nebyla nalezena." with no way to read it as
+  // anything but a failure. The list is where they belong once the room is not
+  // theirs. It lives here rather than in applyChatFrame because only the route knows
+  // which conversation is open.
+  useLeaveWhenGone(id, () => navigate(routes.chat))
 
   return (
     /* --chat-chrome is declared in theme/globals.css, beside the other layout

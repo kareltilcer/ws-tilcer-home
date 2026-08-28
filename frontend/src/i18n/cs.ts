@@ -1411,7 +1411,8 @@ export const cs = {
     emptyTitle: 'Zatím žádné konverzace',
     emptyBody:
       'Píšete v konverzaci Všichni, kde je celá domácnost. Vlastní skupinu si můžete kdykoliv založit.',
-    unreadLabel: 'nepřečtené zprávy',
+    // The unread badge's accessible name lives in PLURAL.unreadMessages, not here:
+    // it counts, and a count label that is a fixed phrase cannot decline (D20).
     pickPrompt: 'Vyberte konverzaci vlevo.',
 
     // ---- the thread ----
@@ -1473,6 +1474,11 @@ export const cs = {
     deleteBody:
       'Konverzace zmizí všem členům a přesune se do koše. Odtud ji lze obnovit, dokud se nesmažou její soubory.',
     deleteConfirmPrompt: 'Pro potvrzení opište název konverzace:',
+    /** ⚠ Reached FROM the koš, which is the whole reason the verb accepts an
+     *  already-trashed room — the bytes go on counting against both thresholds
+     *  until something really purges it (D254), and waiting out the window is not
+     *  an answer for somebody who deleted the room to free space. */
+    purgeTitle: 'Smazat konverzaci natrvalo?',
     purgeBody:
       'Zpátky to nejde. Soubory se uvolní hned, místo aby se smazaly až po uplynutí lhůty v koši.',
     trashEmpty: 'V koši nic není.',

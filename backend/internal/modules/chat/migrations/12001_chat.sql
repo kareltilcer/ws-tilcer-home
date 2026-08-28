@@ -152,6 +152,18 @@ CREATE TABLE chat_messages (
 -- +goose StatementBegin
 CREATE INDEX idx_chat_messages_conv ON chat_messages (conversation_id, id);
 -- +goose StatementEnd
+-- ⚠ THE SECOND INDEX IS THE FK's, NOT A QUERY's, and it is not optional. Nothing
+-- SELECTs by reply_to_id — quoteMap looks parents up by `id` — but `reply_to_id`
+-- REFERENCES chat_messages (id) with no ON DELETE action, so with foreign_keys=ON
+-- SQLite must prove no row refers to each message it deletes. Unindexed, that is a
+-- full scan of this table PER CASCADED ROW: purging a conversation measured 145 ms
+-- at 2 000 messages, 2.1 s at 8 000 and 33 s at 16 000, against 106 ms with this
+-- index. The pool is capped at a single connection (platform/db), so those seconds
+-- are seconds in which no module in Home can write — and `?hard=true` exists
+-- precisely so somebody fixing a storage overrun is not told to wait (D253).
+-- +goose StatementBegin
+CREATE INDEX idx_chat_messages_reply ON chat_messages (reply_to_id);
+-- +goose StatementEnd
 
 -- ============================== přílohy ==============================
 

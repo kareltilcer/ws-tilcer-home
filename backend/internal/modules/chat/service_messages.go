@@ -25,6 +25,11 @@ func (s *Service) Thread(ctx context.Context, conversationID, direction, cursor 
 		return MessagePage{}, mapScopeErr(err)
 	}
 	rows, hasMore, err := s.store.Thread(ctx, s.db, sc, direction, cursor, limit)
+	if errors.Is(err, errBadCursor) {
+		// The same refusal ListConversations gives, in the same words: a cursor
+		// that cannot be honoured is answered, never silently dropped.
+		return MessagePage{}, httpx.ErrUnprocessable("Neplatný kurzor.")
+	}
 	if err != nil {
 		return MessagePage{}, err
 	}
@@ -191,14 +196,15 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, in Mes
 	// reads MAX(id) there for prev_message_id. Minting beside that read is what
 	// makes id order and commit order the same order.
 	var (
-		id        string
-		now       string
-		prev      *string
-		audience  []string
-		convName  string
-		replyTo   *string
-		rendered  Message
-		sentScope Scope
+		id         string
+		now        string
+		prev       *string
+		audience   []string
+		recipients []string
+		convName   string
+		replyTo    *string
+		rendered   Message
+		sentScope  Scope
 	)
 	if in.ReplyToID != nil && strings.TrimSpace(*in.ReplyToID) != "" {
 		replyTo = in.ReplyToID
@@ -237,6 +243,17 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, in Mes
 			return err
 		}
 		audience, err = s.store.MemberIDs(ctx, tx, sc.ConversationID)
+		if err != nil {
+			return err
+		}
+		// ⚠ THE PUSH AUDIENCE IS RESOLVED HERE TOO, AND FOR THE SAME REASON (D233).
+		// It was the one audience in the module read AFTER the commit, from a
+		// goroutine — and a member added in that window has a floor of MAX(id),
+		// which is THIS message, so every read path refuses it to them while the
+		// push carried a 140-rune preview of it to their lock screen. Resolved
+		// inside the writing transaction, the set is the membership as of the
+		// message: nobody added afterwards is in it.
+		recipients, err = s.store.PushRecipients(ctx, tx, sc.ConversationID, actor)
 		return err
 	})
 	if err != nil {
@@ -260,7 +277,7 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, in Mes
 	}
 
 	s.publishMessage(ctx, audience, rendered, prev)
-	s.pushAfterSend(ctx, conversationID, convName, actor, rendered)
+	s.pushAfterSend(ctx, convName, recipients, rendered)
 	return rendered, nil
 }
 
@@ -277,19 +294,18 @@ func (s *Service) publishMessage(ctx context.Context, audience []string, m Messa
 // response is written, and a push started on it would be aborted mid-flight for
 // every message ever sent. The recipients were resolved from the committed
 // transaction, so nothing here depends on the request still being alive.
-func (s *Service) pushAfterSend(ctx context.Context, conversationID, conversationName, author string, m Message) {
-	if s.pusher == nil {
+//
+// ⚠ IT TAKES THE RECIPIENTS RATHER THAN RESOLVING THEM (v10 review). Reading the
+// audience here meant reading it after the commit, from a goroutine, against a
+// query with no floor in it — so a member added between the two saw a preview of
+// the message their floor had just been set above. The set now comes from
+// SendMessage's own transaction, like every other audience in this module.
+func (s *Service) pushAfterSend(ctx context.Context, conversationName string, recipients []string, m Message) {
+	if s.pusher == nil || len(recipients) == 0 {
 		return
 	}
 	bg := context.WithoutCancel(ctx)
-	go func() {
-		recipients, err := s.store.PushRecipients(bg, s.db, conversationID, author)
-		if err != nil {
-			s.logger.Warn("chat: resolve push recipients", "err", err, "conversation", conversationID)
-			return
-		}
-		s.notifyPush(bg, conversationName, recipients, m)
-	}()
+	go func() { s.notifyPush(bg, conversationName, recipients, m) }()
 }
 
 // EditMessage rewrites a body. Own messages only, no time limit (D225).
@@ -442,6 +458,16 @@ func (s *Service) scopeForMessage(ctx context.Context, q querier, actor, message
 	return sc, row, err
 }
 
+// maxStr is SQLite's scalar MAX() over two TEXT values — the monotonic step the
+// read marker takes in AdvanceRead's statement, spelled the same way in Go so the
+// value computed here and the value stored there cannot drift.
+func maxStr(a, b string) string {
+	if b > a {
+		return b
+	}
+	return a
+}
+
 // mapMessageErr renders both refusals as the same 404. A message the caller may not
 // see, may not act on, or that never existed are one answer.
 func mapMessageErr(err error) error {
@@ -472,12 +498,21 @@ func (s *Service) AdvanceRead(ctx context.Context, conversationID string, in Rea
 		if err := s.store.AdvanceRead(ctx, tx, sc.ConversationID, actor, row.CreatedAt, row.ID); err != nil {
 			return err
 		}
-		// Re-read the scope so the count below uses the marker just written rather
-		// than the one loaded before it.
-		sc, err = s.store.memberScope(ctx, tx, actor, conversationID)
-		if err != nil {
-			return err
+		// The count below has to use the marker JUST WRITTEN rather than the one
+		// loaded before it — and that value is computable rather than re-readable.
+		//
+		// ⚠ IT IS NOT A SECOND memberScope (v10 review). This fires on every message
+		// that arrives in an open thread, in every open tab, against a pool capped at
+		// ONE connection, so a fourth round trip here is the module's most frequent
+		// avoidable read. The UPDATE is `MAX(old, new)` in each column, which is the
+		// same monotonic step applied below to the scope already in hand — the same
+		// two values, without asking for them.
+		sc.LastReadID = maxStr(sc.LastReadID, row.ID)
+		at := row.CreatedAt
+		if sc.LastReadAt != nil {
+			at = maxStr(*sc.LastReadAt, at)
 		}
+		sc.LastReadAt = &at
 		n, err := s.store.UnreadCount(ctx, tx, sc, actor)
 		if err != nil {
 			return err

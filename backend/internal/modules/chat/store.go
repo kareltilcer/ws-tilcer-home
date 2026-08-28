@@ -356,21 +356,8 @@ func (s *Store) ListMembers(ctx context.Context, q querier, conversationID, acto
 // NOT the same set for an edit or a delete of an OLD message — use
 // MemberIDsAbove for those.
 func (s *Store) MemberIDs(ctx context.Context, q querier, conversationID string) ([]string, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT user_id FROM chat_members WHERE conversation_id = ?`, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return scanIDs(q.QueryContext(ctx,
+		`SELECT user_id FROM chat_members WHERE conversation_id = ?`, conversationID))
 }
 
 // MemberIDsAbove is the audience for an EXISTING message: the members whose floor
@@ -384,35 +371,35 @@ func (s *Store) MemberIDs(ctx context.Context, q querier, conversationID string)
 // replaceMessage finds no row to replace; it had already reached their browser.
 // The same predicate as every read path, in the one place the payload leaves.
 func (s *Store) MemberIDsAbove(ctx context.Context, q querier, conversationID, messageID string) ([]string, error) {
-	rows, err := q.QueryContext(ctx,
+	return scanIDs(q.QueryContext(ctx,
 		`SELECT user_id FROM chat_members
-		  WHERE conversation_id = ? AND ? > effective_from_id`, conversationID, messageID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+		  WHERE conversation_id = ? AND ? > effective_from_id`, conversationID, messageID))
 }
 
 // PushRecipients is the audience minus the author, minus anyone who muted this
 // conversation (D248). The `cat_chat` preference is applied later, by
 // push.EligibleSubscriptions — this is the per-conversation half.
 func (s *Store) PushRecipients(ctx context.Context, q querier, conversationID, author string) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `
+	return scanIDs(q.QueryContext(ctx, `
 		SELECT user_id FROM chat_members
-		 WHERE conversation_id = ? AND user_id <> ? AND muted = 0`, conversationID, author)
+		 WHERE conversation_id = ? AND user_id <> ? AND muted = 0`, conversationID, author))
+}
+
+// scanIDs drains a one-TEXT-column result set into a slice.
+//
+// ⚠ ONE LOOP FOR THE THREE AUDIENCE QUERIES (v10 review). MemberIDs,
+// MemberIDsAbove and PushRecipients differ only in a WHERE clause and then repeated
+// the same twelve lines — three places for a Close, an Err() or the nil-versus-empty
+// decision to drift, in the file whose entire subject is who receives a payload, and
+// which has already been wrong twice about exactly that. It takes the (rows, err)
+// pair so each caller stays a single statement.
+func scanIDs(rows *sql.Rows, err error) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	// ALWAYS a slice, never nil: an empty audience is a set nobody is in, and the
+	// callers range over it.
 	out := []string{}
 	for rows.Next() {
 		var id string

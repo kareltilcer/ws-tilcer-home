@@ -38,11 +38,18 @@ export function todayISO(offsetDays = 0): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/** fmtDateTime renders an RFC3339 timestamp as `d. M. yyyy HH:mm` (24-hour). */
-export function fmtDateTime(iso: string): string {
+/** fmtTime renders an RFC3339 timestamp as `HH:mm` (24-hour) — fmtDateTime's own
+ *  time half, so a screen that wants only the clock (a chat bubble) does not grow
+ *  a second spelling of it. */
+export function fmtTime(iso: string): string {
   const d = new Date(iso)
   const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getDate()}. ${d.getMonth() + 1}. ${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** fmtDateTime renders an RFC3339 timestamp as `d. M. yyyy HH:mm` (24-hour). */
+export function fmtDateTime(iso: string): string {
+  return `${fmtDate(new Date(iso))} ${fmtTime(iso)}`
 }
 
 /** monthLabel renders a 'yyyy-MM' key as a Czech month + year, e.g. "červenec 2026". */

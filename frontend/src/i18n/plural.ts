@@ -65,10 +65,15 @@ export const PLURAL = {
   // `days` above already covers; these two are the module's own nouns.
   readings: ['odečet', 'odečty', 'odečtů'],
   tariffs: ['ceník', 'ceníky', 'ceníků'],
-  // v10 — Chat. `days` above already covers the koš countdown; this is the module's
-  // own noun. ⚠ `members` is distinct from `people`: a conversation has členy, and
-  // the household has lidi — the members panel and the directory picker sit next to
-  // each other and would otherwise read as the same list. The message and
-  // conversation forms arrive with the screens that count them.
+  // v10 — Chat. `days` above already covers the koš countdown; these are the
+  // module's own nouns. ⚠ `members` is distinct from `people`: a conversation has
+  // členy, and the household has lidi — the members panel and the directory picker
+  // sit next to each other and would otherwise read as the same list.
   members: ['člen', 'členové', 'členů'],
+  // ⚠ The unread badge's accessible name, and it is a TRIPLE rather than a fixed
+  // phrase for the reason every other count label here is one (D20): shipped as
+  // `${n} nepřečtené zprávy` a screen reader said "1 nepřečtené zprávy" and "7
+  // nepřečtené zprávy". The badge itself shows only the numeral, so this string is
+  // the whole of what a screen-reader user gets.
+  unreadMessages: ['nepřečtená zpráva', 'nepřečtené zprávy', 'nepřečtených zpráv'],
 } satisfies Record<string, PluralForms>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { UserMinus } from 'lucide-react'
 import { cs } from '@/i18n/cs'
+import { fmtDate } from '@/i18n/format'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { useAuth } from '@/app/auth'
@@ -168,7 +169,7 @@ function FloorLabel({ member }: { member: ConversationMember }) {
   }
   return (
     <>
-      {cs.chat.memberSince} {dateFmt.format(new Date(member.effective_from))}
+      {cs.chat.memberSince} {fmtDate(new Date(member.effective_from))}
     </>
   )
 }
@@ -231,5 +232,3 @@ function RemoveDialog({
     </ResponsiveModal>
   )
 }
-
-const dateFmt = new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'long', year: 'numeric' })

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Message reads and writes. Every read here takes a Scope, which is the only thing
@@ -34,6 +36,16 @@ const (
 // opened); `forward` walks it again as new messages arrive.
 func (s *Store) Thread(ctx context.Context, q querier, sc Scope, direction, cursor string, limit int) ([]messageRow, bool, error) {
 	limit = NormalizeLimit(limit)
+	// ⚠ A CURSOR THIS ENDPOINT DID NOT ISSUE IS REFUSED, NOT BOUND (v10 review).
+	// It went straight into `m.id < ?`, where every UUIDv7 sorts below a cursor
+	// like `zzz` — so a truncated, stale or conversation-list cursor came back as
+	// the NEWEST page with has_more true: page one dressed as "continue from where
+	// you were", and Načíst starší looping on the same fifty messages forever.
+	// ListConversations answers this with errBadCursor and Search with 422; the
+	// thread was the one paged surface that answered it with page one.
+	if cursor != "" && !validMessageCursor(cursor) {
+		return nil, false, errBadCursor
+	}
 
 	where := []string{"m.conversation_id = ?", "m.id > ?"}
 	args := []any{sc.ConversationID, sc.Floor.ID}
@@ -94,6 +106,18 @@ func (s *Store) Thread(ctx context.Context, q querier, sc Scope, direction, curs
 		}
 	}
 	return out, hasMore, nil
+}
+
+// validMessageCursor reports whether a thread cursor could have come from this
+// endpoint: the CANONICAL spelling of a UUID, which is what a message id is.
+//
+// The canonical check is the load-bearing half. uuid.Parse also accepts the
+// braced, urn: and unhyphenated spellings, and those sort somewhere else entirely
+// against a column of canonical ids — a cursor that parses but does not round-trip
+// would be exactly the silent wrong page this guard exists to refuse.
+func validMessageCursor(cursor string) bool {
+	id, err := uuid.Parse(cursor)
+	return err == nil && id.String() == cursor
 }
 
 // messageRow is one row as the table stores it.

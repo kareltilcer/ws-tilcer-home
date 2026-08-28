@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -11,6 +11,7 @@ import {
   useChatSearch,
   useConversations,
   useCreateConversation,
+  useDeleteConversation,
   useLoadMoreConversations,
   useRestoreConversation,
 } from './api/hooks'
@@ -240,7 +241,10 @@ function ConversationRow({ conversation, selected }: { conversation: Conversatio
           // shift the row. An unread count is a reason to open something, not an
           // alarm about it.
           className="flex-none rounded-full bg-accent px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-accent-fg"
-          aria-label={`${unread} ${cs.chat.unreadLabel}`}
+          // ⚠ Through `count`, like every other number in this module and in Home
+          // (D20). The badge renders the numeral alone, so this label is all a
+          // screen reader gets — and a fixed noun made it "1 nepřečtené zprávy".
+          aria-label={count(unread, PLURAL.unreadMessages)}
         >
           {unread}
         </span>
@@ -259,6 +263,7 @@ function ConversationRow({ conversation, selected }: { conversation: Conversatio
  */
 function TrashedRow({ conversation }: { conversation: Conversation }) {
   const restore = useRestoreConversation()
+  const [purging, setPurging] = useState(false)
   return (
     <div className="flex items-center gap-3 rounded-md px-3 py-2.5">
       <span className="min-w-0 flex-1">
@@ -279,7 +284,78 @@ function TrashedRow({ conversation }: { conversation: Conversation }) {
       >
         {cs.chat.word.restore}
       </Button>
+      {/* ⚠ THE OTHER DOOR, AND THE KOŠ IS WHERE IT BELONGS (v10 review). The
+          service accepts `?hard=true` on an already-trashed room precisely so
+          Smazat natrvalo can be reached from here — and nothing could reach it:
+          the only other button lives in the thread header, which a trashed room
+          can never render, because it has left every read and /chat/{id} answers
+          404. So the row offered Obnovit or seven days, and D254's "its bytes go
+          on counting until it is really purged" had no exit. */}
+      <Button size="sm" variant="ghost" className="text-danger" onClick={() => setPurging(true)}>
+        {cs.chat.word.purge}
+      </Button>
+      <PurgeDialog
+        conversation={conversation}
+        open={purging}
+        onClose={() => setPurging(false)}
+      />
     </div>
+  )
+}
+
+/**
+ * Purging one room out of the koš.
+ *
+ * ⚠ THE NAME IS TYPED HERE TOO, and the first typing does not carry over. That one
+ * confirmed a REVERSIBLE move — the room is sitting in the koš because it worked —
+ * and this one destroys every message and file in it with no restore behind it
+ * (D253). The same prompt for the two is what makes the second one land.
+ */
+function PurgeDialog({
+  conversation,
+  open,
+  onClose,
+}: {
+  conversation: Conversation
+  open: boolean
+  onClose: () => void
+}) {
+  const [typed, setTyped] = useState('')
+  const purge = useDeleteConversation()
+
+  useEffect(() => {
+    if (open) setTyped('')
+  }, [open])
+
+  return (
+    <ResponsiveModal
+      open={open}
+      onOpenChange={(o) => !o && onClose()}
+      title={cs.chat.purgeTitle}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {cs.chat.cancel}
+          </Button>
+          <Button
+            variant="danger"
+            loading={purge.isPending}
+            disabled={typed.trim() !== conversation.name}
+            onClick={() =>
+              purge.mutate({ id: conversation.id, hard: true }, { onSuccess: onClose })
+            }
+          >
+            {cs.chat.word.purge}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-pretty">{cs.chat.purgeBody}</p>
+      <label className="mt-4 block">
+        <span className="mb-1.5 block text-sm font-semibold">{cs.chat.deleteConfirmPrompt}</span>
+        <Input value={typed} autoFocus onChange={(e) => setTyped(e.target.value)} />
+      </label>
+    </ResponsiveModal>
   )
 }
 
