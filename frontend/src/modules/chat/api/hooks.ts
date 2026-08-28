@@ -754,6 +754,14 @@ export function useMoveAttachment(conversationID?: string) {
 function invalidateAfterCleanup(qc: QueryClient, conversationID?: string): void {
   void qc.invalidateQueries({ queryKey: qk.chatStorage })
   void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
+  // ⚠ AND THE LIST, because each row now carries the room's own `bytes` and its
+  // `over_conversation_limit` mark. This set was written before those existed, so
+  // the person who did the cleaning went back to a list still wearing *Nad limitem*
+  // over the old figure — while every OTHER member's list refreshed, because the
+  // `chat_conversation.changed` frame calls invalidateLists for them. The acting
+  // tab was the only stale one, on the workflow whose whole premise is *clean until
+  // the number goes down*.
+  invalidateLists(qc)
   if (conversationID) {
     void qc.invalidateQueries({ queryKey: qk.chatMessages(conversationID) })
   }
