@@ -120,15 +120,29 @@ func (s *Service) labels(ctx context.Context) (map[string]string, error) {
 		return nil, err
 	}
 	for _, m := range members {
-		name := m.DisplayName
-		if name == "" {
-			// push.Store.Members already falls back to the email; if even that is
-			// empty there is nothing to show but the id, which label() handles.
+		if !isRealDisplayName(m) {
 			continue
 		}
-		out[m.UserID] = name
+		out[m.UserID] = m.DisplayName
 	}
 	return out, nil
+}
+
+// isRealDisplayName reports whether a directory row carries a name somebody chose,
+// as opposed to push.Store.Members' own fallback.
+//
+// ⚠ THE PROJECTION IS NOT SAFE BY CONSTRUCTION AFTER ALL, AND THIS IS WHERE THAT
+// IS FIXED (v10 review). types.go says chat's wire types carry no email because
+// there is no field to fill in — true of the SHAPE, and beside the point: when
+// `sessions.display_name` is NULL, push.Store.Members substitutes the EMAIL into
+// DisplayName (store.go), so the address arrives inside the one field chat does
+// copy. D230 makes /api/chat/directory the first surface in Home to show the
+// directory to a non-admin, which is precisely the audience that must not get it.
+//
+// The comparison is exact rather than a guess at what an address looks like: we
+// are detecting one known substitution, not validating an email.
+func isRealDisplayName(m push.Member) bool {
+	return m.DisplayName != "" && m.DisplayName != m.Email
 }
 
 // Directory is the add-member picker's data: user id and display name, and
@@ -143,9 +157,12 @@ func (s *Service) Directory(ctx context.Context) (Directory, error) {
 		return Directory{}, err
 	}
 	for _, m := range members {
-		name := m.DisplayName
-		if name == "" {
-			name = m.UserID
+		// The id, never the email — see isRealDisplayName. label()'s reasoning
+		// applies here too: one raw id somebody can look up beats an address the
+		// member never agreed to publish to the household.
+		name := m.UserID
+		if isRealDisplayName(m) {
+			name = m.DisplayName
 		}
 		out.Items = append(out.Items, DirectoryEntry{UserID: m.UserID, DisplayName: name})
 	}

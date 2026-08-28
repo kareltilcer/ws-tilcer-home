@@ -122,7 +122,7 @@ func validateBody(body string) (string, error) {
 //
 // The auto-join has already run: it is the router's own middleware (http.go), so
 // every chat request carries it rather than each service method remembering to.
-func (s *Service) ListConversations(ctx context.Context, state string) (ConversationPage, error) {
+func (s *Service) ListConversations(ctx context.Context, state, cursor string, limit int) (ConversationPage, error) {
 	actor := actorID(ctx)
 	if actor == "" {
 		return ConversationPage{}, httpx.ErrUnauthorized("")
@@ -130,7 +130,10 @@ func (s *Service) ListConversations(ctx context.Context, state string) (Conversa
 	if state != "" && state != "active" && state != "trash" {
 		return ConversationPage{}, httpx.ErrUnprocessable("Parametr state musí být active nebo trash.")
 	}
-	items, err := s.store.ListConversations(ctx, actor, state)
+	items, hasMore, err := s.store.ListConversations(ctx, actor, state, cursor, limit)
+	if errors.Is(err, errBadCursor) {
+		return ConversationPage{}, httpx.ErrUnprocessable("Neplatný kurzor.")
+	}
 	if err != nil {
 		return ConversationPage{}, err
 	}
@@ -139,7 +142,12 @@ func (s *Service) ListConversations(ctx context.Context, state string) (Conversa
 			items[i].PurgeAfter = s.purgeAfter(items[i].DeletedAt)
 		}
 	}
-	return ConversationPage{Items: items, NextCursor: nil}, nil
+	page := ConversationPage{Items: items}
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		page.NextCursor = ptr(encodeConversationCursor(last.UpdatedAt, last.ID))
+	}
+	return page, nil
 }
 
 // purgeAfter derives when the drain will destroy a trashed conversation's bytes.
@@ -281,12 +289,25 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 	actor := actorID(ctx)
 	now := nowUTC()
 	return mapScopeErr(appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		kind, memberErr := s.conversationForDestructiveVerb(ctx, tx, actor, id)
+		kind, trashed, memberErr := s.conversationForDestructiveVerb(ctx, tx, actor, id)
 		if memberErr != nil {
 			return memberErr
 		}
 		if kind == kindDefault {
 			return httpx.ErrUnprocessable("Konverzaci „Všichni“ nelze smazat.")
+		}
+		// ⚠ A SOFT DELETE OF SOMETHING ALREADY IN THE KOŠ IS REFUSED, NOT REPEATED.
+		// TrashConversation's own `deleted_at IS NULL` makes the UPDATE a no-op, so
+		// without this the request still succeeded — writing a second "přesunuta do
+		// koše" to the Log and, worse, re-queuing every key with a purge_after of
+		// now + TrashDays while deleted_at (and therefore the countdown the koš row
+		// renders) stayed put. The promise on screen and the deadline the drain
+		// holds would drift apart by a whole retention window, every time.
+		//
+		// `hard` is deliberately NOT refused: Smazat natrvalo is reached FROM the
+		// koš, and it is the one verb whose job is to act on an already-trashed room.
+		if trashed && !hard {
+			return httpx.ErrUnprocessable("Konverzace už je v koši.")
 		}
 		name, err := s.store.ConversationName(ctx, tx, id)
 		if err != nil {
@@ -327,8 +348,18 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversation, error) {
 	actor := actorID(ctx)
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if _, err := s.conversationForDestructiveVerb(ctx, tx, actor, id); err != nil {
+		_, trashed, err := s.conversationForDestructiveVerb(ctx, tx, actor, id)
+		if err != nil {
 			return err
+		}
+		// ⚠ RESTORING A ROOM THAT IS NOT IN THE KOŠ DOES NOTHING, SILENTLY. The
+		// mirror of the guard in DeleteConversation: RestoreConversation's UPDATE
+		// already lands on a row that is not trashed without changing it, so the
+		// only thing the rest of this block would add is a "obnovena z koše" event
+		// for a restore that restored nothing. Idempotent rather than 422, because
+		// a double tap on Obnovit has plainly got what it asked for.
+		if !trashed {
+			return nil
 		}
 		name, err := s.store.ConversationName(ctx, tx, id)
 		if err != nil {
@@ -373,23 +404,26 @@ func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversa
 //
 // A member's own membership is checked FIRST, so the ordinary case never depends on
 // a role at all.
-func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx, actor, id string) (string, error) {
+// It also reports whether the conversation is ALREADY in the koš, because each of
+// the three verbs needs a different answer to that: a soft delete refuses, a purge
+// proceeds (that is Smazat natrvalo, reached FROM the koš), and a restore of a live
+// room does nothing at all.
+func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx, actor, id string) (kind string, trashed bool, err error) {
 	// memberScope excludes a trashed conversation, which is right for every read
 	// and wrong for exactly these three verbs — restore and purge act ON the koš.
 	// So membership is asked without the koš predicate here.
-	var kind string
-	err := tx.QueryRowContext(ctx, `
-		SELECT c.kind FROM chat_members m
+	err = tx.QueryRowContext(ctx, `
+		SELECT c.kind, c.deleted_at IS NOT NULL FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
-		 WHERE m.conversation_id = ? AND m.user_id = ?`, id, actor).Scan(&kind)
+		 WHERE m.conversation_id = ? AND m.user_id = ?`, id, actor).Scan(&kind, &trashed)
 	if err == nil {
-		return kind, nil
+		return kind, trashed, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
+		return "", false, err
 	}
 	if !isAdminCtx(ctx) {
-		return "", ErrNotMember
+		return "", false, ErrNotMember
 	}
 	return s.store.adminScope(ctx, tx, id)
 }

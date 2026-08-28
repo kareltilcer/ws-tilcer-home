@@ -102,6 +102,17 @@ export function NastaveniPage() {
               disabled={!masterOn || !online || update.isPending}
               onChange={(v) => setCategory('summaries', v)}
             />
+            {/* v10. The backend has carried cat_chat since 02004 — the column, the
+                category, the patch field and the delivery-log kind — but this row
+                was missing, so the app-wide chat mute existed only in the API and
+                a member's one recourse was muting every conversation by hand. */}
+            <ToggleRow
+              label={cs.settings.catChat}
+              hint={cs.settings.catChatHint}
+              checked={prefs?.categories.chat ?? true}
+              disabled={!masterOn || !online || update.isPending}
+              onChange={(v) => setCategory('chat', v)}
+            />
           </div>
         </div>
       </section>

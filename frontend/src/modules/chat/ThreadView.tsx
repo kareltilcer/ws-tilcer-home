@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, BellOff, CornerUpLeft, MoreHorizontal, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
-import { Button, Spinner, Textarea } from '@/components/ui/ui'
+import { Button, Input, Spinner, Textarea } from '@/components/ui/ui'
+import { ResponsiveModal } from '@/components/ui/modal'
 import { useAuth } from '@/app/auth'
 import {
   useAdvanceRead,
   useConversation,
+  useDeleteConversation,
   useDeleteMessage,
   useEditMessage,
+  useLoadOlderMessages,
   useMessages,
+  useRenameConversation,
   useSendMessage,
 } from './api/hooks'
 import type { ChatMessage, Conversation, MessageQuote } from './api/types'
@@ -35,6 +39,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
 }) {
   const conversation = useConversation(conversationID)
   const thread = useMessages(conversationID)
+  const older = useLoadOlderMessages(conversationID)
   const advanceRead = useAdvanceRead(conversationID)
   const { identity } = useAuth()
   const me = identity?.userId ?? ''
@@ -82,6 +87,19 @@ export function ThreadView({ conversationID, onOpenMembers }: {
       <ThreadHeader conversation={room} onOpenMembers={onOpenMembers} />
 
       <div className="min-h-0 flex-1 overflow-y-auto om-scroll px-4 py-4">
+        {/* ⚠ ABOVE the floor line, and only when there IS more. The two say
+            different things and the order matters: "there is older history you can
+            load" sits above "and beyond that, history that is not yours". A thread
+            that showed only the floor line while silently holding back page two
+            explained the truncation as the membership floor. */}
+        {thread.data?.has_more && (
+          <div className="mb-4 flex justify-center">
+            <Button size="sm" variant="secondary" loading={older.isPending} onClick={() => older.mutate()}>
+              {cs.chat.loadOlder}
+            </Button>
+          </div>
+        )}
+
         <FloorLine conversation={room} />
 
         {messages.length === 0 && (
@@ -126,6 +144,14 @@ function ThreadHeader({
   conversation: Conversation
   onOpenMembers: () => void
 }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  // ⚠ Všichni is renameable and NOT deletable (D219) — the same asymmetry the
+  // service enforces with a 422. Hiding the entry is not the guard; it is what
+  // stops a member meeting the guard as an error message.
+  const isDefault = conversation.kind === 'default'
+
   return (
     <header className="flex items-center gap-2 border-b border-border px-3 py-2.5 lg:px-4">
       {/* Below 1024 the thread is a route push, so back returns to the list. The
@@ -153,7 +179,178 @@ function ThreadHeader({
         <Users size={14} aria-hidden />
         <span className="hidden sm:inline">{cs.chat.word.members}</span>
       </Button>
+
+      {/* ⚠ THE ROOM'S OWN VERBS. Without them a conversation created by mistake was
+          permanent from the UI: nothing anywhere could rename or trash one, so the
+          koš section below could only ever be empty and its Obnovit button could
+          only ever be dead. */}
+      <div className="relative flex-none">
+        <button
+          type="button"
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-label={cs.chat.word.conversation}
+          aria-expanded={menuOpen}
+          className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-s2 hover:text-fg"
+        >
+          <MoreHorizontal size={16} aria-hidden />
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 z-10 mt-1 w-52 rounded-md border border-border bg-s1 p-1 shadow-[var(--shadow)]">
+            <button
+              type="button"
+              className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-s2"
+              onClick={() => {
+                setMenuOpen(false)
+                setRenaming(true)
+              }}
+            >
+              {cs.chat.word.rename}
+            </button>
+            {!isDefault && (
+              <button
+                type="button"
+                className="block w-full rounded px-2 py-1.5 text-left text-sm text-danger hover:bg-danger/10"
+                onClick={() => {
+                  setMenuOpen(false)
+                  setDeleting(true)
+                }}
+              >
+                {cs.chat.word.deleteConversation}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <RenameDialog conversation={conversation} open={renaming} onClose={() => setRenaming(false)} />
+      <DeleteDialog conversation={conversation} open={deleting} onClose={() => setDeleting(false)} />
     </header>
+  )
+}
+
+function RenameDialog({
+  conversation,
+  open,
+  onClose,
+}: {
+  conversation: Conversation
+  open: boolean
+  onClose: () => void
+}) {
+  const [name, setName] = useState(conversation.name)
+  const rename = useRenameConversation(conversation.id)
+
+  // Re-seed each time it opens, so a cancelled edit does not persist into the next.
+  useEffect(() => {
+    if (open) setName(conversation.name)
+  }, [open, conversation.name])
+
+  const submit = () => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    rename.mutate(trimmed, { onSuccess: onClose })
+  }
+
+  return (
+    <ResponsiveModal
+      open={open}
+      onOpenChange={(o) => !o && onClose()}
+      title={cs.chat.word.rename}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {cs.chat.cancel}
+          </Button>
+          <Button variant="primary" loading={rename.isPending} onClick={submit} disabled={!name.trim()}>
+            {cs.chat.save}
+          </Button>
+        </>
+      }
+    >
+      <label className="block">
+        <span className="mb-1.5 block text-sm font-semibold">{cs.chat.word.conversation}</span>
+        <Input
+          value={name}
+          maxLength={80}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+          }}
+        />
+      </label>
+    </ResponsiveModal>
+  )
+}
+
+/**
+ * The delete confirmation.
+ *
+ * ⚠ THE NAME HAS TO BE TYPED, because any member may delete a room holding
+ * everybody else's messages and files (D253) — the koš is what makes that
+ * survivable, and the typing is what makes it deliberate.
+ *
+ * ⚠ AND BOTH DOORS ARE HERE, side by side and labelled with what each costs.
+ * *Smazat natrvalo* exists so somebody deleting a heavy conversation TO FREE SPACE
+ * is never told to come back in seven days.
+ */
+function DeleteDialog({
+  conversation,
+  open,
+  onClose,
+}: {
+  conversation: Conversation
+  open: boolean
+  onClose: () => void
+}) {
+  const [typed, setTyped] = useState('')
+  const remove = useDeleteConversation()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (open) setTyped('')
+  }, [open])
+
+  const confirmed = typed.trim() === conversation.name
+  const go = (hard: boolean) =>
+    remove.mutate(
+      { id: conversation.id, hard },
+      {
+        onSuccess: () => {
+          onClose()
+          // The room is gone from every read the moment this commits, so staying on
+          // /chat/{id} would render its own 404.
+          navigate('/chat')
+        },
+      },
+    )
+
+  return (
+    <ResponsiveModal
+      open={open}
+      onOpenChange={(o) => !o && onClose()}
+      title={cs.chat.deleteTitle}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {cs.chat.cancel}
+          </Button>
+          <Button variant="secondary" loading={remove.isPending} disabled={!confirmed} onClick={() => go(true)}>
+            {cs.chat.word.purge}
+          </Button>
+          <Button variant="danger" loading={remove.isPending} disabled={!confirmed} onClick={() => go(false)}>
+            {cs.chat.confirmDelete}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-pretty">{cs.chat.deleteBody}</p>
+      <p className="mt-2 text-sm text-muted text-pretty">{cs.chat.purgeBody}</p>
+      <label className="mt-4 block">
+        <span className="mb-1.5 block text-sm font-semibold">{cs.chat.deleteConfirmPrompt}</span>
+        <Input value={typed} autoFocus onChange={(e) => setTyped(e.target.value)} />
+      </label>
+    </ResponsiveModal>
   )
 }
 

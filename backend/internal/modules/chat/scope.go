@@ -117,30 +117,19 @@ func (s *Store) memberScope(ctx context.Context, q querier, actor, conversationI
 // should tidy up. It follows v9's D181 exactly: an admin hard-deleting a foreign
 // private item is doing a write to a row they may not read.
 //
+// It returns the koš state alongside the kind, because the three verbs that come
+// here are the only ones that ACT ON the koš and each needs a different answer to
+// "is it already in there?" — see conversationForDestructiveVerb.
+//
 // Nothing here returns a floor, because nothing here reads a message.
-func (s *Store) adminScope(ctx context.Context, q querier, conversationID string) (string, error) {
-	var kind string
-	err := q.QueryRowContext(ctx,
-		`SELECT kind FROM chat_conversations WHERE id = ?`, conversationID).Scan(&kind)
+func (s *Store) adminScope(ctx context.Context, q querier, conversationID string) (kind string, trashed bool, err error) {
+	err = q.QueryRowContext(ctx,
+		`SELECT kind, deleted_at IS NOT NULL FROM chat_conversations WHERE id = ?`,
+		conversationID).Scan(&kind, &trashed)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotMember
+		return "", false, ErrNotMember
 	}
-	return kind, err
-}
-
-// anyScope loads a conversation WITH NO ACTOR AT ALL, for background work.
-//
-// ⚠ IT IS NAMED SO THAT USING IT IS A DECISION RATHER THAN AN ACCIDENT. The drain,
-// the koš purge and thumbnail generation have no session behind them, so a
-// viewer-scoped read there returns nothing and the job silently does nothing
-// forever. §V9-12 records that this exact shape — the preview worker and the image
-// GC — was the pair v9's twenty-three-row leak table did not list, found only by
-// building it.
-//
-// PR 2 has no background job; this exists so PR 3's drain has somewhere correct to
-// go rather than reaching for memberScope with an empty actor.
-func (s *Store) conversationAnyScope(ctx context.Context, q querier, conversationID string) (string, error) {
-	return s.adminScope(ctx, q, conversationID)
+	return kind, trashed, err
 }
 
 // ---- request plumbing ----

@@ -45,7 +45,46 @@ const (
 	redactedEntityDocFold  = "document_folder"
 	redactedEntityNote     = "note"
 	redactedEntityDocument = "document"
+
+	// RedactedConversation is v10's, and it is a DIFFERENT RULE reusing the same
+	// machinery — see RedactMemberScoped.
+	RedactedConversation = "Změna v konverzaci — podrobnosti skryty"
 )
+
+// MemberScoped reports whether an entry's rendered text names something readable
+// by a MEMBERSHIP rather than by the household (v10).
+//
+// It is not the v9 private marker and must not be confused with it: a chat event
+// is not somebody's private item, and its Log row stays UNREDACTED for admins by
+// design (leak table row 12 — the Log is admin-only). What it is, is member-scoped:
+// a conversation's name is readable by the people in that conversation.
+func MemberScoped(e Entry) bool { return e.Module == ModuleChat }
+
+// RedactMemberScoped strips what a member-scoped entry NAMES, for a render whose
+// audience is chosen by ROLE rather than by membership.
+//
+// ⚠ THE PUSH RENDERER IS THE ONLY CALLER, AND THAT IS THE WHOLE POINT (v10
+// review). admin's trigger listener already had a chat case in inAppURL, dropping
+// /chat/{id} down to /chat because "the id in the notification would itself be the
+// disclosure" — while the body template, whose default IS the audit summary,
+// carried `Konverzace „Dovolená s Petrou" přejmenována` to every lock screen a
+// role-chosen audience owns. The guard was on the strictly less disclosive of the
+// two fields. This is the other half.
+//
+// Changes go for the D207 reason, unchanged: `{{change.name.new}}` is whitelisted
+// by SHAPE, so a clean summary is not enough on its own.
+func RedactMemberScoped(e Entry, changes []Change) (Entry, []Change) {
+	if !MemberScoped(e) {
+		return e, changes
+	}
+	e.Summary = RedactedConversation
+	e.EntityID = ""
+	// A fresh map rather than a delete: Entry is a value but its map is shared
+	// with the caller's copy, and redaction must never mutate the raw entry.
+	e.Meta = map[string]any{}
+	e.Redacted = true
+	return e, nil
+}
 
 // IsPrivate reports whether an entry describes a private item.
 func IsPrivate(e Entry) bool {

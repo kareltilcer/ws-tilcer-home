@@ -29,12 +29,14 @@ import type {
 // there is no cached thread to fall back on and a query firing offline would only
 // produce a spinner that never resolves. The route renders an offline state instead.
 
-export function useConversations(state?: 'active' | 'trash') {
+// `enabled` is how the koš section pays for itself only when it is opened — the
+// key still carries the state, so the two listings never share a cache entry.
+export function useConversations(state?: 'active' | 'trash', enabled = true) {
   const online = useOnline()
   return useQuery({
     queryKey: qk.chatConversations(state),
     queryFn: () => api.listConversations(state),
-    enabled: online,
+    enabled: online && enabled,
   })
 }
 
@@ -53,6 +55,50 @@ export function useMessages(id: string | undefined) {
     queryKey: qk.chatMessages(id ?? ''),
     queryFn: () => api.listMessages(id as string, { limit: 50 }),
     enabled: online && !!id,
+  })
+}
+
+/**
+ * useLoadOlderMessages walks the thread backwards, one page at a time.
+ *
+ * ⚠ WITHOUT IT THE THREAD SIMPLY STOPPED AT FIFTY. The server has always answered
+ * with `has_more` and a `next_cursor` and the spec has always documented the
+ * backward/forward paging — nothing consumed either, so the newest fifty messages
+ * were the only ones a conversation had, and the floor line at the top of the
+ * thread explained the truncation as the membership floor. It was reachable by any
+ * room that had been used for a week.
+ *
+ * ⚠ OLDER MESSAGES ARE APPENDED, NOT PREPENDED. The page is stored newest-first,
+ * so the tail is where older goes — which is also what keeps `items[0]` the newest
+ * message and therefore keeps the gap check (newestInCache) reading the same thing
+ * it read before.
+ */
+export function useLoadOlderMessages(conversationID: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const page = qc.getQueryData<MessagePage>(qk.chatMessages(conversationID))
+      if (!page?.has_more || !page.next_cursor) return null
+      return api.listMessages(conversationID, {
+        cursor: page.next_cursor,
+        direction: 'backward',
+        limit: 50,
+      })
+    },
+    onSuccess: (older) => {
+      if (!older) return
+      qc.setQueryData<MessagePage>(qk.chatMessages(conversationID), (old) => {
+        if (!old) return old
+        // Idempotent by id, for the same reason appendMessage is: a page fetched
+        // twice (a double click, a retry) must not double the thread.
+        const seen = new Set(old.items.map((m) => m.id))
+        return {
+          items: [...old.items, ...older.items.filter((m) => !seen.has(m.id))],
+          next_cursor: older.next_cursor,
+          has_more: older.has_more,
+        }
+      })
+    },
   })
 }
 

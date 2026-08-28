@@ -587,6 +587,8 @@ export interface PushCategories {
   broadcast: boolean
   triggers: boolean
   summaries: boolean
+  /** v10's fourth bucket (cat_chat). Defaults on, like the other three. */
+  chat: boolean
 }
 
 export interface PushSubscriptionInfo {

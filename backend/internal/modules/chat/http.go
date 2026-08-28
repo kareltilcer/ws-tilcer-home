@@ -81,7 +81,9 @@ func (h *Handler) autoJoin(next http.Handler) http.Handler {
 // ---- conversations ----
 
 func (h *Handler) listConversations(w http.ResponseWriter, r *http.Request) {
-	page, err := h.svc.ListConversations(r.Context(), r.URL.Query().Get("state"))
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	page, err := h.svc.ListConversations(r.Context(), q.Get("state"), q.Get("cursor"), limit)
 	respond(w, http.StatusOK, page, err)
 }
 

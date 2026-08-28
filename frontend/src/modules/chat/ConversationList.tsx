@@ -1,13 +1,18 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Search, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Input } from '@/components/ui/ui'
-import { useConversations, useCreateConversation, useRestoreConversation } from './api/hooks'
+import {
+  useChatSearch,
+  useConversations,
+  useCreateConversation,
+  useRestoreConversation,
+} from './api/hooks'
 import type { Conversation } from './api/types'
 
 /**
@@ -21,8 +26,17 @@ import type { Conversation } from './api/types'
  */
 export function ConversationList({ activeID }: { activeID?: string }) {
   const active = useConversations('active')
-  const trashed = useConversations('trash')
   const [creating, setCreating] = useState(false)
+  const [query, setQuery] = useState('')
+  // ⚠ THE KOŠ IS FETCHED ONLY WHEN IT IS OPENED. It used to be a second request on
+  // every mount and on every chatAll invalidation — create, rename, delete,
+  // restore, remove-member and every membership frame — for a section that renders
+  // only when it is non-empty, in the module whose whole live-sync design is
+  // justified by counting requests.
+  const [trashOpen, setTrashOpen] = useState(false)
+  const trashed = useConversations('trash', trashOpen)
+
+  const searching = query.trim().length > 0
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -34,49 +48,136 @@ export function ConversationList({ activeID }: { activeID?: string }) {
         </Button>
       </div>
 
+      {/* ⚠ SEARCH LIVES HERE, over the whole list, because a hit spans conversations
+          — the server's one MATCH carries the membership join and the per-row floor
+          precisely so it can (D251). Scoping the box to the open thread would throw
+          that away. */}
+      <div className="border-b border-border px-3 py-2">
+        <div className="relative">
+          <Search size={14} aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+          <Input
+            value={query}
+            type="search"
+            className="pl-8"
+            placeholder={cs.chat.searchPlaceholder}
+            aria-label={cs.chat.searchPlaceholder}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto om-scroll">
-        {active.isPending && (
-          <div className="grid place-items-center py-10 text-muted">
-            <Spinner />
-          </div>
-        )}
+        {searching ? (
+          <SearchResults query={query} />
+        ) : (
+          <>
+            {active.isPending && (
+              <div className="grid place-items-center py-10 text-muted">
+                <Spinner />
+              </div>
+            )}
 
-        {active.data?.items.length === 0 && !active.isPending && (
-          <div className="px-4 py-8 text-center">
-            <div className="mb-1.5 text-sm font-bold">{cs.chat.emptyTitle}</div>
-            <p className="text-sm text-muted text-pretty">{cs.chat.emptyBody}</p>
-          </div>
-        )}
+            {active.data?.items.length === 0 && !active.isPending && (
+              <div className="px-4 py-8 text-center">
+                <div className="mb-1.5 text-sm font-bold">{cs.chat.emptyTitle}</div>
+                <p className="text-sm text-muted text-pretty">{cs.chat.emptyBody}</p>
+              </div>
+            )}
 
-        <ul className="p-2">
-          {active.data?.items.map((c) => (
-            <li key={c.id}>
-              <ConversationRow conversation={c} selected={c.id === activeID} />
-            </li>
-          ))}
-        </ul>
-
-        {/* The koš, as its own section (D253). A trashed conversation has left every
-            other surface entirely, so this is the only place it appears at all. */}
-        {(trashed.data?.items.length ?? 0) > 0 && (
-          <div className="border-t border-border p-2">
-            <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-bold uppercase tracking-wide text-muted">
-              <Trash2 size={12} aria-hidden />
-              {cs.chat.trashSectionTitle}
-            </div>
-            <ul>
-              {trashed.data?.items.map((c) => (
+            <ul className="p-2">
+              {active.data?.items.map((c) => (
                 <li key={c.id}>
-                  <TrashedRow conversation={c} />
+                  <ConversationRow conversation={c} selected={c.id === activeID} />
                 </li>
               ))}
             </ul>
-          </div>
+
+            {/* The koš, as its own section (D253). A trashed conversation has left
+                every other surface entirely, so this is the only place it appears at
+                all — which is why the section header is always here to be opened,
+                rather than appearing only once something is in it. */}
+            <div className="border-t border-border p-2">
+              <button
+                type="button"
+                onClick={() => setTrashOpen((v) => !v)}
+                aria-expanded={trashOpen}
+                className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs font-bold uppercase tracking-wide text-muted hover:bg-s2 hover:text-fg"
+              >
+                <Trash2 size={12} aria-hidden />
+                {cs.chat.trashSectionTitle}
+              </button>
+              {trashOpen && (
+                <>
+                  {trashed.isPending && (
+                    <div className="grid place-items-center py-4 text-muted">
+                      <Spinner />
+                    </div>
+                  )}
+                  {trashed.data?.items.length === 0 && (
+                    <p className="px-2 py-2 text-xs text-muted">{cs.chat.trashEmpty}</p>
+                  )}
+                  <ul>
+                    {trashed.data?.items.map((c) => (
+                      <li key={c.id}>
+                        <TrashedRow conversation={c} />
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          </>
         )}
       </div>
 
       <NewConversationDialog open={creating} onOpenChange={setCreating} />
     </div>
+  )
+}
+
+/**
+ * Search hits, in place of the list.
+ *
+ * ⚠ SINGLE PAGE, AND THE SCREEN SAYS SO. The ordering is relevance and a keyset
+ * cursor is an id, which does not locate a position in a rank ordering — the server
+ * answers a cursor with 422 rather than serving page one forever, so there is
+ * deliberately no Load-more here and a line of copy explains the absence.
+ */
+function SearchResults({ query }: { query: string }) {
+  const hits = useChatSearch(query)
+
+  if (hits.isPending) {
+    return (
+      <div className="grid place-items-center py-10 text-muted">
+        <Spinner />
+      </div>
+    )
+  }
+  if (!hits.data?.items.length) {
+    return <p className="px-4 py-8 text-center text-sm text-muted">{cs.chat.searchEmpty}</p>
+  }
+  return (
+    <>
+      <ul className="p-2">
+        {hits.data.items.map((h) => (
+          <li key={h.message_id}>
+            <Link
+              to={`/chat/${h.conversation_id}`}
+              className="block rounded-md px-3 py-2.5 text-muted hover:bg-s2 hover:text-fg"
+            >
+              <span className="flex items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs font-bold text-fg">
+                  {h.conversation_name}
+                </span>
+                <span className="flex-none text-[11px] text-subtle">{h.author_label}</span>
+              </span>
+              <span className="mt-0.5 block break-words text-sm">{h.snippet}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <p className="px-4 pb-4 text-xs text-muted text-pretty">{cs.chat.searchSinglePage}</p>
+    </>
   )
 }
 

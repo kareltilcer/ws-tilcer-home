@@ -168,15 +168,14 @@ func (s *Store) Quote(ctx context.Context, q querier, sc Scope, parentID string,
 // excerpt is the quote's first line or so.
 const excerptRunes = 120
 
+// The truncation itself is truncateRunes (push.go) — the same rune slice, the same
+// trailing-space trim, the same ellipsis. Two spellings of it drift, and the two
+// callers are the quote excerpt and the push preview, which render the same body.
 func excerpt(body string) string {
 	if i := strings.IndexAny(body, "\r\n"); i >= 0 {
 		body = body[:i]
 	}
-	runes := []rune(body)
-	if len(runes) <= excerptRunes {
-		return body
-	}
-	return strings.TrimRight(string(runes[:excerptRunes]), " ") + "…"
+	return truncateRunes(body, excerptRunes)
 }
 
 // InsertMessage writes one message.

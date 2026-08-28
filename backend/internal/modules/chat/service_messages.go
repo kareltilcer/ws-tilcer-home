@@ -104,7 +104,7 @@ func (s *Service) quoteMap(ctx context.Context, q querier, sc Scope, rows []mess
 	found, err := q.QueryContext(ctx, `
 		SELECT id, author_id, body, created_at, deleted_at
 		  FROM chat_messages
-		 WHERE conversation_id = ? AND id > ? AND id IN (`+placeholders(len(wanted))+`)`, ids...)
+		 WHERE conversation_id = ? AND id > ? AND id IN (`+appdb.Placeholders(len(wanted))+`)`, ids...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,9 +169,21 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, in Mes
 		return Message{}, err
 	}
 
+	// ⚠ id AND now ARE MINTED INSIDE THE TRANSACTION, BELOW, AND THAT IS THE POINT
+	// (v10 review). A UUIDv7 minted before the tx orders by the moment the handler
+	// reached this line, not by the moment the row committed — and the pool is
+	// capped at ONE connection (platform/db), so a request that mints its id and
+	// then waits for that connection can commit AFTER a request whose id is larger.
+	// The message then sorts BELOW one already delivered: the thread reorders on
+	// the next refetch, and — because created_at is minted with it — a reader whose
+	// marker already passed the other message never counts it as unread.
+	//
+	// The tx is where the conversation's sequence is decided anyway: InsertMessage
+	// reads MAX(id) there for prev_message_id. Minting beside that read is what
+	// makes id order and commit order the same order.
 	var (
-		id        = idgen.New()
-		now       = nowUTC()
+		id        string
+		now       string
 		prev      *string
 		audience  []string
 		convName  string
@@ -188,6 +200,7 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, in Mes
 		if err != nil {
 			return err
 		}
+		id, now = idgen.New(), nowUTC()
 		sentScope = sc
 		if replyTo != nil {
 			// The parent must be one THIS CALLER can read: same conversation, above
@@ -466,11 +479,19 @@ func (s *Service) Search(ctx context.Context, query, conversationID, cursor stri
 		return SearchPage{}, httpx.ErrUnprocessable(
 			"Výsledky hledání se řadí podle relevance a stránkovat je kurzorem nelze.")
 	}
+	// ⚠ SANITISED BEFORE IT REACHES THE MATCH, and an unsearchable query is an
+	// EMPTY PAGE rather than a MATCH on the empty string, whose behaviour FTS5
+	// leaves unspecified. Somebody searching `:-)` gets no results; before this
+	// they got a 500.
+	match := ftsQuery(query)
+	if match == "" {
+		return SearchPage{Items: []SearchHit{}, NextCursor: nil}, nil
+	}
 	labels, err := s.labels(ctx)
 	if err != nil {
 		return SearchPage{}, err
 	}
-	items, err := s.store.Search(ctx, actor, query, conversationID, limit, labels)
+	items, err := s.store.Search(ctx, actor, match, conversationID, limit, labels)
 	if err != nil {
 		return SearchPage{}, err
 	}

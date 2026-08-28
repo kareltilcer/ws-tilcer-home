@@ -331,6 +331,11 @@ export const cs = {
     catTriggersHint: 'Když se v domácnosti něco změní.',
     catSummaries: 'Souhrny',
     catSummariesHint: 'Pravidelné přehledy, třeba ranní.',
+    // v10 — the app-wide half of chat's two mutes. The per-conversation one lives
+    // in the members panel; the hint says which is which, because "ztlumit" in two
+    // places with two scopes is otherwise the same word twice.
+    catChat: 'Zprávy v chatu',
+    catChatHint: 'Nové zprávy v konverzacích. Jednotlivou konverzaci lze ztlumit zvlášť.',
     selfTest: 'Poslat zkušební oznámení',
     selfTestSent: 'Zkušební oznámení odesláno na toto zařízení.',
     selfTestFailed: 'Zkušební oznámení se nepodařilo doručit. Zkuste oznámení vypnout a znovu zapnout.',
@@ -1385,6 +1390,7 @@ export const cs = {
     word: {
       conversation: 'Konverzace',
       newConversation: 'Nová konverzace',
+      rename: 'Přejmenovat',
       members: 'Členové',
       addMember: 'Přidat člena',
       removeMember: 'Odebrat z konverzace',

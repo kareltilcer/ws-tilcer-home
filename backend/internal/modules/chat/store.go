@@ -8,15 +8,11 @@ import (
 )
 
 // Store is chat's data access. Every method that touches a conversation's contents
-// goes through memberScope first (see scope.go); the exceptions are named for what
-// they are — adminScope for restore/purge, conversationAnyScope for background work.
+// goes through memberScope first (see scope.go); the one exception is named for
+// what it is — adminScope, for restore and purge.
 type Store struct{ db *sql.DB }
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
-
-// DB exposes the pool to this module's own read paths. It is NOT a way around the
-// scope: every caller still passes an actor.
-func (s *Store) DB() *sql.DB { return s.db }
 
 const (
 	kindDefault = "default"
@@ -65,12 +61,37 @@ type conversationRow struct {
 // The unread count is computed in SQL against MAX(last_read_at, effective_from) so
 // that a member added yesterday never opens a conversation to a four-figure badge
 // (D250). COALESCE, not a branch: last_read_at is NULL until they first read.
-func (s *Store) ListConversations(ctx context.Context, actor, state string) ([]Conversation, error) {
+//
+// ⚠ IT IS PAGED, AND `limit`/`cursor` ARE HONOURED RATHER THAN ACCEPTED AND
+// DROPPED. The spec has declared both since 0.12.0 along with `next_cursor`, and a
+// list that takes a cursor and returns everything is page one dressed as the whole
+// result — the failure this module refuses to commit one file away, where Search
+// answers a cursor it cannot honour with 422. The keyset rides the ORDER BY it
+// already had: (updated_at, id) descending, which is why the cursor carries both.
+func (s *Store) ListConversations(ctx context.Context, actor, state, cursor string, limit int) ([]Conversation, bool, error) {
+	limit = NormalizeLimit(limit)
 	trashed := state == "trash"
 	koš := "c.deleted_at IS NULL"
 	if trashed {
 		koš = "c.deleted_at IS NOT NULL"
 	}
+	// The unread subquery's `?` is written before the WHERE clause, so `actor`
+	// binds twice, in that order.
+	args := []any{actor, actor}
+	keyset := ""
+	if cursor != "" {
+		at, id, ok := decodeConversationCursor(cursor)
+		if !ok {
+			return nil, false, errBadCursor
+		}
+		// Spelled out rather than as a row value: the comparison has to match the
+		// ORDER BY exactly, and an explicit form says so to the next reader.
+		keyset = ` AND (c.updated_at < ? OR (c.updated_at = ? AND c.id < ?))`
+		args = append(args, at, at, id)
+	}
+	// One row over the limit answers has_more without a second COUNT that could
+	// disagree with it — the same shape Thread uses.
+	args = append(args, limit+1)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.kind, c.name, c.created_by, c.created_at, c.updated_at,
 		       c.deleted_at,
@@ -84,10 +105,11 @@ func (s *Store) ListConversations(ctx context.Context, actor, state string) ([]C
 		           AND x.created_at > COALESCE(m.last_read_at, ''))
 		  FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
-		 WHERE m.user_id = ? AND `+koš+`
-		 ORDER BY c.updated_at DESC, c.id DESC`, actor, actor)
+		 WHERE m.user_id = ? AND `+koš+keyset+`
+		 ORDER BY c.updated_at DESC, c.id DESC
+		 LIMIT ?`, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -104,7 +126,7 @@ func (s *Store) ListConversations(ctx context.Context, actor, state string) ([]C
 		)
 		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 			&r.DeletedAt, &effFrom, &mutedInt, &members, &unread); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		c := Conversation{
 			ID: r.ID, Kind: r.Kind, Name: r.Name,
@@ -125,7 +147,32 @@ func (s *Store) ListConversations(ctx context.Context, actor, state string) ([]C
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
+}
+
+// errBadCursor is a cursor that did not come from this endpoint. It is REFUSED
+// rather than ignored, for the reason Search states at length: a parameter that is
+// silently dropped returns page one forever and reads as the end of the results.
+var errBadCursor = errors.New("chat: malformed cursor")
+
+// The conversation cursor carries BOTH ordering columns, because the ORDER BY does:
+// `updated_at` alone is not unique — a send bumps it, and two rooms bumped in the
+// same millisecond would page over each other or skip one.
+func encodeConversationCursor(updatedAt, id string) string { return updatedAt + "|" + id }
+
+func decodeConversationCursor(cursor string) (updatedAt, id string, ok bool) {
+	at, rest, found := strings.Cut(cursor, "|")
+	if !found || at == "" || rest == "" {
+		return "", "", false
+	}
+	return at, rest, true
 }
 
 // GetConversation loads one room for a member. The scope has already refused a
@@ -432,11 +479,3 @@ func nullStr(v sql.NullString) *string {
 }
 
 func ptr[T any](v T) *T { return &v }
-
-// placeholders builds "?,?,?" for an IN clause of n arguments.
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
-}
