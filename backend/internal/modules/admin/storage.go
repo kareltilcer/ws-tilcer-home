@@ -39,6 +39,10 @@ type StorageSnapshot struct {
 	Replica      StorageReplica  `json:"replica"`
 	Backup       StorageBackup   `json:"backup"`
 	Warning      StorageWarning  `json:"warning"`
+	// Chat is v10's block (storage_chat.go). Omitted entirely when no module
+	// reports storage groups — a household running a build without chat gets no
+	// empty block rather than one full of zeroes it cannot explain.
+	Chat *StorageChat `json:"chat,omitempty"`
 }
 
 type StorageDatabase struct {
@@ -339,7 +343,27 @@ func (s *StorageService) compute(ctx context.Context) (*StorageSnapshot, error) 
 	// prefixes, resolved once above rather than restated here.
 	out.Backup = s.measureBackup(ctx, out.Blobs)
 	out.Warning = s.warning(out.Blobs)
+	// v10: the chat block, from the catalog's GroupSource plus the two DB-backed
+	// thresholds. Nil when no module reports groups, so a household without chat
+	// gets no empty block rather than one full of zeroes.
+	out.Chat = s.measureChat(ctx)
 	return out, nil
+}
+
+// Invalidate drops the cached snapshot.
+//
+// ⚠ IT EXISTS FOR ONE CALLER: saving a threshold (SetThresholds). The two limits
+// ride the snapshot rather than having a GET of their own, so a save followed by
+// the page re-reading a 60-second-old cache shows the OLD number back — which reads
+// as "it did not take", on a field that autosaves on blur and has no Save button to
+// press again.
+func (s *StorageService) Invalidate() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.cached, s.cachedAt = nil, time.Time{}
+	s.mu.Unlock()
 }
 
 func (s *StorageService) measureDatabase(ctx context.Context) (StorageDatabase, error) {

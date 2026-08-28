@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 // TargetedNotifier publishes a websocket change to a NAMED SET of members after
@@ -32,6 +34,32 @@ type Options struct {
 	// the koš before the drain destroys its bytes. Chat's only env var.
 	TrashDays int
 	Logger    *slog.Logger
+
+	// Blob is the primary object store, under the `chat/` prefix (D229). Nil in a
+	// host that wires none: uploads then refuse and the delivery routes 404, which
+	// is the same shape `documents` takes.
+	Blob blobstore.BlobStore
+	// Sink is `documents` accepting custody, handed over at composition as an
+	// OPTIONAL dependency (D238/D239).
+	//
+	// ⚠ NIL IS A SUPPORTED STATE AND IT MEANS 501, NEVER A FALLBACK TO DELETE. A
+	// capability that silently becomes a different, DESTRUCTIVE capability is worse
+	// than one that is plainly absent — so the move refuses and the UI renders no
+	// button.
+	Sink storage.BlobSink
+	// Upload is the per-file cap and the thumbnail toolchain, all of it read from
+	// Dokumenty's configuration (D228). There is deliberately no HOME_CHAT_*
+	// equivalent of any of it.
+	Upload UploadOptions
+}
+
+// UploadOptions bounds an attachment and describes how to thumbnail it.
+type UploadOptions struct {
+	// MaxBytes is HOME_DOCS_MAX_UPLOAD_MB in bytes — Dokumenty's cap, shared on
+	// purpose so every chat attachment is movable into Dokumenty by construction.
+	MaxBytes int64
+	TempDir  string
+	Thumb    ThumbOptions
 }
 
 // Service orchestrates chat: validate → memberScope → WithTx → notify + push.
@@ -51,6 +79,21 @@ type Service struct {
 	directory DirectorySource
 	trashDays int
 	logger    *slog.Logger
+	blob      blobstore.BlobStore
+	blobSink  storage.BlobSink
+	upload    UploadOptions
+	// moveFault is the fault-injection seam for the custody transfer, nil in
+	// production and set only by tests in this package.
+	//
+	// ⚠ IT EXISTS BECAUSE THE MOVE IS THE ONE THING IN v10 THAT CAN DESTROY DATA
+	// SILENTLY, and the acceptance criteria ask for a failure injected at each of
+	// its five steps with the resulting state asserted and the move re-run from it.
+	// Steps 2 and 3 live inside the sink and a fake sink covers them; steps 4 and 5
+	// are chat's own SQLite write and object delete, and there is no honest way to
+	// make those fail from outside. A nil-by-default hook is cheaper than the
+	// alternative — shipping the matrix untested, on the only path in this version
+	// that can lose a file.
+	moveFault func(step moveStep) error
 	// dir memoises the directory projection for directoryTTL — see push.go. It is
 	// why a Service must never be copied.
 	dir directoryCache
@@ -66,10 +109,16 @@ func NewService(db *sql.DB, sink audit.Sink, notifyTo TargetedNotifier, pusher p
 	if opts.TrashDays < 1 {
 		opts.TrashDays = 7
 	}
+	if opts.Upload.MaxBytes <= 0 {
+		// The documents default, restated rather than imported: a host that wires no
+		// upload options still gets D228's cap and not an unbounded one.
+		opts.Upload.MaxBytes = 50 << 20
+	}
 	return &Service{
 		db: db, store: NewStore(db), sink: sink, notifyTo: notifyTo,
 		pusher: pusher, directory: directory,
 		trashDays: opts.TrashDays, logger: opts.Logger,
+		blob: opts.Blob, blobSink: opts.Sink, upload: opts.Upload,
 	}
 }
 

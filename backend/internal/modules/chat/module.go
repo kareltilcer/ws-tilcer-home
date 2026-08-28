@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 
@@ -37,11 +38,38 @@ var MigrationsFS embed.FS
 // (v8's trap). Third version running with that file untouched.
 type Module struct {
 	handler *Handler
+	svc     *Service
 }
 
 // NewModule builds the chat module over svc.
 func NewModule(svc *Service) *Module {
-	return &Module{handler: NewHandler(svc)}
+	return &Module{handler: NewHandler(svc), svc: svc}
+}
+
+// StorageBlobs and StorageGroups forward to the service for the storage catalog.
+//
+// ⚠ THEIR ABSENCE IS SILENT — the registry duck-types both interfaces, so a module
+// that stops implementing one is simply skipped and its bytes vanish from the page
+// with nothing failing to compile. That is the §V9-12 trap
+// (TestRealModulesImplementTheStorageCatalog) and it is why the wiring is asserted
+// by a test rather than trusted.
+//
+// ⚠ THE NIL GUARDS ARE FOR bootstrap.StorageSourcesForTest, which builds a
+// ZERO-VALUED module to read StorageTables() — a static list that touches nothing.
+// The guards mean a future caller that reaches further gets an empty answer rather
+// than a nil dereference inside the completeness test.
+func (m *Module) StorageBlobs(ctx context.Context) ([]storage.BlobUsage, error) {
+	if m.svc == nil {
+		return nil, nil
+	}
+	return m.svc.StorageBlobs(ctx)
+}
+
+func (m *Module) StorageGroups(ctx context.Context) ([]storage.GroupUsage, error) {
+	if m.svc == nil {
+		return nil, nil
+	}
+	return m.svc.StorageGroups(ctx)
 }
 
 func (m *Module) Name() string { return "chat" }
@@ -59,10 +87,27 @@ func (m *Module) Migrations() fs.FS { return MigrationsFS }
 // conversation in the house. TestChatMessagesAreNotAudited asserts it so the gap is
 // never closed by somebody who reads it as an oversight.
 //
-// ⚠ SEVEN HERE, NOT ELEVEN. The three chat.attachment.* verbs and the threshold
-// verb belong to the code that emits them, which is PR 3 — a declared action that
-// can never fire is a dead entry in the trigger composer's picker, offering an
-// admin a rule that will never run.
+// ⚠ ELEVEN NOW: PR 3 adds the three chat.attachment.* verbs and the threshold one.
+// PR 2 declared seven deliberately, because a declared action that can never fire is
+// a dead entry in the trigger composer's picker — an admin offered a rule that will
+// never run. These four are declared in the PR that makes them fire.
+//
+// ⚠ ATTACHMENTS ARE AUDITED ALTHOUGH THE MESSAGES CARRYING THEM ARE NOT. That looks
+// inconsistent and is not: the BYTES are what the two thresholds, the clean-up page
+// and the storage register exist for, and "who uploaded that 40 MB video, and when"
+// is the question the whole storage half of v10 answers. `chat.attachment.uploaded`
+// carries the filename and the conversation name; no event in this module ever
+// carries message text.
+//
+// ⚠ `threshold.update` IS DECLARED HERE AND EMITTED BY `admin`, and that is not a
+// mistake. The write happens on an admin route (PUT /api/admin/storage/thresholds)
+// because an admin owns the setting, but the ACTION is chat's — the same shape D255
+// uses for restore and purge, where an admin's verb over a chat room stays a chat
+// event. `admin` writes it with audit.ModuleChat and the catalog is what makes the
+// two agree.
+//
+// ⚠ AND IT IS `threshold.update`, NOT `settings.updated` (D263, from the design
+// bundle, which is later than the PRD and wins on this point).
 //
 // Structural changes ARE audited, and the asymmetry with messages is deliberate
 // rather than inconsistent: who created, renamed, trashed or purged a room, and who
@@ -72,6 +117,8 @@ func (m *Module) AuditActions() []string {
 		"conversation.created", "conversation.renamed", "conversation.deleted",
 		"conversation.restored", "conversation.purged",
 		"member.added", "member.removed",
+		"attachment.uploaded", "attachment.removed", "attachment.moved",
+		"threshold.update",
 	}
 }
 

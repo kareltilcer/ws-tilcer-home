@@ -286,11 +286,6 @@ func run(logger *slog.Logger) error {
 	// pushSvc, as the notification channel. Chat narrows the directory to user id
 	// and display name at its own boundary, because /api/chat/directory is the
 	// first surface in Home that shows it to a non-admin (D230).
-	chatSvc := chat.NewService(sqldb, sink, hub.NotifyTo, pushSvc, pushStore, chat.Options{
-		TrashDays: cfg.ChatTrashDays,
-		Logger:    logger,
-	})
-
 	// documents (v4) is the first module with bytes outside SQLite: it needs an object
 	// store, an async preview worker, and — because Litestream cannot back up a blob
 	// bucket — its own mirror/reconciliation job (D45).
@@ -304,6 +299,41 @@ func run(logger *slog.Logger) error {
 		PreviewEnabled: cfg.Docs.PreviewEnabled,
 		PublicBaseURL:  cfg.Docs.PublicBaseURL,
 	}, logger)
+
+	// chat (v10) is constructed AFTER documents, and the order is the dependency:
+	// `documents` is chat's `storage.BlobSink` — the receiving half of the move
+	// (D238) — handed over as a plain interface value at composition, because
+	// internal/arch forbids the two modules from importing each other.
+	//
+	// ⚠ IT IS OPTIONAL AND NIL MEANS 501, NEVER A FALLBACK TO DELETE (D239). Wiring
+	// the wrong VALUE here compiles and passes every test — §V9-12 records a catalog
+	// method landing on the wrong type, everything green, and the page reporting
+	// 0 B — so TestDocumentsImplementsBlobSink pins the interface and this line is
+	// the one place the value is chosen.
+	//
+	// ⚠ AND THE UPLOAD SETTINGS ARE DOKUMENTY'S, DELIBERATELY (D228). The per-file
+	// cap is HOME_DOCS_MAX_UPLOAD_MB because a file above Dokumenty's cap could never
+	// be MOVED into Dokumenty — the clean-up page's headline action would fail on
+	// exactly the files heavy enough to have caused the overrun. The thumbnail
+	// toolchain is shared for the same reason there is only one of it in the image.
+	chatSvc := chat.NewService(sqldb, sink, hub.NotifyTo, pushSvc, pushStore, chat.Options{
+		TrashDays: cfg.ChatTrashDays,
+		Logger:    logger,
+		Blob:      docsBlob,
+		Sink:      docsSvc,
+		Upload: chat.UploadOptions{
+			MaxBytes: int64(cfg.Docs.MaxUploadMB) << 20,
+			// TempDir stays the OS default, as it does for Dokumenty: nothing in this
+			// image configures one, and a staged upload lives for the length of one
+			// request.
+			Thumb: chat.ThumbOptions{
+				CwebpPath:      cfg.Docs.CwebpPath,
+				MaxPx:          cfg.Docs.ThumbMaxPx,
+				MaxImagePixels: cfg.Docs.ImageMaxMegapixels * 1_000_000,
+
+			},
+		},
+	})
 
 	// notes (v4.1) gained inline images: the bytes reuse the documents object store
 	// under a distinct note-images/ prefix (each module's reconciliation is prefix-
@@ -474,6 +504,20 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Info("garden: weather poll disabled (HOME_GARDEN_WEATHER_ENABLED=false) — manual frost dates only")
 	}
+	// v10's ONE scheduler job, and it is chat's only reason for taking
+	// platform/scheduler at all (D247). Every path in chat that destroys bytes
+	// enqueues into chat_deleted_keys with a purge_after; this drains what is due,
+	// then purges the conversations whose koš window has elapsed — in that order,
+	// inside one job, so the bytes go before the rows that pointed at them.
+	//
+	// ⚠ THE CLEAN-UP PAGE IS THE EXCEPTION AND DELETES INLINE. The workflow there is
+	// *clean until the number goes down*, and a figure lagging fifteen minutes behind
+	// the button makes the page unusable — while a conversation with four hundred
+	// attachments is exactly the case that must not block a request.
+	//
+	// ⚠ THE JOB HAS NO ACTOR, which is the hazard §V10-4a names: every load it makes
+	// is an explicit any-membership variant (chat/drain.go).
+	sched.RegisterJob("chat.drain", chat.DrainInterval, chatSvc.DrainJob)
 	sched.Start(bgCtx)
 
 	// Deliveries are operational, not audit (D64): prune them on boot, the same

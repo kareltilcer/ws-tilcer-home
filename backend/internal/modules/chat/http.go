@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,7 +49,20 @@ func (h *Handler) Mount(r chi.Router) {
 		c.Patch("/messages/{id}", h.editMessage)
 		c.Delete("/messages/{id}", h.deleteMessage)
 
+		// ⚠ HEAD IS ROUTED EXPLICITLY BESIDE GET, and it is not decoration. chi does
+		// not answer HEAD from a GET route, and the refusal has to be identical on
+		// both: a HEAD-only oracle still answers "does this attachment exist" for a
+		// conversation the caller may not open, which is the question D217 closes.
+		c.Get("/attachments/{id}/raw", h.attachmentRaw)
+		c.Head("/attachments/{id}/raw", h.attachmentRaw)
+		c.Get("/attachments/{id}/thumbnail", h.attachmentThumbnail)
+		c.Head("/attachments/{id}/thumbnail", h.attachmentThumbnail)
+		c.Delete("/attachments/{id}", h.removeAttachment)
+		c.Post("/attachments/{id}/move", h.moveAttachment)
+
 		c.Get("/search", h.search)
+		c.Get("/storage", h.storage)
+		c.Get("/cleanup", h.cleanup)
 		c.Get("/directory", h.directory)
 	})
 }
@@ -191,12 +205,26 @@ func (h *Handler) thread(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, page, err)
 }
 
-// sendMessage takes JSON only in PR 2.
+// sendMessage takes JSON, or multipart/form-data when the message carries files.
 //
-// ⚠ The multipart branch is PR 3's (D224: one request either way, never an
-// upload-then-reference pair). A client that sends multipart here gets the ordinary
-// decode refusal rather than a half-implemented upload.
+// ⚠ ONE REQUEST EITHER WAY, NEVER AN UPLOAD-THEN-REFERENCE PAIR (D224). A two-step
+// flow orphans an object every time the second step does not happen, and chat has
+// no reconciliation pass to find one — `documents` has a mirror job that sweeps its
+// prefix and chat deliberately has neither (D229).
+//
+// The branch is on the request's own Content-Type rather than on a query flag: it
+// is the one signal that is already correct in every client, including curl.
 func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
+	if isMultipart(r) {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			httpx.WriteError(w, httpx.ErrUnprocessable("Poškozený multipart požadavek."))
+			return
+		}
+		m, err := h.svc.SendMessageMultipart(r.Context(), chi.URLParam(r, "id"), mr)
+		respond(w, http.StatusCreated, m, err)
+		return
+	}
 	var in MessageCreate
 	if err := httpx.DecodeJSON(r, &in); err != nil {
 		httpx.WriteError(w, httpx.ErrUnprocessable(err.Error()))
@@ -204,6 +232,49 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.svc.SendMessage(r.Context(), chi.URLParam(r, "id"), in)
 	respond(w, http.StatusCreated, m, err)
+}
+
+func isMultipart(r *http.Request) bool {
+	ct, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && ct == "multipart/form-data"
+}
+
+// ---- attachments ----
+
+func (h *Handler) attachmentRaw(w http.ResponseWriter, r *http.Request) {
+	h.serveAttachment(w, r, chi.URLParam(r, "id"), contentRaw)
+}
+
+func (h *Handler) attachmentThumbnail(w http.ResponseWriter, r *http.Request) {
+	h.serveAttachment(w, r, chi.URLParam(r, "id"), contentThumbnail)
+}
+
+func (h *Handler) removeAttachment(w http.ResponseWriter, r *http.Request) {
+	respondNoContent(w, h.svc.RemoveAttachment(r.Context(), chi.URLParam(r, "id")))
+}
+
+func (h *Handler) moveAttachment(w http.ResponseWriter, r *http.Request) {
+	var in AttachmentMove
+	if err := httpx.DecodeJSON(r, &in); err != nil {
+		httpx.WriteError(w, httpx.ErrUnprocessable(err.Error()))
+		return
+	}
+	a, err := h.svc.MoveAttachment(r.Context(), chi.URLParam(r, "id"), in.FolderID)
+	respond(w, http.StatusOK, a, err)
+}
+
+// ---- storage and clean-up ----
+
+func (h *Handler) storage(w http.ResponseWriter, r *http.Request) {
+	s, err := h.svc.Storage(r.Context())
+	respond(w, http.StatusOK, s, err)
+}
+
+func (h *Handler) cleanup(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	page, err := h.svc.Cleanup(r.Context(), q.Get("conversation_id"), q.Get("sort"), q.Get("cursor"), limit)
+	respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) advanceRead(w http.ResponseWriter, r *http.Request) {
