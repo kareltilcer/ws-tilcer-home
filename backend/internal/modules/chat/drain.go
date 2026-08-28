@@ -76,12 +76,33 @@ func (s *Service) Drain(ctx context.Context, now time.Time) error {
 			"deleted", len(keys), "err", err)
 		return err
 	}
-	deferred, err := s.store.QueuedCount(ctx, s.db)
+	// ⚠ TWO NUMBERS, BECAUSE ONE CANNOT SEPARATE THE TWO STATES IT WOULD DESCRIBE.
+	// This line is the job's only visibility, and reporting a single `deferred` count
+	// conflated keys WAITING OUT A KOŠ WINDOW — healthy, and most of the queue most
+	// of the time — with keys that were DUE and fell outside this pass's batch, which
+	// is a backlog draining at 500 per quarter-hour. After a *Smazat natrvalo* on a
+	// room with nine hundred attachments those look identical in the log and want
+	// opposite responses.
+	queued, err := s.store.QueuedCount(ctx, s.db)
 	if err != nil {
-		deferred = -1
+		queued = -1
 	}
-	s.logger.Info("chat: drain pass", "deleted", len(keys), "deferred", deferred)
+	stillDue, err := s.store.DueCount(ctx, s.db, due)
+	if err != nil {
+		stillDue = -1
+	}
+	s.logger.Info("chat: drain pass",
+		"deleted", len(keys), "still_due", stillDue, "queued", queued)
 	return nil
+}
+
+// DueCount is how much of the queue this pass left BEHIND rather than ahead — the
+// half of the log line that says whether the drain is keeping up.
+func (s *Store) DueCount(ctx context.Context, q querier, due string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM chat_deleted_keys WHERE purge_after <= ?`, due).Scan(&n)
+	return n, err
 }
 
 // DueKeys reads the keys whose purge_after has passed.

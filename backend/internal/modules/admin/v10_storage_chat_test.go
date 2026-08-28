@@ -245,3 +245,37 @@ func auditRows(t *testing.T, f *fixture) int {
 }
 
 func intp(n int) *int { return &n }
+
+// TestSetThresholdsRefusesAnOverflowingValue is the upper bound.
+//
+// ⚠ `storage.MB` SHIFTS BY 20, so an unbounded value saved cleanly and then became a
+// limit of ZERO — after which every comparison read `total > 0` as exceeded and the
+// warning fired on every screen for a household holding a few bytes, beside a figure
+// claiming the limit was millions of terabytes. `value_mb > 0` is the only invariant
+// SQLite can hold, so the bound has to be here.
+func TestSetThresholdsRefusesAnOverflowingValue(t *testing.T) {
+	f := newFixture(t)
+	f.svc.SetStorage(newStorageService(t, f.db, []any{
+		&fakeGroupModule{name: "chat", tables: []string{"chat_conversations"}},
+	}, nil))
+	ctx := testsupport.CtxUser("u-admin", "admin")
+
+	huge := 9007199254740992 // well inside int64, and zero after <<20
+	if _, err := f.svc.SetThresholds(ctx, admin.StorageThresholdsUpdate{ChatTotalMB: &huge}); err == nil {
+		t.Fatal("a value that overflows MB() was accepted")
+	}
+	// The seeded value survives, so the refusal did not half-apply.
+	snap, err := f.svc.Storage().Snapshot(context.Background(), true)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snap.Chat == nil || snap.Chat.ThresholdTotalMB != 512 {
+		t.Errorf("the refused save changed the threshold: %+v", snap.Chat)
+	}
+	// And the bound itself is still a legal value, so the refusal is a bound and not
+	// an off-by-one that rules out everything large.
+	atMax := storage.MaxThresholdMB
+	if _, err := f.svc.SetThresholds(ctx, admin.StorageThresholdsUpdate{ChatTotalMB: &atMax}); err != nil {
+		t.Errorf("the maximum itself was refused: %v", err)
+	}
+}

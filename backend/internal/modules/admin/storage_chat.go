@@ -176,9 +176,16 @@ func (s *Service) SetThresholds(ctx context.Context, in StorageThresholdsUpdate)
 	if in.ChatTotalMB == nil && in.ChatConversationMB == nil {
 		return StorageThresholds{}, httpx.ErrUnprocessable("Zadejte alespoň jeden limit.")
 	}
+	// The same bounds SetThreshold enforces, restated here so a refusal is a 422 with
+	// a Czech sentence rather than a 500 carrying the storage layer's own error text.
+	//
+	// ⚠ THE UPPER BOUND IS NOT DECORATION. storage.MB shifts by 20, so an unbounded
+	// value saved cleanly and then overflowed into a limit of ZERO — a warning that
+	// fired on every screen and could not be turned off except by saving again.
 	for _, v := range []*int{in.ChatTotalMB, in.ChatConversationMB} {
-		if v != nil && *v < 1 {
-			return StorageThresholds{}, httpx.ErrUnprocessable("Limit musí být alespoň 1 MB.")
+		if v != nil && (*v < 1 || *v > storage.MaxThresholdMB) {
+			return StorageThresholds{}, httpx.ErrUnprocessable(
+				fmt.Sprintf("Limit musí být mezi 1 a %d MB.", storage.MaxThresholdMB))
 		}
 	}
 	actor := actorID(ctx)

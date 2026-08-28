@@ -41,6 +41,20 @@ const (
 	DefaultChatConversationMB = 128
 )
 
+// MaxThresholdMB is the upper bound — 1 PB, which is four orders of magnitude past
+// anything a household bucket will hold and still nowhere near where the arithmetic
+// breaks.
+//
+// ⚠ IT EXISTS BECAUSE MB() SHIFTS BY 20, AND AN UNBOUNDED VALUE OVERFLOWS INTO A
+// WARNING THAT CANNOT BE TURNED OFF. `value_mb > 0` is the only thing SQLite can
+// hold, so a fat-fingered 9007199254740992 saved cleanly, answered 200, and then
+// became a limit of ZERO — after which every comparison read `total > 0` as
+// exceeded and the banner fired on every screen for a household holding 43 bytes,
+// beside a figure claiming the limit was 8 589 934 592 TB. Recoverable by saving a
+// sane value, and nothing on the way in said the number had been refused, because
+// it had not been.
+const MaxThresholdMB = 1 << 30
+
 // Threshold is one row.
 type Threshold struct {
 	Key       string
@@ -118,8 +132,8 @@ func SetThreshold(ctx context.Context, q ThresholdQuerier, key string, valueMB i
 	default:
 		return fmt.Errorf("storage: unknown threshold %q", key)
 	}
-	if valueMB < 1 {
-		return fmt.Errorf("storage: threshold %q must be at least 1 MB", key)
+	if valueMB < 1 || valueMB > MaxThresholdMB {
+		return fmt.Errorf("storage: threshold %q must be between 1 and %d MB", key, MaxThresholdMB)
 	}
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO storage_thresholds (key, value_mb, updated_at, updated_by)
