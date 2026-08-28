@@ -80,3 +80,30 @@ describe('attachment URLs are session-gated backend paths', () => {
     expect(thumbnailURL('a-1')).toBe('/api/chat/attachments/a-1/thumbnail')
   })
 })
+
+describe('the clean-up prefix is a key, not a literal', () => {
+  // ⚠ THREE CALL SITES INVALIDATE THE LISTING AFTER A BYTE MOVES, and they used to
+  // hand-write `['chat','cleanup']`. §V10-12 records this module's message key being
+  // restructured once already — a literal elsewhere goes on compiling and silently
+  // matches nothing the day the shape changes again.
+  it('actually prefixes every listing key it is meant to reach', () => {
+    const prefixes = (a: readonly unknown[], b: readonly unknown[]) =>
+      a.length <= b.length && a.every((seg, i) => seg === b[i])
+
+    for (const key of [
+      qk.chatCleanup(),
+      qk.chatCleanup(undefined, 'recent'),
+      qk.chatCleanup('c-1', 'size'),
+    ]) {
+      expect(
+        prefixes(qk.chatCleanupAll, key),
+        `${JSON.stringify(qk.chatCleanupAll)} must prefix ${JSON.stringify(key)}`,
+      ).toBe(true)
+    }
+    // And it must not reach anything else in the module — an invalidation that
+    // refetched every open thread is the defect invalidateLists was written to fix.
+    expect(prefixes(qk.chatCleanupAll, qk.chatMessages('c-1'))).toBe(false)
+    expect(prefixes(qk.chatCleanupAll, qk.chatStorage)).toBe(false)
+    expect(prefixes(qk.chatCleanupAll, qk.chatConversations())).toBe(false)
+  })
+})

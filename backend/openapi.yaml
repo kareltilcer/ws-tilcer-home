@@ -9451,7 +9451,8 @@ components:
 
     ChatStorage:
       type: object
-      required: [total_bytes, threshold_total_mb, total_exceeded, threshold_conversation_mb, conversations]
+      required: [total_bytes, threshold_total_mb, total_exceeded, threshold_conversation_mb,
+                 conversations, can_clean_up, max_upload_mb, move_available]
       description: >-
         What the in-module warning renders. Both thresholds are **WARN ONLY** — no upload is
         ever refused, there is no quota and no new 413 anywhere in the app (PRD D237, §V9
@@ -9488,6 +9489,18 @@ components:
             uploading it. A client constant would name a limit that stops being the limit
             the moment an operator raises it; the server stays the authority and still
             answers 413.
+        move_available:
+          type: boolean
+          description: >-
+            ⚠ **AS BUILT (0.12.1).** Whether a `storage.BlobSink` is wired at all, which is
+            what D239's *"the button is absent"* half needs: with no sink the move is 501,
+            and a capability that is plainly absent has to LOOK absent rather than open a
+            folder picker and refuse after the confirm.
+
+            ⚠ **It is NOT `can_clean_up`, and conflating them was the bug.** That one
+            answers D241's ROLE gate; this one answers whether the capability exists in
+            this deployment. Gating the button on the role meant a household without
+            `documents` wired still offered *Přesunout do Dokumentů* to every editor.
 
     ChatStorageConversation:
       type: object

@@ -482,6 +482,15 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
     // room is the 404 the route renders as "this conversation is no longer yours".
     void qc.invalidateQueries({ queryKey: qk.chatConversation(ev.conversation_id) })
     invalidateLists(qc)
+    // ⚠ AND THE STORAGE FIGURES, because this is the frame a CLEAN-UP publishes and
+    // the whole workflow is *clean until the number goes down*. The warning is shown
+    // to every member of an over-limit room, so two of them cleaning together is the
+    // invited case — and without this the second person's banner went on saying the
+    // room was over while their listing still offered the row the first had just
+    // deleted, which then answers 422. A rename publishes this frame too and moves no
+    // bytes; a refetch of two small figures is the cheaper half of that trade.
+    void qc.invalidateQueries({ queryKey: qk.chatStorage })
+    void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
     if (ev.gone) {
       // Its thread is unreadable from here on, so drop what this tab holds rather
       // than refetching a page that can only 404.
@@ -691,7 +700,7 @@ export function useUploadMessage(conversationID: string) {
       void qc.invalidateQueries({ queryKey: qk.chatConversations() })
       // The bytes moved, so both figures did.
       void qc.invalidateQueries({ queryKey: qk.chatStorage })
-      void qc.invalidateQueries({ queryKey: ['chat', 'cleanup'] })
+      void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
     },
   })
 }
@@ -744,7 +753,7 @@ export function useMoveAttachment(conversationID?: string) {
  */
 function invalidateAfterCleanup(qc: QueryClient, conversationID?: string): void {
   void qc.invalidateQueries({ queryKey: qk.chatStorage })
-  void qc.invalidateQueries({ queryKey: ['chat', 'cleanup'] })
+  void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
   if (conversationID) {
     void qc.invalidateQueries({ queryKey: qk.chatMessages(conversationID) })
   }
