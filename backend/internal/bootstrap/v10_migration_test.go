@@ -460,14 +460,21 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// TestV10MigrationOnRestoredCopy is Karel's gate before PR 2 merges, expressed as a
-// test that skips by default.
+// TestV10MigrationOnRestoredCopy is the restored-copy rehearsal, available and NOT
+// required.
 //
-// ⚠ EVERY OTHER TEST IN THIS FILE RUNS AGAINST A DATABASE THIS PROCESS JUST BUILT.
-// That is enough to prove the SQL is well formed and the ordering is right, and it
-// is not enough to prove anything about the household's actual delivery log: an
-// empty table copies perfectly. §V9-12 records the same split for the `soukrome`
-// backfill, and the same runbook applies —
+// ⚠ THE REHEARSAL WAS DECLINED, DELIBERATELY (Karel, 2026-08-27, recorded in PRD
+// §V10-12). Restoring production to run it copies every message, document title and
+// audit row the household owns onto a second machine, which is a real cost to pay
+// for confidence about a nine-column operational table. What stands in for it is
+// `v10_rebuild_test.go`: scale far past what retention permits, every column and
+// NULL state, and — the part that actually matters — proof that the rebuild rolls
+// back cleanly after the drop, so a boot-time failure is a rolled-back deploy rather
+// than a destroyed delivery log.
+//
+// This test stays because the option should stay. If a future migration touches
+// something the rollback argument does not cover, or somebody simply wants the
+// belt-and-braces run, the harness is here and the runbook is below —
 //
 //	litestream restore -o /tmp/home-restored.db <replica-url>
 //	cp /tmp/home-restored.db /tmp/home-v10-check.db     # NEVER point this at the original

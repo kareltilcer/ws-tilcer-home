@@ -3648,8 +3648,20 @@ Both were invisible in review because each piece looked correct on its own:
 - **The koš purge job.** `chat_deleted_keys` exists and the delete paths enqueue into it; the drain is PR 3's. In PR 2 there are no attachments, so nothing is ever queued.
 - **The composer's attachment half** — drag-and-drop, paste, the picker, progress rows and the over-cap refusal.
 
-### Outstanding before merge
+### The production rehearsal was declined, and what replaced it
 
-- [ ] **Karel's gate:** `08003` up **and** down against a Litestream-restored copy of production. `TestV10MigrationOnRestoredCopy` is the harness; it skips unless `HOME_V10_MIGRATION_TEST_DB` points at a **copy**.
+⚠ **The acceptance criteria asked for `08003` to be run against a Litestream-restored copy of production. It was not, and Karel declined it deliberately** (2026-08-27): the point of a restore rehearsal is confidence about a table rebuild, and the rehearsal itself copies every message, document title and audit row the household owns onto a second machine. Paying that to test a nine-column operational table is the wrong trade.
+
+What replaced it is `bootstrap/v10_rebuild_test.go`, which covers the three things a restored copy would actually have told us:
+
+- **Scale.** 50 000 delivery rows rebuilt in **~750 ms**. `notification_deliveries` is pruned on every boot at `HOME_NOTIF_DELIVERY_RETENTION_DAYS` (default 30), so the live table is orders of magnitude smaller — the boot-time question is settled with room to spare.
+- **Shape.** Every kind × category × status, both NULL states of every nullable, and the values most likely to break a hand-built copy: quotes, newlines, long non-ASCII error bodies. Plus `TestRebuildCopiesEveryColumn`, which derives the column set from the schema at runtime — so a column added by a **later** migration and forgotten in `08003`'s named copy list fails the build instead of being silently dropped for every row.
+- **Atomicity, and this is the one that matters.** `TestRebuildRollsBackAfterTheDrop` replays the whole Up section inside one transaction, lets every destructive step succeed — copy, drop, rename, all four indexes — proves the widened CHECK is live mid-transaction, then **rolls back** and asserts the original table, its rows, its indexes and its narrow CHECK all return. `TestRebuildIsNotMarkedNoTransaction` asserts goose is still being asked to wrap it.
+
+⚠ **Why that is the right substitute rather than a weaker one.** A rehearsal answers *does it work on the real data*; atomicity answers *what happens when it does not* — which is the question the rehearsal was a proxy for, because migrations run at boot and a failure there crash-loops the container. With the rollback proven, the worst case of shipping this unrehearsed is **a deploy that has to be rolled back, not a delivery log that is gone**.
+
+⚠ **What none of it covers: schema drift.** If `notification_deliveries` has been ALTERed on the droplet by hand, outside a migration, the copy step would not match and the rebuild would fail — safely, per the above, but it would fail. That is a claim about the droplet rather than about the code, and no test in this repo can see it. The mitigation is that Home has never performed manual DDL in production.
+
+### Outstanding before merge
 - [ ] Playwright + axe at 375 and 1440 in both themes — outstanding since v5, and chat is the densest screen in the app.
 - [ ] A click-through **with a second member's session**. Everything verified live so far ran under one dev-bypass actor, so the adversarial half is covered by tests alone. §V9-12 records six frontend bugs no test caught.
