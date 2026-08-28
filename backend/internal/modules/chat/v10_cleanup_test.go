@@ -492,3 +492,60 @@ func TestKosPurgeIsNotEarly(t *testing.T) {
 		t.Error("the drain did not purge a conversation whose window had elapsed")
 	}
 }
+
+// TestChatBlobsAreReportedSharedNotPrivate is §11.2/D235, and it is the one place
+// the word being wrong actually matters.
+//
+// ⚠ THE ALTERNATIVE IS NOT "a better word", IT IS THE WRONG SECTION. `Kind:
+// private` is what carries an OwnerID through storage.Attribute, so attributing to
+// the uploader would file chat's bytes under Úložiště's *Soukromé* breakdown beside
+// v9 private notes and documents — a section that means "items the purge screen
+// owns". Chat implements no PrivateInventory, so those rows would name bytes that
+// screen can neither list nor delete.
+func TestChatBlobsAreReportedSharedNotPrivate(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Fotky")
+	hh.uploadOne(kaja, room.ID, "a.png", pngBytes)
+
+	usage, err := hh.svc.StorageBlobs(hh.ctx(kaja))
+	if err != nil {
+		t.Fatalf("StorageBlobs: %v", err)
+	}
+	var sharedBytes, privateRows int64
+	for _, u := range usage {
+		switch u.Kind {
+		case "shared":
+			sharedBytes += u.Bytes
+		case "private":
+			privateRows++
+		}
+		if u.Prefix != "chat/" {
+			t.Errorf("a usage row claims prefix %q, want chat/", u.Prefix)
+		}
+	}
+	if privateRows != 0 {
+		t.Errorf("%d private row(s) — a chat attachment is member-restricted, which is a "+
+			"THIRD thing, and reporting it as a v9 private item files it under a screen "+
+			"that cannot touch it (D235)", privateRows)
+	}
+	if sharedBytes != int64(len(pngBytes)) {
+		t.Errorf("shared bytes = %d, want %d", sharedBytes, len(pngBytes))
+	}
+
+	// ⚠ AND THE ORPHAN ROW IS ALWAYS EMITTED, empty or not. An absent row reads as
+	// "nobody looked"; a zero reads as "no orphan backlog", which is good news worth
+	// stating on a maintenance page.
+	var sawOrphanRow bool
+	for _, u := range usage {
+		if u.Kind == "unattributed" {
+			sawOrphanRow = true
+			if u.Objects != 0 {
+				t.Errorf("%d unattributed object(s) after a clean upload", u.Objects)
+			}
+		}
+	}
+	if !sawOrphanRow {
+		t.Error("no unattributed row — its absence and its zero mean different things")
+	}
+}

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { unstable_usePrompt as usePrompt } from 'react-router-dom'
+import { useLeaveConfirm } from './useLeaveConfirm'
 import { AlertTriangle, FileText, Trash2, MoveRight } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -40,19 +40,21 @@ export function UklidPage() {
   const [moving, setMoving] = useState<CleanupItem | null>(null)
 
   /**
-   * ⚠ LEAVING WHILE STILL OVER RAISES A CONFIRMATION (D244), AND IT HOOKS THE
-   * ROUTER'S NAVIGATION BLOCKER. `beforeunload` alone misses client-side route
-   * changes, which is most exits — tapping another tab in the bottom bar never
-   * reaches it. It is a CONFIRM, never a block: the member can always leave.
+   * ⚠ LEAVING WHILE STILL OVER RAISES A CONFIRMATION (D244), and it catches
+   * CLIENT-SIDE route changes — tapping another tab in the bottom bar, the side nav,
+   * the header's back link — because that is most exits and `beforeunload` never
+   * sees any of them. It is a CONFIRM, never a block. See useLeaveConfirm for why it
+   * is not react-router's `useBlocker` (data-router only; this app mounts
+   * `<BrowserRouter>`) and for the one exit it does not cover.
    */
   const stillOver = storage.data?.total_exceeded ?? false
-  usePrompt({
-    when: stillOver,
-    message: `${cs.chat.cleanupLeaveOver(
+  useLeaveConfirm(
+    stillOver,
+    `${cs.chat.cleanupLeaveOver(
       fmtStorageBytes(storage.data?.total_bytes ?? null),
       `${storage.data?.threshold_total_mb ?? 0} MB`,
     )} ${cs.chat.cleanupLeaveBody}`,
-  })
+  )
 
   // ⚠ THE GROUPING RUNS BEFORE THE 403 BRANCH, and the order is the rules-of-hooks
   // rule rather than a preference: a useMemo after an early return is called

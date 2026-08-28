@@ -101,7 +101,7 @@ func (s *Service) Storage(ctx context.Context) (ChatStorage, error) {
 	return out, nil
 }
 
-// StorageBlobs attributes every object under `chat/` to its UPLOADER (FR-V10-21).
+// StorageBlobs reports every object under the `chat/` prefix (FR-V10-21).
 //
 // ⚠ `Kind: shared` IS THE WRONG WORD AND IT IS KEPT DELIBERATELY. In
 // platform/storage, `shared` means *not a v9 private item*; a chat attachment is
@@ -109,6 +109,8 @@ func (s *Service) Storage(ctx context.Context) (ChatStorage, error) {
 // enum and every consumer of it — the admin page, its frontend types, the warning's
 // contributor list — for a distinction that page does not draw. This sentence is in
 // the code so that somebody does not "fix" it (D235's note, FR-V10-16).
+//
+// ⚠ EVERY ROW COMES BACK `shared` (see LiveAttachmentIDs), never `private`.
 //
 // ⚠ IT LISTS THE BUCKET RATHER THAN SUMMING byte_size, for the reason
 // documents/storage.go states: summing the column would make objects that resolve
@@ -123,7 +125,7 @@ func (s *Service) StorageBlobs(ctx context.Context) ([]storage.BlobUsage, error)
 	if err != nil {
 		return nil, err
 	}
-	owners, err := s.store.AttachmentUploaders(ctx, s.db)
+	owners, err := s.store.LiveAttachmentIDs(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -243,32 +245,41 @@ func (s *Store) ConversationsOverLimit(ctx context.Context, q querier, actor str
 	return out, rows.Err()
 }
 
-// AttachmentUploaders maps attachment id → uploader for the blob attribution.
+// LiveAttachmentIDs is the id → owner map storage.Attribute buckets on.
 //
-// ⚠ ONLY `live` ROWS ARE HERE, and the omission is what makes the storage page
-// honest: an object whose row says `moved` or `removed` but which is still sitting
-// in the bucket resolves to no live row and is reported as UNATTRIBUTED — the drain
-// backlog, visible instead of quietly folded into somebody's total.
+// ⚠ EVERY VALUE IS THE EMPTY STRING, WHICH storage.Attribute READS AS `shared`
+// (§11.2, D235). The word is wrong and it is kept deliberately — see StorageBlobs
+// above — but the alternative is worse in a way that is easy to reach by accident:
+// returning the UPLOADER makes Attribute emit `Kind: private` rows, which puts chat
+// attachments in the Úložiště page's *Soukromé* breakdown beside v9 private notes
+// and documents. That section means "items the purge screen owns", and chat
+// implements no PrivateInventory, so an admin would be shown per-member private
+// rows for bytes the private-items screen cannot list, cannot size and cannot
+// delete. A wrong word on one row beats a wrong SECTION for the whole module.
 //
-// ⚠ THE VALUE IS THE UPLOADER, NOT "" (FR-V10-16). storage.Attribute reads "" as
-// "a shared row" and a missing key as "no live row", so returning the uploader puts
-// chat's bytes in the per-member breakdown where the question "who uploaded that
-// 40 MB video" can be answered — which is the whole reason attachments are audited
-// when messages are not.
-func (s *Store) AttachmentUploaders(ctx context.Context, q querier) (map[string]string, error) {
+// ⚠ "Who uploaded that 40 MB video" is still answerable, and by design: it is what
+// `chat.attachment.uploaded` is FOR (§14 — attachments are audited although the
+// messages carrying them are not). The storage page reports bytes; the Log reports
+// who.
+//
+// ⚠ ONLY `live` ROWS ARE HERE, and the omission is what makes the page honest: an
+// object whose row says `moved` or `removed` while it still sits in the bucket
+// resolves to no live row and is reported as UNATTRIBUTED — the drain backlog,
+// visible instead of quietly folded into a total.
+func (s *Store) LiveAttachmentIDs(ctx context.Context, q querier) (map[string]string, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, uploaded_by FROM chat_attachments WHERE state = 'live'`)
+		`SELECT id FROM chat_attachments WHERE state = 'live'`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	out := map[string]string{}
 	for rows.Next() {
-		var id, owner string
-		if err := rows.Scan(&id, &owner); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		out[id] = owner
+		out[id] = ""
 	}
 	return out, rows.Err()
 }

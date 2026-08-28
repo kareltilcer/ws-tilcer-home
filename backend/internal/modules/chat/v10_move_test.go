@@ -75,6 +75,31 @@ func TestMoveHappyPath(t *testing.T) {
 	if moved.DocumentID == nil || moved.DocumentPath == nil {
 		t.Fatalf("a moved attachment must name where it went, got %+v", moved)
 	}
+	// ⚠ THE RESPONSE IS ASSEMBLED BY HAND FROM THE ROW THE MOVE LOADED, so every
+	// field the write changed has to be applied to it too. `cleaned_at` was the one
+	// that was not: the row carried it and the response serialised null, so the
+	// bubble's *Přesunuto do Dokumentů* marker had no date until something refetched
+	// the thread. Found by moving a file and reading the response.
+	if moved.CleanedAt == nil || *moved.CleanedAt == "" {
+		t.Error("cleaned_at is null on the move's own response although the row has one")
+	}
+	if moved.CleanedByLabel == nil {
+		t.Error("cleaned_by_label is null on the move's own response")
+	}
+	// And the response agrees with what a re-read says, which is the general form of
+	// the same bug.
+	thread := hh.thread(kaja, msg.ConversationID)
+	for _, m := range thread.Items {
+		for _, a := range m.Attachments {
+			if a.ID != att.ID {
+				continue
+			}
+			if a.State != moved.State || !eqStr(a.CleanedAt, moved.CleanedAt) {
+				t.Errorf("the move's response and the thread disagree:\n response: %+v\n   thread: %+v",
+					moved, a)
+			}
+		}
+	}
 
 	// ⚠ THE BYTES LEFT THE `chat/` PREFIX, WHICH IS WHY THEY LEAVE BOTH THRESHOLDS
 	// BY CONSTRUCTION (D246) rather than by bookkeeping that can drift.
@@ -345,4 +370,12 @@ func TestMoveRequiresAFolder(t *testing.T) {
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a move with no folder answered %d, want 422", rr.Code)
 	}
+}
+
+
+func eqStr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

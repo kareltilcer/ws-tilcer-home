@@ -126,13 +126,20 @@ func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID str
 	if err := s.faultAt(stepMark); err != nil {
 		return Attachment{}, err
 	}
+	// ⚠ MINTED ONCE, OUTSIDE THE TX, AND REUSED IN THE RESPONSE. The row and the
+	// answer have to carry the same instant: a second nowUTC() for the rendered
+	// attachment would differ by however long the transaction took, and leaving it
+	// off entirely — which the first version did — serialised `cleaned_at: null` on
+	// a `moved` attachment whose row had one. The bubble's marker then had no date
+	// until something refetched the thread.
+	cleanedAt := nowUTC()
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		name, err := s.store.ConversationName(ctx, tx, att.ConversationID)
 		if err != nil {
 			return err
 		}
 		moved, err := s.store.MarkAttachmentMoved(ctx, tx, attachmentID,
-			result.DocumentID, result.Path, actor, nowUTC())
+			result.DocumentID, result.Path, actor, cleanedAt)
 		if err != nil {
 			return err
 		}
@@ -179,6 +186,7 @@ func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID str
 	att.DocumentID = sql.NullString{String: result.DocumentID, Valid: true}
 	att.DocumentPath = sql.NullString{String: result.Path, Valid: result.Path != ""}
 	att.CleanedBy = sql.NullString{String: actor, Valid: true}
+	att.CleanedAt = sql.NullString{String: cleanedAt, Valid: true}
 	out := att.wire(labels)
 	s.publishConversationChanged(ctx, att.ConversationID)
 	return out, nil
