@@ -507,7 +507,7 @@ func TestAddingAMemberTellsTheRestOfTheRoom(t *testing.T) {
 	hh := newHousehold(t, kaja, andy, quiet)
 	room := hh.group(kaja, "Skupina", quiet)
 
-	hh.notify.audiences, hh.notify.types, hh.notify.payloads = nil, nil, nil
+	hh.notify.reset()
 	if _, err := hh.svc.AddMember(hh.ctx(kaja), room.ID,
 		chat.ConversationMemberAdd{UserID: andy.id}); err != nil {
 		t.Fatalf("add member: %v", err)
@@ -599,5 +599,54 @@ func TestOverConversationLimitIsNullWhileBytesIs(t *testing.T) {
 	}
 	if !strings.Contains(body, `"over_conversation_limit":null`) {
 		t.Errorf("over_conversation_limit is a verdict about an unmeasured figure: %s", body)
+	}
+}
+
+// ⚠ CREATING A ROOM AROUND SOMEBODY IS AN ADDITION, AND IT IS ANNOUNCED LIKE ONE
+// (the fifth review). AddMember publishes to the person it happened to precisely
+// because their client is holding a conversation list that does not contain the
+// room and has no reason to refetch it — and CreateConversation with `member_ids`
+// puts them in the identical position while publishing nothing at all, so the room
+// and its unread badge stayed invisible to them until a refetch-on-focus or the
+// first message. The frontend's create dialog sends no member_ids today, which is
+// the only reason this was not visible; the served contract has documented the
+// field since 0.12.0.
+//
+// The creator is deliberately NOT told: they are holding the response.
+func TestCreatingAConversationTellsTheMembersItAdds(t *testing.T) {
+	hh := newHousehold(t, kaja, andy, quiet)
+
+	hh.notify.reset()
+	room, err := hh.svc.CreateConversation(hh.ctx(kaja), chat.ConversationCreate{
+		Name: "Založená kolem nich", MemberIDs: []string{andy.id, quiet.id},
+	})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	told := map[string]int{}
+	for i, typ := range hh.notify.types {
+		if typ != "chat_membership.changed" {
+			t.Errorf("create published %q, want only chat_membership.changed", typ)
+			continue
+		}
+		ev, ok := hh.notify.payloads[i].(chat.MembershipEvent)
+		if !ok || ev.ConversationID != room.ID || ev.Removed {
+			t.Errorf("payload = %+v, want a join for %s", hh.notify.payloads[i], room.ID)
+		}
+		// ⚠ ADDRESSED TO THEM. A membership frame names a person, so it goes to
+		// that person alone — the D221 split AddMember already keeps.
+		if got := hh.notify.audiences[i]; len(got) != 1 || got[0] != ev.UserID {
+			t.Errorf("the membership frame went to %v, want only %s", got, ev.UserID)
+		}
+		told[ev.UserID]++
+	}
+	for _, m := range []member{andy, quiet} {
+		if told[m.id] != 1 {
+			t.Errorf("%s was told %d times, want exactly once", m.id, told[m.id])
+		}
+	}
+	if told[kaja.id] != 0 {
+		t.Errorf("the creator was told %d times; they are holding the response", told[kaja.id])
 	}
 }

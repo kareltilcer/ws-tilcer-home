@@ -178,9 +178,20 @@ func decodeConversationCursor(cursor string) (updatedAt, id string, ok bool) {
 	return at, rest, true
 }
 
-// GetConversation loads one room for a member. The scope has already refused a
-// non-member, so this is a plain row read.
-func (s *Store) GetConversation(ctx context.Context, q querier, actor string, sc Scope) (Conversation, error) {
+// GetConversation loads one room for a member, MEMBERSHIP AND KOŠ INCLUDED.
+//
+// ⚠ IT RESOLVES THE ACCESS RULE ITSELF RATHER THAN TRUSTING A SCOPE, AND THAT IS
+// WHAT MAKES IT ONE QUERY (v10 review). It always carried the membership join —
+// `m.conversation_id = ? AND m.user_id = ?` — so a caller ran memberScope, threw
+// the result away and paid for the SAME join a second time, against a pool capped
+// at one connection (platform/db). What it was missing was the one term that made
+// the first query load-bearing: `c.deleted_at IS NULL`, the koš. With that term
+// here the two queries are one, and `ErrNoRows` still means exactly what
+// memberScope means by it — not a member, in the koš, or never issued.
+//
+// It takes the conversation id rather than a Scope for the same reason: a Scope
+// argument would be a claim this query does not need and cannot check.
+func (s *Store) GetConversation(ctx context.Context, q querier, actor, conversationID string) (Conversation, error) {
 	var (
 		r         conversationRow
 		effFrom   string
@@ -201,8 +212,8 @@ func (s *Store) GetConversation(ctx context.Context, q querier, actor string, sc
 		           AND x.id > m.last_read_id)
 		  FROM chat_members m
 		  JOIN chat_conversations c ON c.id = m.conversation_id
-		 WHERE m.conversation_id = ? AND m.user_id = ?`,
-		actor, sc.ConversationID, actor).
+		 WHERE m.conversation_id = ? AND m.user_id = ? AND c.deleted_at IS NULL`,
+		actor, conversationID, actor).
 		Scan(&r.ID, &r.Kind, &r.Name, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
 			&effFrom, &fromStart, &mutedInt, &members, &unread)
 	if errors.Is(err, sql.ErrNoRows) {

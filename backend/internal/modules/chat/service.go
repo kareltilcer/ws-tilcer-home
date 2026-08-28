@@ -170,13 +170,18 @@ func (s *Service) purgeAfter(deletedAt *string) *string {
 	return ptr(t.AddDate(0, 0, s.trashDays).UTC().Format(tsFormat))
 }
 
+// GetConversation is ONE query, and the store's own predicate is the access rule.
+//
+// ⚠ IT NO LONGER RESOLVES A SCOPE FIRST (v10 review). memberScope and
+// Store.GetConversation join the same two tables on the same two columns, so
+// running both meant every conversation read — the handler's, and the tail of
+// Create, Rename and UpdateSelf after their transaction commits — paid two round
+// trips on a single-connection pool for one row. Store.GetConversation now carries
+// the koš term memberScope contributed, which was the only part of that first query
+// this path used. scope.go's rule is unchanged: this is still one predicate, in
+// SQL, refusing non-member, trashed and unknown with the same answer.
 func (s *Service) GetConversation(ctx context.Context, id string) (Conversation, error) {
-	actor := actorID(ctx)
-	sc, err := s.store.memberScope(ctx, s.db, actor, id)
-	if err != nil {
-		return Conversation{}, mapScopeErr(err)
-	}
-	c, err := s.store.GetConversation(ctx, s.db, actor, sc)
+	c, err := s.store.GetConversation(ctx, s.db, actorID(ctx), id)
 	return c, mapScopeErr(err)
 }
 
@@ -226,7 +231,11 @@ func (s *Service) CreateConversation(ctx context.Context, in ConversationCreate)
 	if err != nil {
 		return Conversation{}, err
 	}
+	// The founding members other than the creator, collected as they are written so
+	// the /ws fan-out below matches the rows that actually landed.
+	var joined []string
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		joined = joined[:0]
 		if err := s.store.InsertConversation(ctx, tx, id, name, actor, now); err != nil {
 			return err
 		}
@@ -237,8 +246,14 @@ func (s *Service) CreateConversation(ctx context.Context, in ConversationCreate)
 			if m == actor {
 				continue
 			}
-			if _, err := s.store.InsertMember(ctx, tx, id, m, actor, f); err != nil {
+			added, err := s.store.InsertMember(ctx, tx, id, m, actor, f)
+			if err != nil {
 				return err
+			}
+			// A duplicate id in the request writes one row and is announced once —
+			// the same thing InsertMember's ON CONFLICT already says about the write.
+			if added {
+				joined = append(joined, m)
 			}
 		}
 		return s.record(ctx, tx, "conversation.created", id,
@@ -246,6 +261,18 @@ func (s *Service) CreateConversation(ctx context.Context, in ConversationCreate)
 	})
 	if err != nil {
 		return Conversation{}, err
+	}
+	// ⚠ THE FOUNDING MEMBERS ARE TOLD, EXACTLY AS AN ADDED ONE IS (v10 review).
+	// AddMember publishes a MembershipEvent to the person it happened to precisely
+	// because "their client is holding a conversation list that does not contain
+	// this room and has no reason to refetch" — and creating a room AROUND somebody
+	// puts them in the identical position, so the room and its unread badge stayed
+	// invisible to them until a refetch-on-focus or the first message. The creator
+	// gets nothing here: they are holding the response.
+	for _, m := range joined {
+		s.notifyTo(ctx, []string{m}, "chat_membership.changed", MembershipEvent{
+			ConversationID: id, UserID: m, Removed: false,
+		})
 	}
 	return s.GetConversation(ctx, id)
 }
@@ -425,17 +452,16 @@ func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversa
 	s.publishConversation(ctx, audience, id, false)
 	// The membership question is asked directly rather than inferred from a 404, so
 	// "the admin half of D255" is a branch on the access rule itself and not on the
-	// shape of an error some other code path might also produce.
-	sc, scErr := s.store.memberScope(ctx, s.db, actor, id)
-	if errors.Is(scErr, ErrNotMember) {
+	// shape of an error some other code path might also produce. ErrNotMember IS
+	// that rule's answer — Store.GetConversation resolves membership and the koš in
+	// its own predicate (v10 review), so the question costs the one read that
+	// answers it rather than a scope resolution and then the same join again.
+	c, err := s.store.GetConversation(ctx, s.db, actor, id)
+	if errors.Is(err, ErrNotMember) {
 		return nil, nil
 	}
-	if scErr != nil {
-		return nil, scErr
-	}
-	c, err := s.store.GetConversation(ctx, s.db, actor, sc)
 	if err != nil {
-		return nil, mapScopeErr(err)
+		return nil, err
 	}
 	return &c, nil
 }

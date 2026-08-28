@@ -1504,5 +1504,17 @@ export const cs = {
 
     // ---- errors ----
     notFound: 'Konverzace nebyla nalezena.',
+    // ⚠ A THREAD THAT FAILED TO LOAD IS NOT AN EMPTY ONE (v10 review). Without
+    // this the fallback was `threadEmpty` — "Zatím tu nikdo nic nenapsal." over a
+    // room with two years of history, under a usable composer, with nothing to
+    // press. The retry is part of the fix: the copy has to be actionable.
+    threadLoadFailed: 'Zprávy se nepodařilo načíst.',
+    threadLoadFailedHint: 'Zkuste to prosím znovu — nic se neztratilo.',
+    retry: 'Zkusit znovu',
+    // The mutation fallbacks. The server's own detail is preferred when it sends
+    // one (`Konverzace nebyla nalezena.`, `Zpráva nesmí být prázdná.`), because it
+    // says WHICH rule refused; these are what a network failure leaves.
+    sendFailed: 'Zprávu se nepodařilo odeslat.',
+    actionFailed: 'Akci se nepodařilo dokončit.',
   },
 } as const

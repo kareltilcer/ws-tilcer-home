@@ -116,6 +116,20 @@ func (c *capturedNotify) fn(_ context.Context, userIDs []string, typ string, pay
 	c.payloads = append(c.payloads, payload)
 }
 
+// reset clears the setup's publishes so a test asserts only its own.
+//
+// ⚠ ALL THREE TOGETHER, WHICH IS WHY IT IS A METHOD (v10 review). The slices are
+// parallel and tests index one by a position found in another — `payloads[room]`
+// where `room` came from scanning `types`. Two call sites cleared `types` and
+// `audiences` by hand and left `payloads` holding the setup's frames, so every
+// index was off by however many publishes the setup happened to make. It read as
+// passing until a verb started publishing one more (CreateConversation telling the
+// members it adds), at which point the offset moved and the assertion failed
+// somewhere with nothing to do with the change.
+func (c *capturedNotify) reset() {
+	c.audiences, c.types, c.payloads = nil, nil, nil
+}
+
 type household struct {
 	t        *testing.T
 	db       *sql.DB

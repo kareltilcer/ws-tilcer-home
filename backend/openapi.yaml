@@ -4520,7 +4520,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ConversationState"
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/ConversationCursor"
       responses:
         "200":
           description: OK — always an array, never null (D174).
@@ -4618,10 +4618,19 @@ paths:
         that somebody deleting a heavy conversation TO FIX AN OVERRUN is never told to come
         back in seven days. Deletion is recoverable by default and irreversible on request.
 
-        Any MEMBER may do either (D222) — the koš is what makes that survivable — and so may
-        an **`admin` who is not a member** (D255). ⚠ v9's asymmetry, repeated exactly: an
-        admin may reclaim the space and may never read what was in it, so `GET` of this same
-        id still returns 404 to them.
+        Any MEMBER may do either (D222) — the koš is what makes that survivable.
+
+        ⚠ **An `admin` who is not a member may PURGE, and may not trash** (D255), and the
+        asymmetry is per verb. The admin door is justified by STORAGE — a room that is
+        costing the household money — so it opens for the verb that frees bytes and not for
+        the one that frees nothing: `?hard=true` from a non-member admin is 204, and the
+        same request without it is **404**, byte-identical to an id that does not exist.
+        Letting the soft delete through would let an admin make a conversation vanish for
+        all its members while `GET` of that same room still, correctly, 404'd for them —
+        which is not v9's asymmetry but that asymmetry leaking into a third verb.
+
+        ⚠ v9's asymmetry itself, repeated exactly: an admin may reclaim the space and may
+        never read what was in it, so `GET` of this same id still returns 404 to them.
 
         ⚠ A `moved` attachment's document in Dokumenty **survives both paths**. The cascade
         takes `chat/` objects; `documents/` objects belong to another module now.
@@ -5359,6 +5368,21 @@ components:
       name: cursor
       in: query
       description: UUIDv7 keyset cursor from the previous page.
+      schema: { type: string }
+    ConversationCursor:
+      name: cursor
+      in: query
+      description: >-
+        Opaque keyset cursor from the previous page's `next_cursor` — **echo it back
+        verbatim** (v10).
+
+        ⚠ It is NOT the bare UUIDv7 the house `Cursor` describes, which is why this
+        listing has a parameter of its own. The ORDER BY is `(updated_at, id)`
+        descending and `updated_at` alone is not unique — a send bumps it, and two
+        rooms bumped in the same millisecond would page over each other or skip one
+        — so the cursor carries BOTH columns as `<updated_at>|<id>`. A client that
+        passes the last row's id on its own gets 422 *Neplatný kurzor.*, since that
+        is the one shape the endpoint cannot decode.
       schema: { type: string }
     Scope:
       name: scope
@@ -9036,7 +9060,15 @@ components:
 
     Conversation:
       type: object
-      required: [id, kind, name, created_at, updated_at, member_count, unread_count, bytes, muted, effective_from]
+      # ⚠ `reads_from_beginning` IS REQUIRED, and that is load-bearing rather than
+      # tidiness (v10 review). Typed optional, a generated client falls back to the
+      # `effective_from` vs `created_at` comparison this field exists to replace —
+      # which the field's own description below calls a second spelling of one
+      # access rule, and one that disagrees. The server always sends it, so the
+      # schema says so and the wrong path stops being the ergonomic one.
+      # `over_conversation_limit` is required and NULLABLE for the same reason
+      # `bytes` is: null is its answer until PR 3 measures, not its absence.
+      required: [id, kind, name, created_at, updated_at, member_count, unread_count, bytes, muted, effective_from, reads_from_beginning, over_conversation_limit]
       description: >-
         A room. ⚠ It is addressed by its UUIDv7 `id` and has NO SLUG (PRD D220) — the house
         `freeSlug` pattern appends `-2` on a sibling collision, which here would disclose a
@@ -9142,7 +9174,10 @@ components:
 
     ConversationMember:
       type: object
-      required: [user_id, display_name, effective_from]
+      # `reads_from_beginning` is required here for the reason it is on
+      # Conversation: the panel is told the answer so it never re-derives the floor
+      # from two timestamps that disagree with it.
+      required: [user_id, display_name, effective_from, reads_from_beginning]
       description: >-
         ⚠ **Display name only.** `push.Member` also carries `email` and `roles`; neither is
         serialised anywhere in `chat` (PRD D230).
@@ -9243,7 +9278,9 @@ components:
 
     ChatMessagePage:
       type: object
-      required: [items]
+      # `has_more` is required: the thread gates *Načíst starší* on it, so a client
+      # that types it optional cannot page at all without inventing a default.
+      required: [items, has_more]
       description: >-
         ⚠ `next_cursor` and `has_more` are computed from the SAME predicate that produced
         `items` — membership, floor, koš. A post-filter would leak what it removed through

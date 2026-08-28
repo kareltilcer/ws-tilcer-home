@@ -20,8 +20,7 @@ func TestMessagePublishReachesExactlyTheMembers(t *testing.T) {
 	hh := newHousehold(t, kaja, andy, boss, quiet)
 	c := hh.group(kaja, "Trojka", andy)
 
-	hh.notify.audiences = nil
-	hh.notify.types = nil
+	hh.notify.reset()
 	hh.send(kaja, c.ID, "jen pro nás dva")
 
 	if len(hh.notify.audiences) != 1 {
@@ -58,8 +57,7 @@ func TestRemovedMemberIsToldSpecifically(t *testing.T) {
 	hh := newHousehold(t, kaja, andy, boss)
 	c := hh.group(kaja, "Dočasné členství", andy)
 
-	hh.notify.audiences = nil
-	hh.notify.types = nil
+	hh.notify.reset()
 	if err := hh.svc.RemoveMember(hh.ctx(kaja), c.ID, andy.id); err != nil {
 		t.Fatalf("remove member: %v", err)
 	}
@@ -125,7 +123,7 @@ func TestPrevMessageIDIsOneValueForTheWholeAudience(t *testing.T) {
 	hh := newHousehold(t, kaja, andy)
 	c := hh.group(kaja, "Řada", andy)
 
-	hh.notify.payloads = nil
+	hh.notify.reset()
 	first := hh.send(kaja, c.ID, "jedna")
 	second := hh.send(andy, c.ID, "dvě")
 	third := hh.send(kaja, c.ID, "tři")
@@ -211,7 +209,7 @@ func TestGapCheckTerminatesForAMemberAddedToABusyConversation(t *testing.T) {
 	// remaining frame's prev looks like a gap and the test reports five refetches —
 	// an artefact of the harness, not of the protocol.
 	for i := range 5 {
-		hh.notify.payloads = nil
+		hh.notify.reset()
 		hh.send(kaja, c.ID, string(rune('A'+i))+" po připojení")
 		for _, p := range hh.notify.payloads {
 			receive(p.(chat.MessageEvent))

@@ -222,12 +222,14 @@
      below 3:1, because the own-versus-others distinction must NOT rest on colour.
      Alignment and the author label carry it; the tint only reinforces.
 
-     ⚠ THESE THREE ARE WRITTEN OUT IN BOTH BLOCKS, unlike v9's aliases above. A
-     var() alias declared only here re-resolves under .light on the SAME element,
-     which is how --vis-private gets away with it — but the moment one of these is
-     wanted on a nested surface, or somebody restates --s2 locally, the alias
-     silently keeps the dark value. Two literal declarations cost two lines and
-     remove the question. (Worth doing for v9's aliases too; not this PR's.) */
+     ⚠ DECLARED ONCE, exactly like v9's --vis-private above. An earlier version
+     restated all three under .light and claimed that as protection against a
+     nested surface redefining --s2; it is not. .light sits on the SAME root
+     element, so both declarations substitute the same computed value and the
+     second is simply dead — and a nested redefinition of --s2 cannot reach a
+     --bub-theirs already computed at the root either way. The theme swap works
+     because --accent-soft, --s2 and --muted are themselves redefined under .light,
+     which is the whole mechanism the alias pattern relies on. */
   --bub-mine: var(--accent-soft);
   --bub-theirs: var(--s2);
   /* The author label inside a FOREIGN bubble. ⚠ --muted, not --subtle: measured on
@@ -311,12 +313,9 @@
   --info-soft: oklch(0.955 0.014 256);
   /* Darkened from the design's 0.640 for the same reason as its dark twin. */
   --unmeasured: oklch(0.545 0.018 264);
-  /* v10's three aliases, restated rather than inherited — see the :root block for
-     why. The values are the light theme's own accent-soft / s2 / muted, so this
-     moves nothing on screen. */
-  --bub-mine: var(--accent-soft);
-  --bub-theirs: var(--s2);
-  --bub-label: var(--muted);
+  /* v10's three bubble tokens are NOT restated here — see the :root block. They
+     alias --accent-soft / --s2 / --muted, all three of which this block redefines,
+     so they follow the theme on their own. */
   --shadow: 0 1px 2px oklch(0.2 0.02 264 / 0.10), 0 2px 8px oklch(0.2 0.02 264 / 0.06);
 }
 

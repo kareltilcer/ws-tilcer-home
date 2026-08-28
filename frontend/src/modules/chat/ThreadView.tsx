@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, BellOff, CornerUpLeft, MoreHorizontal, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -82,9 +82,6 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     // not read as "they have scrolled away".
     return el.scrollHeight - el.scrollTop - el.clientHeight < 24
   }
-  const onScroll = () => {
-    atBottom.current = showingNewest()
-  }
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !newest || !atBottom.current) return
@@ -92,8 +89,18 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     // The trigger is the IDENTITY of the newest message, not the object: an edit or
     // a tombstone rewrites `newest` without extending the thread, and following that
     // down would move the view for a change that happened where they already are.
+    //
+    // ⚠ AND `conversation.data` IS A DEP FOR THE REASON THE CATCH-UP BELOW HAS ONE
+    // (v10 review). Both queries start together and either may land first. When the
+    // THREAD lands first this effect runs while the component is still returning the
+    // spinner — `conversation.isPending` — so the box does not exist and it bails on
+    // `!el`; the newest id never changes again, so it never re-ran, and a 62-message
+    // room opened on message 13 with everything after it below the fold. The box
+    // appears on the commit where the LAST of the two queries resolves, so that is
+    // what has to be depended on. A re-run with the member scrolled up is harmless:
+    // `atBottom` is false and nothing moves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newest?.id, conversationID])
+  }, [newest?.id, conversationID, conversation.data])
 
   /**
    * Loading older messages PREPENDS above the viewport, so without an anchor the
@@ -152,55 +159,84 @@ export function ThreadView({ conversationID, onOpenMembers }: {
    * a conversation they cannot see being marked read.
    */
   const marked = useRef<string>('')
-  useEffect(() => {
-    if (!newest || marked.current === newest.id) return
+  /** The request in flight, so a burst of scroll events sends one POST, not thirty. */
+  const marking = useRef<string>('')
+  /**
+   * ⚠ THE NEWEST ID LIVES IN A REF BECAUSE THE HANDLER IS REGISTERED ONCE (v10
+   * review). It used to be captured, which is why the listener had to be torn down
+   * and re-attached on every cache mutation to see a new message.
+   */
+  const newestID = newest?.id ?? ''
+  const newestRef = useRef(newestID)
+  newestRef.current = newestID
+
+  /**
+   * catchUp is the module's ONE scroll handler.
+   *
+   * ⚠ ONE, REGISTERED ONCE (v10 review). There were two — the `onScroll` prop and a
+   * native listener — measuring the same box for two halves of the same question,
+   * and the native one was re-registered on every arriving message because its
+   * effect depended on `thread.data`. On a busy thread that is a removeEventListener
+   * and an addEventListener per message, plus two document listeners, for a function
+   * whose only changing input is one id. The id moved into a ref and the listener
+   * stopped moving at all.
+   *
+   * ⚠ AND THE MARKER IS RECORDED ONLY ONCE THE REQUEST HAS LANDED (v10 review).
+   * `marked.current = id` before the mutation meant a POST lost to a dropped
+   * connection still permanently marked that id handled — both entry points
+   * short-circuit on it, so neither scrolling nor returning to the tab would ever
+   * retry, and the badge sat over messages plainly read until a NEWER message
+   * arrived to move the id along. `marking` holds the in-flight id so the retry
+   * costs nothing while it is still trying.
+   */
+  const catchUp = useCallback(() => {
+    const onScreen = showingNewest()
+    // ⚠ ONLY A MOUNTED BOX MAY ANSWER `atBottom`. An unmounted one is not "scrolled
+    // away", it is not there yet — recording that as false would leave the optimistic
+    // `true` overwritten before the commit where the box appears, and the auto-scroll
+    // above reads exactly that flag to decide whether to follow the thread down.
+    if (scrollRef.current) atBottom.current = onScreen
+    const latest = newestRef.current
+    if (!latest || marked.current === latest || marking.current === latest) return
     // ⚠ MEASURED, NOT ASSUMED. showingNewest() answers false while the scroll box is
     // unmounted and false while the member is scrolled back through history, which
     // are the two ways a marker can run ahead of what anybody has actually seen.
-    if (!showingNewest() || document.visibilityState !== 'visible') return
-    marked.current = newest.id
-    advanceRead.mutate(newest.id)
-    // advanceRead is a stable mutation object; including it would re-fire on every
-    // render of a busy thread.
+    if (!onScreen || document.visibilityState !== 'visible') return
+    marking.current = latest
+    advanceRead.mutate(latest, {
+      onSuccess: () => {
+        marked.current = latest
+      },
+      onError: () => {
+        // Leave `marked` alone, so the next scroll or tab return tries again.
+        if (marking.current === latest) marking.current = ''
+      },
+    })
+    // advanceRead is a stable mutation object and everything else here is a ref;
+    // including them would re-register the listeners this indirection removed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newest?.id])
+  }, [])
+
+  /** Returning to the tab catches the marker up. Registered once, never re-bound. */
+  useEffect(() => {
+    document.addEventListener('visibilitychange', catchUp)
+    return () => document.removeEventListener('visibilitychange', catchUp)
+  }, [catchUp])
 
   /**
-   * Scrolling back to the bottom, or returning to the tab, is what catches the
-   * marker up — otherwise a member who read everything while the tab was hidden,
-   * or while scrolled up, would keep a badge over messages they have plainly seen.
-   * The `marked` guard makes the repeat free.
+   * ⚠ THE DATA CHANGE CALLS IT; IT NO LONGER RE-REGISTERS ANYTHING (v10 review). A
+   * thread short enough to be wholly visible has no scroll to catch it up, so the
+   * arrival of the data is the only moment it can be marked read.
+   *
+   * ⚠ WHICH IS WHY `conversation.data` IS A DEP. The box appears on the commit where
+   * the LAST of the two queries resolves, and when that is the conversation rather
+   * than the thread, nothing about the thread changed to re-run this. A taller
+   * thread still correctly waits for the scroll that reaches its end, because
+   * showingNewest() measures.
    */
   useEffect(() => {
-    const catchUp = () => {
-      const latest = thread.data?.items[0]
-      if (!latest || marked.current === latest.id) return
-      if (!showingNewest() || document.visibilityState !== 'visible') return
-      marked.current = latest.id
-      advanceRead.mutate(latest.id)
-    }
-    // ⚠ IT RUNS ONCE HERE TOO, NOT ONLY ON A LISTENER (v10 review). The effect above
-    // fires while the scroll box may still be unmounted and then never re-fires,
-    // because its dep is the newest message id and that does not change again — so
-    // a thread short enough to be wholly visible would never be marked read at all,
-    // there being no scroll to catch it up.
-    //
-    // ⚠ WHICH IS WHY `conversation.data` IS A DEP. The box appears on the commit
-    // where the LAST of the two queries resolves, and when that is the conversation
-    // rather than the thread, nothing about the thread changed to re-run this. With
-    // it, the first commit at which the box exists is where a wholly-visible thread
-    // gets marked — and a taller one still correctly waits for the scroll that
-    // reaches its end, because showingNewest() measures.
     catchUp()
-    const el = scrollRef.current
-    el?.addEventListener('scroll', catchUp, { passive: true })
-    document.addEventListener('visibilitychange', catchUp)
-    return () => {
-      el?.removeEventListener('scroll', catchUp)
-      document.removeEventListener('visibilitychange', catchUp)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thread.data, conversation.data])
+  }, [catchUp, thread.data, conversation.data])
 
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [editing, setEditing] = useState<ChatMessage | null>(null)
@@ -219,6 +255,31 @@ export function ThreadView({ conversationID, onOpenMembers }: {
       </div>
     )
   }
+  // ⚠ A THREAD THAT FAILED TO LOAD IS NOT AN EMPTY ONE (v10 review). Only the
+  // CONVERSATION query was checked, so a 500 on the messages left `thread.data`
+  // undefined, `messages` empty, and the render fell through to the empty state:
+  // "Zatím tu nikdo nic nenapsal." over a room with two years of history, under a
+  // composer that still worked, with nothing on screen to press. The retry is part
+  // of the fix — the two states differ in what the member can DO about them.
+  if (thread.isError) {
+    return (
+      <div className="grid h-full place-items-center p-6 text-center">
+        <div className="max-w-sm">
+          <p className="text-sm font-bold">{cs.chat.threadLoadFailed}</p>
+          <p className="mt-1 text-sm text-muted text-pretty">{cs.chat.threadLoadFailedHint}</p>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-4"
+            loading={thread.isFetching}
+            onClick={() => void thread.refetch()}
+          >
+            {cs.chat.retry}
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   const room = conversation.data as Conversation
 
@@ -228,7 +289,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
 
       <div
         ref={scrollRef}
-        onScroll={onScroll}
+        onScroll={catchUp}
         className="min-h-0 flex-1 overflow-y-auto om-scroll px-4 py-4"
       >
         {/* ⚠ ABOVE the floor line, and only when there IS more. The two say

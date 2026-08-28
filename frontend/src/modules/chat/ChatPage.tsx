@@ -82,7 +82,16 @@ function ChatLayout() {
       </div>
 
       {id && (
-        <MembersPanel conversationID={id} open={membersOpen} onOpenChange={setMembersOpen} />
+        /* ⚠ KEYED FOR THE REASON ThreadView IS (v10 review). This panel holds
+           `removing` — the member row a confirmation dialog is armed with — and it
+           was the one component here React was free to reconcile across a room
+           switch. Arm a removal in room A, change route (browser back, a push deep
+           link, the `gone` frame's navigate), and the dialog is still open over a
+           panel that now says room B: confirming called removeMember(B, petra),
+           taking Petra out of a conversation nobody asked about. `membersOpen`
+           lives out here and deliberately survives — a panel left open should
+           follow you into the next room; it is the ARMED ROW that must not. */
+        <MembersPanel key={id} conversationID={id} open={membersOpen} onOpenChange={setMembersOpen} />
       )}
     </div>
   )

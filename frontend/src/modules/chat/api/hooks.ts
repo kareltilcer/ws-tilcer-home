@@ -5,7 +5,10 @@ import {
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { qk } from '@/api/keys'
+import { cs } from '@/i18n/cs'
+import { ApiError } from '@/api/client'
 import { subscribeToFrames, type LiveFrame } from '@/api/ws'
 import { clientId } from '@/api/clientId'
 import { useOnline } from '@/platform/pwa/offline'
@@ -80,6 +83,7 @@ export function useLoadMoreConversations(state?: 'active' | 'trash') {
         limit: CONVERSATION_PAGE,
       })
     },
+    onError: failed(cs.chat.actionFailed),
     onSuccess: (more) => {
       if (!more) return
       qc.setQueryData<ConversationPage>(qk.chatConversations(state), (old) => {
@@ -168,6 +172,7 @@ export function useLoadOlderMessages(conversationID: string) {
         limit: THREAD_PAGE,
       })
     },
+    onError: failed(cs.chat.actionFailed),
     onSuccess: (older) => {
       if (!older) return
       qc.setQueryData<MessagePage>(qk.chatMessages(conversationID), (old) => {
@@ -238,11 +243,33 @@ export function useChatSearch(q: string, conversationID?: string) {
 
 // ---- mutations ----
 
+/**
+ * failed is the module's ONE mutation error handler.
+ *
+ * ⚠ EVERY WRITE IN THIS MODULE NEEDS ONE (v10 review). Not a single mutation here
+ * had an `onError`, so a send that 404s — the room trashed by another member while
+ * the composer was open — stopped its spinner, left the typed text in the box and
+ * said nothing. The member reads that as "sent", presses Enter again, and gets the
+ * same silence, in the one module whose whole point is that a message either
+ * arrived or did not. Every other module in Home already does this
+ * (`toast.error(cs.…saveFailed)` in electricity, garden, finance).
+ *
+ * The server's own detail wins when there is one, because it names WHICH rule
+ * refused — `Konverzace nebyla nalezena.`, `Poslední člen nemůže konverzaci
+ * opustit — smažte ji místo toho.` — and those sentences were written to be read.
+ * The fallback is what a network failure leaves behind.
+ */
+function failed(fallback: string) {
+  return (e: unknown) =>
+    toast.error(e instanceof ApiError ? (e.detail ?? fallback) : fallback)
+}
+
 export function useSendMessage(conversationID: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (input: { body: string; replyToID?: string }) =>
       api.sendMessage(conversationID, { body: input.body, reply_to_id: input.replyToID ?? null }),
+    onError: failed(cs.chat.sendFailed),
     onSuccess: (msg) => {
       // The message is applied straight into the thread rather than refetched: the
       // response IS the message, and the /ws echo carries our own client id so it
@@ -257,6 +284,7 @@ export function useEditMessage(conversationID: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (input: { id: string; body: string }) => api.editMessage(input.id, input.body),
+    onError: failed(cs.chat.actionFailed),
     onSuccess: (msg) => replaceMessage(qc, conversationID, msg),
   })
 }
@@ -265,11 +293,18 @@ export function useDeleteMessage(conversationID: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.deleteMessage(id),
+    onError: failed(cs.chat.actionFailed),
     // ⚠ Refetch rather than patch. A delete turns a message into a TOMBSTONE —
     // the row survives with an empty body (D223) — and reconstructing that shape
     // client-side would be a second, drifting definition of what a tombstone is.
+    //
+    // ⚠ AND THE LIST GOES WITH IT (v10 review). UnreadCount excludes
+    // `deleted_at IS NOT NULL`, so a delete LOWERS every other member's badge —
+    // patch the thread and not the list and the row goes on counting a message
+    // that is now a tombstone in the thread beside it.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.chatMessages(conversationID) })
+      void qc.invalidateQueries({ queryKey: qk.chatConversations() })
     },
   })
 }
@@ -294,6 +329,7 @@ export function useCreateConversation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: api.createConversation,
+    onError: failed(cs.chat.actionFailed),
     onSuccess: () => invalidateLists(qc),
   })
 }
@@ -302,6 +338,7 @@ export function useRenameConversation(id: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (name: string) => api.renameConversation(id, name),
+    onError: failed(cs.chat.actionFailed),
     onSuccess: () => {
       // The header reads the name off the conversation, the rows read it off the
       // list. The thread is untouched — a rename does not change a message.
@@ -316,6 +353,7 @@ export function useDeleteConversation() {
   return useMutation({
     mutationFn: (input: { id: string; hard?: boolean }) =>
       api.deleteConversation(input.id, input.hard),
+    onError: failed(cs.chat.actionFailed),
     onSuccess: (_data, input) => {
       void qc.invalidateQueries({ queryKey: qk.chatConversation(input.id) })
       invalidateLists(qc)
@@ -327,6 +365,7 @@ export function useRestoreConversation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.restoreConversation(id),
+    onError: failed(cs.chat.actionFailed),
     onSuccess: (_data, id) => {
       void qc.invalidateQueries({ queryKey: qk.chatConversation(id) })
       invalidateLists(qc)
@@ -338,6 +377,7 @@ export function useAddMember(id: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (userID: string) => api.addMember(id, userID),
+    onError: failed(cs.chat.actionFailed),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.chatMembers(id) })
       void qc.invalidateQueries({ queryKey: qk.chatConversation(id) })
@@ -349,6 +389,7 @@ export function useRemoveMember(id: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (userID: string) => api.removeMember(id, userID),
+    onError: failed(cs.chat.actionFailed),
     // The panel, the member count on the room, and the lists — because removing
     // YOURSELF is how leaving works, and the room then leaves your list. Still not
     // the thread: the messages of somebody who left stay exactly where they were.
@@ -364,6 +405,7 @@ export function useSetMuted(id: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (muted: boolean) => api.setMuted(id, muted),
+    onError: failed(cs.chat.actionFailed),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.chatConversation(id) })
       void qc.invalidateQueries({ queryKey: qk.chatConversations() })
@@ -375,6 +417,11 @@ export function useAdvanceRead(id: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (untilMessageID: string) => api.advanceRead(id, untilMessageID),
+    // ⚠ THE ONE MUTATION HERE WITH NO TOAST, AND THAT IS DELIBERATE. It is
+    // housekeeping the member never asked for — it fires on every message that
+    // arrives in an open thread — so a banner on failure would be noise about
+    // something nobody did. ThreadView retries it instead, by only recording the
+    // marker once the request has actually landed.
     // ⚠ PATCHED, NOT INVALIDATED. The response already carries the new unread count,
     // and this fires on every message that arrives in an open thread — a refetch
     // here is one request per message per tab for a number the server just handed
@@ -500,6 +547,14 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
     // Neither extends the thread, so neither carries a prev_message_id and neither
     // can represent a gap.
     replaceMessage(qc, convID, ev.message)
+    // ⚠ BUT A DELETE MOVES THE BADGE (v10 review). UnreadCount excludes
+    // `deleted_at IS NOT NULL`, so the server's count drops the moment this frame
+    // is published — and patching only the thread left the row beside it counting
+    // a message the recipient can now see is a tombstone. An EDIT changes no
+    // count, which is why only this branch pays for the refetch.
+    if (frame.type === 'chat_message.deleted') {
+      void qc.invalidateQueries({ queryKey: qk.chatConversations() })
+    }
   }
 }
 
