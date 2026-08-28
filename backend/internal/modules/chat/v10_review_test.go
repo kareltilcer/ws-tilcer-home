@@ -608,9 +608,9 @@ func TestOverConversationLimitIsNullWhileBytesIs(t *testing.T) {
 // room and has no reason to refetch it — and CreateConversation with `member_ids`
 // puts them in the identical position while publishing nothing at all, so the room
 // and its unread badge stayed invisible to them until a refetch-on-focus or the
-// first message. The frontend's create dialog sends no member_ids today, which is
-// the only reason this was not visible; the served contract has documented the
-// field since 0.12.0.
+// first message. It was invisible only because the create dialog sent no
+// member_ids; it picks the founding members now, so this frame is on the live path
+// rather than ahead of it.
 //
 // The creator is deliberately NOT told: they are holding the response.
 func TestCreatingAConversationTellsTheMembersItAdds(t *testing.T) {
@@ -648,5 +648,84 @@ func TestCreatingAConversationTellsTheMembersItAdds(t *testing.T) {
 	}
 	if told[kaja.id] != 0 {
 		t.Errorf("the creator was told %d times; they are holding the response", told[kaja.id])
+	}
+}
+
+// ---- reported from the household ----
+
+// ⚠ A BUBBLE WITH NOTHING WRITTEN IN IT, AND IT LED THE PICKER. `push.Store.Members`
+// substituted the email only when the display name was exactly empty, so a name of
+// spaces survived as itself — past chat's directoryName, which detects that one
+// substitution and nothing else — and the add-member picker drew a member nobody
+// could read or recognise. It drew it first, because a space sorts before every
+// letter. The projection now trims before its fallback and this asserts the result
+// at chat's own boundary, where the interface (not push.Store) is what chat has.
+func TestDirectoryDoesNotListAMemberWithABlankName(t *testing.T) {
+	// Blank in the two shapes a profile field produces: spaces, and a non-breaking
+	// space that looks identical and is not one.
+	spaces := member{"u-spaces", "   ", []string{"editor"}}
+	nbsp := member{"u-nbsp", " ", []string{"editor"}}
+	hh := newHousehold(t, kaja, spaces, nbsp)
+	hh.join(kaja)
+
+	dir := decode[chat.Directory](t, hh.as(kaja, "GET", "/api/chat/directory", ""))
+	for _, e := range dir.Items {
+		if strings.TrimSpace(e.DisplayName) == "" {
+			t.Errorf("the directory lists %s as %q — a bubble with nothing in it", e.UserID, e.DisplayName)
+		}
+	}
+	byID := map[string]string{}
+	for _, e := range dir.Items {
+		byID[e.UserID] = e.DisplayName
+	}
+	for _, m := range []member{spaces, nbsp} {
+		if byID[m.id] != m.id {
+			t.Errorf("%s renders as %q, want their id", m.id, byID[m.id])
+		}
+	}
+
+	// ⚠ And not on the member row either, which is the same projection reaching a
+	// second surface: a blank name there takes the avatar's initial with it.
+	room := hh.group(kaja, "Skupina", spaces)
+	members := decode[chat.ConversationMemberList](t,
+		hh.as(kaja, "GET", "/api/chat/conversations/"+room.ID+"/members", ""))
+	for _, m := range members.Items {
+		if strings.TrimSpace(m.DisplayName) == "" {
+			t.Errorf("member %s renders as %q on the panel row", m.UserID, m.DisplayName)
+		}
+	}
+}
+
+// ⚠ THE PICKER AND THE MEMBERSHIP GATE ARE ONE SET (the same rule
+// TestAMemberTheDirectoryListsCanBeAdded states, from the other end). AddMember
+// answers an empty user id with 422, so a directory row carrying one is a button
+// that can only fail — and CreateConversation, which checks that same projection
+// for "is this person in the directory", would have accepted it and written a
+// membership row for nobody.
+//
+// ⚠ AddMember's TEST IS `strings.TrimSpace(in.UserID) == ""`, SO THIS ONE IS TOO.
+// The first filter here read `!= ""`, which is a DIFFERENT question: an id of spaces
+// passed it, led the picker as a live button, met the 422 anyway — and went through
+// CreateConversation, which has no trim of its own, to leave a real chat_members row
+// for nobody. Two spellings of the same gate is how the gate reopens.
+func TestDirectoryDoesNotListARowWithNoUserID(t *testing.T) {
+	nobody := member{"", "Bez ID", []string{"editor"}}
+	ghost := member{"  ", "Duch", []string{"editor"}}
+	hh := newHousehold(t, kaja, nobody, ghost)
+	hh.join(kaja)
+
+	dir := decode[chat.Directory](t, hh.as(kaja, "GET", "/api/chat/directory", ""))
+	for _, e := range dir.Items {
+		if strings.TrimSpace(e.UserID) == "" {
+			t.Errorf("the directory lists a row with no user id: %+v", e)
+		}
+	}
+
+	for _, id := range []string{"", "  "} {
+		if _, err := hh.svc.CreateConversation(hh.ctx(kaja), chat.ConversationCreate{
+			Name: "Kolem nikoho", MemberIDs: []string{id},
+		}); err == nil {
+			t.Errorf("CreateConversation accepted member id %q; AddMember answers one with 422", id)
+		}
 	}
 }

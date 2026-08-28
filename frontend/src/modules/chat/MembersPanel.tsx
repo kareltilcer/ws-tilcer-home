@@ -10,6 +10,7 @@ import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { useAuth } from '@/app/auth'
+import { DirectoryPicker } from './DirectoryPicker'
 import {
   useAddMember,
   useConversation,
@@ -171,32 +172,29 @@ export function MembersPanel({
                     {cs.chat.word.addMember}
                   </Button>
                 ) : (
-                  <>
-                    {directory.isPending && <Spinner />}
-                    {!directory.isPending && addable.length === 0 && (
-                      <p className="text-sm text-muted text-pretty">{cs.chat.directoryEmpty}</p>
+                  <DirectoryPicker
+                    directory={directory}
+                    addable={addable}
+                    label={cs.chat.word.addMember}
+                    renderChip={(d) => (
+                      <Button
+                        key={d.user_id}
+                        size="sm"
+                        variant="secondary"
+                        className="min-h-11 lg:min-h-8"
+                        // ⚠ THE ONE THAT WAS PRESSED, not all of them (v10 review).
+                        // Every button read the shared mutation's isPending, so
+                        // adding one person put the whole picker into the loading
+                        // state and the member could not tell which add was in
+                        // flight. `variables` is the id this mutation was called
+                        // with.
+                        loading={add.isPending && add.variables === d.user_id}
+                        onClick={() => add.mutate(d.user_id)}
+                      >
+                        {d.display_name}
+                      </Button>
                     )}
-                    <div className="flex flex-wrap gap-2">
-                      {addable.map((d) => (
-                        <Button
-                          key={d.user_id}
-                          size="sm"
-                          variant="secondary"
-                          className="min-h-11 lg:min-h-8"
-                          // ⚠ THE ONE THAT WAS PRESSED, not all of them (v10 review).
-                          // Every button read the shared mutation's isPending, so
-                          // adding one person put the whole picker into the loading
-                          // state and the member could not tell which add was in
-                          // flight. `variables` is the id this mutation was called
-                          // with.
-                          loading={add.isPending && add.variables === d.user_id}
-                          onClick={() => add.mutate(d.user_id)}
-                        >
-                          {d.display_name}
-                        </Button>
-                      ))}
-                    </div>
-                  </>
+                  />
                 )}
                 {/* ⚠ The directory is a LOGIN HISTORY projected from sessions — Home
                     has no user table — so somebody who has never logged in is simply

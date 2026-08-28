@@ -1580,6 +1580,22 @@ export const cs = {
     memberSinceBeginning: 'Vidí celou historii',
     directoryEmpty: 'Zatím se nikdo další nepřihlásil.',
     /**
+     * ⚠ A DIRECTORY THAT FAILED TO LOAD IS NOT AN EMPTY ONE (v10 chat report) — the
+     * same distinction `threadLoadFailed` draws one section down, for the same
+     * reason. Without this the fallback was `directoryEmpty`, so a 500 told the
+     * household nobody had ever logged in: a claim about who exists, made on the
+     * strength of a failed request, with nothing on screen to press.
+     */
+    directoryLoadFailed: 'Seznam lidí se nepodařilo načíst.',
+    /**
+     * ⚠ The create dialog's picker heading. It is a QUESTION rather than the noun
+     * *Členové*, because the panel's list is who is already in the room and this
+     * one is who will be — the same word for both would make the empty directory
+     * read as "this conversation has no members" instead of "nobody else has ever
+     * logged in".
+     */
+    createMembers: 'Kdo bude v konverzaci',
+    /**
      * ⚠ The directory is a LOGIN HISTORY projected from sessions — Home has no user
      * table — so somebody who has never logged in cannot be added. The picker says
      * so rather than looking broken.
