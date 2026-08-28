@@ -188,7 +188,7 @@ func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID str
 	att.CleanedBy = sql.NullString{String: actor, Valid: true}
 	att.CleanedAt = sql.NullString{String: cleanedAt, Valid: true}
 	out := att.wire(labels)
-	s.publishConversationChanged(ctx, att.ConversationID)
+	s.publishAttachmentChanged(ctx, actor, att)
 	return out, nil
 }
 
@@ -219,20 +219,72 @@ func alreadyCleaned(state string) error {
 	return httpx.ErrUnprocessable("Soubor už byl odstraněn.")
 }
 
-// publishConversationChanged tells a room's members that something about it moved.
+// publishAttachmentChanged re-publishes the BUBBLE an attachment belongs to.
 //
-// ⚠ THE FRAME CARRIES NO NAME AND NO ATTACHMENT ID, exactly as ConversationEvent
-// does everywhere else: a conversation's content is member-scoped, so the frame says
-// only "refetch this room" and each client re-reads through the membership join that
-// is already the access rule. `gone` is false — the room is still theirs.
-func (s *Service) publishConversationChanged(ctx context.Context, conversationID string) {
-	audience, err := s.store.MemberIDs(ctx, s.db, conversationID)
+// ⚠ A `chat_conversation.changed` FRAME IS NOT ENOUGH, AND SENDING ONLY THAT LEFT
+// EVERY OTHER MEMBER LOOKING AT A DEAD FILE. That frame means "refetch this room",
+// and the client answers it by invalidating the conversation and the two listings —
+// deliberately NOT the thread, because a room-level change is not a message change.
+// So a removal left other members' open threads still rendering the attachment, with
+// `/raw` now 404 because the object was deleted inline, and the epitaph — filename,
+// size, who, when — appearing only for the person who clicked. D243's whole point is
+// that the thread stays legible for everybody else.
+//
+// The right frame already exists: an attachment state change IS a message change, so
+// this publishes `chat_message.updated` with the re-rendered message, which
+// replaceMessage on the client already knows how to apply.
+//
+// ⚠ THE AUDIENCE IS MemberIDsAbove, NOT MemberIDs, and the distinction is the floor
+// (D218). This is an OLD message: somebody added to the room afterwards is bounded
+// off it by every read path, and publishing its body to them would hand their socket
+// exactly what the floor exists to withhold. EditMessage learned this in PR 2; the
+// clean-up verbs are the same shape.
+func (s *Service) publishAttachmentChanged(ctx context.Context, actor string, att attachmentRow) {
+	// The acting member's own scope, which is the one that produced the row this is
+	// about — so the re-render goes through the same floor every other read of it
+	// does, and a reply quote is resolved exactly as EditMessage resolves one.
+	sc, err := s.store.memberScope(ctx, s.db, actor, att.ConversationID)
 	if err != nil {
-		s.logger.Warn("chat: could not resolve the audience for a cleanup frame",
-			"conversation", conversationID, "err", err)
+		s.logger.Warn("chat: could not resolve a scope for an attachment frame",
+			"conversation", att.ConversationID, "err", err)
 		return
 	}
-	s.publishConversation(ctx, audience, conversationID, false)
+	messageID := att.MessageID
+	audience, err := s.store.MemberIDsAbove(ctx, s.db, sc.ConversationID, messageID)
+	if err != nil {
+		s.logger.Warn("chat: could not resolve the audience for an attachment frame",
+			"conversation", sc.ConversationID, "message", messageID, "err", err)
+		return
+	}
+	if len(audience) == 0 {
+		return
+	}
+	labels, err := s.labels(ctx)
+	if err != nil {
+		labels = map[string]string{}
+	}
+	row, err := s.store.MessageByID(ctx, s.db, sc, messageID)
+	if err != nil {
+		s.logger.Warn("chat: could not re-render a message after a cleanup",
+			"message", messageID, "err", err)
+		return
+	}
+	rendered, err := s.renderMessages(ctx, s.db, sc, []messageRow{row}, labels)
+	if err != nil || len(rendered) == 0 {
+		s.logger.Warn("chat: could not re-render a message after a cleanup",
+			"message", messageID, "err", err)
+		return
+	}
+	// No prev_message_id: this does not extend the thread, so there is no gap for a
+	// client to detect and nothing to compare against (the EditMessage rule).
+	s.notifyTo(ctx, audience, "chat_message.updated", MessageEvent{
+		ConversationID: sc.ConversationID, Message: rendered[0],
+	})
+	// The room's own figures moved too — its byte total and its over-limit flag —
+	// and those live on the conversation, not on the bubble.
+	if members, err := s.store.MemberIDs(ctx, s.db, sc.ConversationID); err == nil {
+		s.publishConversation(ctx, members, sc.ConversationID, false)
+	}
 }
 
 // assertCleanupGate is D241, in one place.

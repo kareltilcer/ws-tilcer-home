@@ -732,3 +732,100 @@ func TestSmazatNatrvaloStillBringsADeadlineForward(t *testing.T) {
 			"is not an answer for somebody who purged to fix an overrun (D254)")
 	}
 }
+
+// TestCleanupRepublishesTheBubble is D243 for everybody who is not clicking.
+//
+// ⚠ A `chat_conversation.changed` FRAME IS NOT ENOUGH, and sending only that left
+// every other member looking at a dead file. That frame means "refetch this room",
+// and the client answers it by invalidating the conversation and the two listings —
+// deliberately NOT the thread. So a removal left other members' open threads still
+// rendering the attachment, with /raw now 404 because the object was deleted inline,
+// and the epitaph appearing only for the person who clicked.
+func TestCleanupRepublishesTheBubble(t *testing.T) {
+	hh := newStorageHousehold(t, kaja, andy)
+	hh.join(kaja)
+	hh.join(andy)
+	room := hh.group(kaja, "Společná", andy)
+	msg := hh.uploadOne(kaja, room.ID, "velky.pdf", pdfBytes())
+	hh.notify.reset()
+
+	if rr := hh.as(kaja, "DELETE", "/api/chat/attachments/"+msg.Attachments[0].ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("Odstranit: %d %s", rr.Code, rr.Body.String())
+	}
+
+	var (
+		sawMessageFrame bool
+		epitaph         chat.Attachment
+		audience        []string
+	)
+	for i, typ := range hh.notify.types {
+		if typ != "chat_message.updated" {
+			continue
+		}
+		ev, ok := hh.notify.payloads[i].(chat.MessageEvent)
+		if !ok || len(ev.Message.Attachments) == 0 {
+			continue
+		}
+		sawMessageFrame = true
+		epitaph = ev.Message.Attachments[0]
+		audience = hh.notify.audiences[i]
+	}
+	if !sawMessageFrame {
+		t.Fatal("a removal published no chat_message.updated — every other member's open " +
+			"thread goes on rendering a file whose bytes are gone, and the epitaph (D243) " +
+			"never reaches them")
+	}
+	// The frame carries the epitaph, so the other member's bubble becomes legible
+	// without a refetch.
+	if epitaph.State != "removed" {
+		t.Errorf("the republished attachment is %q, want removed", epitaph.State)
+	}
+	if epitaph.OriginalFilename != "velky.pdf" || epitaph.ByteSize == 0 {
+		t.Errorf("the republished epitaph lost its filename or size: %+v", epitaph)
+	}
+	if epitaph.CleanedByLabel == nil {
+		t.Error("the republished epitaph is not attributed")
+	}
+	// ⚠ AND IT REACHES BOTH MEMBERS. The audience is MemberIDsAbove — the floor — so
+	// a member added AFTER this message would be excluded, but andy was there.
+	if len(audience) != 2 {
+		t.Errorf("the frame reached %v, want both members", audience)
+	}
+}
+
+// TestCleanupFrameRespectsTheFloor — the audience is bounded by D218, not by
+// membership alone.
+//
+// ⚠ IT IS AN OLD MESSAGE. Somebody added to the room afterwards is bounded off it by
+// every read path, so publishing its body to them would hand their socket exactly
+// what the floor exists to withhold — the mistake EditMessage was corrected for in
+// PR 2, in a verb that did not exist yet.
+func TestCleanupFrameRespectsTheFloor(t *testing.T) {
+	hh := newStorageHousehold(t, kaja, andy)
+	hh.join(kaja)
+	hh.join(andy)
+	room := hh.group(kaja, "Historie")
+	msg := hh.uploadOne(kaja, room.ID, "stary.pdf", pdfBytes())
+
+	// andy joins AFTER the message, so his floor sits above it.
+	if rr := hh.as(kaja, "POST", "/api/chat/conversations/"+room.ID+"/members",
+		`{"user_id":"`+andy.id+`"}`); rr.Code != http.StatusOK {
+		t.Fatalf("add member: %d %s", rr.Code, rr.Body.String())
+	}
+	hh.notify.reset()
+
+	if rr := hh.as(kaja, "DELETE", "/api/chat/attachments/"+msg.Attachments[0].ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("Odstranit: %d", rr.Code)
+	}
+	for i, typ := range hh.notify.types {
+		if typ != "chat_message.updated" {
+			continue
+		}
+		for _, who := range hh.notify.audiences[i] {
+			if who == andy.id {
+				t.Fatal("the cleanup frame carried an old message's body to a member whose " +
+					"floor sits above it — MemberIDs, not MemberIDsAbove (D218)")
+			}
+		}
+	}
+}

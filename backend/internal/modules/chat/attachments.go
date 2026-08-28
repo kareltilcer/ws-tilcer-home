@@ -232,10 +232,21 @@ func (s *Store) InsertAttachment(ctx context.Context, q querier, a attachmentRow
 // The `state = 'live'` term is the authorisation against a double click: the second
 // request affects no rows and the service turns that into 422 rather than a second
 // audit event and a second object delete.
+// ⚠ `thumbnail_key` IS CLEARED IN THE SAME STATEMENT, because the object it names is
+// deleted by the very next step. Leaving it set made `has_thumbnail` serialise true
+// for bytes that are gone — harmless today, since the epitaph is text and the client
+// branches on `state` first, but it is exactly the shape of the bug this PR already
+// fixed one file over: a row asserting an object the bucket does not have, waiting
+// for the first consumer that trusts the flag before checking the state.
+//
+// ⚠ `storage_key` STAYS, because the epitaph is not the only reader: the drain's
+// fallback path (queueOrphan) is handed the keys from the row that was loaded BEFORE
+// this ran, and keeping the column is what lets a later reconciliation say which
+// object this row used to own.
 func (s *Store) MarkAttachmentRemoved(ctx context.Context, q querier, id, actor, now string) (bool, error) {
 	res, err := q.ExecContext(ctx, `
 		UPDATE chat_attachments
-		   SET state = 'removed', cleaned_by = ?, cleaned_at = ?
+		   SET state = 'removed', cleaned_by = ?, cleaned_at = ?, thumbnail_key = NULL
 		 WHERE id = ? AND state = 'live'`, actor, now, id)
 	if err != nil {
 		return false, err
@@ -263,17 +274,24 @@ func (s *Store) MarkAttachmentMoved(ctx context.Context, q querier, id, document
 
 // QueueKeys enqueues object keys for the drain (D247).
 //
-// `INSERT OR IGNORE` rather than an upsert: a key already queued has a purge_after
-// somebody chose, and the paths that mean to bring it forward (Smazat natrvalo)
-// rewrite it explicitly through queuePurge.
+// ⚠ THE QUEUE HOLDS THE EARLIEST PROMISE, and this takes the same MIN as queuePurge
+// for that reason. An earlier version used `INSERT OR IGNORE`, which keeps whichever
+// deadline happened to be written first — the opposite rule to the one queuePurge
+// enforces, in the same table. No path reaches the conflict today (both callers
+// require a live attachment in a live room, which excludes every other enqueue), so
+// this is not a bug being fixed; it is the second spelling of one rule being removed
+// before somebody adds a third caller and inherits the wrong half.
 func (s *Store) QueueKeys(ctx context.Context, q querier, keys []string, queuedAt, purgeAfter string) error {
 	for _, k := range keys {
 		if k == "" {
 			continue
 		}
 		if _, err := q.ExecContext(ctx, `
-			INSERT OR IGNORE INTO chat_deleted_keys (key, queued_at, purge_after)
-			VALUES (?, ?, ?)`, k, queuedAt, purgeAfter); err != nil {
+			INSERT INTO chat_deleted_keys (key, queued_at, purge_after)
+			VALUES (?, ?, ?)
+			    ON CONFLICT (key) DO UPDATE
+			       SET purge_after = MIN(chat_deleted_keys.purge_after, excluded.purge_after)`,
+			k, queuedAt, purgeAfter); err != nil {
 			return err
 		}
 	}

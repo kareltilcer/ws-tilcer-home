@@ -182,7 +182,7 @@ func (s *Service) RemoveAttachment(ctx context.Context, attachmentID string) err
 			"attachment", attachmentID, "err", err)
 		s.queueOrphan(ctx, att.objectKeys())
 	}
-	s.publishConversationChanged(ctx, att.ConversationID)
+	s.publishAttachmentChanged(ctx, actor, att)
 	return nil
 }
 
