@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import shell from './AppShell.tsx?raw'
-import { isFullBleedRoute, routes } from './routes'
+import { DESKTOP_NAV_ORDER, isFullBleedRoute, routes } from './routes'
 
 // D260 — the first demotion in this app's history, asserted against the source.
 //
@@ -73,23 +73,47 @@ describe('the chat routes', () => {
 })
 
 describe('the desktop side nav leads with Chat', () => {
-  // ⚠ ALSO READ AS TEXT, for the reason at the top of this file: `desktopItems` is
-  // assembled inside the component out of both module-level tables, so reading one
-  // array's order back would mean standing up the whole provider stack.
+  // ⚠ THIS ONE IS STRUCTURAL, NOT TEXTUAL, and that is why the order was moved out
+  // of the component into DESKTOP_NAV_ORDER. The `?raw` convention at the top of
+  // this file is for the two nav TABLES, which are still module-level constants
+  // inside AppShell; an order that lives in routes.ts can simply be read back, and
+  // an assertion on the real array cannot be satisfied by rearranging source text.
   //
   // The sidebar is not the tab bar with a wider gutter. The phone bar is ordered by
-  // REACH; a list has no reach to trade on, so it is ordered by REASON TO LOOK, and
-  // chat is the only entry in it that can be waiting for you. Deriving one from the
-  // other is what had Chat fourth, under three destinations that never ask for
-  // anything.
-  it('puts Chat above the other three thumb tabs', () => {
-    const start = shell.indexOf('const desktopItems = [')
-    expect(start, 'desktopItems is missing from AppShell').toBeGreaterThan(-1)
-    const list = shell.slice(start, shell.indexOf('\n  ]', start))
-    const chatFirst = list.indexOf('item.to === routes.chat')
-    const theRest = list.indexOf('item.to !== routes.chat')
-    expect(chatFirst, 'the side nav no longer leads with Chat').toBeGreaterThan(-1)
-    expect(theRest, 'the other three thumb tabs are missing from the side nav').toBeGreaterThan(chatFirst)
+  // REACH; a list has no reach to trade on, so the artboards order it by REASON TO
+  // LOOK, and chat is the only entry in it that can be waiting for you.
+  it('matches the artboard order (design/v10 Home.dc.html, lines 828–842)', () => {
+    expect([...DESKTOP_NAV_ORDER]).toEqual([
+      routes.chat,
+      routes.nastenka,
+      routes.ukoly,
+      // ⚠ OKNO KEEPS THE FOURTH SLOT IT HAS ALWAYS HAD HERE. D260 took its THUMB
+      // TAB, not its place in a list with room for every destination — the demotion
+      // is about the four slots that have to fit under a thumb at 375 px.
+      routes.okno,
+      routes.poznamky,
+      routes.dokumenty,
+      routes.finance,
+      routes.zahrada,
+      routes.elektrina,
+      routes.log,
+      routes.administrace,
+      routes.nastaveni,
+    ])
+  })
+
+  // ⚠ THE ORDER HAS TO NAME EVERY NAV ENTRY. AppShell sorts by it and ranks anything
+  // unnamed last, so a module added to PRIMARY or OVERFLOW and forgotten here would
+  // land silently at the bottom of the sidebar rather than where it belongs. This is
+  // where that gets caught.
+  it('covers every entry in both nav tables', () => {
+    const keys = [...(block('PRIMARY') + block('OVERFLOW')).matchAll(/\{ to: routes\.(\w+)/g)].map(
+      (m) => m[1] as keyof typeof routes,
+    )
+    expect(keys.length, 'no nav entries found in AppShell').toBe(DESKTOP_NAV_ORDER.length)
+    for (const key of keys) {
+      expect(DESKTOP_NAV_ORDER, `routes.${key} is missing from DESKTOP_NAV_ORDER`).toContain(routes[key])
+    }
   })
 })
 
@@ -106,10 +130,40 @@ describe('isFullBleedRoute — the one module the shell does not pad', () => {
     expect(isFullBleedRoute(routes.chatUklid)).toBe(false)
     // React Router reads `/chat/uklid/` as the same location, so this has to too.
     expect(isFullBleedRoute(`${routes.chatUklid}/`)).toBe(false)
+    // ⚠ AND ANYTHING UNDER IT. `uklid` has no sub-routes today; the exclusion is
+    // written for the day it grows one, because an exact match would hand that page
+    // the full-bleed box and put its heading against the shell's edge.
+    expect(isFullBleedRoute(`${routes.chatUklid}/2026-08`)).toBe(false)
+  })
+
+  // ⚠ CASE-INSENSITIVELY, BECAUSE THE ROUTER IS. No route in App.tsx sets
+  // `caseSensitive`, so /CHAT really does render the module — and a predicate
+  // stricter than the router's matching pads a viewport-sized pane, which is the one
+  // thing it exists to prevent.
+  it('matches the way the router matches, regardless of case', () => {
+    expect(isFullBleedRoute('/CHAT')).toBe(true)
+    expect(isFullBleedRoute('/Chat/0198F4C2-6A1B-7000-8000-000000000000')).toBe(true)
+    expect(isFullBleedRoute('/Chat/Uklid')).toBe(false)
   })
 
   it('pads every other destination', () => {
-    for (const path of [routes.nastenka, routes.ukoly, routes.okno, routes.poznamky, routes.dokumenty, routes.log, routes.nastaveni]) {
+    for (const path of [
+      routes.nastenka,
+      routes.ukoly,
+      routes.okno,
+      routes.poznamky,
+      routes.dokumenty,
+      routes.finance,
+      routes.log,
+      routes.administrace,
+      routes.nastaveni,
+      // ⚠ THE TWO MODULES WITH SUB-ROUTES, base AND sub-path: they are the ones a
+      // predicate that widened past /chat would catch out first.
+      routes.zahrada,
+      `${routes.zahrada}/plodiny`,
+      routes.elektrina,
+      `${routes.elektrina}/cenik`,
+    ]) {
       expect(isFullBleedRoute(path), path).toBe(false)
     }
   })

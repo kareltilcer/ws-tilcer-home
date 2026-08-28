@@ -269,7 +269,13 @@
      (isFullBleedRoute), so this is the only thing taken off the viewport: get it
      wrong and the thread either leaves a gap or pushes the composer under the
      fold. ⚠ AND IT STILL CHANGES WITH AppShell — a taller header or a taller tab
-     bar has to be counted here, and nowhere else. */
+     bar has to be counted here, and nowhere else.
+
+     ⚠ IT DOES NOT COUNT THE OFFLINE BANNER, AND IT CANNOT: that strip is only up
+     when the network is gone, and its height depends on how its two sentences
+     wrap. Nothing that uses this token renders underneath it — ChatLayout is
+     replaced by the offline screen, which deliberately sizes itself with no
+     viewport arithmetic at all (ChatPage). */
   --chat-chrome: 118px;
 
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);

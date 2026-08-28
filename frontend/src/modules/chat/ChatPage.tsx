@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Route, Routes, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { WifiOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
-import { isFullBleedRoute, routes } from '@/app/routes'
+import { routes, type ShellLayout } from '@/app/routes'
 import { useOnline } from '@/platform/pwa/offline'
 import { ConversationList } from './ConversationList'
 import { ThreadView } from './ThreadView'
@@ -33,13 +33,14 @@ import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
 export function ChatPage() {
   useChatLiveSync()
   const online = useOnline()
-  const { pathname } = useLocation()
-
   // ⚠ THE OFFLINE SCREEN REPLACES THE WHOLE MODULE, `/chat/uklid` INCLUDED, so it
-  // has to fit whichever box the shell handed it — the viewport for the list and the
-  // thread, an ordinary padded page for the clean-up screen. One height for both
-  // leaves one of them scrolling a strip with nothing in it.
-  if (!online) return <ChatOffline fill={isFullBleedRoute(pathname)} />
+  // has to fit whichever box the shell handed it — the unpadded content box for the
+  // list and the thread, an ordinary padded page for the clean-up screen. The shell
+  // says which, through its Outlet; asking isFullBleedRoute again here would be the
+  // same answer arrived at twice, with nothing keeping the two honest.
+  const { fullBleed } = useOutletContext<ShellLayout>()
+
+  if (!online) return <ChatOffline fill={fullBleed} />
 
   return (
     <Routes>
@@ -73,7 +74,10 @@ function ChatLayout() {
        thumb tabs below, which is what --chat-chrome measures (theme/globals.css).
        The old `lg:h-[calc(100dvh-4rem)]` was the md:py-8 that is now gone. */
     <div className="h-[calc(100dvh-var(--chat-chrome))] md:h-full">
-      <div className="grid h-full min-h-0 overflow-hidden bg-s1 lg:grid-cols-[320px_1fr]">
+      {/* 312px is the artboard's list pane, not a rounded 320: with the card frame
+          and the shell's padding gone, that pane's border-right is the only line
+          between the two and it now lands where the design puts it. */}
+      <div className="grid h-full min-h-0 overflow-hidden bg-s1 lg:grid-cols-[312px_1fr]">
         {/* Below 1024 exactly one pane is on screen: the list, or the thread. The
             hidden pane is not rendered at all rather than hidden with CSS, so a
             phone never fetches a thread nobody is looking at.
@@ -165,8 +169,19 @@ function ChatOffline({ fill }: { fill: boolean }) {
   return (
     <div
       className={cn(
-        'grid place-items-center px-6 py-10 text-center',
-        fill ? 'h-[calc(100dvh-var(--chat-chrome))] md:h-full' : 'min-h-[340px]',
+        'grid min-h-[340px] place-items-center px-6 py-10 text-center',
+        // ⚠ NO 100dvh ARITHMETIC HERE, UNLIKE ChatLayout, and the reason is that
+        // this is the one chat screen that renders WHILE THE OFFLINE BANNER IS UP —
+        // they have the same trigger. --chat-chrome counts the header and the thumb
+        // bar; the banner is a third strip above both, and its height depends on how
+        // its two sentences wrap (73 px at 375 px), so a constant cannot know it.
+        // Subtracting only --chat-chrome left this box 16 px taller than the
+        // viewport: a strip that scrolled with nothing in it, which is the exact
+        // defect the panes were just fixed for. A short centred block does not need
+        // a viewport below 768. From 768 up `<main>` is a flex child with a real
+        // height and the banner is already accounted for inside it, so `h-full`
+        // fills what is left and centres in that.
+        fill && 'md:h-full',
       )}
     >
       <div className="max-w-[460px]">

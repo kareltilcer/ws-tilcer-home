@@ -26,7 +26,7 @@ import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { useTheme } from '@/theme/theme'
 import { useAuth } from '@/app/auth'
-import { isFullBleedRoute, routes } from '@/app/routes'
+import { DESKTOP_NAV_ORDER, isFullBleedRoute, routes, type ShellLayout } from '@/app/routes'
 import { useLiveSync } from '@/api/ws'
 import { useOnline } from '@/platform/pwa/offline'
 import { usePushKeepalive } from '@/platform/push/usePush'
@@ -94,6 +94,16 @@ const OVERFLOW: NavItem[] = [
   { to: routes.nastaveni, label: cs.settings.title, icon: Settings, desc: cs.settings.subtitle },
 ]
 
+// ⚠ AN UNNAMED ENTRY SORTS TO THE END RATHER THAN TO THE FRONT. `indexOf` returns
+// -1 for a module nobody added to DESKTOP_NAV_ORDER, and -1 would put it ABOVE Chat
+// — a new destination silently jumping the queue is worse than one landing at the
+// bottom. `sort` is stable (ES2019), so several unnamed entries keep their table
+// order. nav.test.ts fails on the omission either way.
+function desktopRank(to: string): number {
+  const i = DESKTOP_NAV_ORDER.indexOf(to)
+  return i === -1 ? DESKTOP_NAV_ORDER.length : i
+}
+
 export function AppShell() {
   const { theme, toggle } = useTheme()
   const { isAdmin, identity, logout } = useAuth()
@@ -113,19 +123,14 @@ export function AppShell() {
     item.to === routes.chat ? { ...item, badge: unread } : item,
   )
   const overflowItems = OVERFLOW.filter((item) => !item.adminOnly || isAdmin)
-  // ⚠ THE SIDE NAV LEADS WITH CHAT; THE THUMB BAR KEEPS IT THIRD OF FIVE. The two
-  // orders differ in the artboards and they differ on purpose. The phone bar is
-  // ordered by REACH — the middle slot is the easiest one to hit, which is why the
-  // one tab carrying an unread count sits there — while the sidebar is a list with
-  // no reach to trade on, so it is ordered by REASON TO LOOK. Chat is the only entry
-  // in it that can be waiting for you; everything else is visited deliberately.
-  // Deriving the sidebar from the tab bar's order is what had it fourth, under three
-  // destinations that never ask for anything.
-  const desktopItems = [
-    ...primaryItems.filter((item) => item.to === routes.chat),
-    ...primaryItems.filter((item) => item.to !== routes.chat),
-    ...overflowItems,
-  ]
+  // ⚠ THE SIDE NAV HAS ITS OWN ORDER, WRITTEN DOWN IN ONE PLACE (DESKTOP_NAV_ORDER
+  // in app/routes.ts), because it is not the thumb bar's order and never was — the
+  // artboards draw Chat at the top of the sidebar and third of five on the phone.
+  // Concatenating the two nav tables is what had Chat fourth and Okno fifth; a list
+  // that states the order is also a list a test can read back.
+  const desktopItems = [...primaryItems, ...overflowItems].sort(
+    (a, b) => desktopRank(a.to) - desktopRank(b.to),
+  )
   const fullBleed = isFullBleedRoute(location.pathname)
   // The "Více" tab lights up when the open route lives behind it.
   const overflowActive = overflowItems.some(
@@ -195,7 +200,12 @@ export function AppShell() {
               : 'px-4 py-5 pb-24 md:overflow-y-auto md:px-8 md:py-8 md:pb-8',
           )}
         >
-          <Outlet />
+          {/* ⚠ THE DECISION TRAVELS WITH THE OUTLET rather than being made twice.
+              Chat's offline screen has to fit whichever box it was handed, and the
+              only thing that actually knows which box that is, is the element that
+              handed it over. A page re-deriving it from its own pathname would agree
+              today and would be free to stop agreeing. */}
+          <Outlet context={{ fullBleed } satisfies ShellLayout} />
         </main>
       </div>
 
