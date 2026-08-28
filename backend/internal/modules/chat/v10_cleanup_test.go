@@ -14,6 +14,11 @@ import (
 
 func nowForTest() time.Time { return time.Now().UTC() }
 
+// tsFormat mirrors the module's own house timestamp (chat/floor.go), which is
+// unexported. Restated rather than exported: a test needing to PARSE a wire value is
+// not a reason to widen the package's surface.
+const tsFormat = "2006-01-02T15:04:05.000Z07:00"
+
 func (hh *storageHousehold) cleanupPage(m member, query string) chat.CleanupPage {
 	hh.t.Helper()
 	rr := hh.as(m, "GET", "/api/chat/cleanup"+query, "")
@@ -547,5 +552,183 @@ func TestChatBlobsAreReportedSharedNotPrivate(t *testing.T) {
 	}
 	if !sawOrphanRow {
 		t.Error("no unattributed row — its absence and its zero mean different things")
+	}
+}
+
+// TestDeletedMessageBytesLeaveTheTotal is the drift the review found, pinned.
+//
+// ⚠ A MESSAGE DELETE QUEUES ITS ATTACHMENT'S KEYS AND LEAVES THE ROW `live` — the
+// row survives so replies do not point at nothing, and the attachment is not an
+// epitaph (the MESSAGE is the tombstone). So a figure that filters on `state` alone
+// keeps counting bytes the drain has already destroyed, forever: the clean-up
+// listing correctly excludes a deleted message's rows, so nothing on that page can
+// ever bring the number down, and the threshold warns about bytes nobody can free.
+//
+// The predicate is `state = 'live' AND the message is not deleted`, in one place
+// (storage.go's ownedBytes) and in every figure built from it.
+func TestDeletedMessageBytesLeaveTheTotal(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Smazané zprávy")
+	msg := hh.uploadOne(kaja, room.ID, "velky.pdf", pdfBytes())
+
+	if before := *hh.storagePicture(kaja).TotalBytes; before == 0 {
+		t.Fatal("the fixture measured nothing; the test would pass vacuously")
+	}
+	if rr := hh.as(kaja, "DELETE", "/api/chat/messages/"+msg.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete the message: %d %s", rr.Code, rr.Body.String())
+	}
+
+	// ⚠ IMMEDIATELY, NOT AFTER THE DRAIN. The bytes are promised to the drain the
+	// moment the message is deleted, and a member watching the figure should not have
+	// to wait fifteen minutes to see the room they just emptied reported as empty.
+	picture := hh.storagePicture(kaja)
+	if picture.TotalBytes == nil || *picture.TotalBytes != 0 {
+		t.Errorf("total_bytes = %v after deleting the only message that carried a file, want 0",
+			picture.TotalBytes)
+	}
+	for _, c := range picture.Conversations {
+		if c.ID != room.ID {
+			continue
+		}
+		// ⚠ THE ROOM STILL HAS A ROW, reporting zero. Dropping the row instead would
+		// make the caller's two figures cover different sets of rooms.
+		if c.Bytes == nil || *c.Bytes != 0 {
+			t.Errorf("the room reports %v bytes, want a measured 0", c.Bytes)
+		}
+	}
+
+	// The admin's block agrees, because it is the same rule.
+	groups, err := hh.svc.StorageGroups(hh.ctx(kaja))
+	if err != nil {
+		t.Fatalf("StorageGroups: %v", err)
+	}
+	for _, g := range groups {
+		if g.ID == room.ID && g.Bytes != 0 {
+			t.Errorf("Administrace reports %d bytes for a room whose only file is in a "+
+				"deleted message", g.Bytes)
+		}
+	}
+
+	// And the drain then really does destroy them, so the figure was telling the truth.
+	if err := hh.svc.DrainJob(hh.ctx(kaja), nowForTest()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if n := hh.countObjects("chat/"); n != 0 {
+		t.Errorf("%d object(s) survived the drain", n)
+	}
+}
+
+// TestTrashedRoomReportsItsPurgeDeadline — the admin's *v koši · zbývá N dní*.
+//
+// ⚠ IT IS DERIVED FROM deleted_at, NOT READ OUT OF THE DRAIN'S QUEUE. The first
+// version looked it up by joining chat_deleted_keys to chat_attachments on
+// `storage_key`, a column with no index, once per conversation — for a value that is
+// just the room's own deleted_at plus HOME_CHAT_TRASH_DAYS.
+func TestTrashedRoomReportsItsPurgeDeadline(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Do koše")
+	hh.uploadOne(kaja, room.ID, "a.pdf", pdfBytes())
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("trash: %d", rr.Code)
+	}
+
+	groups, err := hh.svc.StorageGroups(hh.ctx(kaja))
+	if err != nil {
+		t.Fatalf("StorageGroups: %v", err)
+	}
+	for _, g := range groups {
+		if g.ID != room.ID {
+			continue
+		}
+		if g.TrashedAt == "" {
+			t.Fatal("a trashed room is not flagged")
+		}
+		if g.PurgeAfter == "" {
+			t.Fatal("a trashed room reports no deadline — the koš countdown has nothing to render")
+		}
+		trashed, err := time.Parse(tsFormat, g.TrashedAt)
+		if err != nil {
+			t.Fatalf("parse trashed_at %q: %v", g.TrashedAt, err)
+		}
+		purge, err := time.Parse(tsFormat, g.PurgeAfter)
+		if err != nil {
+			t.Fatalf("parse purge_after %q: %v", g.PurgeAfter, err)
+		}
+		if days := purge.Sub(trashed).Hours() / 24; days < 6.9 || days > 7.1 {
+			t.Errorf("the deadline is %.1f days after the delete, want HOME_CHAT_TRASH_DAYS (7)", days)
+		}
+		// ⚠ AND ITS BYTES ARE STILL COUNTED (D254). A trashed room's files are still in
+		// R2, and this page's premise is that its figures sum.
+		if g.Bytes == 0 {
+			t.Error("a trashed room reports 0 bytes — they are still in R2 until the drain runs (D254)")
+		}
+	}
+}
+
+// TestTrashingARoomDoesNotDelayAnAlreadyDueKey is the queue's MIN rule.
+//
+// ⚠ THE QUEUE HOLDS THE EARLIEST PROMISE, and an overwrite broke that in the one
+// direction that matters. A message delete queues at `purge_after = now`, due on the
+// next pass; trashing the room afterwards used to rewrite those keys to
+// `now + HOME_CHAT_TRASH_DAYS`, so bytes a member watched leave the thread on Monday
+// were still in R2 the following week with nothing on screen explaining it.
+func TestTrashingARoomDoesNotDelayAnAlreadyDueKey(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Nejprve zpráva")
+	msg := hh.uploadOne(kaja, room.ID, "smazany.pdf", pdfBytes())
+	key := "chat/" + msg.Attachments[0].ID + "/original"
+
+	// Monday: the message goes. Its key is queued at `now`.
+	if rr := hh.as(kaja, "DELETE", "/api/chat/messages/"+msg.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete the message: %d", rr.Code)
+	}
+	// Monday, a moment later: the whole room goes to the koš, which queues at now+7d.
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("trash the room: %d", rr.Code)
+	}
+
+	// The next pass must still collect the message's bytes: they were promised for
+	// today, and nothing that happened afterwards un-promised them.
+	if err := hh.svc.DrainJob(hh.ctx(kaja), nowForTest()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if hh.objectExists(key) {
+		t.Error("trashing the room pushed an already-due key out by the koš window — the " +
+			"queue must hold the EARLIEST promise, not the most recent one")
+	}
+}
+
+// TestSmazatNatrvaloStillBringsADeadlineForward is the other direction of the same
+// rule: MIN must not stop *Smazat natrvalo* from pulling a pending deadline in.
+func TestSmazatNatrvaloStillBringsADeadlineForward(t *testing.T) {
+	hh := newStorageHousehold(t, kaja)
+	hh.join(kaja)
+	room := hh.group(kaja, "Napřed do koše")
+	msg := hh.uploadOne(kaja, room.ID, "velky.pdf", pdfBytes())
+	key := "chat/" + msg.Attachments[0].ID + "/original"
+
+	// Into the koš first: the key is queued seven days out.
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("trash: %d", rr.Code)
+	}
+	if err := hh.svc.DrainJob(hh.ctx(kaja), nowForTest()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if !hh.objectExists(key) {
+		t.Fatal("the drain took a key that was not due yet")
+	}
+	// Then purged: the deadline has to come forward to now.
+	if rr := hh.as(kaja, "DELETE", "/api/chat/conversations/"+room.ID+"?hard=true", ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("purge: %d %s", rr.Code, rr.Body.String())
+	}
+	if err := hh.svc.DrainJob(hh.ctx(kaja), nowForTest()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if hh.objectExists(key) {
+		t.Error("Smazat natrvalo did not bring the deadline forward — waiting out the window " +
+			"is not an answer for somebody who purged to fix an overrun (D254)")
 	}
 }

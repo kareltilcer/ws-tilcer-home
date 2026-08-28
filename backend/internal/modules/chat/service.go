@@ -567,12 +567,21 @@ func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx
 // is not one or two DELETE calls. PR 2 has no attachments, so this enqueues nothing
 // today; it is written now because the delete path is written now, and a queue
 // added later is a queue that misses everything deleted in between.
+// ⚠ THE QUEUE ALWAYS HOLDS THE EARLIEST PROMISE, which is why the conflict clause
+// takes a MIN rather than overwriting (v10 PR 3 review). A MESSAGE delete queues its
+// keys at `purge_after = now`, due on the very next drain pass; a plain overwrite
+// meant that trashing the room afterwards pushed those same keys out to
+// `now + HOME_CHAT_TRASH_DAYS`, so bytes a member had watched leave the thread on
+// Monday were still in R2 the following week for a reason nothing on screen
+// explained. MIN keeps the hard purge working too — *Smazat natrvalo* passes `now`,
+// which is smaller than any pending deadline and therefore still brings it forward.
 func (s *Service) queuePurge(ctx context.Context, tx *sql.Tx, conversationID, queuedAt, purgeAfter string) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_deleted_keys (key, queued_at, purge_after)
 		SELECT storage_key, ?, ? FROM chat_attachments
 		 WHERE conversation_id = ? AND state = 'live'
-		    ON CONFLICT (key) DO UPDATE SET purge_after = excluded.purge_after`,
+		    ON CONFLICT (key) DO UPDATE
+		       SET purge_after = MIN(chat_deleted_keys.purge_after, excluded.purge_after)`,
 		queuedAt, purgeAfter, conversationID); err != nil {
 		return err
 	}
@@ -580,7 +589,8 @@ func (s *Service) queuePurge(ctx context.Context, tx *sql.Tx, conversationID, qu
 		INSERT INTO chat_deleted_keys (key, queued_at, purge_after)
 		SELECT thumbnail_key, ?, ? FROM chat_attachments
 		 WHERE conversation_id = ? AND state = 'live' AND thumbnail_key IS NOT NULL
-		    ON CONFLICT (key) DO UPDATE SET purge_after = excluded.purge_after`,
+		    ON CONFLICT (key) DO UPDATE
+		       SET purge_after = MIN(chat_deleted_keys.purge_after, excluded.purge_after)`,
 		queuedAt, purgeAfter, conversationID)
 	return err
 }

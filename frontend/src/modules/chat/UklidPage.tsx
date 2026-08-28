@@ -160,6 +160,12 @@ export function UklidPage() {
                     <CleanupRow
                       key={item.attachment.id}
                       item={item}
+                      // ⚠ PASSED DOWN, NOT RE-QUERIED PER ROW. Each row calling
+                      // useChatStorage() subscribed 200 components to one key — the
+                      // fetch is deduped, the re-renders are not, and they all fire
+                      // on every Odstranit and every move, which is exactly when the
+                      // list is busiest.
+                      canMove={storage.data?.move_available ?? false}
                       onRemove={() => setRemoving(item)}
                       onMove={() => setMoving(item)}
                     />
@@ -211,19 +217,24 @@ function SortTab({
 
 function CleanupRow({
   item,
+  canMove,
   onRemove,
   onMove,
 }: {
   item: CleanupItem
+  /**
+   * ⚠ NO BUTTON AT ALL WHEN THERE IS NO SINK (D239) — and this is `move_available`,
+   * NOT `can_clean_up`. The two answer different questions: one is the role gate,
+   * the other is whether `documents` was wired to accept custody at all. Gating on
+   * the role meant a deployment with no sink still offered the control, opened the
+   * folder picker, and answered 501 after the confirm — which is the opposite of a
+   * capability being plainly absent.
+   */
+  canMove: boolean
   onRemove: () => void
   onMove: () => void
 }) {
   const a = item.attachment
-  const storage = useChatStorage()
-  // ⚠ NO BUTTON AT ALL WHEN THERE IS NO SINK (D239). The move is 501 in that
-  // deployment and it does NOT fall back to delete, so offering it would be
-  // offering a control that can only fail.
-  const canMove = storage.data?.can_clean_up ?? false
   return (
     <li className="flex items-center gap-3 rounded-md border border-border bg-s1 px-3 py-2">
       {a.has_thumbnail ? (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { cs } from '@/i18n/cs'
@@ -125,9 +125,23 @@ function LimitField({
   onSave: (mb: number) => void
 }) {
   const [draft, setDraft] = useState(String(value))
-  // A value that changed on the server (another admin, or our own save landing)
-  // replaces the draft — the field is a view of the setting, not a form.
-  useEffect(() => setDraft(String(value)), [value])
+  const input = useRef<HTMLInputElement>(null)
+  /**
+   * A value that changed on the server — another admin, or our own save landing —
+   * replaces the draft, because the field is a VIEW of the setting rather than a
+   * form.
+   *
+   * ⚠ EXCEPT WHILE IT IS FOCUSED, which is the whole correction. The snapshot query
+   * refetches on window focus and on the invalidate the OTHER field's save triggers,
+   * and re-syncing then overwrote whatever was being typed: an admin part-way through
+   * `1024` watched the field jump back to `512` mid-keystroke, on a screen with no
+   * Save button to press again. A focused field belongs to whoever is typing in it;
+   * the blur that follows is what reconciles the two.
+   */
+  useEffect(() => {
+    if (document.activeElement === input.current) return
+    setDraft(String(value))
+  }, [value])
 
   const parsed = Number.parseInt(draft, 10)
   const valid = Number.isFinite(parsed) && parsed >= 1
@@ -142,6 +156,7 @@ function LimitField({
       </label>
       <div className="mt-1 flex items-center gap-2">
         <Input
+          ref={input}
           id={id}
           type="number"
           min={1}

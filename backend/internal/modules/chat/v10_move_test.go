@@ -379,3 +379,31 @@ func eqStr(a, b *string) bool {
 	}
 	return *a == *b
 }
+
+// TestStoragePictureSaysWhetherTheMoveExists is D239's other half.
+//
+// ⚠ THE 501 IS NOT ENOUGH ON ITS OWN. "With no sink configured the move is 501 AND
+// THE BUTTON IS ABSENT" — and a client cannot work that out: `can_clean_up` answers
+// a ROLE gate, which is a different question, so gating the button on it offered
+// *Přesunout do Dokumentů* in a deployment that has no sink, opened the folder
+// picker, and refused after the confirm. A capability that is plainly absent has to
+// look absent.
+func TestStoragePictureSaysWhetherTheMoveExists(t *testing.T) {
+	with := newStorageHousehold(t, kaja)
+	with.join(kaja)
+	if picture := with.storagePicture(kaja); !picture.MoveAvailable {
+		t.Error("move_available is false with a sink wired — the button would never be offered")
+	}
+
+	without := newStorageHouseholdWith(t, nil, kaja)
+	without.join(kaja)
+	picture := without.storagePicture(kaja)
+	if picture.MoveAvailable {
+		t.Error("move_available is true with NO sink — the UI offers a control that can only 501 (D239)")
+	}
+	// ⚠ And the gate it is NOT: a reader with no sink must still see can_clean_up
+	// answered on its own terms, so the two flags cannot be collapsed into one.
+	if !picture.CanCleanUp {
+		t.Error("can_clean_up was dragged down by the missing sink — they answer different questions")
+	}
+}

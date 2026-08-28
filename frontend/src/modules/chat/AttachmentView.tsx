@@ -30,9 +30,19 @@ export function AttachmentView({ attachment: a }: { attachment: Attachment }) {
   return <FileAttachment attachment={a} />
 }
 
+/**
+ * ⚠ THE FALLBACK STEPS DOWN TWICE, and collapsing it to one step lost an image that
+ * was perfectly readable. A missing THUMBNAIL and a missing ORIGINAL are different
+ * failures: the first happens whenever cwebp was unavailable at upload, or the
+ * derived object was lost, and `/raw` still serves the full picture — so dropping
+ * straight to an icon-and-filename row threw away the thing the reserved box was
+ * sized for. Only when the ORIGINAL will not load is there nothing left to render.
+ */
 function ImageAttachment({ attachment: a }: { attachment: Attachment }) {
-  const [failed, setFailed] = useState(false)
-  if (failed) return <FileAttachment attachment={a} />
+  const [step, setStep] = useState<'thumb' | 'full' | 'gone'>(
+    a.has_thumbnail ? 'thumb' : 'full',
+  )
+  if (step === 'gone') return <FileAttachment attachment={a} />
   return (
     <a
       href={attachmentURL(a.id)}
@@ -44,12 +54,15 @@ function ImageAttachment({ attachment: a }: { attachment: Attachment }) {
       style={a.width && a.height ? { aspectRatio: `${a.width} / ${a.height}` } : undefined}
     >
       <img
-        src={a.has_thumbnail ? thumbnailURL(a.id) : attachmentURL(a.id)}
+        // `key` forces a fresh element on the step down, so the browser actually
+        // re-requests instead of keeping the errored one and never firing load.
+        key={step}
+        src={step === 'thumb' ? thumbnailURL(a.id) : attachmentURL(a.id)}
         alt={a.original_filename}
         loading="lazy"
         width={a.width ?? undefined}
         height={a.height ?? undefined}
-        onError={() => setFailed(true)}
+        onError={() => setStep((s) => (s === 'thumb' ? 'full' : 'gone'))}
         className="h-full w-full object-cover"
       />
     </a>

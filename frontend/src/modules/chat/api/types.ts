@@ -264,6 +264,15 @@ export interface ChatStorage {
    * limit.
    */
   max_upload_mb: number
+  /**
+   * Whether a `storage.BlobSink` is wired at all (D239).
+   *
+   * ⚠ GATE THE MOVE BUTTON ON THIS, NOT ON `can_clean_up`. The two answer different
+   * questions — one is a role gate, the other is whether the capability exists in
+   * this deployment — and D239 requires an absent capability to LOOK absent rather
+   * than to open a dialog and 501 after the confirm.
+   */
+  move_available: boolean
 }
 
 export interface ChatStorageConversation {

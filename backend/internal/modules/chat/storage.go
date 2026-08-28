@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
@@ -52,6 +53,15 @@ type ChatStorage struct {
 	// its own tree; chat republishes it rather than fetching another module's tree
 	// to find out its own cap.
 	MaxUploadMB int `json:"max_upload_mb"`
+	// MoveAvailable reports whether a `storage.BlobSink` is wired at all (D239).
+	//
+	// ⚠ WITHOUT IT THE UI CANNOT OBEY D239. "With no sink configured the move is 501
+	// AND THE BUTTON IS ABSENT" — and the client has no way to know: `can_clean_up`
+	// answers a ROLE gate, which is a different question. Gating the button on that
+	// one meant a deployment with no sink still offered *Přesunout do Dokumentů*,
+	// opened the folder picker, and answered 501 after the confirm. A capability that
+	// is plainly absent has to actually LOOK absent.
+	MoveAvailable bool `json:"move_available"`
 }
 
 // ConversationStorage is one room's line.
@@ -90,6 +100,7 @@ func (s *Service) Storage(ctx context.Context) (ChatStorage, error) {
 		Conversations:           make([]ConversationStorage, 0, len(rooms)),
 		CanCleanUp:              writeAllowedCtx(ctx),
 		MaxUploadMB:             int(s.upload.MaxBytes >> 20),
+		MoveAvailable:           s.blobSink != nil,
 	}
 	for _, r := range rooms {
 		bytes, objects := r.Bytes, r.Objects
@@ -143,7 +154,22 @@ func (s *Service) StorageBlobs(ctx context.Context) ([]storage.BlobUsage, error)
 // members; clean-up is member-scoped (D241) and the admin's only two verbs over a
 // room they are not in are restore and purge (D255).
 func (s *Service) StorageGroups(ctx context.Context) ([]storage.GroupUsage, error) {
-	return s.store.ConversationUsageAll(ctx, s.db)
+	groups, err := s.store.ConversationUsageAll(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	// The koš deadline, added here because this is the layer that holds TrashDays —
+	// the store returns the instant the countdown starts from. See ConversationUsageAll
+	// for why it is derived rather than read back out of the drain's queue.
+	for i := range groups {
+		if groups[i].TrashedAt == "" {
+			continue
+		}
+		if at, err := time.Parse(tsFormat, groups[i].TrashedAt); err == nil {
+			groups[i].PurgeAfter = at.AddDate(0, 0, s.trashDays).Format(tsFormat)
+		}
+	}
+	return groups, nil
 }
 
 // ---- store ----
@@ -156,15 +182,34 @@ type conversationUsage struct {
 	Objects int64
 }
 
-// TotalLiveBytes is the household's whole live chat attachment total.
+// ownedBytes is the ONE definition of "bytes chat still owns", and every figure in
+// this file is built from it.
 //
-// `state = 'live'` is the entire rule: `moved` bytes left the `chat/` prefix and
-// `removed` bytes are gone, so both leave this figure BY CONSTRUCTION rather than
-// by bookkeeping that can drift (D246).
+// ⚠ `state = 'live'` IS NOT THE WHOLE RULE, AND ASSUMING IT WAS DRIFTED THE TOTAL
+// UPWARDS FOREVER. Deleting a message queues its attachment's keys for the drain and
+// deliberately does NOT move the row off `live` (messages.go: the row survives so
+// replies do not point at nothing, and the attachment is not an *epitaph* — the
+// message is a tombstone). So after the drain destroys those objects, an
+// attachment-only predicate keeps counting bytes that are gone from R2 — and no
+// clean-up action can ever lower the figure, because the listing correctly excludes
+// a deleted message's rows. The threshold then warns about bytes nobody can free.
+//
+// The honest predicate is therefore BOTH terms: the attachment is live AND its
+// message is not a tombstone. It is spelled once here and joined in by every caller.
+const ownedBytes = `a.state = 'live' AND m.deleted_at IS NULL`
+
+// ownedFrom is the join those two terms need.
+const ownedFrom = ` FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id`
+
+// TotalLiveBytes is the household's whole owned attachment total.
+//
+// `moved` bytes left the `chat/` prefix and `removed` bytes are gone, so both leave
+// this figure BY CONSTRUCTION rather than by bookkeeping that can drift (D246) —
+// and so does a deleted message's, for the reason ownedBytes records.
 func (s *Store) TotalLiveBytes(ctx context.Context, q querier) (int64, error) {
 	var total sql.NullInt64
 	err := q.QueryRowContext(ctx,
-		`SELECT SUM(byte_size) FROM chat_attachments WHERE state = 'live'`).Scan(&total)
+		`SELECT SUM(a.byte_size)`+ownedFrom+` WHERE `+ownedBytes).Scan(&total)
 	return total.Int64, err
 }
 
@@ -175,13 +220,23 @@ func (s *Store) TotalLiveBytes(ctx context.Context, q querier) (int64, error) {
 // there is no `c.deleted_at IS NULL` term here and why that absence is worth a
 // sentence: it is the one read in the module that deliberately does not carry it.
 func (s *Store) ConversationUsageFor(ctx context.Context, q querier, actor string) ([]conversationUsage, error) {
+	// ⚠ THE OWNED-BYTES PREDICATE RIDES THE LEFT JOIN'S ON CLAUSE, not a WHERE. In a
+	// WHERE it would drop the whole ROW for a conversation with no owned bytes, so a
+	// room whose only file was in a deleted message would vanish from the caller's
+	// storage picture instead of reporting 0 B — and the two figures the page shows
+	// would stop being the same set of rooms.
+	// ⚠ AND THE AGGREGATES KEY ON `m.id IS NOT NULL`, not on the join alone. A LEFT
+	// JOIN whose ON clause fails still emits the left row with the right side NULL,
+	// so summing a.byte_size unconditionally would count a deleted message's
+	// attachment anyway — the join would look right and change nothing.
 	rows, err := q.QueryContext(ctx, `
 		SELECT c.id, c.name,
-		       COALESCE(SUM(CASE WHEN a.state = 'live' THEN a.byte_size END), 0),
-		       COUNT(CASE WHEN a.state = 'live' THEN 1 END)
+		       COALESCE(SUM(CASE WHEN m.id IS NOT NULL THEN a.byte_size END), 0),
+		       COUNT(m.id)
 		  FROM chat_conversations c
-		  JOIN chat_members m ON m.conversation_id = c.id AND m.user_id = ?
-		  LEFT JOIN chat_attachments a ON a.conversation_id = c.id
+		  JOIN chat_members mem ON mem.conversation_id = c.id AND mem.user_id = ?
+		  LEFT JOIN chat_attachments a ON a.conversation_id = c.id AND a.state = 'live'
+		  LEFT JOIN chat_messages m    ON m.id = a.message_id AND m.deleted_at IS NULL
 		 GROUP BY c.id, c.name
 		 ORDER BY 3 DESC, c.name`, actor)
 	if err != nil {
@@ -192,18 +247,25 @@ func (s *Store) ConversationUsageFor(ctx context.Context, q querier, actor strin
 
 // ConversationUsageAll is the admin's table: every room, trashed ones flagged.
 func (s *Store) ConversationUsageAll(ctx context.Context, q querier) ([]storage.GroupUsage, error) {
+	// ⚠ `purge_after` IS DERIVED FROM deleted_at, NOT READ FROM THE QUEUE. The first
+	// version looked it up with a correlated subquery joining chat_deleted_keys to
+	// chat_attachments on `storage_key` — a column with no index, so it scanned the
+	// attachment table once per queued key PER CONVERSATION, on the one page that
+	// already runs a COUNT per table, a dbstat scan and a full bucket listing. And it
+	// was answering a question the caller already knows: a trashed room's deadline is
+	// its own deleted_at plus HOME_CHAT_TRASH_DAYS, which is exactly what the delete
+	// path wrote into the queue. StorageGroups adds the days (it holds trashDays);
+	// this returns the instant the countdown starts from.
 	rows, err := q.QueryContext(ctx, `
 		SELECT c.id, c.name, COALESCE(c.deleted_at, ''),
-		       COALESCE((SELECT MIN(k.purge_after) FROM chat_deleted_keys k
-		                   JOIN chat_attachments ka ON ka.storage_key = k.key
-		                  WHERE ka.conversation_id = c.id), ''),
 		       (SELECT COUNT(*) FROM chat_members mm WHERE mm.conversation_id = c.id),
-		       COALESCE(SUM(CASE WHEN a.state = 'live' THEN a.byte_size END), 0),
-		       COUNT(CASE WHEN a.state = 'live' THEN 1 END)
+		       COALESCE(SUM(CASE WHEN m.id IS NOT NULL THEN a.byte_size END), 0),
+		       COUNT(m.id)
 		  FROM chat_conversations c
-		  LEFT JOIN chat_attachments a ON a.conversation_id = c.id
+		  LEFT JOIN chat_attachments a ON a.conversation_id = c.id AND a.state = 'live'
+		  LEFT JOIN chat_messages m    ON m.id = a.message_id AND m.deleted_at IS NULL
 		 GROUP BY c.id, c.name, c.deleted_at
-		 ORDER BY 6 DESC, c.name`)
+		 ORDER BY 5 DESC, c.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +273,7 @@ func (s *Store) ConversationUsageAll(ctx context.Context, q querier) ([]storage.
 	out := []storage.GroupUsage{}
 	for rows.Next() {
 		var g storage.GroupUsage
-		if err := rows.Scan(&g.ID, &g.Name, &g.TrashedAt, &g.PurgeAfter,
+		if err := rows.Scan(&g.ID, &g.Name, &g.TrashedAt,
 			&g.Members, &g.Bytes, &g.Objects); err != nil {
 			return nil, err
 		}
@@ -223,11 +285,15 @@ func (s *Store) ConversationUsageAll(ctx context.Context, q querier) ([]storage.
 // ConversationsOverLimit answers "which of my rooms are over" in one query, so the
 // clean-up listing does not run a SUM per row.
 func (s *Store) ConversationsOverLimit(ctx context.Context, q querier, actor string, limitBytes int64) (map[string]bool, error) {
+	// The same owned-bytes rule as every other figure here: an attachment whose
+	// message is a tombstone is not bytes this room can be asked to clean up.
 	rows, err := q.QueryContext(ctx, `
 		SELECT c.id
 		  FROM chat_conversations c
-		  JOIN chat_members m ON m.conversation_id = c.id AND m.user_id = ?
-		  JOIN chat_attachments a ON a.conversation_id = c.id AND a.state = 'live'
+		  JOIN chat_members mem   ON mem.conversation_id = c.id AND mem.user_id = ?
+		  JOIN chat_attachments a ON a.conversation_id = c.id
+		  JOIN chat_messages m    ON m.id = a.message_id
+		 WHERE `+ownedBytes+`
 		 GROUP BY c.id
 		HAVING SUM(a.byte_size) > ?`, actor, limitBytes)
 	if err != nil {
@@ -268,7 +334,7 @@ func (s *Store) ConversationsOverLimit(ctx context.Context, q querier, actor str
 // visible instead of quietly folded into a total.
 func (s *Store) LiveAttachmentIDs(ctx context.Context, q querier) (map[string]string, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT id FROM chat_attachments WHERE state = 'live'`)
+		`SELECT a.id`+ownedFrom+` WHERE `+ownedBytes)
 	if err != nil {
 		return nil, err
 	}

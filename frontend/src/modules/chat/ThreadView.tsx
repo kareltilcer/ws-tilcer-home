@@ -811,20 +811,23 @@ function Composer({
    */
   const accept = (incoming: File[]) => {
     if (incoming.length === 0) return
-    const tooBig: string[] = []
+    const overCap: string[] = []
     const kept: File[] = []
     for (const f of incoming) {
-      if (f.size > maxBytes) tooBig.push(f.name)
+      if (f.size > maxBytes) overCap.push(f.name)
       else kept.push(f)
     }
-    setRejected(tooBig)
-    setFiles((current) => {
-      const room = MAX_FILES - current.length
-      if (kept.length > room) {
-        setRejected((r) => [...r, ...kept.slice(room).map((f) => f.name)])
-      }
-      return [...current, ...kept.slice(0, Math.max(0, room))]
-    })
+    // ⚠ BOTH DECISIONS ARE MADE BEFORE EITHER setState, AGAINST `files` RATHER THAN
+    // INSIDE AN UPDATER. The first version called setRejected from inside setFiles's
+    // updater — an updater must be pure, and React runs it twice under StrictMode,
+    // so the names of the files that overflowed the ten-file cap were appended to
+    // the rejection list twice. It also made what the member is told depend on how
+    // many times React chose to re-run the updater, which is not a guarantee React
+    // offers. Both handlers here are user events, so `files` is current.
+    const room = Math.max(0, MAX_FILES - files.length)
+    const overflow = kept.slice(room).map((f) => f.name)
+    setFiles([...files, ...kept.slice(0, room)])
+    setRejected([...overCap, ...overflow])
   }
 
   const submit = () => {
