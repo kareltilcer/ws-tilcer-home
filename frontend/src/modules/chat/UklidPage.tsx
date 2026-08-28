@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useLeaveConfirm } from './useLeaveConfirm'
-import { AlertTriangle, FileText, Trash2, MoveRight } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, FileText } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { fmtDate, fmtStorageBytes } from '@/i18n/format'
 import { qk } from '@/api/keys'
+import { routes } from '@/app/routes'
 import { getDocumentsTree } from '@/api/endpoints'
 import { ApiError } from '@/api/client'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
-import { ScreenHeader } from '@/components/common/states'
 import { thumbnailURL } from './api/endpoints'
 import { useChatStorage, useCleanup, useMoveAttachment, useRemoveAttachment } from './api/hooks'
 import type { CleanupItem } from './api/types'
@@ -47,14 +48,29 @@ export function UklidPage() {
    * is not react-router's `useBlocker` (data-router only; this app mounts
    * `<BrowserRouter>`) and for the one exit it does not cover.
    */
-  const stillOver = storage.data?.total_exceeded ?? false
-  useLeaveConfirm(
-    stillOver,
-    `${cs.chat.cleanupLeaveOver(
-      fmtStorageBytes(storage.data?.total_bytes ?? null),
-      `${storage.data?.threshold_total_mb ?? 0} MB`,
-    )} ${cs.chat.cleanupLeaveBody}`,
-  )
+  /**
+   * ⚠ AND IT NAMES *WHICH* THRESHOLD (D244), which is why the per-conversation one
+   * is here too. It used to watch only the module total, so somebody who came in
+   * from the warning about one heavy room — the case the link on that warning
+   * exists for — left without being asked, because the household as a whole was
+   * fine. A sentence about the total, on a screen a member reached because of a
+   * room, breaks the one thing this page stands on: that its figures mean what
+   * they say.
+   */
+  const overRoom = storage.data?.conversations.find((c) => c.over_limit)
+  const overTotalNow = storage.data?.total_exceeded ?? false
+  const stillOver = overTotalNow || !!overRoom
+  const leaveLine = overTotalNow
+    ? cs.chat.cleanupLeaveOver(
+        fmtStorageBytes(storage.data?.total_bytes ?? null),
+        `${storage.data?.threshold_total_mb ?? 0} MB`,
+      )
+    : cs.chat.cleanupLeaveOverConversation(
+        overRoom?.name ?? '',
+        fmtStorageBytes(overRoom?.bytes ?? null),
+        `${storage.data?.threshold_conversation_mb ?? 0} MB`,
+      )
+  useLeaveConfirm(stillOver, `${leaveLine} ${cs.chat.cleanupLeaveBody}`)
 
   // ⚠ THE GROUPING RUNS BEFORE THE 403 BRANCH, and the order is the rules-of-hooks
   // rule rather than a preference: a useMemo after an early return is called
@@ -67,20 +83,27 @@ export function UklidPage() {
   // that never hits is a memo that costs and buys nothing.
   const items = listing.data?.items ?? []
   const grouped = useMemo(() => groupByConversation(listing.data?.items ?? []), [listing.data])
+  // The room's OWN weight, beside what this single page of it lists. Keyed rather
+  // than searched per group: `conversations` is the caller's whole membership.
+  const roomBytes = useMemo(
+    () => new Map((storage.data?.conversations ?? []).map((c) => [c.id, c.bytes])),
+    [storage.data],
+  )
 
   // ⚠ THE READER'S 403 IS A SCREEN, NOT A TOAST (D241). It is the module's one
   // recorded asymmetry — a reader can fill storage they can never clean — and the
   // copy explains rather than scolds.
   if (listing.error instanceof ApiError && listing.error.status === 403) {
     return (
-      <div className="mx-auto max-w-3xl">
-        <ScreenHeader title={cs.chat.cleanupTitle} />
-        <div className="rounded-lg border border-border bg-s1 p-6 text-center">
-          <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-lg bg-attention-soft text-attention">
-            <AlertTriangle size={22} aria-hidden />
+      <div className="mx-auto max-w-[1000px]">
+        <CleanupHeader />
+        <div className="max-w-[620px] rounded-[14px] border border-border bg-s1 p-6">
+          <div className="mb-2 flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.06em] text-subtle">
+            <AlertTriangle size={13} aria-hidden />
+            {cs.chat.cleanupForbiddenLabel}
           </div>
-          <p className="mb-1 font-bold">{cs.chat.cleanupForbidden}</p>
-          <p className="mx-auto max-w-md text-sm text-muted text-pretty">
+          <p className="mb-2 text-[17px] font-extrabold">{cs.chat.cleanupForbidden}</p>
+          <p className="text-[13.5px] leading-relaxed text-muted text-pretty">
             {cs.chat.cleanupForbiddenHint}
           </p>
         </div>
@@ -88,40 +111,39 @@ export function UklidPage() {
     )
   }
 
-
   return (
-    <div className="mx-auto max-w-3xl">
-      <ScreenHeader title={cs.chat.cleanupTitle} subtitle={cs.chat.cleanupSubtitle} />
+    <div className="mx-auto max-w-[1000px]">
+      <CleanupHeader />
 
-      {storage.data && (
-        <div
-          className={cn(
-            'mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border px-4 py-3',
-            storage.data.total_exceeded
-              ? 'border-attention/40 bg-attention-soft'
-              : 'border-border bg-s1',
-          )}
-        >
-          <span className="text-sm font-semibold">{cs.chat.cleanupTotal}</span>
-          <span className="font-mono text-base tabular-nums">
-            {fmtStorageBytes(listing.data?.total_bytes ?? null)}
+      {/* The figure this screen exists to move, the flag when it is over, and the
+          ordering — one line, because they are read together. */}
+      <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        {/* `overTotalNow`, not a second reading of the same field: the leave
+            confirmation above already decided what the total means, and two names
+            for one verdict is how the badge and the sentence come to disagree. */}
+        {overTotalNow && (
+          <span className="inline-flex flex-none items-center gap-1.5 rounded-full border border-attention bg-attention-soft px-3 py-1 text-xs font-bold text-attention">
+            <AlertTriangle size={12} aria-hidden />
+            {cs.chat.storageWarnWord}
           </span>
-          <span className="text-sm text-muted">
-            {cs.chat.storageOverTotal(
+        )}
+        {storage.data && (
+          <span className="font-mono text-[12.5px] tabular-nums">
+            {cs.chat.cleanupTotalLine(
               fmtStorageBytes(storage.data.total_bytes),
               `${storage.data.threshold_total_mb} MB`,
             )}
           </span>
+        )}
+        <span className="hidden flex-1 lg:block" />
+        <div className="flex items-center gap-1.5">
+          <SortTab active={sort === 'size'} onClick={() => setSort('size')}>
+            {cs.chat.cleanupSortSize}
+          </SortTab>
+          <SortTab active={sort === 'recent'} onClick={() => setSort('recent')}>
+            {cs.chat.cleanupSortRecent}
+          </SortTab>
         </div>
-      )}
-
-      <div className="mb-3 flex items-center gap-1">
-        <SortTab active={sort === 'size'} onClick={() => setSort('size')}>
-          {cs.chat.cleanupSortSize}
-        </SortTab>
-        <SortTab active={sort === 'recent'} onClick={() => setSort('recent')}>
-          {cs.chat.cleanupSortRecent}
-        </SortTab>
       </div>
 
       {listing.isPending ? (
@@ -129,8 +151,9 @@ export function UklidPage() {
           <Spinner />
         </div>
       ) : items.length === 0 ? (
-        <div className="rounded-lg border border-border bg-s1 p-8 text-center">
-          <p className="text-sm text-muted text-pretty">
+        <div className="max-w-[560px] rounded-[14px] border border-dashed border-border px-6 py-7 text-center">
+          <p className="mb-2 text-[17px] font-extrabold">{cs.chat.cleanupEmptyTitle}</p>
+          <p className="text-[13.5px] leading-relaxed text-muted text-pretty">
             {/* ⚠ A MEMBER OF NO CONVERSATION GETS AN EXPLANATION, NOT A REFUSAL
                 (D241): the gate passed, there is simply nothing to clean. The two
                 empty states say different things because they ARE different. */}
@@ -141,21 +164,33 @@ export function UklidPage() {
         </div>
       ) : (
         <>
-          <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-3.5">
             {grouped.map((group) => (
-              <section key={group.id}>
-                <h2 className="mb-2 flex flex-wrap items-baseline gap-2">
-                  <span className="text-sm font-bold">{group.name}</span>
+              <section
+                key={group.id}
+                className="overflow-hidden rounded-[14px] border border-border bg-s1"
+              >
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-3">
+                  <h2 className="text-[14.5px] font-extrabold">{group.name}</h2>
                   {group.overLimit && (
-                    <span className="rounded-full bg-attention-soft px-2 py-0.5 text-[11px] font-semibold text-attention">
+                    <span className="flex-none whitespace-nowrap rounded-full border border-attention bg-attention-soft px-2 py-0.5 text-[10.5px] font-bold text-attention">
                       {cs.chat.cleanupOverLimit}
                     </span>
                   )}
-                  <span className="font-mono text-xs tabular-nums text-muted">
-                    {fmtStorageBytes(group.bytes)}
+                  <span className="hidden flex-1 sm:block" />
+                  {/* ⚠ TWO FIGURES, NOT ONE. What this VIEW lists is not what the
+                      ROOM holds — sorting by size is single-page, and a heading
+                      showing only the page's sum would quietly claim the room is
+                      lighter than it is, on the screen whose whole value is that its
+                      numbers add up. */}
+                  <span className="font-mono text-[11.5px] tabular-nums text-muted">
+                    {cs.chat.cleanupGroupSum(
+                      fmtStorageBytes(group.bytes),
+                      fmtStorageBytes(roomBytes.get(group.id) ?? null),
+                    )}
                   </span>
-                </h2>
-                <ul className="flex flex-col gap-1.5">
+                </div>
+                <ul>
                   {group.items.map((item) => (
                     <CleanupRow
                       key={item.attachment.id}
@@ -174,19 +209,69 @@ export function UklidPage() {
               </section>
             ))}
           </div>
-          {/* ⚠ *Ponechat* explained rather than offered. */}
-          <p className="mt-6 border-t border-border pt-4 text-xs text-muted text-pretty">
-            {cs.chat.cleanupKeepExplainer}
-          </p>
+
           {sort === 'size' && (
-            <p className="mt-1.5 text-xs text-muted">{cs.chat.cleanupSortSizeSinglePage}</p>
+            <p className="mt-3.5 max-w-[80ch] rounded-xl border border-dashed border-border px-4 py-3 text-[12.5px] leading-relaxed text-muted text-pretty">
+              {cs.chat.cleanupSortSizeSinglePage}
+            </p>
           )}
+
+          {/* ⚠ *Ponechat* explained rather than offered (D242), and beside it the
+              only exit control — because leaving is confirmed, never blocked (D244),
+              and a screen that confirms an exit should say where the exit is. */}
+          <div className="mt-3.5 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <p className="max-w-[62ch] flex-1 text-[12.5px] text-subtle text-pretty">
+              {cs.chat.cleanupKeepExplainer}
+            </p>
+            {stillOver ? (
+              <Link
+                to={routes.chat}
+                className="inline-flex min-h-11 flex-none items-center justify-center rounded-[10px] border border-border bg-s2 px-3.5 text-[12.5px] font-semibold hover:bg-s3 lg:min-h-9"
+              >
+                {cs.chat.cleanupLeavePage}
+              </Link>
+            ) : (
+              <span className="flex-none text-[12.5px] text-muted">{cs.chat.cleanupLeaveFree}</span>
+            )}
+          </div>
         </>
       )}
 
       <RemoveDialog item={removing} onClose={() => setRemoving(null)} />
       <MoveDialog item={moving} onClose={() => setMoving(null)} />
     </div>
+  )
+}
+
+/**
+ * The screen's own header — a breadcrumb and a way back, not `ScreenHeader`.
+ *
+ * ⚠ `/chat/uklid` IS A SUB-PAGE OF A MODULE THAT HAS NO OTHER SUB-PAGES, and it is
+ * reached from a warning rather than from the nav — so nothing in the chrome says
+ * where a member is or how to get back to the conversation they were reading. The
+ * standard page title says neither.
+ */
+function CleanupHeader() {
+  return (
+    <header className="mb-5 flex flex-wrap items-start gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 font-mono text-[11px] text-muted">
+          {cs.nav.chat} <span className="text-subtle">›</span>{' '}
+          <span className="text-fg">{cs.chat.cleanupTitle}</span>
+        </div>
+        <h1 className="text-[22px] font-extrabold tracking-tight">{cs.chat.cleanupTitle}</h1>
+        <p className="mt-1 max-w-[78ch] text-[12.5px] text-muted text-pretty">
+          {cs.chat.cleanupSubtitle}
+        </p>
+      </div>
+      <Link
+        to={routes.chat}
+        className="inline-flex min-h-11 flex-none items-center gap-1.5 rounded-[10px] border border-border bg-s2 px-3.5 text-[12.5px] font-semibold hover:bg-s3 lg:min-h-9"
+      >
+        <ArrowLeft size={14} aria-hidden />
+        {cs.chat.cleanupBack}
+      </Link>
+    </header>
   )
 }
 
@@ -206,8 +291,10 @@ function SortTab({
       aria-selected={active}
       onClick={onClick}
       className={cn(
-        'min-h-[36px] rounded-md px-3 text-[13px]',
-        active ? 'bg-s3 font-bold text-fg' : 'font-semibold text-muted hover:bg-s2',
+        'inline-flex min-h-9 items-center whitespace-nowrap rounded-full border px-3 font-mono text-[11px] font-semibold',
+        active
+          ? 'border-accent bg-accent-soft text-fg'
+          : 'border-border bg-s2 text-muted hover:text-fg',
       )}
     >
       {children}
@@ -236,44 +323,56 @@ function CleanupRow({
 }) {
   const a = item.attachment
   return (
-    <li className="flex items-center gap-3 rounded-md border border-border bg-s1 px-3 py-2">
-      {a.has_thumbnail ? (
-        <img
-          src={thumbnailURL(a.id)}
-          alt=""
-          width={40}
-          height={40}
-          className="h-10 w-10 flex-none rounded object-cover"
-        />
-      ) : (
-        <span className="grid h-10 w-10 flex-none place-items-center rounded bg-s2 text-muted">
-          <FileText size={17} aria-hidden />
+    <li className="border-b border-border px-4 py-3 last:border-b-0">
+      <div className="flex items-center gap-3">
+        {a.has_thumbnail ? (
+          <img
+            src={thumbnailURL(a.id)}
+            alt=""
+            width={40}
+            height={40}
+            className="h-10 w-10 flex-none rounded-[9px] border border-border object-cover"
+          />
+        ) : (
+          <span className="grid h-10 w-10 flex-none place-items-center rounded-[9px] border border-border bg-s2 text-muted">
+            <FileText size={17} aria-hidden />
+          </span>
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold">{a.original_filename}</span>
+          <span className="mt-0.5 block truncate text-[11.5px] text-muted">
+            {cs.chat.cleanupUploadedBy} {item.uploaded_by_label} · {fmtDate(new Date(a.created_at))}
+          </span>
         </span>
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold">{a.original_filename}</span>
-        <span className="block text-[11px] text-muted">
-          {cs.chat.cleanupUploadedBy} {item.uploaded_by_label} · {fmtDate(new Date(a.created_at))}
+        <span className="flex-none font-mono text-[13px] tabular-nums">
+          {fmtStorageBytes(a.byte_size)}
         </span>
-      </span>
-      <span className="flex-none font-mono text-xs tabular-nums text-muted">
-        {fmtStorageBytes(a.byte_size)}
-      </span>
-      <span className="flex flex-none items-center gap-1">
+      </div>
+      {/* ⚠ THE VERBS CARRY THEIR WORDS. An icon rail was two unlabelled glyphs for
+          the two actions this screen exists for, one of which PUBLISHES the file to
+          the whole household (D245) — and *Přesunout do Dokumentů* is fixed
+          vocabulary, so the row is exactly where it has to be readable. They wrap
+          under the row on a phone and sit beside it at the desk. */}
+      <div className="mt-2.5 flex flex-wrap gap-2 sm:mt-0 sm:justify-end">
         {canMove && (
-          <Button variant="ghost" size="sm" aria-label={cs.chat.moveConfirm} onClick={onMove}>
-            <MoveRight size={15} aria-hidden />
+          <Button
+            variant="secondary"
+            size="sm"
+            className="min-h-11 flex-1 border-border-strong sm:min-h-8 sm:flex-none"
+            onClick={onMove}
+          >
+            {cs.chat.word.moveToDocuments}
           </Button>
         )}
         <Button
           variant="ghost"
           size="sm"
-          aria-label={cs.chat.wordRemoveFile}
+          className="min-h-11 flex-none border-border px-3.5 sm:min-h-8"
           onClick={onRemove}
         >
-          <Trash2 size={15} className="text-danger" aria-hidden />
+          {cs.chat.word.remove}
         </Button>
-      </span>
+      </div>
     </li>
   )
 }

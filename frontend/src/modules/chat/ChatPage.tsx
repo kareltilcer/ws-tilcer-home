@@ -109,7 +109,12 @@ function ChatLayout() {
             </div>
           ) : (
             <div className="grid h-full flex-1 place-items-center p-6 text-center">
-              <p className="max-w-xs text-sm text-muted text-pretty">{cs.chat.pickPrompt}</p>
+              <div className="max-w-[440px]">
+                <div className="mb-2 text-lg font-extrabold">{cs.chat.emptyAllTitle}</div>
+                <p className="text-[13.5px] leading-relaxed text-muted text-pretty">
+                  {cs.chat.pickPrompt}
+                </p>
+              </div>
             </div>
           )}
         </main>
@@ -146,13 +151,22 @@ function ChatLayout() {
  */
 function ChatOffline() {
   return (
-    <div className="grid min-h-[340px] place-items-center text-center">
-      <div className="max-w-sm">
-        <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-lg bg-info-soft text-info">
-          <WifiOff size={26} aria-hidden />
+    <div className="grid min-h-[340px] place-items-center px-6 text-center">
+      <div className="max-w-[460px]">
+        {/* ⚠ A NEUTRAL SURFACE, NOT THE INFORMATIONAL BLUE. `--info` is v9's register
+            for a fact the app is telling you about your data; this is the module
+            declining to hold any, which is not a state of anything the member did.
+            The plain s2 tile is the design's, and it keeps the screen from reading
+            as a condition to be cleared. */}
+        <div className="mx-auto mb-3.5 grid h-12 w-12 place-items-center rounded-[13px] border border-border bg-s2 text-muted">
+          <WifiOff size={22} aria-hidden />
         </div>
-        <div className="mb-1.5 text-lg font-bold">{cs.chat.offlineTitle}</div>
-        <p className="text-sm text-muted text-pretty">{cs.chat.offlineBody}</p>
+        <div className="mb-2 text-[19px] font-extrabold tracking-tight">
+          {cs.chat.offlineTitle}
+        </div>
+        <p className="text-[13.5px] leading-relaxed text-muted text-pretty">
+          {cs.chat.offlineBody}
+        </p>
       </div>
     </div>
   )
