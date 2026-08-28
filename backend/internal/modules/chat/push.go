@@ -140,8 +140,33 @@ func (s *Service) directoryMembers(ctx context.Context) ([]push.Member, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.dir.members, s.dir.at, s.dir.loaded = members, time.Now(), true
-	return members, nil
+	// ⚠ A ROW WITH NO USER ID IS DROPPED HERE, so the picker and the membership
+	// set keep saying the same thing. AddMember answers an empty id with 422
+	// ("Chybí uživatel."), so listing one is exactly the button that answers every
+	// click with an error that labels() was written to prevent — and
+	// CreateConversation, which checks this same projection for "is this person in
+	// the directory", would have accepted it and written a membership row for
+	// nobody. One projection, one membership of it: the filter belongs here, above
+	// both callers, and not in either of them.
+	//
+	// ⚠ TrimSpace, NOT `!= ""` — IT MUST BE AddMember's OWN TEST, spelled the same
+	// way. That guard is `strings.TrimSpace(in.UserID) == ""`, so an id of spaces
+	// passed an `!= ""` filter here and met the 422 there anyway: the exact
+	// button-that-can-only-fail this filter exists to remove, with the phantom
+	// membership row through CreateConversation still behind it. push.Store drops
+	// these too, one layer down; this is chat's guard because DirectorySource is an
+	// INTERFACE and what arrives through it is whatever the implementation sends.
+	//
+	// Into a NEW slice rather than members[:0]: the projection belongs to whoever
+	// implemented DirectorySource, and filtering in place would rewrite it.
+	kept := make([]push.Member, 0, len(members))
+	for _, m := range members {
+		if strings.TrimSpace(m.UserID) != "" {
+			kept = append(kept, m)
+		}
+	}
+	s.dir.members, s.dir.at, s.dir.loaded = kept, time.Now(), true
+	return kept, nil
 }
 
 // labels builds the id → display name map every render path uses.
@@ -174,7 +199,7 @@ func (s *Service) labels(ctx context.Context) (map[string]string, error) {
 // chose one, their id otherwise — never the email push.Store.Members substitutes.
 func directoryName(m push.Member) string {
 	if isRealDisplayName(m) {
-		return m.DisplayName
+		return strings.TrimSpace(m.DisplayName)
 	}
 	return m.UserID
 }
@@ -192,8 +217,22 @@ func directoryName(m push.Member) string {
 //
 // The comparison is exact rather than a guess at what an address looks like: we
 // are detecting one known substitution, not validating an email.
+//
+// ⚠ AND IT TRIMS, because "   " is not a name either (v10 chat report). The
+// projection now trims before its own email fallback, so this is chat's guard
+// rather than a second one: DirectorySource is an INTERFACE, and what arrives
+// through it is whatever the implementation chose to put in the field. A blank
+// name reaching a picker draws a bubble with nothing in it, which is not a member
+// somebody can recognise — the id at least is one they can look up.
+//
+// ⚠ BOTH SIDES OF THE COMPARISON ARE TRIMMED, or the trim above defeats the
+// detection it sits beside: push.Store copies the email VERBATIM into DisplayName,
+// so padding on `sessions.email` left the trimmed name and the raw address unequal,
+// the substitution went undetected, and the address reached every non-admin — the
+// one leak this function exists to catch.
 func isRealDisplayName(m push.Member) bool {
-	return m.DisplayName != "" && m.DisplayName != m.Email
+	name := strings.TrimSpace(m.DisplayName)
+	return name != "" && name != strings.TrimSpace(m.Email)
 }
 
 // Directory is the add-member picker's data: user id and display name, and

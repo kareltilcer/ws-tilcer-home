@@ -392,14 +392,19 @@ type Member struct {
 func (s *Store) Members(ctx context.Context) ([]Member, error) {
 	// One row per user: the most recent session carries the freshest display name
 	// and roles (roles are re-minted into the session on the refresh threshold).
+	// ⚠ UNORDERED ON PURPOSE — THE SORT IS IN GO, BELOW. SQLite's TRIM() strips the
+	// ASCII space and nothing else, so an ORDER BY built on it disagreed with the
+	// strings.TrimSpace the projection applies a few lines down: a display_name of
+	// "\t" was blank to Go and a name to SQL, which sorted the row under whitespace
+	// and showed it under its email. Two spellings of "is this blank" cannot be kept
+	// in agreement; there is now one, and it is the one the member is shown under.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.user_id, s.email, COALESCE(s.display_name, ''), s.roles,
 		       (SELECT COUNT(*) FROM push_subscriptions ps WHERE ps.user_id = s.user_id)
 		  FROM sessions s
 		  JOIN (SELECT user_id, MAX(created_at) AS newest FROM sessions GROUP BY user_id) latest
 		    ON latest.user_id = s.user_id AND latest.newest = s.created_at
-		 GROUP BY s.user_id
-		 ORDER BY LOWER(COALESCE(s.display_name, s.email))`)
+		 GROUP BY s.user_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -414,13 +419,45 @@ func (s *Store) Members(ctx context.Context) ([]Member, error) {
 		if err := rows.Scan(&m.UserID, &m.Email, &m.DisplayName, &rolesJSON, &m.Subscriptions); err != nil {
 			return nil, err
 		}
+		// ⚠ A ROW WITH NO USER ID IS NOT A MEMBER, AND IT IS DROPPED IN THE
+		// PROJECTION rather than in one consumer of it. chat's add-member picker
+		// listed such a row as a button that could only answer 422 ("Chybí
+		// uživatel.") — but the same row is an unnamed entry in admin's "Vybraným
+		// lidem" picker, a blank Příjemce in the delivery log, and an empty string
+		// inside a resolved push audience. One projection, one answer to "who is a
+		// member": this is where the display name is normalised, so it is where the
+		// id is too.
+		if strings.TrimSpace(m.UserID) == "" {
+			continue
+		}
 		_ = json.Unmarshal([]byte(rolesJSON), &m.Roles)
+		// ⚠ TRIMMED BEFORE THE FALLBACK, because a name that is blank once trimmed
+		// is not a name. NULL and "" already fell through to the email here; a
+		// display_name of "   " did not — it survived as itself into every surface
+		// that renders a member, and chat's add-member picker drew a bubble with
+		// nothing in it. It drew it FIRST, too: a space sorts before every letter,
+		// so the one unreadable row led the list.
+		m.DisplayName = strings.TrimSpace(m.DisplayName)
 		if m.DisplayName == "" {
 			m.DisplayName = m.Email
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// ⚠ SORTED BY WHAT EACH MEMBER IS SHOWN AS, which is only knowable here: the
+	// email fallback above is what a blank name resolves to, so the key has to be
+	// read after it. UserID breaks ties so the order is total and the list does not
+	// shuffle between two members who share a name.
+	sort.Slice(out, func(i, j int) bool {
+		a, b := strings.ToLower(out[i].DisplayName), strings.ToLower(out[j].DisplayName)
+		if a != b {
+			return a < b
+		}
+		return out[i].UserID < out[j].UserID
+	})
+	return out, nil
 }
 
 // ResolveAudience turns an audience into user ids (HANDOFF-7 §10).

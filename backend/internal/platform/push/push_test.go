@@ -607,6 +607,100 @@ func TestMembersProjectsTheNewestSessionPerUser(t *testing.T) {
 	}
 }
 
+// ⚠ "   " IS NOT A NAME, AND THE == "" TEST NEVER SAID SO. A display name of spaces
+// went through the fallback above untouched, stayed itself through chat's
+// directoryName (which only detects the email substitution), and arrived in the
+// add-member picker as a bubble with nothing written in it — reported from the
+// household. It arrived FIRST, too: a space sorts before every letter, so the one
+// unreadable row led the list. The ordering is asserted here with the fallback,
+// because a member sorted under a name they are not shown under is the same defect.
+//
+// ⚠ EVERY BLANK IS TESTED, NOT ONLY THE ASCII SPACE (v10 review). The first fix
+// sorted in SQL, whose TRIM() strips the space and nothing else, while the fallback
+// below uses strings.TrimSpace, which strips six more — so a tab was blank to Go and
+// a name to SQL. Seeding only "   ", the one class the two agreed on, is what let
+// that ship: "\t" still led the list under an email, and the NBSP row sorted last.
+func TestMembersTreatsABlankDisplayNameAsNoName(t *testing.T) {
+	sqldb := testsupport.NewDB(t)
+	store := NewStore(sqldb)
+	base := time.Now().Add(-time.Hour)
+
+	// The three shapes a blank profile field arrives in: spaces, a tab, and a
+	// non-breaking space that looks identical to a space and is not one.
+	seedSession(t, sqldb, "u-blank", "zuzana@tilcer.cz", "   ", []string{"editor"}, base)
+	seedSession(t, sqldb, "u-tab", "tomas@tilcer.cz", "\t", []string{"editor"}, base)
+	seedSession(t, sqldb, "u-nbsp", "alena@tilcer.cz", " ", []string{"editor"}, base)
+	seedSession(t, sqldb, "u-named", "karel@tilcer.cz", "Karel", []string{"editor"}, base)
+
+	members, err := store.Members(context.Background())
+	if err != nil {
+		t.Fatalf("members: %v", err)
+	}
+	if len(members) != 4 {
+		t.Fatalf("got %d members, want 4: %+v", len(members), members)
+	}
+	// ⚠ Every one of them is SORTED BY WHAT IT IS SHOWN AS, which is the assertion
+	// that fails on the old SQL ORDER BY: "alena@…", "karel" (Karel), "tomas@…",
+	// "zuzana@…" — not a blank row leading the list, and not the NBSP row trailing
+	// it under a character the reader never sees.
+	want := []string{"u-nbsp", "u-named", "u-tab", "u-blank"}
+	for i, id := range want {
+		if members[i].UserID != id {
+			got := make([]string, len(members))
+			for j, m := range members {
+				got[j] = m.UserID + "=" + m.DisplayName
+			}
+			t.Fatalf("order = %v; want every member sorted under the name they are shown as %v", got, want)
+		}
+	}
+	for _, m := range members {
+		if strings.TrimSpace(m.DisplayName) == "" {
+			t.Errorf("%s renders as %q — a bubble with nothing in it", m.UserID, m.DisplayName)
+		}
+	}
+	if members[3].DisplayName != "zuzana@tilcer.cz" {
+		t.Errorf("blank display name = %q, want the email fallback", members[3].DisplayName)
+	}
+	// And a real name keeps its own shape — the trim must not eat anything else.
+	if members[1].DisplayName != "Karel" {
+		t.Errorf("display name = %q, want %q", members[1].DisplayName, "Karel")
+	}
+}
+
+// ⚠ A SESSION WITH NO USER ID IS NOT A MEMBER OF ANYTHING, and the projection is
+// where that is decided. chat filtered such rows out of its own directory, which
+// left admin's "Vybraným lidem" picker, the delivery log's Příjemce column and
+// ResolveAudience each holding an entry for nobody.
+func TestMembersDropsARowWithNoUserID(t *testing.T) {
+	sqldb := testsupport.NewDB(t)
+	store := NewStore(sqldb)
+	base := time.Now().Add(-time.Hour)
+
+	seedSession(t, sqldb, "", "nikdo@tilcer.cz", "Bez ID", []string{"editor"}, base)
+	seedSession(t, sqldb, "  ", "duch@tilcer.cz", "Duch", []string{"editor"}, base)
+	seedSession(t, sqldb, "u-named", "karel@tilcer.cz", "Karel", []string{"editor"}, base)
+
+	members, err := store.Members(context.Background())
+	if err != nil {
+		t.Fatalf("members: %v", err)
+	}
+	if len(members) != 1 || members[0].UserID != "u-named" {
+		t.Fatalf("got %+v; want only the member who has an id", members)
+	}
+
+	// The same rows must not become a push audience either — an empty string in a
+	// resolved audience is a delivery attempt aimed at nobody.
+	ids, err := store.ResolveAudience(context.Background(), Audience{Scope: ScopeRoles, Roles: []string{"editor"}})
+	if err != nil {
+		t.Fatalf("resolve audience: %v", err)
+	}
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			t.Errorf("the editor audience resolved to %q — a recipient with no id: %+v", id, ids)
+		}
+	}
+}
+
 func TestResolveAudience(t *testing.T) {
 	sqldb := testsupport.NewDB(t)
 	store := NewStore(sqldb)

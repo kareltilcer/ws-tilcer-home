@@ -8,12 +8,15 @@ import { fmtStorageBytes } from '@/i18n/format'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Input } from '@/components/ui/ui'
+import { useAuth } from '@/app/auth'
+import { DirectoryPicker } from './DirectoryPicker'
 import { fmtWhen } from './when'
 import {
   useChatSearch,
   useConversations,
   useCreateConversation,
   useDeleteConversation,
+  useDirectory,
   useLoadMoreConversations,
   useRestoreConversation,
 } from './api/hooks'
@@ -476,6 +479,24 @@ function daysUntil(iso: string): string {
   return count(days, PLURAL.days)
 }
 
+/** Ties the picker's visible heading to the group of chips it names. */
+const CREATE_MEMBERS_LABEL = 'chat-create-members-label'
+
+/**
+ * Nová konverzace — a name and the people it is for.
+ *
+ * ⚠ THE MEMBERS ARE PICKED HERE AND NOT ONLY AFTERWARDS. The dialog used to be one
+ * field followed by `directoryHint`, a sentence about who is in a list that was not
+ * on the screen — so it read as a picker that had failed to load, and creating a
+ * group meant creating an empty room and then going to find Členové. The founding
+ * members go in the create call, where the server gives every one of them the
+ * conversation's own beginning as their floor: nobody founds a room with history
+ * behind them, and there is no history yet anyway.
+ *
+ * ⚠ IT STAYS OPTIONAL. A room created for nobody is a legitimate thing to make —
+ * a note to self, or a group whose people are added as they log in for the first
+ * time — so an empty selection creates the conversation rather than blocking it.
+ */
 function NewConversationDialog({
   open,
   onOpenChange,
@@ -484,20 +505,36 @@ function NewConversationDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [name, setName] = useState('')
+  const [picked, setPicked] = useState<string[]>([])
+  const directory = useDirectory(open)
+  const { identity } = useAuth()
+  const me = identity?.userId ?? ''
   const create = useCreateConversation()
+
+  // ⚠ THE DIALOG IS EMPTIED WHEN IT CLOSES, NOT WHEN IT SUCCEEDS. This component is
+  // mounted for the life of the pane — only the modal's CHILDREN unmount — so state
+  // cleared in `onSuccess` alone survived every other way out: cancel, Esc, a click
+  // on the overlay. A name left behind is visible on the next open and merely untidy;
+  // a SELECTION left behind is not, because pressing Vytvořit founds the new room
+  // around somebody the member picked, thought better of, and never saw again.
+  useEffect(() => {
+    if (!open) {
+      setName('')
+      setPicked([])
+    }
+  }, [open])
+
+  // ⚠ THE CREATOR IS NOT OFFERED. CreateConversation joins them itself, so a toggle
+  // for the one member who cannot be left out is a control that does nothing.
+  const addable = (directory.data?.items ?? []).filter((d) => d.user_id !== me)
+
+  const toggle = (id: string) =>
+    setPicked((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]))
 
   const submit = () => {
     const trimmed = name.trim()
     if (!trimmed) return
-    create.mutate(
-      { name: trimmed },
-      {
-        onSuccess: () => {
-          setName('')
-          onOpenChange(false)
-        },
-      },
-    )
+    create.mutate({ name: trimmed, member_ids: picked }, { onSuccess: () => onOpenChange(false) })
   }
 
   return (
@@ -528,12 +565,40 @@ function NewConversationDialog({
           }}
         />
       </label>
-      <p className="mt-3 text-sm text-muted text-pretty">
-        {/* Members are added afterwards, from the panel, so the create dialog stays
-            one field — and so the floor sentence has one place to live rather than
-            two. */}
-        {cs.chat.directoryHint}
-      </p>
+      <div className="mt-4">
+        <span id={CREATE_MEMBERS_LABEL} className="mb-1.5 block text-sm font-semibold">
+          {cs.chat.createMembers}
+        </span>
+        <DirectoryPicker
+          directory={directory}
+          addable={addable}
+          label={cs.chat.createMembers}
+          labelledBy={CREATE_MEMBERS_LABEL}
+          renderChip={(d) => {
+            const on = picked.includes(d.user_id)
+            return (
+              <Button
+                key={d.user_id}
+                size="sm"
+                // ⚠ SELECTION IS NOT CARRIED BY COLOUR ALONE — `aria-pressed` states
+                // it, which is what a screen reader and a CVD reader both get.
+                variant={on ? 'primary' : 'secondary'}
+                aria-pressed={on}
+                className="min-h-11 lg:min-h-8"
+                onClick={() => toggle(d.user_id)}
+              >
+                {d.display_name}
+              </Button>
+            )
+          }}
+        />
+        {/* The directory is a LOGIN HISTORY projected from sessions — Home has no
+            user table — so somebody who has never logged in is simply not in this
+            list. The note says so rather than letting the gap look like a bug. */}
+        <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted text-pretty">
+          {cs.chat.directoryHint}
+        </p>
+      </div>
     </ResponsiveModal>
   )
 }
