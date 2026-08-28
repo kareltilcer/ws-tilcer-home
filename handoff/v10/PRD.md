@@ -3708,3 +3708,67 @@ What replaced it is `bootstrap/v10_rebuild_test.go`, which covers the three thin
 Every one of the fifteen review findings shipped **green**: `go build`, `go vet`, `go test ./...`, `tsc`, `vitest` and `vite build` all passed with the search 500, the paging that stopped at fifty, the unreachable delete and the email in the directory all present. The suites were not weak — they were pointed at the decisions, and the module's decisions are genuinely well covered. What they never did was *type an apostrophe into the search box, scroll to the top of a long thread, or look for a button*.
 
 The fixes carry their own regressions (`chat/v10_review_test.go`, `audit/v10_member_scoped_test.go`), and two of them were **watched failing** against the unfixed code first: the search test reports the five 500s, and the directory test renders `u-nameless@example.test` in all three places. The remaining gap is the one the checkbox above names — a browser driving the screens, which is where all four of the missing-UI findings actually lived.
+
+---
+
+## V10-13. As built — PR 3, attachments and storage (built 2026-08-28, OpenAPI 0.12.0 → **0.12.1**)
+
+> **Read this before trusting §V10-1…§V10-12 on the points below.** PR 1 shipped as [#23](https://github.com/kareltilcer/ws-tilcer-home/pull/23), PR 2 as [#24](https://github.com/kareltilcer/ws-tilcer-home/pull/24). PR 3 is the rest: attachments, the two thresholds, `/chat/uklid`, the move to Dokumenty, the drain, the Administrace block and the nav demotion. **v10 is complete.**
+>
+> Five things shipped differently from the spec, and one of them is a spec contradiction resolved rather than a deviation taken.
+
+### Chat's blobs are `Kind: shared` with NO per-member attribution (resolves a §V10-6/§11.2 contradiction)
+
+FR-V10-16 says chat's objects "appear in the existing per-module and **per-member** breakdowns, attributed to the **uploader**" *and* that "they are reported with `Kind: shared`". Both cannot hold: `storage.Attribute` derives the kind FROM the owner — a non-empty owner is `KindPrivate`, which is the only kind that carries an `OwnerID` and therefore the only one that produces per-member rows.
+
+⚠ **`shared` wins, and the reason is which error is worse.** `private` is what the Úložiště page groups under *Soukromé*, a section that means *items the purge screen owns* — and chat implements no `PrivateInventory`, so an admin would have been shown per-member private rows for bytes that screen can neither list, size, nor delete. A wrong word on one row (§11.2 argues that at length itself) beats a wrong section for the whole module. `HANDOFF-12` §11.2 and the design bundle both say `shared` unqualified, which is two sources to one.
+
+**"Who uploaded that 40 MB video" is still answerable, and by the surface built for it**: `chat.attachment.uploaded` carries the filename and the conversation name (§14). The storage page reports bytes; the Log reports who.
+
+### Thumbnails are generated INLINE, not in a worker (narrows §V10-4a)
+
+§V10-4a names thumbnail generation as one of three background jobs with no actor that must load through an explicit any-membership variant. It is not a background job here. The encode runs in the upload request, after membership is resolved and before the row is written — which removes the hazard rather than guarding against it: there is no *zpracovává se* state to design, no pending column to sweep at boot, and no thumbnail that silently never appears. Failure is non-fatal and the intrinsic dimensions are recorded either way, because the dimensions are what stop the thread reflowing. The cost is bounded by D224's ten files and D228's cap.
+
+The other two actorless jobs — the drain and the koš purge — are real, are one scheduler job, and do use any-membership reads by name.
+
+### `12002` adds `chat_attachments.document_path` (adds to §V10-5)
+
+`12001` shipped with PR 2 and is applied, so it is history. After a move the bubble renders the file from Dokumenty, and building that URL in Go would put another module's layout inside `chat` — which is what the catalog exists to broker. `storage.BlobSink` hands the path back as part of accepting custody; this column is where the answer lives, beside the `document_id` it belongs to.
+
+### `ChatStorage` gained three fields the client could not be correct without (extends §V10-6)
+
+`can_clean_up` (D241's gate is member ∧ role and the client holds only the role half, so a banner that guessed offered a `reader` a link that 403s them), `max_upload_mb` (the composer refuses an over-cap file *before* uploading it, and a hard-coded 50 names a limit that stops being the limit the moment an operator raises `HOME_DOCS_MAX_UPLOAD_MB`), and `move_available` (D239's *"the button is absent"* half — nothing else tells a client whether a `BlobSink` is wired). ⚠ **`move_available` is not `can_clean_up`, and conflating them was a review finding**: gating the button on the role meant a household without `documents` wired still offered *Přesunout do Dokumentů*, opened the picker, and refused after the confirm.
+
+`StorageChat` likewise gained `thresholds_updated_at` / `_by`, so the Limity tab can tell a value somebody chose from a seeded default — the distinction `02004` leaves `updated_by` NULL to draw.
+
+### The threshold verb is `chat.threshold.update` (D263, confirming §V10-12)
+
+Recorded in §V10-12 and now built. `chat.Module.AuditActions()` declares it; the **`admin`** module emits it with `module = "chat"`, because the setting is an admin's to change and the subject is chat's — the same shape D255 uses when an admin restores a room they may not read. A save that changes nothing writes no event: the fields autosave on blur, and a Log row per focus loss would bury the changes that mattered.
+
+### What eight review rounds found
+
+The branch went through eight `xhigh` review rounds; **twenty-seven findings, all fixed**. Six are worth reading as decisions rather than as bugs.
+
+**A total that could only ever go up.** Every byte figure filtered on `state = 'live'` alone — but a message delete queues its attachment's keys for the drain and deliberately leaves the row `live` (the row survives so replies do not point at nothing; the MESSAGE is the tombstone). So once the drain destroyed those objects, chat went on counting bytes that were gone from R2, permanently: the clean-up listing correctly excludes a deleted message's rows, so nothing on that page could ever bring the figure down, and the threshold warned about bytes nobody could free. Confirmed with a probe before the fix — 43 B before the delete, 43 B after the delete *and* the drain. The predicate is now `live AND the message is not a tombstone`, spelled once and used by all four figures.
+
+**The conversation list never learned to measure.** `bytes` and `over_conversation_limit` shipped null from PR 2 with a note in `types.go` saying PR 3 would fill them. PR 3 nearly did not — the list would have rendered *nezměřeno* beside every room forever, with no way to see which one is heavy, on the version whose second half is a storage register. Exactly §V10-12's *"missing rather than deferred"* shape, one release later.
+
+**An epitaph only the person who clicked could see.** Removing or moving an attachment published `chat_conversation.changed`, which the client answers by invalidating the room and the listings and deliberately *not* the thread. Other members' open threads kept rendering a file whose `/raw` had just become a 404. Both verbs now publish `chat_message.updated` with the re-rendered bubble — and the audience is `MemberIDsAbove`, not `MemberIDs`, because these are OLD messages and a member added afterwards is bounded off them by every read path. That is the correction `EditMessage` took in PR 2, in a verb that did not exist yet.
+
+**The clean-up page rendered nothing at all.** `unstable_usePrompt` is data-router-only and this app mounts `<BrowserRouter>`, so D244's leave confirmation threw on mount and took the whole screen with it. Found by opening the page. The guard is now a capture-phase click interceptor plus `beforeunload`, which still catches the exits the decision is about — the bottom bar, the side nav, the header link. ⚠ **The browser's own back button is not covered and `useLeaveConfirm` says so**: by the time `popstate` fires the entry is gone, and the only way back is a sentinel push that traps people when it misfires, which is the one outcome *"a confirm, never a block"* rules out.
+
+**Two rows that claimed objects R2 did not have.** `putStaged` deliberately swallows a failed thumbnail upload — a message must not fail because a derived object did — but the row was keyed on whether the thumbnail was *encoded*, not *stored*, so a bucket blip left `has_thumbnail: true` and a `/thumbnail` that 404s once per view forever. `MarkAttachmentRemoved` left `thumbnail_key` set for an object the same request had just deleted. Both now describe the bucket.
+
+**A queue with two conflict rules.** `queuePurge` overwrote `purge_after`, so trashing a room after deleting a message pushed that message's already-due keys out by the whole seven-day window. It now takes a `MIN` — which still lets *Smazat natrvalo* pull a deadline forward — and `QueueKeys` was brought to the same rule before a third caller could inherit the other half.
+
+⚠ **Three of the fixes were watched failing against the unfixed code first**: the leak-row-5 test against a re-introduced copy of v9's 304 bug, the fault-injection matrix against a delete-before-mark inversion, and the queue's MIN rule against the overwrite.
+
+### Outstanding before merge
+
+- [ ] Playwright + axe at 375 and 1440 in both themes — outstanding since v5, and chat is the densest screen in the app.
+- [ ] A click-through **with a second member's session**. Everything verified live ran under one dev-bypass actor, so the adversarial half is covered by tests alone. §V9-12 records six frontend bugs no test caught; this PR added four more to that tally by opening pages.
+- [ ] ⚠ **`cwebp` is assumed present in the runtime image.** It is Dokumenty's existing dependency (`HOME_DOCS_CWEBP_PATH`) and chat reuses it, so nothing new is required — but every thumbnail here was verified on a box WITHOUT it, which means the failure branch is well tested and the success branch is not. A first upload on the droplet is what confirms it.
+
+### A note on what the live run was worth
+
+Everything in this PR passed `go build`, `go vet`, `go test ./...`, `tsc -b`, `oxlint`, `vitest` and `vite build` while the clean-up page rendered a blank screen, chat's bytes were filed under *Soukromé* beside v9 private items, the conversation list reported two nulls, and a moved attachment's `cleaned_at` came back null. **Four defects, none of which a green suite could see**, all found by starting the server and opening the pages — which is the same sentence §V10-12 wrote one release ago about a different four.

@@ -144,7 +144,14 @@ function LimitField({
   }, [value])
 
   const parsed = Number.parseInt(draft, 10)
-  const valid = Number.isFinite(parsed) && parsed >= 1
+  // ⚠ THE SAME BOUNDS THE SERVER ENFORCES. Checking only `>= 1` left the client's
+  // notion of valid WIDER than the server's, so a 16-digit value passed here, 422'd
+  // there, and stayed sitting in the field — the snap-back below never fired,
+  // because it keys on the value CHANGING and a refused save changes nothing. The
+  // upper bound exists because the byte conversion shifts by 20 and an unbounded
+  // limit overflowed into zero; the field has to know that too, or it offers a
+  // number it cannot save and says so only in a toast that disappears.
+  const valid = Number.isFinite(parsed) && parsed >= 1 && parsed <= MAX_THRESHOLD_MB
   // ⚠ THE STATE LIVES BESIDE THE FIELD, always. `belowUsage` is not an error — it is
   // a legitimate save that switches a warning ON, and the sentence says which.
   const belowUsage = valid && usage !== null && usage > parsed * 1024 * 1024
@@ -160,6 +167,7 @@ function LimitField({
           id={id}
           type="number"
           min={1}
+          max={MAX_THRESHOLD_MB}
           inputMode="numeric"
           value={draft}
           disabled={saving}
@@ -189,6 +197,16 @@ function LimitField({
     </div>
   )
 }
+
+/**
+ * MAX_THRESHOLD_MB mirrors `storage.MaxThresholdMB` — 1 PB.
+ *
+ * ⚠ A CONSTANT RATHER THAN A FIELD ON THE PAYLOAD, deliberately: it is not a
+ * SETTING, it is the point past which the byte conversion overflows, and it changes
+ * only if that arithmetic does. The server refuses the same value with a 422 that
+ * names the range; this is what stops the field offering it in the first place.
+ */
+const MAX_THRESHOLD_MB = 1 << 30
 
 /** The heaviest room, which is what the per-conversation limit is measured against. */
 function largestConversationBytes(rooms: { bytes: number | null }[]): number | null {
