@@ -26,7 +26,7 @@ import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { useTheme } from '@/theme/theme'
 import { useAuth } from '@/app/auth'
-import { routes } from '@/app/routes'
+import { isFullBleedRoute, routes } from '@/app/routes'
 import { useLiveSync } from '@/api/ws'
 import { useOnline } from '@/platform/pwa/offline'
 import { usePushKeepalive } from '@/platform/push/usePush'
@@ -113,7 +113,20 @@ export function AppShell() {
     item.to === routes.chat ? { ...item, badge: unread } : item,
   )
   const overflowItems = OVERFLOW.filter((item) => !item.adminOnly || isAdmin)
-  const desktopItems = [...primaryItems, ...overflowItems]
+  // ⚠ THE SIDE NAV LEADS WITH CHAT; THE THUMB BAR KEEPS IT THIRD OF FIVE. The two
+  // orders differ in the artboards and they differ on purpose. The phone bar is
+  // ordered by REACH — the middle slot is the easiest one to hit, which is why the
+  // one tab carrying an unread count sits there — while the sidebar is a list with
+  // no reach to trade on, so it is ordered by REASON TO LOOK. Chat is the only entry
+  // in it that can be waiting for you; everything else is visited deliberately.
+  // Deriving the sidebar from the tab bar's order is what had it fourth, under three
+  // destinations that never ask for anything.
+  const desktopItems = [
+    ...primaryItems.filter((item) => item.to === routes.chat),
+    ...primaryItems.filter((item) => item.to !== routes.chat),
+    ...overflowItems,
+  ]
+  const fullBleed = isFullBleedRoute(location.pathname)
   // The "Více" tab lights up when the open route lives behind it.
   const overflowActive = overflowItems.some(
     (item) => location.pathname === item.to || location.pathname.startsWith(item.to + '/'),
@@ -169,7 +182,19 @@ export function AppShell() {
             </button>
           </div>
         </header>
-        <main className="flex-1 px-4 py-5 pb-24 md:min-h-0 md:overflow-y-auto md:px-8 md:py-8 md:pb-8">
+        <main
+          className={cn(
+            'flex-1 md:min-h-0',
+            // Chat sizes itself to the viewport and draws its own edges
+            // (isFullBleedRoute), so it takes this box whole and scrolls inside its
+            // own panes. `overflow-hidden` rather than `auto`: the panes are exactly
+            // as tall as the box, and a sub-pixel rounding that grew a shell
+            // scrollbar would put the composer back under the fold.
+            fullBleed
+              ? 'md:overflow-hidden'
+              : 'px-4 py-5 pb-24 md:overflow-y-auto md:px-8 md:py-8 md:pb-8',
+          )}
+        >
           <Outlet />
         </main>
       </div>

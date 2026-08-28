@@ -42,3 +42,32 @@ export const routes = {
 // backend and handed to the client as `urls.permalink` on the document detail, so
 // that HOME_DOCS_PUBLIC_BASE_URL can absolutise it. Building it client-side would
 // bypass that setting. The route itself is registered in App.tsx.
+
+/**
+ * Whether a path owns the shell's whole content box rather than sitting inside its
+ * padding (design/v10, desktop and 375 px frames).
+ *
+ * ⚠ CHAT IS THE ONLY ONE, AND IT IS NOT A STYLE PREFERENCE. Every other module is a
+ * document that scrolls: the shell's `px-4 py-5 pb-24 md:p-8` is its margin and the
+ * page grows as tall as it needs. The chat list and thread are PANES — each one a
+ * fixed-height flex column with its own scroll box — so the padding is not a margin
+ * around them, it is height subtracted from a viewport-sized element that has
+ * already been sized to the full viewport. Below 768 that arithmetic ran twice and
+ * the page gained 49 px it could scroll and no content to put there, with the
+ * composer sitting above a dead strip; the artboards draw the two panes flush to
+ * the shell on both frames, with no card frame around them.
+ *
+ * ⚠ `/chat/uklid` IS NOT FULL-BLEED, and that is the design too (D241): the
+ * clean-up screen is an ordinary scrolling document, like the ten modules either
+ * side of it. Excluding it is safe for the same reason the route tree is:
+ * `uklid` is a reserved word under `/chat` and a conversation is addressed by
+ * UUIDv7 (D220 — no slugs anywhere in the module), so no room can ever claim it.
+ */
+export function isFullBleedRoute(pathname: string): boolean {
+  // React Router treats `/chat/uklid/` as the same location as `/chat/uklid`, so
+  // the comparison has to as well — otherwise one stray slash unpads the one chat
+  // screen that needs the padding.
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+  if (path === routes.chatUklid) return false
+  return path === routes.chat || path.startsWith(routes.chat + '/')
+}

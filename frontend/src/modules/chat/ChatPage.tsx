@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { WifiOff } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
-import { routes } from '@/app/routes'
+import { isFullBleedRoute, routes } from '@/app/routes'
 import { useOnline } from '@/platform/pwa/offline'
 import { ConversationList } from './ConversationList'
 import { ThreadView } from './ThreadView'
@@ -32,8 +33,13 @@ import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
 export function ChatPage() {
   useChatLiveSync()
   const online = useOnline()
+  const { pathname } = useLocation()
 
-  if (!online) return <ChatOffline />
+  // ⚠ THE OFFLINE SCREEN REPLACES THE WHOLE MODULE, `/chat/uklid` INCLUDED, so it
+  // has to fit whichever box the shell handed it — the viewport for the list and the
+  // thread, an ordinary padded page for the clean-up screen. One height for both
+  // leaves one of them scrolling a strip with nothing in it.
+  if (!online) return <ChatOffline fill={isFullBleedRoute(pathname)} />
 
   return (
     <Routes>
@@ -58,10 +64,16 @@ function ChatLayout() {
   useLeaveWhenGone(id, () => navigate(routes.chat))
 
   return (
-    /* --chat-chrome is declared in theme/globals.css, beside the other layout
-       tokens — it is the header plus the thumb-tab bar below 1024. */
-    <div className="h-[calc(100dvh-var(--chat-chrome))] lg:h-[calc(100dvh-4rem)]">
-      <div className="grid h-full min-h-0 overflow-hidden rounded-lg border border-border bg-s1 lg:grid-cols-[320px_1fr]">
+    /* ⚠ TWO HEIGHTS, AND NEITHER IS A CARD'S. The shell hands chat its content box
+       whole (isFullBleedRoute) rather than padding a page around it, which the
+       artboards draw on both frames: the panes reach the shell's edges, the list
+       pane's own border-right is the only line between them, and there is no rounded
+       frame to inset. From 768 up that box IS the viewport minus nothing, so
+       `h-full` is the whole answer; below it the shell still has a header above and
+       thumb tabs below, which is what --chat-chrome measures (theme/globals.css).
+       The old `lg:h-[calc(100dvh-4rem)]` was the md:py-8 that is now gone. */
+    <div className="h-[calc(100dvh-var(--chat-chrome))] md:h-full">
+      <div className="grid h-full min-h-0 overflow-hidden bg-s1 lg:grid-cols-[320px_1fr]">
         {/* Below 1024 exactly one pane is on screen: the list, or the thread. The
             hidden pane is not rendered at all rather than hidden with CSS, so a
             phone never fetches a thread nobody is looking at.
@@ -149,9 +161,14 @@ function ChatLayout() {
  * do zařízení neukládají" says what was decided; "nepodařilo se načíst" would say
  * something untrue.
  */
-function ChatOffline() {
+function ChatOffline({ fill }: { fill: boolean }) {
   return (
-    <div className="grid min-h-[340px] place-items-center px-6 text-center">
+    <div
+      className={cn(
+        'grid place-items-center px-6 py-10 text-center',
+        fill ? 'h-[calc(100dvh-var(--chat-chrome))] md:h-full' : 'min-h-[340px]',
+      )}
+    >
       <div className="max-w-[460px]">
         {/* ⚠ A NEUTRAL SURFACE, NOT THE INFORMATIONAL BLUE. `--info` is v9's register
             for a fact the app is telling you about your data; this is the module

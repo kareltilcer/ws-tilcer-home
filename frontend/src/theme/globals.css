@@ -255,14 +255,22 @@
   --att-removed: var(--unmeasured);
 
   /* ⚠ DECLARED, because ChatPage READS IT. `h-[calc(100dvh-var(--chat-chrome))]` is
-     what stops the two panes growing to their content, and it was running on an
-     inline 8rem fallback that no stylesheet defined — a magic number wearing a
-     variable's clothes. It is the app chrome above and below the chat viewport
-     below 1024: the header plus the thumb-tab bar. ⚠ IT CHANGES WHEN AppShell
-     GAINS CHAT'S TAB (D260), and this is the one place that has to be edited —
-     get it wrong and the thread either leaves a gap or pushes the composer back
-     under the fold, which is the bug the pane heights were just fixed for. */
-  --chat-chrome: 8rem;
+     what stops the two panes growing to their content. It is the app chrome above
+     and below the chat viewport BELOW 768 — the only widths where the shell has
+     any — and it is a MEASUREMENT OF AppShell rather than a round number: the
+     mobile header is py-3 twice over a 36 px button plus its border (61 px), and
+     the thumb-tab bar is a 56 px minimum plus its border (57 px).
+
+     ⚠ IT IS THE WHOLE CHROME NOW, WHICH 8rem NEVER WAS. 128 px was tuned while
+     `<main>` still put px-4 py-5 pb-24 around chat, so the viewport was being
+     divided between two subtractions and neither could be read on its own — they
+     did not add up, and the 49 px they missed by was a strip of page that scrolled
+     with nothing in it. The shell hands chat the box whole now
+     (isFullBleedRoute), so this is the only thing taken off the viewport: get it
+     wrong and the thread either leaves a gap or pushes the composer under the
+     fold. ⚠ AND IT STILL CHANGES WITH AppShell — a taller header or a taller tab
+     bar has to be counted here, and nowhere else. */
+  --chat-chrome: 118px;
 
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;

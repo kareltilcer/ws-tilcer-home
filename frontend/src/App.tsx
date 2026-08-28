@@ -62,13 +62,13 @@ export default function App() {
                     gate anywhere in the module (D151): a reader sees every
                     number and can change nothing. */}
                 <Route path={`${routes.elektrina}/*`} element={<ElectricityPage />} />
-                {/* v10: Chat — the list and one thread under one prefix.
-                    ⚠ THERE IS NO NAV ENTRY FOR IT IN THIS RELEASE, and that is
-                    deliberate rather than forgotten: the module ships without
-                    attachments, so the household meets it when PR 3 lands them and
-                    Chat takes a thumb tab (D260). Registering the route now is what
-                    makes /chat and the push deep link /chat/{id} work for the people
-                    testing it.
+                {/* v10: Chat — the list and one thread under one prefix, plus the
+                    clean-up screen at /chat/uklid.
+                    ⚠ IT IS THE ONE ROUTE THE SHELL DOES NOT PAD. The list and the
+                    thread are panes sized to the viewport rather than a document
+                    that scrolls, so `<main>` hands them its content box whole —
+                    isFullBleedRoute in app/routes.ts is where that is decided, and
+                    /chat/uklid is deliberately outside it.
                     ⚠ And there is NO RequireWrite here or anywhere in the module: a
                     `reader` writes in chat (D222), which is a first for Home. The
                     gate is membership, enforced in SQL. */}
