@@ -28,42 +28,65 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 // enforced in SQL rather than by middleware: see scope.go.
 func (h *Handler) Mount(r chi.Router) {
 	r.Route("/chat", func(c chi.Router) {
-		c.Use(h.autoJoin)
+		// ⚠ THE BYTE ROUTES SIT IN THEIR OWN GROUP, OUTSIDE autoJoin, DELIBERATELY.
+		// They are the only high-frequency routes in the module — one request per image
+		// per thread render, twenty on a photo-heavy conversation — and the auto-join is
+		// a write path that begins with an indexed read, against a pool capped at a
+		// SINGLE connection (platform/db). Paying it per image serialises twenty extra
+		// reads behind every other request in the application, to enrol somebody who by
+		// definition reached the thread through a route that already enrolled them.
+		//
+		// ⚠ NOTHING ABOUT ACCESS CHANGES, and that is why this is safe. autoJoin only
+		// ever ADDS a membership row for Všichni — it is not a check. The check is
+		// AttachmentForViewer's join, which is the same predicate either way, and a
+		// first-sight enrolment into the household room cannot make anybody a member of
+		// the conversation an attachment belongs to.
+		//
+		// ⚠ A chi Group RATHER THAN A SECOND Route. Two Routes on overlapping prefixes
+		// (`/chat` and `/chat/attachments`) do not compose: the first mounts a subtree
+		// wildcard and swallows the second, which is exactly what happened — every
+		// attachment path answered "no such endpoint" while the code read correctly.
+		c.Group(func(raw chi.Router) {
+			// ⚠ HEAD IS ROUTED EXPLICITLY BESIDE GET, and it is not decoration. chi does
+			// not answer HEAD from a GET route, and the refusal has to be identical on
+			// both: a HEAD-only oracle still answers "does this attachment exist" for a
+			// conversation the caller may not open, which is the question D217 closes.
+			raw.Get("/attachments/{id}/raw", h.attachmentRaw)
+			raw.Head("/attachments/{id}/raw", h.attachmentRaw)
+			raw.Get("/attachments/{id}/thumbnail", h.attachmentThumbnail)
+			raw.Head("/attachments/{id}/thumbnail", h.attachmentThumbnail)
+		})
 
-		c.Get("/conversations", h.listConversations)
-		c.Post("/conversations", h.createConversation)
-		c.Get("/conversations/{id}", h.getConversation)
-		c.Patch("/conversations/{id}", h.renameConversation)
-		c.Delete("/conversations/{id}", h.deleteConversation)
-		c.Post("/conversations/{id}/restore", h.restoreConversation)
+		c.Group(func(g chi.Router) {
+			g.Use(h.autoJoin)
 
-		c.Get("/conversations/{id}/members", h.listMembers)
-		c.Post("/conversations/{id}/members", h.addMember)
-		c.Delete("/conversations/{id}/members/{user_id}", h.removeMember)
-		c.Patch("/conversations/{id}/members/me", h.updateSelf)
+			g.Get("/conversations", h.listConversations)
+			g.Post("/conversations", h.createConversation)
+			g.Get("/conversations/{id}", h.getConversation)
+			g.Patch("/conversations/{id}", h.renameConversation)
+			g.Delete("/conversations/{id}", h.deleteConversation)
+			g.Post("/conversations/{id}/restore", h.restoreConversation)
 
-		c.Get("/conversations/{id}/messages", h.thread)
-		c.Post("/conversations/{id}/messages", h.sendMessage)
-		c.Post("/conversations/{id}/read", h.advanceRead)
+			g.Get("/conversations/{id}/members", h.listMembers)
+			g.Post("/conversations/{id}/members", h.addMember)
+			g.Delete("/conversations/{id}/members/{user_id}", h.removeMember)
+			g.Patch("/conversations/{id}/members/me", h.updateSelf)
 
-		c.Patch("/messages/{id}", h.editMessage)
-		c.Delete("/messages/{id}", h.deleteMessage)
+			g.Get("/conversations/{id}/messages", h.thread)
+			g.Post("/conversations/{id}/messages", h.sendMessage)
+			g.Post("/conversations/{id}/read", h.advanceRead)
 
-		// ⚠ HEAD IS ROUTED EXPLICITLY BESIDE GET, and it is not decoration. chi does
-		// not answer HEAD from a GET route, and the refusal has to be identical on
-		// both: a HEAD-only oracle still answers "does this attachment exist" for a
-		// conversation the caller may not open, which is the question D217 closes.
-		c.Get("/attachments/{id}/raw", h.attachmentRaw)
-		c.Head("/attachments/{id}/raw", h.attachmentRaw)
-		c.Get("/attachments/{id}/thumbnail", h.attachmentThumbnail)
-		c.Head("/attachments/{id}/thumbnail", h.attachmentThumbnail)
-		c.Delete("/attachments/{id}", h.removeAttachment)
-		c.Post("/attachments/{id}/move", h.moveAttachment)
+			g.Patch("/messages/{id}", h.editMessage)
+			g.Delete("/messages/{id}", h.deleteMessage)
 
-		c.Get("/search", h.search)
-		c.Get("/storage", h.storage)
-		c.Get("/cleanup", h.cleanup)
-		c.Get("/directory", h.directory)
+			g.Delete("/attachments/{id}", h.removeAttachment)
+			g.Post("/attachments/{id}/move", h.moveAttachment)
+
+			g.Get("/search", h.search)
+			g.Get("/storage", h.storage)
+			g.Get("/cleanup", h.cleanup)
+			g.Get("/directory", h.directory)
+		})
 	})
 }
 

@@ -549,3 +549,60 @@ func (hh *storageHousehold) objectExists(key string) bool {
 	_, err := hh.blob.Stat(context.Background(), key)
 	return err == nil
 }
+
+// TestByteRoutesResolveOutsideTheAutoJoinGroup pins the router split.
+//
+// ⚠ IT EXISTS BECAUSE THE FIRST ATTEMPT SILENTLY UNMOUNTED THEM. Moving the byte
+// routes off autoJoin by declaring a SECOND `r.Route("/chat/attachments", …)` beside
+// the existing `r.Route("/chat", …)` does not compose in chi — the first mounts a
+// subtree wildcard and swallows the second — so every attachment path answered
+// `{"error":"not_found","detail":"no such endpoint"}` while the code read exactly
+// right. A chi Group inside the one Route is the shape that works.
+//
+// ⚠ AND THE REFUSAL IS UNCHANGED, which is the half that matters. autoJoin only ever
+// ADDS a Všichni membership row; it is not a check, and a first-sight enrolment into
+// the household room cannot make anybody a member of the conversation an attachment
+// belongs to. The access rule is AttachmentForViewer's join either way.
+func TestByteRoutesResolveOutsideTheAutoJoinGroup(t *testing.T) {
+	hh := newStorageHousehold(t, kaja, andy)
+	hh.join(kaja)
+	room := hh.group(kaja, "Fotky")
+	msg := hh.uploadOne(kaja, room.ID, "a.png", pngBytes)
+	raw := "/api/chat/attachments/" + msg.Attachments[0].ID + "/raw"
+
+	// The member's own request resolves — the routes are mounted at all.
+	if rr := hh.as(kaja, "GET", raw, ""); rr.Code != http.StatusOK {
+		t.Fatalf("the uploader's GET answered %d, want 200 — are the byte routes mounted? %s",
+			rr.Code, rr.Body.String())
+	}
+	if rr := hh.head(kaja, raw); rr.Code != http.StatusOK {
+		t.Errorf("HEAD answered %d, want 200", rr.Code)
+	}
+
+	// ⚠ `andy` HAS NEVER MADE A CHAT REQUEST, so he has no Všichni row and this route
+	// no longer enrols him. He must still be refused, and refused identically.
+	for _, method := range []string{"GET", "HEAD"} {
+		var rr *httptest.ResponseRecorder
+		if method == "HEAD" {
+			rr = hh.head(andy, raw)
+		} else {
+			rr = hh.as(andy, method, raw, "")
+		}
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("%s by a non-member answered %d, want 404 (D217)", method, rr.Code)
+		}
+	}
+
+	// And the auto-join is still doing its job on the routes that need it: andy's
+	// first conversation listing enrols him in Všichni.
+	hh.join(andy)
+	var rows int
+	if err := hh.db.QueryRow(
+		`SELECT COUNT(*) FROM chat_members m JOIN chat_conversations c ON c.id = m.conversation_id
+		  WHERE m.user_id = ? AND c.kind = 'default'`, andy.id).Scan(&rows); err != nil {
+		t.Fatalf("count memberships: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("the auto-join did not enrol a member on the listing route (%d rows)", rows)
+	}
+}

@@ -105,23 +105,32 @@ func (s *StorageService) measureChat(ctx context.Context) *StorageChat {
 		s.logf("admin: reading the chat thresholds failed", err)
 		return nil
 	}
-	groups, err := s.deps.Catalog.Groups(ctx)
+	rooms, err := s.deps.Catalog.GroupsOf(ctx, chatModule)
 	if err != nil {
 		s.logf("admin: reading the chat storage groups failed", err)
 		return nil
 	}
-	rooms := groups[chatModule]
 
 	limit := storage.MB(th.Conversation.ValueMB)
 	out := &StorageChat{
 		ThresholdTotalMB:        th.Total.ValueMB,
 		ThresholdConversationMB: th.Conversation.ValueMB,
-		ThresholdsUpdatedBy:     th.Total.UpdatedBy,
 		Mirrored:                false,
 		Conversations:           make([]StorageChatConversation, 0, len(rooms)),
 	}
-	if th.Total.UpdatedAt != "" {
-		at := th.Total.UpdatedAt
+	// ⚠ THE LATER OF THE TWO ROWS, NOT `chat.total`'S. They are separate rows with
+	// separate stamps, and reading only the total's meant that changing only *Limit
+	// na jednu konverzaci* left the page reporting "Zatím nikdo neměnil — platí
+	// výchozí hodnoty" over a value somebody had just chosen. That sentence is the
+	// exact distinction the null-for-a-seeded-default design exists to draw, so
+	// getting it wrong is worse than showing nothing.
+	latest := th.Total
+	if th.Conversation.UpdatedAt > latest.UpdatedAt {
+		latest = th.Conversation
+	}
+	out.ThresholdsUpdatedBy = latest.UpdatedBy
+	if latest.UpdatedAt != "" {
+		at := latest.UpdatedAt
 		out.ThresholdsUpdatedAt = &at
 	}
 	var total int64

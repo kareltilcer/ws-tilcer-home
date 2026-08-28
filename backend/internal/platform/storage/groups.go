@@ -139,6 +139,32 @@ func (r *Registry) Groups(ctx context.Context) (map[string][]GroupUsage, error) 
 	return out, nil
 }
 
+// GroupsOf resolves ONE module's groups.
+//
+// ⚠ IT EXISTS SO A CONSUMER THAT WANTS ONE BLOCK DOES NOT RUN EVERY SOURCE. Groups
+// above resolves them all, which is right for a caller rendering all of them and
+// wrong for Administrace's chat block: today chat is the only implementer so the
+// difference is nil, but the interface is deliberately generic (D235 — `documents`
+// could report per-root, `garden` per-bed), and the moment a second one exists its
+// full per-group query would run on every uncached snapshot and be discarded.
+//
+// An unknown or non-implementing module is (nil, nil) — the caller renders nothing,
+// which is the same answer it gives for a household without that module at all.
+func (r *Registry) GroupsOf(ctx context.Context, module string) ([]GroupUsage, error) {
+	if r == nil {
+		return nil, nil
+	}
+	gs, ok := r.groups[module]
+	if !ok {
+		return nil, nil
+	}
+	usage, err := gs.StorageGroups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("storage: %s group usage: %w", module, err)
+	}
+	return usage, nil
+}
+
 // GroupModules returns, in registration order, the modules that implement
 // GroupSource — the same declare-once/ask-the-catalog shape InventoryModules has,
 // and for the same reason: a consumer must not carry a hand-written module name.

@@ -67,7 +67,6 @@ type ThumbOptions struct {
 	CwebpPath      string
 	MaxPx          int
 	MaxImagePixels int
-	TempDir        string
 }
 
 // makeThumbnail scales an image down and encodes it as WebP, returning the path of

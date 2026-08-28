@@ -71,7 +71,18 @@ type stagedFile struct {
 	// thumbPath is "" when there is no thumbnail — a video, a file, or an image
 	// whose encoding failed. ⚠ A missing thumbnail is NOT an error state: the
 	// bubble falls back to the full image, which is what it would show anyway.
-	thumbPath     string
+	thumbPath string
+	// thumbStored is set by putStaged when the thumbnail actually reached the
+	// bucket.
+	//
+	// ⚠ IT IS A SECOND FLAG BECAUSE thumbPath ANSWERS A DIFFERENT QUESTION —
+	// "was it encoded", not "was it stored" — and keying the row on the first one
+	// made the database claim a thumbnail that is not in R2. putStaged deliberately
+	// swallows a storage failure (a message must not fail because a derived object
+	// did), so the row would then set thumbnail_key, every render of that image
+	// would request /thumbnail, and the server would 404 it forever after resolving
+	// a key to nothing.
+	thumbStored   bool
 	width, height int
 	dir           string
 }
@@ -156,13 +167,13 @@ func (s *Service) SendMessageMultipart(ctx context.Context, conversationID strin
 
 	// 3. Objects first. Nothing is written to the database until every one is durable.
 	written := make([]string, 0, len(files)*2)
-	for _, f := range files {
-		keys, err := s.putStaged(ctx, f)
+	for i := range files {
+		keys, err := s.putStaged(ctx, &files[i])
 		written = append(written, keys...)
 		if err != nil {
 			s.purgeObjects(ctx, written)
 			s.logger.Error("chat: storing an attachment failed — nothing committed",
-				"attachment", f.id, "err", err)
+				"attachment", files[i].id, "err", err)
 			return Message{}, httpx.ErrBadGateway("Úložiště souborů není dostupné.")
 		}
 	}
@@ -248,8 +259,9 @@ func (s *Service) stage(ctx context.Context, part *multipart.Part) (stagedFile, 
 }
 
 // putStaged writes one staged file's objects, returning the keys it actually wrote
-// so a later failure can undo them.
-func (s *Service) putStaged(ctx context.Context, f stagedFile) ([]string, error) {
+// so a later failure can undo them — and recording on `f` whether the THUMBNAIL got
+// there, which is a different question from whether it was encoded.
+func (s *Service) putStaged(ctx context.Context, f *stagedFile) ([]string, error) {
 	written := []string{}
 	body, err := os.Open(f.path)
 	if err != nil {
@@ -285,6 +297,7 @@ func (s *Service) putStaged(ctx context.Context, f stagedFile) ([]string, error)
 		s.logger.Warn("chat: storing a thumbnail failed", "attachment", f.id, "err", err)
 		return written, nil
 	}
+	f.thumbStored = true
 	return append(written, tk), nil
 }
 
@@ -343,7 +356,8 @@ func (s *Service) commitMessage(ctx context.Context, conversationID, body string
 				ByteSize: f.size, Checksum: f.checksum, StorageKey: originalKey(f.id),
 				UploadedBy: actor, CreatedAt: now,
 			}
-			if f.thumbPath != "" {
+			// ⚠ thumbStored, NOT thumbPath — the row must describe the BUCKET.
+			if f.thumbStored {
 				row.ThumbnailKey = sql.NullString{String: thumbnailKey(f.id), Valid: true}
 			}
 			if f.width > 0 && f.height > 0 {
@@ -393,7 +407,7 @@ func (s *Service) commitMessage(ctx context.Context, conversationID, body string
 	for _, f := range files {
 		a := Attachment{
 			ID: f.id, Kind: f.kind, State: stateLive, OriginalFilename: f.filename,
-			ContentType: f.contentType, ByteSize: f.size, HasThumbnail: f.thumbPath != "",
+			ContentType: f.contentType, ByteSize: f.size, HasThumbnail: f.thumbStored,
 			UploadedBy: actor, CreatedAt: now,
 		}
 		if f.width > 0 && f.height > 0 {
