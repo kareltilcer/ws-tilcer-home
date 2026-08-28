@@ -73,6 +73,17 @@ func MemberScoped(e Entry) bool { return e.Module == ModuleChat }
 //
 // Changes go for the D207 reason, unchanged: `{{change.name.new}}` is whitelisted
 // by SHAPE, so a clean summary is not enough on its own.
+//
+// ⚠ THE RESULTING NOTIFICATION IS VAGUE ON PURPOSE, AND THAT WAS DECIDED RATHER
+// THAN SETTLED FOR (D264). A rule on a chat action banners "něco se změnilo v
+// nějaké konverzaci" and no more. Dropping chat's verbs from the trigger composer
+// was considered and declined; so was rendering per recipient, which is a platform
+// change because the coalescing window builds ONE envelope per rule before the
+// audience is resolved.
+//
+// So do NOT "fix" the unhelpful copy by putting the summary back. That is the leak
+// this function exists for, and TestRedactMemberScopedStripsTheConversationName is
+// what goes red if anybody tries.
 func RedactMemberScoped(e Entry, changes []Change) (Entry, []Change) {
 	if !MemberScoped(e) {
 		return e, changes
