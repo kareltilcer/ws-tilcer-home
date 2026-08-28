@@ -102,9 +102,9 @@ function VideoAttachment({ attachment: a }: { attachment: Attachment }) {
         <Ban size={15} className="mt-0.5 flex-none text-muted" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-xs leading-normal text-pretty">{cs.chat.videoUnplayable}</p>
-          <div className="mt-1 truncate font-mono text-[10.5px] text-subtle">
-            {a.original_filename} · <span className="tabular-nums">{fmtBytes(a.byte_size)}</span>
-          </div>
+          {/* The same caption the playable video gets — one spelling of "this row
+              names its file", so a restyle cannot reach one state and miss the other. */}
+          <Caption attachment={a} />
         </div>
         <DownloadLink attachment={a} />
       </div>

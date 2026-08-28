@@ -1479,6 +1479,13 @@ export const cs = {
      * (D258) read as a decision rather than as a missing element.
      */
     everyoneMark: 'celá domácnost',
+    /**
+     * The conversation row's timestamp when it falls on the previous calendar day
+     * (see `when.ts`). ⚠ Here rather than in the module file, like every other Czech
+     * word this app renders: a string on every row of the list is not something to
+     * find by grepping the components when the copy is being revised.
+     */
+    whenYesterday: 'včera',
     emptyTitle: 'Zatím žádné konverzace',
     emptyBody:
       'Píšete v konverzaci Všichni, kde je celá domácnost. Vlastní skupinu si můžete kdykoliv založit.',
@@ -1661,6 +1668,14 @@ export const cs = {
      */
     filesRejected: (names: string, limitMB: number) =>
       `Nepřipojeno: ${names}. Jeden soubor může mít nejvýše ${limitMB} MB.`,
+    /**
+     * ⚠ THE OTHER REFUSAL, AND IT IS NOT THE SIZE ONE. A file dropped because the
+     * message already holds ten was refused by a different rule, and `filesRejected`
+     * names the MB cap — telling somebody a 400 kB photo is over a 50 MB limit is
+     * exactly the kind of wrong number this module goes to lengths to avoid.
+     */
+    filesOverCount: (names: string) =>
+      `Nepřipojeno: ${names}. Jedna zpráva unese nejvýš 10 souborů.`,
     /**
      * ⚠ The unplayable video. There is no transcoding in v10 and no plan for one
      * (D227), so this is a designed state and not an apology: an iPhone .mov stores

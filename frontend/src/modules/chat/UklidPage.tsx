@@ -111,8 +111,6 @@ export function UklidPage() {
     )
   }
 
-  const overTotal = storage.data?.total_exceeded ?? false
-
   return (
     <div className="mx-auto max-w-[1000px]">
       <CleanupHeader />
@@ -120,7 +118,10 @@ export function UklidPage() {
       {/* The figure this screen exists to move, the flag when it is over, and the
           ordering — one line, because they are read together. */}
       <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-        {overTotal && (
+        {/* `overTotalNow`, not a second reading of the same field: the leave
+            confirmation above already decided what the total means, and two names
+            for one verdict is how the badge and the sentence come to disagree. */}
+        {overTotalNow && (
           <span className="inline-flex flex-none items-center gap-1.5 rounded-full border border-attention bg-attention-soft px-3 py-1 text-xs font-bold text-attention">
             <AlertTriangle size={12} aria-hidden />
             {cs.chat.storageWarnWord}

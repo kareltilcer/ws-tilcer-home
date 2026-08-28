@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, ArrowUp, Bell, BellOff, MoreHorizontal, Plus, Users, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -7,7 +7,6 @@ import { count, PLURAL } from '@/i18n/plural'
 import { fmtBytes, fmtDate, fmtTime } from '@/i18n/format'
 import { Button, Input, Textarea } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
-import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { useAuth } from '@/app/auth'
 import {
   useAdvanceRead,
@@ -353,47 +352,53 @@ export function ThreadView({ conversationID, onOpenMembers }: {
 
         <ul className="flex flex-col gap-2.5">
           {messages.map((m, i) => (
-            <li key={m.id}>
+            <Fragment key={m.id}>
               {/* The *Nové zprávy* line — accent, because unread is a reason to look
                   rather than a warning, and drawn as a rule THROUGH the thread so it
-                  reads as a position in it and not as a message. */}
+                  reads as a position in it and not as a message.
+                  ⚠ ITS OWN `<li>`, not a block inside the next message's (v10
+                  review). Nested, a screen reader read the line out as part of that
+                  one message — the opposite of "a position in the thread" — and the
+                  list carried one item fewer than it had messages. */}
               {i === dividerAt && (
-                <div className="my-2 flex items-center gap-2.5">
+                <li className="my-2 flex items-center gap-2.5">
                   <span className="h-px flex-1 bg-accent" />
                   <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-accent">
                     {cs.chat.newMessagesDivider}
                   </span>
                   <span className="h-px flex-1 bg-accent" />
-                </div>
+                </li>
               )}
-              <Bubble
-                message={m}
-                mine={m.author_id === me}
-                // ⚠ ONE MUTATION FOR THE THREAD, NOT ONE PER BUBBLE (v10 review).
-                // Bubble called useDeleteMessage itself, so a thread at the
-                // 200-message cap mounted two hundred mutation observers — for a
-                // verb at most one bubble at a time can use, and on messages whose
-                // menu is never even rendered. The composer's send and edit already
-                // live at this level for the same reason.
-                // ⚠ IT ASKS NOW, because the verb moved out of a menu and into the
-                // footer. A delete blanks the body in place and leaves a tombstone
-                // everybody has already seen (D223) — there is no undo — and a
-                // one-tap irreversible control sitting permanently beside *Upravit*
-                // at 375 px is a mis-tap waiting to happen. The menu used to be the
-                // deliberation; the confirm is.
-                onDelete={() => setDeletingMessage(m)}
-                onReply={() => setReplyTo(m)}
-                // ⚠ STARTING AN EDIT DROPS A PENDING REPLY (v10 review). The composer
-                // hides the reply chip while an edit is open, so a reply begun before
-                // it was invisible but still armed — and once the edit finished, the
-                // next ordinary message went out as a reply to a message nobody had
-                // looked at in a while, with no unsend behind it.
-                onEdit={() => {
-                  setReplyTo(null)
-                  setEditing(m)
-                }}
-              />
-            </li>
+              <li>
+                <Bubble
+                  message={m}
+                  mine={m.author_id === me}
+                  // ⚠ ONE MUTATION FOR THE THREAD, NOT ONE PER BUBBLE (v10 review).
+                  // Bubble called useDeleteMessage itself, so a thread at the
+                  // 200-message cap mounted two hundred mutation observers — for a
+                  // verb at most one bubble at a time can use, and on messages whose
+                  // menu is never even rendered. The composer's send and edit already
+                  // live at this level for the same reason.
+                  // ⚠ IT ASKS NOW, because the verb moved out of a menu and into the
+                  // footer. A delete blanks the body in place and leaves a tombstone
+                  // everybody has already seen (D223) — there is no undo — and a
+                  // one-tap irreversible control sitting permanently beside *Upravit*
+                  // at 375 px is a mis-tap waiting to happen. The menu used to be the
+                  // deliberation; the confirm is.
+                  onDelete={() => setDeletingMessage(m)}
+                  onReply={() => setReplyTo(m)}
+                  // ⚠ STARTING AN EDIT DROPS A PENDING REPLY (v10 review). The
+                  // composer hides the reply chip while an edit is open, so a reply
+                  // begun before it was invisible but still armed — and once the edit
+                  // finished, the next ordinary message went out as a reply to a
+                  // message nobody had looked at in a while, with no unsend behind it.
+                  onEdit={() => {
+                    setReplyTo(null)
+                    setEditing(m)
+                  }}
+                />
+              </li>
+            </Fragment>
           ))}
         </ul>
       </div>
@@ -416,12 +421,20 @@ export function ThreadView({ conversationID, onOpenMembers }: {
             <Button variant="ghost" onClick={() => setDeletingMessage(null)}>
               {cs.chat.cancel}
             </Button>
+            {/* ⚠ IT CLOSES ON SUCCESS, NOT ON THE CLICK (v10 review). Dismissing
+                synchronously meant `loading` could never render — the dialog was
+                gone before the mutation was pending — and the member released an
+                irreversible verb into a dialog that vanished with no acknowledgement
+                that anything had been sent. RenameDialog and DeleteDialog below both
+                wait for the same reason; a failure still surfaces as the mutation's
+                own toast, with the dialog still open behind it. */}
             <Button
               variant="danger"
               loading={remove.isPending}
               onClick={() => {
-                if (deletingMessage) remove.mutate(deletingMessage.id)
-                setDeletingMessage(null)
+                const m = deletingMessage
+                if (!m) return
+                remove.mutate(m.id, { onSuccess: () => setDeletingMessage(null) })
               }}
             >
               {cs.chat.confirmDelete}
@@ -476,7 +489,6 @@ function ThreadHeader({
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const setMuted = useSetMuted(conversation.id)
-  const desktop = useIsDesktop()
   // ⚠ Všichni is renameable and NOT deletable (D219) — the same asymmetry the
   // service enforces with a 422. Hiding the entry is not the guard; it is what
   // stops a member meeting the guard as an error message.
@@ -579,18 +591,26 @@ function ThreadHeader({
               onClick={() => setMenuOpen(false)}
             />
             <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-border bg-s1 p-1 shadow-[var(--shadow)]">
-              {!desktop && (
-                <button
-                  type="button"
-                  className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-s2"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    toggleMute()
-                  }}
-                >
-                  {muteLabel}
-                </button>
-              )}
+              {/* ⚠ THE FOLD IS `lg:hidden`, NOT A JS MEDIA QUERY (v10 review). These
+                  entries carry what the header row above could not fit, and the row
+                  is shown by Tailwind's `lg:` — 1024 px. Hiding them with
+                  `useIsDesktop()` instead put the fold at the MD breakpoint, 768 px,
+                  and between the two neither existed: at any width from 768 to 1023
+                  — an iPad in portrait is exactly 768 — Ztlumit konverzaci and
+                  Smazat konverzaci were unreachable, and a room created by mistake
+                  had no delete anywhere in the UI. One mechanism, one breakpoint, no
+                  gap. `display:none` also takes them out of the accessibility tree,
+                  so the desk never meets either verb twice. */}
+              <button
+                type="button"
+                className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-s2 lg:hidden"
+                onClick={() => {
+                  setMenuOpen(false)
+                  toggleMute()
+                }}
+              >
+                {muteLabel}
+              </button>
               <button
                 type="button"
                 className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-s2"
@@ -601,23 +621,29 @@ function ThreadHeader({
               >
                 {cs.chat.word.rename}
               </button>
-              {!desktop &&
-                (isDefault ? (
-                  <p className="px-2 py-2 text-left text-sm text-subtle">
-                    {cs.chat.deleteUnavailable}
-                  </p>
-                ) : (
-                  <button
-                    type="button"
-                    className="block w-full rounded px-2 py-2 text-left text-sm text-danger hover:bg-danger/10"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      setDeleting(true)
-                    }}
-                  >
-                    {cs.chat.word.deleteConversation}
-                  </button>
-                ))}
+              {isDefault ? (
+                // ⚠ THE REASON TRAVELS WITH THE FACT, exactly as it does on the
+                // desk. Stated-rather-than-disabled (D219) only works while the
+                // sentence explaining it is reachable; without the title this read
+                // as a refusal with nothing behind it.
+                <p
+                  title={cs.chat.everyoneCannotLeave}
+                  className="px-2 py-2 text-left text-sm text-subtle lg:hidden"
+                >
+                  {cs.chat.deleteUnavailable}
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  className="block w-full rounded px-2 py-2 text-left text-sm text-danger hover:bg-danger/10 lg:hidden"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setDeleting(true)
+                  }}
+                >
+                  {cs.chat.word.deleteConversation}
+                </button>
+              )}
             </div>
           </>
         )}
@@ -970,8 +996,13 @@ function Composer({
   const [files, setFiles] = useState<File[]>([])
   /** ⚠ NAME AND SIZE, not just the name. A refused file is listed beside the ones
    *  that were kept, in the same row shape, so "why is this one not going" is
-   *  answered by the figure next to it rather than by a sentence somewhere else. */
-  const [rejected, setRejected] = useState<{ name: string; size: number }[]>([])
+   *  answered by the figure next to it rather than by a sentence somewhere else.
+   *
+   *  ⚠ AND WHICH CAP REFUSED IT (v10 review). Two rules drop a file — the per-file
+   *  MB limit and D224's ten per message — and both used to land in one list that
+   *  was then explained by the MB sentence alone: twelve 400 kB photos produced
+   *  "Jeden soubor může mít nejvýše 50 MB" over two files nowhere near it. */
+  const [rejected, setRejected] = useState<RejectedFile[]>([])
   const [progress, setProgress] = useState<number | null>(null)
   const [dragging, setDragging] = useState(false)
   const send = useSendMessage(conversationID)
@@ -998,10 +1029,10 @@ function Composer({
    */
   const accept = (incoming: File[]) => {
     if (incoming.length === 0) return
-    const overCap: { name: string; size: number }[] = []
+    const overCap: RejectedFile[] = []
     const kept: File[] = []
     for (const f of incoming) {
-      if (f.size > maxBytes) overCap.push({ name: f.name, size: f.size })
+      if (f.size > maxBytes) overCap.push({ name: f.name, size: f.size, why: 'size' })
       else kept.push(f)
     }
     // ⚠ BOTH DECISIONS ARE MADE BEFORE EITHER setState, AGAINST `files` RATHER THAN
@@ -1012,7 +1043,9 @@ function Composer({
     // many times React chose to re-run the updater, which is not a guarantee React
     // offers. Both handlers here are user events, so `files` is current.
     const room = Math.max(0, MAX_FILES - files.length)
-    const overflow = kept.slice(room).map((f) => ({ name: f.name, size: f.size }))
+    const overflow: RejectedFile[] = kept
+      .slice(room)
+      .map((f) => ({ name: f.name, size: f.size, why: 'count' }))
     setFiles([...files, ...kept.slice(0, room)])
     setRejected([...overCap, ...overflow])
   }
@@ -1106,8 +1139,13 @@ function Composer({
           it, not two unrelated blocks. */}
       {(files.length > 0 || rejected.length > 0) && (
         <div className="flex flex-col gap-1.5">
+          {/* ⚠ IT COUNTS THE ROWS THAT ARE ON SCREEN, refused ones included (v10
+              review). Counting only the kept files put "0 souborů · nejvýš 10 na
+              zprávu" directly above a list showing one — a heading disagreeing with
+              the list it heads, in the one place a member checks what is about to
+              be sent. */}
           <div className="font-mono text-[10.5px] text-subtle">
-            {cs.chat.composerFileCount(count(files.length, PLURAL.files))}
+            {cs.chat.composerFileCount(count(files.length + rejected.length, PLURAL.files))}
           </div>
           <ul className="flex flex-col gap-1.5">
             {files.map((f, i) => (
@@ -1164,11 +1202,27 @@ function Composer({
               />
             </div>
           )}
-          {rejected.length > 0 && (
+          {/* ⚠ ONE SENTENCE PER RULE. The MB cap and D224's ten refuse different
+              files for different reasons, and a single sentence naming the megabytes
+              was being applied to both. */}
+          {rejected.some((r) => r.why === 'size') && (
             <p className="text-xs leading-normal text-muted text-pretty">
               {cs.chat.filesRejected(
-                rejected.map((r) => r.name).join(', '),
+                rejected
+                  .filter((r) => r.why === 'size')
+                  .map((r) => r.name)
+                  .join(', '),
                 Math.round(maxBytes / (1024 * 1024)),
+              )}
+            </p>
+          )}
+          {rejected.some((r) => r.why === 'count') && (
+            <p className="text-xs leading-normal text-muted text-pretty">
+              {cs.chat.filesOverCount(
+                rejected
+                  .filter((r) => r.why === 'count')
+                  .map((r) => r.name)
+                  .join(', '),
               )}
             </p>
           )}
@@ -1207,7 +1261,12 @@ function Composer({
           value={body}
           maxLength={8000}
           placeholder={cs.chat.composerPlaceholderIn(roomName)}
-          aria-label={cs.chat.composerPlaceholder}
+          // ⚠ THE SAME SENTENCE THE PLACEHOLDER SHOWS (v10 review). The label kept
+          // the generic *Napište zprávu…* while the visible text names the room, so
+          // the one reader who cannot see which thread is behind the composer was
+          // the only one not told which room this posts into — on a control with no
+          // unsend behind it.
+          aria-label={cs.chat.composerPlaceholderIn(roomName)}
           className="max-h-40 min-h-[46px] resize-y rounded-[12px] py-3 text-sm lg:min-h-11"
           onChange={(e) => setBody(e.target.value)}
           onPaste={(e) => {
@@ -1265,6 +1324,15 @@ function Composer({
 
 /** D224's ten. */
 const MAX_FILES = 10
+
+/**
+ * A file the composer would not take, and WHICH rule refused it.
+ *
+ * ⚠ `why` IS NOT COSMETIC. `size` is the server's per-file cap (`max_upload_mb`,
+ * D228) and `count` is MAX_FILES above; the two produce different sentences, and
+ * merging them was how a 400 kB photo came to be told it was over 50 MB.
+ */
+type RejectedFile = { name: string; size: number; why: 'size' | 'count' }
 
 /**
  * useMaxUploadBytes is the per-file cap the composer refuses against.

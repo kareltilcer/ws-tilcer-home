@@ -1,3 +1,4 @@
+import { cs } from '@/i18n/cs'
 import { fmtDate, fmtTime } from '@/i18n/format'
 
 /**
@@ -24,7 +25,7 @@ export function fmtWhen(iso: string, now: Date = new Date()): string {
   // next morning, which is what somebody reading the list means by the word.
   const days = daysBetween(d, now)
   if (days === 0) return fmtTime(iso)
-  if (days === 1) return 'včera'
+  if (days === 1) return cs.chat.whenYesterday
   if (d.getFullYear() === now.getFullYear()) return `${d.getDate()}. ${d.getMonth() + 1}.`
   return fmtDate(d)
 }
