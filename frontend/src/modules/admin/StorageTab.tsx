@@ -6,6 +6,7 @@ import { qk } from '@/api/keys'
 import { getStorageSnapshot } from '@/api/endpoints'
 import type { StorageOwnerUsage, StorageSnapshot } from '@/api/types'
 import { cs } from '@/i18n/cs'
+import { ChatStorageBlock } from './ChatStorageBlock'
 import { cn } from '@/lib/utils'
 import { count, PLURAL } from '@/i18n/plural'
 import { fmtDateTime, fmtMeasuredBytes, fmtNumber, fmtStorageBytes, isMeasuredBytes, UNMEASURED } from '@/i18n/format'
@@ -91,6 +92,10 @@ export function StorageTab() {
       {!s.database.bytes_available && <DbstatMissing />}
       <DatabaseBreakdown s={s} />
       <BlobBreakdown s={s} />
+      {/* v10: the chat block sits BELOW the per-module blob breakdown, where the
+          module's own bytes have just been listed — the block adds the room-level
+          detail and the threshold that acts on it (FR-V10-16). */}
+      {s.chat && <ChatStorageBlock chat={s.chat} />}
       <OutsideBreakdown s={s} />
     </div>
   )

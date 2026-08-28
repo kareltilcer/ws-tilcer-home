@@ -278,3 +278,14 @@ type MembershipEvent struct {
 	UserID         string `json:"user_id"`
 	Removed        bool   `json:"removed"`
 }
+
+// AttachmentMove is the body of POST /api/chat/attachments/{id}/move.
+//
+// ⚠ ONE FIELD, AND IT MUST NAME A SHARED FOLDER. A private v9 folder is refused with
+// 422 rather than being offered and greyed out (D245): a private target would make
+// the file unreadable to the conversation's other members, which is the opposite of
+// what the move is for. The refusal lives in `documents` — it is the only module
+// that knows what makes one of its folders private.
+type AttachmentMove struct {
+	FolderID string `json:"folder_id"`
+}

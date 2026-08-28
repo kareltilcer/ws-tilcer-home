@@ -1,10 +1,33 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.12.0
+  version: 0.12.1
   description: >-
-    API for the `home` household-management service. **0.12.0 IS THE v10 SPEC: chat.**
-    0.11.0 remains the served contract until v10 ships.
+    API for the `home` household-management service. **0.12.1 IS v10 AS BUILT.**
+    0.12.0 was the v10 spec; this reconciles it against the shipped code after PR 3
+    (attachments, the two thresholds, the clean-up page and the move to Dokumenty).
+
+    **What 0.12.1 corrects, and it is one thing plus three additions.**
+
+    ⚠ **The threshold audit action is `chat.threshold.update`, NOT
+    `chat.settings.updated`** (D263). The design bundle is later than the PRD and wins on
+    this point; `PUT /api/admin/storage/thresholds` below still carried the old name at
+    0.12.0. `chat.Module.AuditActions()` declares the verb and the `admin` module emits it
+    with `module = "chat"` — the setting is an admin's to change and the subject is chat's,
+    which is the same shape D255 uses when an admin restores a room they may not read.
+
+    Three fields were added because the client could not be correct without them:
+    `ChatStorage.can_clean_up` (D241's gate is member ∧ (`editor`|`admin`) and the client
+    holds only the role half, so a banner that guessed would offer a `reader` a link that
+    403s them), `ChatStorage.max_upload_mb` (the composer refuses an over-cap file BEFORE
+    uploading it, and a hard-coded 50 would name a limit that is not the limit once an
+    operator raises `HOME_DOCS_MAX_UPLOAD_MB`), and `StorageChat.thresholds_updated_at` /
+    `.thresholds_updated_by` (the Limity tab distinguishes a value somebody chose from a
+    seeded default, which a fake actor in the seed would have made impossible).
+
+    ⚠ **Everything else in the v10 section below describes the server as built.** The
+    attachment, storage, clean-up and move paths are LIVE from PR 3; they were documented
+    at 0.12.0 and unimplemented until then.
 
     v10 adds the ELEVENTH module, `chat`: one household conversation everybody is in
     (**Vsichni** / Vsichni) plus any number of created groups, carrying images, video and
@@ -5302,8 +5325,14 @@ paths:
       description: >-
         Writes `chat.total` and `chat.conversation` into the platform-owned
         `storage_thresholds` table (PRD D236). Admin only. Audited as
-        `chat.settings.updated`. The current values ride `GET /api/admin/storage`, so there
-        is deliberately no GET here.
+        `chat.threshold.update` — ⚠ **AS BUILT (D263), not the 0.12.0 spec's
+        `chat.settings.updated`**; the design bundle is later than the PRD and wins on this
+        point. The current values ride `GET /api/admin/storage`, so there is deliberately
+        no GET here.
+
+        ⚠ **A save that changes nothing writes no event.** The two fields autosave on blur,
+        so a Log row per focus loss would bury the changes that mattered under a dozen that
+        changed nothing.
 
         The table is **platform-owned** because `admin` writes these and `chat` reads them,
         and neither module may import the other. It is keyed rather than columned, so a
@@ -9422,7 +9451,8 @@ components:
 
     ChatStorage:
       type: object
-      required: [total_bytes, threshold_total_mb, total_exceeded, threshold_conversation_mb, conversations]
+      required: [total_bytes, threshold_total_mb, total_exceeded, threshold_conversation_mb,
+                 conversations, can_clean_up, max_upload_mb, move_available]
       description: >-
         What the in-module warning renders. Both thresholds are **WARN ONLY** — no upload is
         ever refused, there is no quota and no new 413 anywhere in the app (PRD D237, §V9
@@ -9442,6 +9472,35 @@ components:
           description: >-
             **Only conversations the caller belongs to.** ALWAYS an array, never null (D174).
           items: { $ref: "#/components/schemas/ChatStorageConversation" }
+        can_clean_up:
+          type: boolean
+          description: >-
+            ⚠ **AS BUILT (0.12.1).** D241's gate is member ∧ (`editor`|`admin`) and the
+            client holds only the ROLE half — so the server answers the intersection here
+            and the warning banner asks rather than guesses. Without it a `reader` is
+            offered a link to `/chat/uklid` that 403s them, which is precisely what the
+            copy is not allowed to do. The membership half stays per row: a member of no
+            conversation passes this gate and gets an empty page, not a refusal.
+        max_upload_mb:
+          type: integer
+          description: >-
+            ⚠ **AS BUILT (0.12.1).** The per-file cap — `HOME_DOCS_MAX_UPLOAD_MB`, shared
+            with Dokumenty (D228) — so the composer can refuse an over-cap file BEFORE
+            uploading it. A client constant would name a limit that stops being the limit
+            the moment an operator raises it; the server stays the authority and still
+            answers 413.
+        move_available:
+          type: boolean
+          description: >-
+            ⚠ **AS BUILT (0.12.1).** Whether a `storage.BlobSink` is wired at all, which is
+            what D239's *"the button is absent"* half needs: with no sink the move is 501,
+            and a capability that is plainly absent has to LOOK absent rather than open a
+            folder picker and refuse after the confirm.
+
+            ⚠ **It is NOT `can_clean_up`, and conflating them was the bug.** That one
+            answers D241's ROLE gate; this one answers whether the capability exists in
+            this deployment. Gating the button on the role meant a household without
+            `documents` wired still offered *Přesunout do Dokumentů* to every editor.
 
     ChatStorageConversation:
       type: object
@@ -9524,6 +9583,16 @@ components:
         threshold_total_mb: { type: integer }
         exceeded: { type: boolean }
         threshold_conversation_mb: { type: integer }
+        thresholds_updated_at:
+          type: [string, "null"]
+          format: date-time
+          description: ⚠ **AS BUILT (0.12.1).** When the pair was last saved.
+        thresholds_updated_by:
+          type: [string, "null"]
+          description: >-
+            ⚠ **AS BUILT (0.12.1).** Who saved them, and **null for a seeded default** —
+            the Limity tab distinguishes a value somebody chose from one nobody has
+            touched, which a fake actor in `02004`'s seed would have made impossible.
         mirrored:
           type: boolean
           description: >-

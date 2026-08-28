@@ -146,13 +146,16 @@ var actionLabels = map[string]string{
 	// the household is owed for a screen that exists at all (D198).
 	"admin.private_items.view": "Když správce otevře seznam soukromých položek",
 
-	// chat (Chat) — v10. ⚠ SEVEN STRUCTURAL VERBS AND NO MESSAGE VERB (D231).
+	// chat (Chat) — v10. ⚠ ELEVEN STRUCTURAL VERBS AND NO MESSAGE VERB (D231).
 	// Sending, editing and deleting a message write nothing to the Log, so there is
 	// deliberately no "Když někdo pošle zprávu" here to bind a rule to. The gap is
 	// asserted by TestChatMessagesAreNotAudited rather than only described.
 	//
-	// The three chat.attachment.* verbs and chat.threshold.update arrive with the
-	// code that emits them, in PR 3.
+	// ⚠ AND ATTACHMENTS ARE HERE ALTHOUGH THE MESSAGES CARRYING THEM ARE NOT. The
+	// bytes are what the two thresholds, the clean-up page and the storage register
+	// exist for; "who uploaded that 40 MB video, and when" is the question the whole
+	// storage half of v10 answers, and it is not answerable from a message log that
+	// does not exist.
 	"chat.conversation.created":  "Když někdo vytvoří konverzaci",
 	"chat.conversation.renamed":  "Když někdo přejmenuje konverzaci",
 	"chat.conversation.deleted":  "Když někdo přesune konverzaci do koše",
@@ -160,6 +163,14 @@ var actionLabels = map[string]string{
 	"chat.conversation.purged":   "Když někdo smaže konverzaci natrvalo",
 	"chat.member.added":          "Když někdo přidá člena do konverzace",
 	"chat.member.removed":        "Když někdo odebere člena z konverzace",
+	"chat.attachment.uploaded":   "Když někdo nahraje soubor do konverzace",
+	"chat.attachment.removed":    "Když někdo odstraní soubor při úklidu úložiště",
+	"chat.attachment.moved":      "Když někdo přesune soubor z chatu do Dokumentů",
+	// ⚠ `threshold.update`, not `settings.updated` (D263 — the design bundle is
+	// later than the PRD and wins on this point). Emitted by the admin module and
+	// filed under `chat`, because the setting is an admin's to change and the
+	// subject is chat's.
+	"chat.threshold.update": "Když správce změní limity úložiště chatu",
 }
 
 // ActionLabel returns the human Czech phrase for an action, falling back to the

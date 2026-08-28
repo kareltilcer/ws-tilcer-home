@@ -27,7 +27,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
-// v10Files are the three migrations v10 adds, in ascending version order.
+// v10Files are the four migrations v10 adds, in ascending version order.
 //
 // ⚠ IDENTIFIED BY FILENAME, NOT BY A VERSION CUTOFF, and that is forced by the
 // numbering scheme rather than preferred: every module owns a numeric BLOCK inside
@@ -35,10 +35,18 @@ import (
 // of releases ago. There is no version V such that "everything below V" means
 // "everything before v10" — the same fact that makes appdb.Migrate need
 // WithAllowMissing.
+//
+// ⚠ THE LIST IS LOAD-BEARING AND IT BIT: `12002` arrived with PR 3 and, until it was
+// added here, preV10MigrationFS built a "pre-v10" schema that nonetheless ran an
+// ALTER against `chat_attachments` — a table `12001` creates and this set excludes.
+// The failure was loud, which is the point of preV10MigrationFS's own guard below;
+// a forgotten file that happened to apply cleanly would have quietly turned every
+// upgrade test into "migrate everything twice".
 var v10Files = []string{
 	"02004_chat_platform.sql",
 	"08003_chat_delivery.sql",
 	"12001_chat.sql",
+	"12002_chat_attachment_document_path.sql",
 }
 
 // preV10MigrationFS is the merged schema WITHOUT v10's three files — exactly the

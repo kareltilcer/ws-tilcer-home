@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
 // TargetedNotifier publishes a websocket change to a NAMED SET of members after
@@ -32,6 +34,32 @@ type Options struct {
 	// the koš before the drain destroys its bytes. Chat's only env var.
 	TrashDays int
 	Logger    *slog.Logger
+
+	// Blob is the primary object store, under the `chat/` prefix (D229). Nil in a
+	// host that wires none: uploads then refuse and the delivery routes 404, which
+	// is the same shape `documents` takes.
+	Blob blobstore.BlobStore
+	// Sink is `documents` accepting custody, handed over at composition as an
+	// OPTIONAL dependency (D238/D239).
+	//
+	// ⚠ NIL IS A SUPPORTED STATE AND IT MEANS 501, NEVER A FALLBACK TO DELETE. A
+	// capability that silently becomes a different, DESTRUCTIVE capability is worse
+	// than one that is plainly absent — so the move refuses and the UI renders no
+	// button.
+	Sink storage.BlobSink
+	// Upload is the per-file cap and the thumbnail toolchain, all of it read from
+	// Dokumenty's configuration (D228). There is deliberately no HOME_CHAT_*
+	// equivalent of any of it.
+	Upload UploadOptions
+}
+
+// UploadOptions bounds an attachment and describes how to thumbnail it.
+type UploadOptions struct {
+	// MaxBytes is HOME_DOCS_MAX_UPLOAD_MB in bytes — Dokumenty's cap, shared on
+	// purpose so every chat attachment is movable into Dokumenty by construction.
+	MaxBytes int64
+	TempDir  string
+	Thumb    ThumbOptions
 }
 
 // Service orchestrates chat: validate → memberScope → WithTx → notify + push.
@@ -51,6 +79,21 @@ type Service struct {
 	directory DirectorySource
 	trashDays int
 	logger    *slog.Logger
+	blob      blobstore.BlobStore
+	blobSink  storage.BlobSink
+	upload    UploadOptions
+	// moveFault is the fault-injection seam for the custody transfer, nil in
+	// production and set only by tests in this package.
+	//
+	// ⚠ IT EXISTS BECAUSE THE MOVE IS THE ONE THING IN v10 THAT CAN DESTROY DATA
+	// SILENTLY, and the acceptance criteria ask for a failure injected at each of
+	// its five steps with the resulting state asserted and the move re-run from it.
+	// Steps 2 and 3 live inside the sink and a fake sink covers them; steps 4 and 5
+	// are chat's own SQLite write and object delete, and there is no honest way to
+	// make those fail from outside. A nil-by-default hook is cheaper than the
+	// alternative — shipping the matrix untested, on the only path in this version
+	// that can lose a file.
+	moveFault func(step moveStep) error
 	// dir memoises the directory projection for directoryTTL — see push.go. It is
 	// why a Service must never be copied.
 	dir directoryCache
@@ -66,10 +109,16 @@ func NewService(db *sql.DB, sink audit.Sink, notifyTo TargetedNotifier, pusher p
 	if opts.TrashDays < 1 {
 		opts.TrashDays = 7
 	}
+	if opts.Upload.MaxBytes <= 0 {
+		// The documents default, restated rather than imported: a host that wires no
+		// upload options still gets D228's cap and not an unbounded one.
+		opts.Upload.MaxBytes = 50 << 20
+	}
 	return &Service{
 		db: db, store: NewStore(db), sink: sink, notifyTo: notifyTo,
 		pusher: pusher, directory: directory,
 		trashDays: opts.TrashDays, logger: opts.Logger,
+		blob: opts.Blob, blobSink: opts.Sink, upload: opts.Upload,
 	}
 }
 
@@ -144,6 +193,31 @@ func (s *Service) ListConversations(ctx context.Context, state, cursor string, l
 		for i := range items {
 			items[i].PurgeAfter = s.purgeAfter(items[i].DeletedAt)
 		}
+	}
+	// ⚠ THE VERDICT LIVES HERE, NOT IN THE STORE — the threshold comparison belongs
+	// to the consumer (D235's rule, which is why GroupSource reports bytes and
+	// nothing else). The store measures; this decides what the number means.
+	//
+	// ⚠ AND IT IS WHAT LETS THE LIST FLAG AN OVER-LIMIT ROOM AT ALL. Both fields
+	// shipped null from PR 2 with a note saying PR 3 would fill them, and PR 3
+	// nearly did not: a list permanently rendering *nezměřeno* beside every room,
+	// with no way to see which one is heavy, on the version whose second half is a
+	// storage register.
+	//
+	// A threshold read that fails leaves both verdicts null rather than false — the
+	// D161 shape one field up: an unmeasured verdict must not serialise as "under
+	// the limit".
+	if th, thErr := storage.LoadThresholds(ctx, s.db); thErr == nil {
+		limit := storage.MB(th.Conversation.ValueMB)
+		for i := range items {
+			if items[i].Bytes == nil {
+				continue
+			}
+			over := *items[i].Bytes > limit
+			items[i].OverConversationLimit = &over
+		}
+	} else {
+		s.logger.Warn("chat: could not read the conversation threshold for the list", "err", thErr)
 	}
 	page := ConversationPage{Items: items}
 	if hasMore && len(items) > 0 {
@@ -518,12 +592,21 @@ func (s *Service) conversationForDestructiveVerb(ctx context.Context, tx *sql.Tx
 // is not one or two DELETE calls. PR 2 has no attachments, so this enqueues nothing
 // today; it is written now because the delete path is written now, and a queue
 // added later is a queue that misses everything deleted in between.
+// ⚠ THE QUEUE ALWAYS HOLDS THE EARLIEST PROMISE, which is why the conflict clause
+// takes a MIN rather than overwriting (v10 PR 3 review). A MESSAGE delete queues its
+// keys at `purge_after = now`, due on the very next drain pass; a plain overwrite
+// meant that trashing the room afterwards pushed those same keys out to
+// `now + HOME_CHAT_TRASH_DAYS`, so bytes a member had watched leave the thread on
+// Monday were still in R2 the following week for a reason nothing on screen
+// explained. MIN keeps the hard purge working too — *Smazat natrvalo* passes `now`,
+// which is smaller than any pending deadline and therefore still brings it forward.
 func (s *Service) queuePurge(ctx context.Context, tx *sql.Tx, conversationID, queuedAt, purgeAfter string) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_deleted_keys (key, queued_at, purge_after)
 		SELECT storage_key, ?, ? FROM chat_attachments
 		 WHERE conversation_id = ? AND state = 'live'
-		    ON CONFLICT (key) DO UPDATE SET purge_after = excluded.purge_after`,
+		    ON CONFLICT (key) DO UPDATE
+		       SET purge_after = MIN(chat_deleted_keys.purge_after, excluded.purge_after)`,
 		queuedAt, purgeAfter, conversationID); err != nil {
 		return err
 	}
@@ -531,7 +614,8 @@ func (s *Service) queuePurge(ctx context.Context, tx *sql.Tx, conversationID, qu
 		INSERT INTO chat_deleted_keys (key, queued_at, purge_after)
 		SELECT thumbnail_key, ?, ? FROM chat_attachments
 		 WHERE conversation_id = ? AND state = 'live' AND thumbnail_key IS NOT NULL
-		    ON CONFLICT (key) DO UPDATE SET purge_after = excluded.purge_after`,
+		    ON CONFLICT (key) DO UPDATE
+		       SET purge_after = MIN(chat_deleted_keys.purge_after, excluded.purge_after)`,
 		queuedAt, purgeAfter, conversationID)
 	return err
 }

@@ -78,6 +78,19 @@ func ErrInternal(detail string) *APIError {
 	return &APIError{http.StatusInternalServerError, "internal", detail}
 }
 
+// ErrNotImplemented reports that a capability exists in the contract but is not
+// configured in this deployment (v10, PRD D239).
+//
+// ⚠ IT IS NOT A 500 AND NOT A 404, and the distinction is the whole point of the
+// decision it was added for. Chat's move to Dokumenty needs a `storage.BlobSink`
+// wired at composition; with none, the move is UNAVAILABLE and must say so — it
+// must never fall back to a delete, because a capability that silently becomes a
+// different, destructive capability is worse than one that is plainly absent. The
+// client renders no button, so a 501 here means somebody reached the route anyway.
+func ErrNotImplemented(detail string) *APIError {
+	return &APIError{http.StatusNotImplemented, "not_implemented", detail}
+}
+
 // WriteError writes err as the shared Error envelope. Non-APIError values are
 // treated as 500s with a generic message (details stay server-side).
 func WriteError(w http.ResponseWriter, err error) {

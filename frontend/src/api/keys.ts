@@ -138,6 +138,23 @@ export const qk = {
   chatSearch: (q: string, conversationID?: string) =>
     ['chat', 'search', q, conversationID ?? ''] as const,
   chatDirectory: ['chat', 'directory'] as const,
+  // v10 PR 3. ⚠ THE RESOURCE COMES BEFORE THE ID here too, so no key is a prefix
+  // of another — `chatCleanup(id)` must not invalidate every cleanup listing when
+  // one conversation's filter changes, the way the messages key once did.
+  chatStorage: ['chat', 'storage'] as const,
+  chatCleanup: (conversationID?: string, sort?: string) =>
+    ['chat', 'cleanup', conversationID ?? '', sort ?? 'size'] as const,
+  /**
+   * Every clean-up listing at once — the prefix the two sorts and any per-room
+   * filter hang off.
+   *
+   * ⚠ IT IS HERE RATHER THAN HAND-WRITTEN AT THE THREE CALL SITES that invalidate
+   * after a byte moves. `qk` is this file's whole point: §V10-12 records the chat
+   * message key being restructured once already, and a literal `['chat','cleanup']`
+   * elsewhere would go on compiling and silently match nothing the day the shape
+   * changes again.
+   */
+  chatCleanupAll: ['chat', 'cleanup'] as const,
   /**
    * ⚠ NOT AN INVALIDATION TARGET, AND NO CHAT MUTATION MAY USE IT. It is the
    * common prefix the key-shape test asserts every chat key hangs off, and the

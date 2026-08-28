@@ -482,6 +482,15 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
     // room is the 404 the route renders as "this conversation is no longer yours".
     void qc.invalidateQueries({ queryKey: qk.chatConversation(ev.conversation_id) })
     invalidateLists(qc)
+    // ⚠ AND THE STORAGE FIGURES, because this is the frame a CLEAN-UP publishes and
+    // the whole workflow is *clean until the number goes down*. The warning is shown
+    // to every member of an over-limit room, so two of them cleaning together is the
+    // invited case — and without this the second person's banner went on saying the
+    // room was over while their listing still offered the row the first had just
+    // deleted, which then answers 422. A rename publishes this frame too and moves no
+    // bytes; a refetch of two small figures is the cheaper half of that trade.
+    void qc.invalidateQueries({ queryKey: qk.chatStorage })
+    void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
     if (ev.gone) {
       // Its thread is unreadable from here on, so drop what this tab holds rather
       // than refetching a page that can only 404.
@@ -625,4 +634,153 @@ function replaceMessage(qc: QueryClient, conversationID: string, msg: ChatMessag
     if (!old) return old
     return { ...old, items: old.items.map((m) => (m.id === msg.id ? msg : m)) }
   })
+}
+
+// ---- PR 3: attachments, the two thresholds, the clean-up page ----
+
+/**
+ * useChatStorage is what both warnings render.
+ *
+ * ⚠ IT IS THE SERVER'S ANSWER TO THE GATE TOO. `can_clean_up` rides the payload
+ * because D241's rule is member ∧ (editor|admin) and the client holds only the role
+ * half: a banner that guessed would offer a reader a link that 403s them, which is
+ * exactly what the copy is not allowed to do.
+ */
+export function useChatStorage() {
+  const online = useOnline()
+  return useQuery({
+    queryKey: qk.chatStorage,
+    queryFn: api.chatStorage,
+    enabled: online,
+  })
+}
+
+/**
+ * useCleanup lists what still counts.
+ *
+ * ⚠ `size` IS THE DEFAULT BECAUSE THAT IS THE ORDER IN WHICH CLEANING PAYS, and it
+ * is SINGLE-PAGE: the server refuses a cursor with it rather than serving page one
+ * forever, so there is deliberately no Load-more for this ordering and the screen
+ * says so instead.
+ */
+export function useCleanup(sort: 'size' | 'recent', conversationID?: string) {
+  const online = useOnline()
+  return useQuery({
+    queryKey: qk.chatCleanup(conversationID, sort),
+    queryFn: () => api.chatCleanup({ sort, conversationID }),
+    enabled: online,
+  })
+}
+
+/**
+ * useUploadMessage sends a message carrying files.
+ *
+ * ⚠ THE OVER-CAP REFUSAL HAPPENS BEFORE THIS IS CALLED (see the composer): the
+ * point of naming the limit in the UI is to refuse a 40 MB video without spending
+ * the member's uplink on it. This hook is what handles the server's own 413, which
+ * is the case where the client's check was wrong.
+ */
+export function useUploadMessage(conversationID: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: {
+      body: string
+      replyToID?: string
+      files: File[]
+      onProgress?: (fraction: number) => void
+    }) =>
+      api.sendMessageWithFiles(
+        conversationID,
+        { body: input.body, replyToID: input.replyToID, files: input.files },
+        { onProgress: input.onProgress },
+      ),
+    onError: failed(cs.chat.sendFailed),
+    onSuccess: (msg) => {
+      appendMessage(qc, conversationID, msg)
+      void qc.invalidateQueries({ queryKey: qk.chatConversations() })
+      // The bytes moved, so both figures did.
+      void qc.invalidateQueries({ queryKey: qk.chatStorage })
+      void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
+    },
+  })
+}
+
+/**
+ * useRemoveAttachment is *Odstranit*.
+ *
+ * ⚠ THE THREAD IS REFETCHED RATHER THAN PATCHED. A removal turns the attachment
+ * into an EPITAPH — filename and size kept, bytes gone, cleaned-by recorded (D243)
+ * — and reconstructing that shape client-side would be a second, drifting
+ * definition of what a removed attachment looks like. The same reasoning as the
+ * message tombstone one hook up.
+ */
+export function useRemoveAttachment(conversationID?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.removeAttachment(id),
+    onError: failed(cs.chat.actionFailed),
+    onSuccess: () => invalidateAfterCleanup(qc, conversationID),
+  })
+}
+
+/**
+ * useMoveAttachment is *Přesunout do Dokumentů*.
+ *
+ * ⚠ A MOVE IS A PUBLISH (D245) and the dialog states that in words before this
+ * runs. Afterwards the attachment stays in the thread — rendered from Dokumenty —
+ * leaves both thresholds and leaves the clean-up listing, all three by construction
+ * because the bytes left the `chat/` prefix.
+ */
+export function useMoveAttachment(conversationID?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { id: string; folderID: string }) =>
+      api.moveAttachment(input.id, input.folderID),
+    onError: failed(cs.chat.actionFailed),
+    onSuccess: () => invalidateAfterCleanup(qc, conversationID),
+  })
+}
+
+/**
+ * invalidateAfterCleanup refreshes exactly what a cleaned-up byte changes.
+ *
+ * ⚠ NOT `qk.chatAll`. That prefix covers every key in the module, so one delete
+ * would refetch every open thread at its full held length, the directory and every
+ * search result the session had accumulated — the defect §V10-12 records
+ * `invalidateLists` being written to fix. What a removed or moved file changes is
+ * the storage figures, the clean-up listing and, if a thread is open, that thread's
+ * bubbles.
+ */
+function invalidateAfterCleanup(qc: QueryClient, conversationID?: string): void {
+  void qc.invalidateQueries({ queryKey: qk.chatStorage })
+  void qc.invalidateQueries({ queryKey: qk.chatCleanupAll })
+  // ⚠ AND THE LIST, because each row now carries the room's own `bytes` and its
+  // `over_conversation_limit` mark. This set was written before those existed, so
+  // the person who did the cleaning went back to a list still wearing *Nad limitem*
+  // over the old figure — while every OTHER member's list refreshed, because the
+  // `chat_conversation.changed` frame calls invalidateLists for them. The acting
+  // tab was the only stale one, on the workflow whose whole premise is *clean until
+  // the number goes down*.
+  invalidateLists(qc)
+  if (conversationID) {
+    void qc.invalidateQueries({ queryKey: qk.chatMessages(conversationID) })
+  }
+}
+
+/**
+ * useUnreadTotal is the nav badge: the sum across the member's conversations.
+ *
+ * ⚠ IT READS THE LIST THE MODULE ALREADY HOLDS rather than fetching a count. The
+ * conversation list carries `unread_count` per room and is invalidated by every
+ * send, every read-marker advance and every membership frame, so a second endpoint
+ * would be a second answer to one question — and the two would disagree for exactly
+ * as long as one of their caches was warmer than the other.
+ *
+ * ⚠ AND IT COUNTS ONLY ACTIVE ROOMS. A conversation in the koš has left every read
+ * its members have (D253); a badge counting its unread messages would send somebody
+ * looking for a room that is not in the list.
+ */
+export function useUnreadTotal(): number {
+  const list = useConversations('active')
+  return (list.data?.items ?? []).reduce((sum, c) => sum + c.unread_count, 0)
 }

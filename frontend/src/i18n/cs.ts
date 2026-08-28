@@ -50,6 +50,12 @@ export const cs = {
     // notification — so this line has to earn the trip on its own.
     elektrina: 'Elektřina',
     elektrinaDesc: 'Odečty, ceník a zálohy — vyjdou, nebo doplatím?',
+    // v10 (D260): Chat takes a thumb tab and Okno do budoucnosti moves into the
+    // overflow — the first demotion in this app's history. `oknoShort` stays for the
+    // tab bar it no longer appears on; the sheet uses the full name, because a
+    // demoted entry needs to be recognisable, not abbreviated.
+    chat: 'Chat',
+    oknoDesc: 'Narozeniny, výročí a co přijde',
   },
   common: {
     loading: 'Načítání…',
@@ -1313,6 +1319,50 @@ export const cs = {
      *  read as freshly recomputed, which is the one mistake this page must not
      *  invite. */
     refreshError: 'Přepočet se nepodařil — čísla níže jsou stále ta předchozí',
+
+    // ---- v10: the chat block and the two limits (D240/D254/D263) ----
+    chatTitle: 'Chat',
+    chatOfLimit: (limit: string) => `z limitu ${limit}`,
+    chatOverLimit: 'Nad limitem',
+    /**
+     * ⚠ Nezálohováno is a NORMAL ROW here, not a warning (D229). Chat blobs are
+     * deliberately excluded from the mirror — they are the most disposable bytes in
+     * the application and the module already lives under a storage limit.
+     */
+    chatNotBackedUp: 'Nezálohováno',
+    /**
+     * ⚠ THE EXPLAINER FOR AN ABSENCE (D240). A table of names with nothing clickable
+     * reads as broken unless the page says why. Clean-up belongs to a conversation's
+     * own members; an admin sees which room is heavy and asks them.
+     */
+    chatNoWayIn:
+      'Do konverzací se odsud nedostanete — úklid patří jejich členům. Když je něco velké, řekněte jim to.',
+    chatEmpty: 'V chatu zatím nejsou žádné soubory.',
+    chatConversation: 'Konverzace',
+    chatBytes: 'Velikost',
+    chatObjects: 'Souborů',
+    chatMembers: 'Členů',
+    chatTrashed: 'v koši',
+    chatPurgeAfter: 'smaže se',
+
+    limitsTab: 'Limity',
+    limitsTitle: 'Limity úložiště chatu',
+    limitsSubtitle:
+      'Jen upozorňují. Nic se nezablokuje, žádné nahrávání neselže — když se limit překročí, chat i tahle stránka to řeknou.',
+    limitTotal: 'Limit pro chat celkem',
+    limitTotalHint: 'Kolik místa smí zabírat chat celé domácnosti, než se objeví upozornění.',
+    limitConversation: 'Limit na jednu konverzaci',
+    limitConversationHint: 'Jedno číslo pro všechny konverzace — jednotlivě se nenastavuje.',
+    /**
+     * ⚠ Lowering a limit below current usage is a legitimate save (D237/D244) — it
+     * switches a warning on. The sentence says which, instead of refusing.
+     */
+    limitBelowUsage: (used: string) =>
+      `Nový limit je pod současným stavem (${used}) — upozornění se objeví hned.`,
+    limitsEditedBy: (who: string) => `Naposledy změnil ${who}`,
+    limitsNeverEdited: 'Zatím nikdo neměnil — platí výchozí hodnoty.',
+    limitsSaveFailed: 'Limit se nepodařilo uložit.',
+    limitsUnavailable: 'Tahle instalace nemá modul, který by limity používal.',
   },
 
   privateItems: {
@@ -1507,6 +1557,112 @@ export const cs = {
     create: 'Vytvořit',
     save: 'Uložit',
     confirmDelete: 'Smazat',
+
+    // ---- attachments (PR 3) ----
+    attachFiles: 'Připojit soubory',
+    removeFile: 'Odebrat soubor',
+    /** The clean-up row's destructive action, as an accessible name. */
+    wordRemoveFile: 'Odstranit soubor',
+    uploading: 'Nahrávání souborů',
+    download: 'Stáhnout',
+    /**
+     * ⚠ The over-cap refusal, named in MB. The server refuses the same file with a
+     * 413 that also names the limit — this is the courtesy check that saves a member
+     * minutes of a household uplink, so it has to say the same thing.
+     */
+    filesRejected: (names: string, limitMB: number) =>
+      `Nepřipojeno: ${names}. Jeden soubor může mít nejvýše ${limitMB} MB.`,
+    /**
+     * ⚠ The unplayable video. There is no transcoding in v10 and no plan for one
+     * (D227), so this is a designed state and not an apology: an iPhone .mov stores
+     * perfectly and some browsers simply cannot decode it. The copy says what to do
+     * next instead of what went wrong.
+     */
+    videoUnplayable: 'Tohle video prohlížeč nepřehraje. Stáhněte si ho a otevřete v přehrávači.',
+    /** The epitaph (D243). A settled absence, not an error. */
+    attachmentRemoved: 'Soubor odstraněn při úklidu úložiště',
+    /** The moved marker (D246). A fact, not a warning. */
+    attachmentMoved: 'Přesunuto do Dokumentů',
+
+    // ---- the two warnings (D237/D241) ----
+    /**
+     * ⚠ Informational, never destructive. Nothing is blocked, no upload fails and
+     * nobody has done anything wrong — so this reuses v9's `--attention` register and
+     * never the delete red.
+     */
+    storageOverTotal: (used: string, limit: string) => `Chat zabírá ${used} z limitu ${limit}`,
+    storageOverConversation: (name: string, used: string, limit: string) =>
+      `Konverzace „${name}“ zabírá ${used} z limitu ${limit}`,
+    /**
+     * ⚠ The link is NOT rendered for a member who cannot use it (D241) — the server
+     * answers that in `can_clean_up`. What a reader sees instead is this sentence,
+     * which explains rather than scolds.
+     */
+    cleanupLink: 'Uklidit úložiště',
+    cleanupNotForReaders:
+      'Úklid úložiště může provést někdo z konverzace, kdo má právo zápisu.',
+
+    // ---- Úklid úložiště chatu (D241–D246) ----
+    cleanupTitle: 'Úklid úložiště chatu',
+    cleanupSubtitle: 'Soubory z konverzací, ve kterých jste. Největší nahoře — tam se úklid vyplatí.',
+    /**
+     * ⚠ *Ponechat* is NOT a button (D242). It is what happens when nothing is
+     * clicked, so the page says so instead of offering a no-op control — and this
+     * sentence is where that is said.
+     */
+    cleanupKeepExplainer:
+      'Co necháte být, zůstane. Nic se neukládá na potom a zavřít stránku je v pořádku.',
+    cleanupEmpty: 'V konverzacích, ve kterých jste, nejsou žádné soubory.',
+    cleanupEmptyNoRooms:
+      'Zatím nejste v žádné konverzaci se soubory, takže tu není co uklízet.',
+    /** A reader's 403 — the recorded asymmetry (D241), stated plainly. */
+    cleanupForbidden: 'Na úklid úložiště potřebujete právo zápisu.',
+    cleanupForbiddenHint:
+      'Soubory můžete nahrávat, ale odstranit nebo přesunout je musí někdo z konverzace, kdo má právo zápisu.',
+    cleanupTotal: 'Celkem k úklidu',
+    cleanupSortSize: 'Podle velikosti',
+    cleanupSortRecent: 'Od nejnovějších',
+    /** Sorting by size is single-page, and the screen says so honestly. */
+    cleanupSortSizeSinglePage: 'Řazení podle velikosti se nestránkuje — vidíte největší soubory.',
+    cleanupOverLimit: 'Nad limitem',
+    cleanupUploadedBy: 'Nahrál',
+    /**
+     * ⚠ Leaving while still over raises a confirmation naming which threshold and by
+     * how much (D244). A confirm, never a block — and it hooks the router's
+     * navigation blocker, because most exits are client-side route changes that
+     * `beforeunload` never sees.
+     */
+    cleanupLeaveTitle: 'Odejít z úklidu?',
+    cleanupLeaveOver: (used: string, limit: string) =>
+      `Chat je stále nad limitem (${used} / ${limit}).`,
+    cleanupLeaveBody: 'Můžete se sem kdykoliv vrátit — nic se neztratí.',
+    cleanupLeaveConfirm: 'Přesto odejít',
+    cleanupStay: 'Zůstat',
+
+    // ---- Odstranit a Přesunout (D243/D245) ----
+    removeAttachmentTitle: 'Odstranit soubor?',
+    removeAttachmentBody:
+      'Soubor se smaže z úložiště. Ve vlákně zůstane jeho název a velikost, aby konverzace dávala smysl.',
+    /**
+     * ⚠ THE PUBLISH SENTENCE IS FIXED (D245) and must appear before the confirm. A
+     * move is the one action in v10 that WIDENS access: the file becomes readable by
+     * every household member, including people who are not in this conversation.
+     */
+    moveTitle: 'Přesunout do Dokumentů?',
+    movePublishSentence:
+      'Soubor bude viditelný pro všechny členy domácnosti, i pro ty, kteří nejsou v této konverzaci.',
+    moveBody: 'Ve vlákně zůstane a otevře se z Dokumentů. Přestane se počítat do limitu chatu.',
+    moveFolder: 'Složka v Dokumentech',
+    moveFolderPlaceholder: 'Vyberte složku…',
+    /**
+     * ⚠ The private roots are ABSENT AND EXPLAINED rather than greyed out. A private
+     * target would make the file unreadable to the conversation's other members,
+     * which is the opposite of what the move is for.
+     */
+    moveSharedOnly: 'Nabízíme jen sdílené složky — v soukromé by soubor ostatní neotevřeli.',
+    moveNoFolders: 'V Dokumentech zatím není žádná sdílená složka.',
+    moveConfirm: 'Přesunout',
+    moveUnavailable: 'Přesun do Dokumentů není v této instalaci dostupný.',
 
     // ---- errors ----
     notFound: 'Konverzace nebyla nalezena.',

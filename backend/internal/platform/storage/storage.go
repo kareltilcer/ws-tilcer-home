@@ -163,7 +163,8 @@ type Registry struct {
 	tables    map[string][]string // module → tables
 	blobs     map[string]BlobSource
 	inventory map[string]PrivateInventory
-	order     []string // module registration order, for stable output
+	groups    map[string]GroupSource // v10 — see groups.go
+	order     []string               // module registration order, for stable output
 }
 
 // NewRegistry returns an empty registry.
@@ -172,6 +173,7 @@ func NewRegistry() *Registry {
 		tables:    map[string][]string{},
 		blobs:     map[string]BlobSource{},
 		inventory: map[string]PrivateInventory{},
+		groups:    map[string]GroupSource{},
 	}
 }
 
@@ -213,6 +215,12 @@ func (r *Registry) Register(m any) error {
 	}
 	if inv, ok := m.(PrivateInventory); ok {
 		r.inventory[name] = inv
+	}
+	// v10: the group projection, duck-typed exactly like the three above it. A
+	// module that does not implement it is skipped rather than declared empty —
+	// which is what keeps ten modules from having to grow a method that returns nil.
+	if gs, ok := m.(GroupSource); ok {
+		r.groups[name] = gs
 	}
 	if _, seen := indexOf(r.order, name); !seen {
 		r.order = append(r.order, name)

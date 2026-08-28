@@ -60,6 +60,8 @@ import type {
   PublishRequest,
   Scope,
   StorageSnapshot,
+  StorageThresholds,
+  StorageThresholdsUpdate,
 } from './types'
 
 function qs(params: Record<string, string | boolean | number | string[] | undefined>): string {
@@ -376,6 +378,21 @@ export const publishDocumentFolder = (id: string, body: PublishRequest = {}) =>
  */
 export const getStorageSnapshot = (refresh = false) =>
   apiFetch<StorageSnapshot>(`/api/admin/storage${qs({ refresh: refresh || undefined })}`)
+
+/**
+ * The two chat storage thresholds (v10, D236/D263).
+ *
+ * ⚠ THERE IS DELIBERATELY NO GET. The current values ride the snapshot above, so a
+ * second endpoint would be a second answer to one question — and the two would
+ * disagree for exactly as long as one of their caches was warmer than the other.
+ * The PUT returns what it saved, which is what the fields render back.
+ *
+ * ⚠ A VALUE BELOW CURRENT USAGE IS SAVED, NOT REFUSED (D237/D244). Nothing in v10
+ * is ever blocked by a threshold — the whole register is warn-only — so the screen
+ * says what it just switched on rather than arguing about it.
+ */
+export const setStorageThresholds = (body: StorageThresholdsUpdate) =>
+  apiFetch<StorageThresholds>('/api/admin/storage/thresholds', { method: 'PUT', body })
 
 /**
  * The purge screen's listing (D198).

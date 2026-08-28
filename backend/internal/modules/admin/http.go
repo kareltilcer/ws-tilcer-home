@@ -285,7 +285,31 @@ func (h *Handler) mountStorage(r chi.Router) {
 		ar.Use(httpx.RequireAdmin)
 		ar.Get("/", h.storageSnapshot)
 		ar.Get("/private-items", h.privateItems)
+		// v10: the two chat thresholds (D236). ⚠ THERE IS DELIBERATELY NO GET — the
+		// current values ride the snapshot above, so a second endpoint would be a
+		// second answer to the same question and one of them would eventually be
+		// served from a different cache than the other.
+		ar.Put("/thresholds", h.setThresholds)
 	})
+}
+
+// setThresholds writes the chat storage limits (FR-V10-17).
+//
+// ⚠ IT IS AN ADMIN ROUTE WRITING A `chat` AUDIT EVENT, and that is the D255 shape:
+// the verb belongs to whoever may perform it, the event belongs to whatever it is
+// about. See Service.SetThresholds.
+func (h *Handler) setThresholds(w http.ResponseWriter, r *http.Request) {
+	var in StorageThresholdsUpdate
+	if err := httpx.DecodeJSON(r, &in); err != nil {
+		httpx.WriteError(w, httpx.ErrUnprocessable(err.Error()))
+		return
+	}
+	out, err := h.svc.SetThresholds(r.Context(), in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) storageSnapshot(w http.ResponseWriter, r *http.Request) {

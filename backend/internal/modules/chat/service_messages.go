@@ -72,17 +72,32 @@ func (s *Service) renderMessages(ctx context.Context, q querier, sc Scope, rows 
 	if err != nil {
 		return nil, err
 	}
+	// ⚠ ONE QUERY FOR THE WHOLE PAGE, keyed on the message ids Thread already
+	// resolved through the floor — so the attachment load inherits the access rule
+	// rather than restating it. A per-message fetch would be a per-message place to
+	// forget the floor, which is the same argument quoteMap above makes.
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	attachments, err := s.store.AttachmentsForMessages(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Message, 0, len(rows))
 	for _, r := range rows {
 		m := Message{
 			ID: r.ID, ConversationID: r.ConversationID, AuthorID: r.AuthorID,
 			AuthorLabel: label(labels, r.AuthorID),
 			Body:        r.Body,
-			// ALWAYS an array, never null (D174). PR 3 fills it.
+			// ALWAYS an array, never null (D174).
 			Attachments: []Attachment{},
 			CreatedAt:   r.CreatedAt,
 			EditedAt:    nullStr(r.EditedAt),
 			Deleted:     r.DeletedAt.Valid,
+		}
+		for _, a := range attachments[r.ID] {
+			m.Attachments = append(m.Attachments, a.wire(labels))
 		}
 		if r.ReplyToID.Valid {
 			m.ReplyTo = quotes[r.ReplyToID.String]
@@ -368,13 +383,24 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 		// until something refetches the thread — and an edit that silently unquoted
 		// its own reply is the shape that found it. Read through the caller's own
 		// scope, like every other read of a parent: an edit is not a reason to widen
-		// the floor (D226). PR 3's attachments belong here for the same reason.
+		// the floor (D226).
 		if row.ReplyToID.Valid {
 			quote, err := s.store.Quote(ctx, tx, sc, row.ReplyToID.String, labels)
 			if err != nil {
 				return err
 			}
 			out.ReplyTo = quote
+		}
+		// ⚠ AND THE ATTACHMENTS RIDE FOR EXACTLY THAT REASON TOO (PR 3). An edit
+		// changes the body and nothing else, but the frame replaces the whole message
+		// — so omitting them here would make editing a caption silently drop every
+		// photo out of the bubble on every other member's screen until they refetched.
+		byMessage, err := s.store.AttachmentsForMessages(ctx, tx, []string{messageID})
+		if err != nil {
+			return err
+		}
+		for _, a := range byMessage[messageID] {
+			out.Attachments = append(out.Attachments, a.wire(labels))
 		}
 		return nil
 	})
