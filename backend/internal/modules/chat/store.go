@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/cursor"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
@@ -185,14 +185,19 @@ var errBadCursor = errors.New("chat: malformed cursor")
 // The conversation cursor carries BOTH ordering columns, because the ORDER BY does:
 // `updated_at` alone is not unique — a send bumps it, and two rooms bumped in the
 // same millisecond would page over each other or skip one.
-func encodeConversationCursor(updatedAt, id string) string { return updatedAt + "|" + id }
+func encodeConversationCursor(updatedAt, id string) string {
+	return cursor.Encode(updatedAt, id)
+}
 
-func decodeConversationCursor(cursor string) (updatedAt, id string, ok bool) {
-	at, rest, found := strings.Cut(cursor, "|")
-	if !found || at == "" || rest == "" {
+// The empty-part check is chat's own and stays here: platform/cursor reports only
+// that a token was minted with the right arity, so a hand-built token carrying an
+// empty column would otherwise decode `ok` and page against "".
+func decodeConversationCursor(c string) (updatedAt, id string, ok bool) {
+	parts, ok := cursor.Decode(c, 2)
+	if !ok || parts[0] == "" || parts[1] == "" {
 		return "", "", false
 	}
-	return at, rest, true
+	return parts[0], parts[1], true
 }
 
 // GetConversation loads one room for a member, MEMBERSHIP AND KOŠ INCLUDED.

@@ -10,7 +10,7 @@
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/ui'
-import type { DaysSpec, WeekdayToken } from '@/api/types'
+import type { DaysSpec, WeekdayToken } from './api/types'
 
 const WEEKDAYS: { key: WeekdayToken; label: string }[] = [
   { key: 'mon', label: 'Po' },

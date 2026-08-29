@@ -6,7 +6,7 @@ import { routes } from '@/app/routes'
 import { cs } from '@/i18n/cs'
 import { monthLabel } from '@/i18n/format'
 import { Button } from '@/components/ui/ui'
-import { displayNeeds, fmtMoney } from '@/routes/finance/buckets'
+import { displayNeeds, fmtMoney } from '@/modules/finance/buckets'
 
 // The finance.rozpocet widget (FR-F7, D88) — two states, and the SECOND one
 // matters more.

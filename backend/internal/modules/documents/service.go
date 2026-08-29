@@ -10,6 +10,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/cursor"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/foldericon"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -1163,7 +1164,7 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 		// last row so the next page resumes exactly after it.
 		if len(items) == limit {
 			last := items[len(items)-1]
-			c := last.UpdatedAt + "|" + last.ID
+			c := encodeCursor(last.UpdatedAt, last.ID)
 			next = &c
 		}
 	}
@@ -1760,17 +1761,19 @@ func splitPath(p string) []string {
 	return out
 }
 
-// splitCursor parses the composite "<updated_at>|<id>" list cursor. An unparseable
+// encodeCursor packs the `(updated_at, id)` pair the ORDER BY pages on. `updated_at`
+// alone is not unique, so both columns travel; splitCursor is the other half.
+func encodeCursor(updatedAt, id string) string { return cursor.Encode(updatedAt, id) }
+
+// splitCursor parses the composite `(updated_at, id)` list cursor. An unparseable
 // cursor is treated as "start from the beginning" rather than an error — a stale
-// bookmark should show the first page, not a 422.
+// bookmark should show the first page, not a 422. The empty-part check is this
+// module's own: platform/cursor reports only that a token was minted with the right
+// arity, and paging against "" is not what a caller meant by either column.
 func splitCursor(c string) (ts, id string) {
-	c = strings.TrimSpace(c)
-	if c == "" {
+	parts, ok := cursor.Decode(strings.TrimSpace(c), 2)
+	if !ok || parts[0] == "" || parts[1] == "" {
 		return "", ""
 	}
-	i := strings.LastIndex(c, "|")
-	if i <= 0 || i == len(c)-1 {
-		return "", ""
-	}
-	return c[:i], c[i+1:]
+	return parts[0], parts[1]
 }

@@ -14,7 +14,7 @@ import { Plus } from 'lucide-react'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { Button, Input, Textarea } from '@/components/ui/ui'
-import type { ListDescriptor, MetricDescriptor, NotificationCatalog, TokenPalette } from '@/api/types'
+import type { ListDescriptor, MetricDescriptor, NotificationCatalog, TokenPalette } from './api/types'
 
 export type ComposerContext = 'broadcast' | 'trigger' | 'summary'
 

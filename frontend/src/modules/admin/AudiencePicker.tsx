@@ -8,7 +8,7 @@ import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { count } from '@/i18n/plural'
 import { PLURAL } from '@/i18n/plural'
-import type { Audience, HouseholdMember } from '@/api/types'
+import type { Audience, HouseholdMember } from './api/types'
 
 const ROLES = [
   { key: 'admin', label: 'Správci' },

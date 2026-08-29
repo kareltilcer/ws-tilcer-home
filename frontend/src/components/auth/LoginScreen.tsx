@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Loader2 } from 'lucide-react'
-import * as api from '@/api/endpoints'
+import * as api from '@/api/auth'
 import { ApiError } from '@/api/client'
 import { AUTH_BASE_URL } from '@/api/authTransport'
 import type { UserPublic } from '@/api/types'

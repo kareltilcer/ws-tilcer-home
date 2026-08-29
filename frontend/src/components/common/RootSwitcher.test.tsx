@@ -17,9 +17,12 @@ import { RootSwitcher } from './RootSwitcher'
 
 const getNotesTree = vi.hoisted(() => vi.fn())
 const getDocumentsTree = vi.hoisted(() => vi.fn())
-vi.mock('@/api/endpoints', async (orig) => ({
+vi.mock('@/modules/notes/api/endpoints', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   getNotesTree,
+}))
+vi.mock('@/modules/documents/api/endpoints', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   getDocumentsTree,
 }))
 vi.mock('@/app/auth', () => ({ useAuth: () => ({ canWrite: true, isAdmin: false }) }))
@@ -94,7 +97,7 @@ describe('RootSwitcher', () => {
 describe('the mobile root switcher', () => {
   it('gives the empty private Poznámky root a way back to the shared tree', async () => {
     getNotesTree.mockResolvedValue({ roots: [], root_notes: [] })
-    const { PoznamkyPage } = await import('@/routes/poznamky/PoznamkyPage')
+    const { PoznamkyPage } = await import('@/modules/notes/PoznamkyPage')
 
     const links = await renderAt(
       `${routes.poznamky}/${PRIVATE_SEGMENT}`,
@@ -110,7 +113,7 @@ describe('the mobile root switcher', () => {
 
   it('gives the empty private Dokumenty root the same way back (D40)', async () => {
     getDocumentsTree.mockResolvedValue({ roots: [], root_documents: [] })
-    const { DokumentyPage } = await import('@/routes/dokumenty/DokumentyPage')
+    const { DokumentyPage } = await import('@/modules/documents/DokumentyPage')
 
     const links = await renderAt(
       `${routes.dokumenty}/${PRIVATE_SEGMENT}`,
@@ -126,7 +129,7 @@ describe('the mobile root switcher', () => {
 
   it('still offers the private root from the shared tree', async () => {
     getNotesTree.mockResolvedValue({ roots: [], root_notes: [] })
-    const { PoznamkyPage } = await import('@/routes/poznamky/PoznamkyPage')
+    const { PoznamkyPage } = await import('@/modules/notes/PoznamkyPage')
 
     const links = await renderAt(routes.poznamky, `${routes.poznamky}/*`, <PoznamkyPage />)
     expect(links[0]).toHaveAttribute('aria-current', 'page')

@@ -12,13 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@/api/keys'
-import {
-  getPushPreferences,
-  getVapidKey,
-  registerPushSubscription,
-  removePushSubscription,
-  updatePushPreferences,
-} from '@/api/endpoints'
+import { getPushPreferences, getVapidKey, registerPushSubscription, removePushSubscription, updatePushPreferences } from '@/api/push'
 import type { PushCategories, PushPreferences } from '@/api/types'
 import { ApiError } from '@/api/client'
 import { cs } from '@/i18n/cs'

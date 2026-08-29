@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { qk } from './keys'
 import { clientId } from './clientId'
 import { ApiError, reportUnauthorized } from './client'
-import { getSession } from './endpoints'
+import { getSession } from './auth'
 import { cs } from '@/i18n/cs'
 import { routes } from '@/app/routes'
 

@@ -11,6 +11,7 @@
 //     common case).
 
 import { apiFetch } from '@/api/client'
+import { qs } from '@/api/qs'
 import type {
   GardenBed,
   GardenBedHistory,
@@ -44,19 +45,6 @@ import type {
 } from './types'
 
 const base = '/api/garden'
-
-// qs takes a plain object rather than a Record so the typed filter interfaces
-// below can be passed straight in — an index signature on each of them would be
-// three declarations serving one helper.
-function qs(params: object): string {
-  const sp = new URLSearchParams()
-  for (const [k, v] of Object.entries(params) as [string, unknown][]) {
-    if (v === undefined || v === null || v === '') continue
-    sp.append(k, String(v))
-  }
-  const s = sp.toString()
-  return s ? `?${s}` : ''
-}
 
 // ---- knowledge base ----
 

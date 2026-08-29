@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import * as api from '@/api/endpoints'
+import * as api from '@/api/auth'
 import { setUnauthorizedHandler } from '@/api/client'
 import type { UserPublic } from '@/api/types'
 import { RedirectingShell } from '@/components/common/RedirectingShell'

@@ -28,7 +28,7 @@ weakening the module boundaries the arch tests enforce.
 | `go vet ./...` | clean |
 | `go test ./...` | 28 packages ok |
 | `tsc -b --noEmit` | clean |
-| `vitest run` | 21 files, 151 tests pass |
+| `vitest run` | **22 files, 161 tests pass** — ⚠ corrected at wave 4. This row read 21 / 151, which was the count before waves 2 and 3 added tests; the baseline it claimed to verify had moved twice underneath it. |
 
 Scale: **58.8k** LOC Go (non-test) + **32.4k** LOC Go tests; **38.7k** LOC TS/TSX.
 
@@ -996,7 +996,7 @@ Sequenced so each step is independently shippable and reviewable.
 | **1 — free wins** ✅ **LANDED** | 1, 2, 4, 8, 9, 10, 12, 23, 24, 26, 27, 28, 45, 46, plus `actorID`/`writeAllowed` from 15 | Mechanical, zero-risk, no design decisions. Clears noise before the real work. Shipped on `refactor/wave-1` as one commit per item — see §Wave 1, as landed. |
 | **2 — frontend hygiene** ✅ **LANDED** | 31, 32, 34, 36, 39, 44 | Small, self-contained, each one commit. Item 34 went first: it is the pattern most likely to be copied wrong next. Shipped on `refactor/wave-2` — see §Wave 2, as landed. |
 | **3 — platform seams** ✅ **LANDED** | 3, 6, 22, 25, then 5, 11 | Bigger, still behaviour-neutral. Item 3 (`appdb.Collect`) is the largest single line-count win in the repo, but read its signature caveat before starting. Items **5** and **11** carry the two ⚠ that survived the review pass — take only the safe half of 5, and pin garden's importer path before touching 11. Shipped on `refactor/wave-3` — see §Wave 3, as landed. |
-| **4 — decide, then act** | 7, 33, 41, 42, 43 | Each needs a call from Karel first — wire format (7), skip semantics (33), directory layout (41/42), scope (43). |
+| **4 — decide, then act** ✅ **LANDED (43 deferred)** | 7, 33, 41, 42 | Each needed a call from Karel first — wire format (7), skip semantics (33), directory layout (41/42), scope (43). All four decisions and what they cost are in §Wave 4, as landed. **Item 43 was not taken**: the Czech-literal extraction is still open, and still wants a tranche picked before it starts. Shipped on `refactor/wave-4`. |
 | **5 — the twin** | 14, 15, 13+16, 17, 21, 37, 38, 19, 18, 20 | Only after **§Part 2's recorded decision is explicitly revisited.** Ordered by ascending risk: `scope.go` proves the pattern, `DeleteFolder` and the mirror jobs come last. Item 13 rides with 16 — see its note. |
 | **not in this pass** | 30, 40 | Item 30 is low value; item 40 is a UX change, not a refactor. |
 
@@ -1242,10 +1242,122 @@ stripped, which was checked rather than assumed; the two that still list —
 `chat/attachments.go`'s alignment and `garden/store.go`'s trailing blank line —
 are byte-identical deviations already present at `origin/main`.
 
+
+# Wave 4, as landed (`refactor/wave-4`)
+
+Four commits, one per item, in the order the wave table gives. Every item here
+needed a call from Karel first; all four decisions are recorded below beside what
+they cost. **Item 43 was not taken** — the Czech-literal extraction is deferred,
+so wave 4 is items 7, 33, 41 and 42.
+
+- **Item 7** — `platform/cursor`, `Encode(parts ...string)` / `Decode(cur, n)`,
+  unpadded base64url over `\x1f`.
+
+  > **Decision: migrate all four, accept one bad page.** The document offered
+  > migrating `garden` alone (its encoding already) and leaving three copies
+  > behind a doc comment. Karel took the wire change.
+
+  The wire moves for **three**, not two as the item's ⚠ implied it might: only
+  `garden` was already at this encoding. `logging` separated with `\x00`, and
+  `chat` and `documents` were not encoded at all — `<updated_at>|<id>` reached
+  the client as readable text.
+
+  What is deliberately NOT shared is what a bad cursor MEANS. `Decode` is
+  structural — it reports that a token was minted by `Encode` with the arity
+  asked for, and nothing else. In particular it does not reject empty parts,
+  because `garden` and `logging` never did; `chat` and `documents` had that check
+  and keep it beside their own call. All four malformed-input behaviours are
+  unchanged: `garden` 422, `logging` an error, `chat` 422, `documents` page one.
+
+  > ⚠ Unchanged at the STATUS level, and `logging`'s 422 BODY did move. Its
+  > `InvalidError` is rendered to the client verbatim, and a malformed-base64
+  > cursor used to surface Go's own text — `invalid cursor: illegal base64 data
+  > at input byte 3` — where it now reads `invalid cursor: malformed cursor`,
+  > the message the arity failure always gave. The split failure and the decode
+  > failure are one case now, so they say one thing. No client reads that
+  > string and the spec does not specify it, but it is observable and it was
+  > not called out when the commit landed.
+
+  > ⚠ The spec was WRONG for two of these before the change and is now right.
+  > `/api/documents` and `/api/logs*` referenced the house `Cursor` parameter,
+  > described as "UUIDv7 keyset cursor" — which neither has ever been. They and
+  > `/api/garden/tasks` now point at a new `OpaqueCursor`; `ConversationCursor`
+  > kept its rationale and lost the `<updated_at>|<id>` it spelled out verbatim.
+  > `backend/openapi.yaml` → **0.12.2**.
+
+- **Item 33** — one `src/api/qs.ts`, dropping `undefined` and nothing else.
+
+  > **Decision: unify and do the full audit.**
+
+  The audit was the work and it came back clean: **no call site in any of the
+  three modules passed `''` or `null`**. garden's call sites were already
+  defensive to a fault (`q: q || undefined`, `status: status || undefined`),
+  electricity's `period_id` comes from a `current.id` behind an early return,
+  and chat's `searchMessages` is gated on `settled.length > 0`. The emitted query
+  strings are byte-identical, in fact and not merely in intent.
+
+  Two details the item did not have. electricity's `if (v)` dropped every FALSY
+  value, so a real `0` or `false` would have vanished — worth more than the `''`
+  the table records. And the signature cannot be `Record<string, QsValue>`:
+  garden's typed filter interfaces have no implicit index signature, so it is
+  `qs<T extends { [K in keyof T]: QsValue }>` — homomorphic, which is what
+  preserves each key's optionality where a `Record` would make every key
+  required.
+
+- **Item 41** — `src/routes/` is gone; its seven folders are
+  `src/modules/<backend-module-name>/`.
+
+  > **Decision: do both 41 and 42.**
+
+  A pure move, as the item asks: **46 files, 15 insertions, 15 deletions**, of
+  which `git diff -M` renders 42 as renames — 41 with an empty diff, the 42nd
+  being `NastenkaPage.tsx`, which is a rename carrying two changed imports. Not one relative
+  import changed — `routes/<x>/` and `modules/<x>/` sit at the same depth, so
+  `../../components/ui/ui` resolves identically from either.
+
+  The item's "with `src/routes/` reduced to the route table" was already true
+  before the move: the table is `src/app/routes.ts` and always was, so the
+  directory simply empties. The Czech ROUTE PATHS are untouched — they are
+  user-visible URLs.
+
+- **Item 42** — `endpoints.ts` (514 lines) split into ten files and deleted;
+  `types.ts` **1,087 → 267**.
+
+  The line the split draws is not "what is left over" but "what more than one
+  place speaks": the v9 scope/pinning vocabulary, `PublishRequest` and
+  `PathSegment`, the widget-host contract, and auth + per-device push. Push
+  splits the way the backend splits it — `api/push.ts` is the half every member
+  has, and broadcasts, rules and schedules went to `modules/admin/`.
+
+  > ⚠ The widget payloads had a wrong answer available. A payload is a MODULE's
+  > data shaped for the host, so `DashboardTask` carries todo's
+  > `ChecklistProgress` and `PripnuteDokumentyWidget` carries documents'
+  > `PreviewKind`. Moving those leaves into their modules while the payloads
+  > stayed central would have made `src/api/types.ts` import FROM the modules —
+  > the exact dependency the split exists to remove. Both halves stay central.
+
+  > ⚠ **The split makes nine cross-module reads visible that were not before.**
+  > `components/common/{CardDetail,EventDetail,EventForm}`, `NastenkaPage`,
+  > `PrivateItemsTab` and chat's `UklidPage` all reach into another module's API.
+  > None is new — they went through one shared import, so nothing named them.
+  > The backend's arch test would forbid the module→module half; the frontend has
+  > no equivalent, which is worth knowing now the imports say it out loud.
+
+Wave 4 is 4 commits, 97 files, +2008 / −1584.
+
+⚠ The baseline table at the top of this document was stale when wave 4 started
+and is corrected there: `go test ./...` is **28** packages at `origin/main`
+(29 with wave 4's `platform/cursor`), and `vitest run` was **22 files / 161
+tests**, not 21 / 151 — waves 2 and 3 added tests without updating the number
+they are measured against.
+
 ## Guard rails for every wave
 
-- The baseline at the top of this file is the contract: `go test ./...` (28 packages),
-  `tsc -b`, `vitest run` (151 tests) must all still pass after each commit.
+- The baseline at the top of this file is the contract: `go test ./...`, `tsc -b` and
+  `vitest run` must all still pass after each commit. The COUNTS drift as waves add
+  tests, so treat them as a floor rather than a target: 28 Go packages at wave 3, 29
+  after wave 4 added `platform/cursor`; `vitest run` was 22 files / 161 tests before
+  wave 4 and is 23 / 169 after it. The 151 this line used to name was two waves stale.
 - `internal/arch` must stay green — it is the thing that keeps a "share this helper"
   from becoming a cross-module import.
 - One concern per commit. Item 41 in particular must be a pure move with no other edits.

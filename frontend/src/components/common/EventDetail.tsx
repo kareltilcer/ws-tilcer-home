@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, Check, Repeat } from 'lucide-react'
 import { qk } from '@/api/keys'
-import * as api from '@/api/endpoints'
+import * as api from '@/modules/events/api/endpoints'
 import type { ReminderLead } from '@/api/types'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Spinner } from '@/components/ui/ui'

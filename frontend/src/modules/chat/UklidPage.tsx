@@ -8,14 +8,14 @@ import { cs } from '@/i18n/cs'
 import { fmtDate, fmtStorageBytes } from '@/i18n/format'
 import { qk } from '@/api/keys'
 import { routes } from '@/app/routes'
-import { getDocumentsTree } from '@/api/endpoints'
+import { getDocumentsTree } from '@/modules/documents/api/endpoints'
 import { ApiError } from '@/api/client'
 import { Button, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { thumbnailURL } from './api/endpoints'
 import { useChatStorage, useCleanup, useMoveAttachment, useRemoveAttachment } from './api/hooks'
 import type { CleanupItem } from './api/types'
-import type { DocFolderNode } from '@/api/types'
+import type { DocFolderNode } from '@/modules/documents/api/types'
 
 /**
  * Úklid úložiště chatu — a working screen, not a dashboard (FR-V10-13, D241–D246).

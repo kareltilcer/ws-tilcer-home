@@ -3,11 +3,11 @@ package garden
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
 
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/cursor"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -959,16 +959,12 @@ var errBadCursor = httpx.ErrUnprocessable("Neplatný stránkovací kurzor.")
 // one opaque, URL-safe token. Opaque on purpose: it is the ORDER BY's business
 // and no caller should be building one by hand.
 func encodeTaskCursor(t Task) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(strings.Join([]string{t.WindowFrom, t.Position, t.ID}, "\x1f")))
+	return cursor.Encode(t.WindowFrom, t.Position, t.ID)
 }
 
-func decodeTaskCursor(cursor string) (windowFrom, position, id string, ok bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil {
-		return "", "", "", false
-	}
-	parts := strings.Split(string(raw), "\x1f")
-	if len(parts) != 3 {
+func decodeTaskCursor(c string) (windowFrom, position, id string, ok bool) {
+	parts, ok := cursor.Decode(c, 3)
+	if !ok {
 		return "", "", "", false
 	}
 	return parts[0], parts[1], parts[2], true

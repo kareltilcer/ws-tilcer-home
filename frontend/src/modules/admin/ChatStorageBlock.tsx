@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { fmtDate, fmtStorageBytes } from '@/i18n/format'
-import type { StorageChat } from '@/api/types'
+import type { StorageChat } from './api/types'
 
 /**
  * Administrace → Úložiště, the chat block (FR-V10-16, D240/D254).
