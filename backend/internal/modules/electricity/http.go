@@ -319,7 +319,7 @@ func (h *Handler) createReading(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreateReading(r.Context(), in)
-	respond(w, http.StatusCreated, toReadingDTO(out), err)
+	httpx.Respond(w, http.StatusCreated, toReadingDTO(out), err)
 }
 
 func (h *Handler) updateReading(w http.ResponseWriter, r *http.Request) {
@@ -335,7 +335,7 @@ func (h *Handler) updateReading(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdateReading(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, toReadingDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toReadingDTO(out), err)
 }
 
 func (h *Handler) getReading(w http.ResponseWriter, r *http.Request) {
@@ -343,11 +343,11 @@ func (h *Handler) getReading(w http.ResponseWriter, r *http.Request) {
 	if err == nil && !ok {
 		err = httpx.ErrNotFound("Odečet nenalezen.")
 	}
-	respond(w, http.StatusOK, toReadingDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toReadingDTO(out), err)
 }
 
 func (h *Handler) deleteReading(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteReading(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteReading(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +462,7 @@ func (h *Handler) getTariff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteTariff(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteTariff(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteTariff(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---------------------------------------------------------------------------
@@ -500,7 +500,7 @@ func (h *Handler) createAdvance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreateAdvance(r.Context(), in)
-	respond(w, http.StatusCreated, toAdvanceDTO(out), err)
+	httpx.Respond(w, http.StatusCreated, toAdvanceDTO(out), err)
 }
 
 func (h *Handler) updateAdvance(w http.ResponseWriter, r *http.Request) {
@@ -516,7 +516,7 @@ func (h *Handler) updateAdvance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdateAdvance(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, toAdvanceDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toAdvanceDTO(out), err)
 }
 
 func (h *Handler) getAdvance(w http.ResponseWriter, r *http.Request) {
@@ -524,11 +524,11 @@ func (h *Handler) getAdvance(w http.ResponseWriter, r *http.Request) {
 	if err == nil && !ok {
 		err = httpx.ErrNotFound("Předpis záloh nenalezen.")
 	}
-	respond(w, http.StatusOK, toAdvanceDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toAdvanceDTO(out), err)
 }
 
 func (h *Handler) deleteAdvance(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteAdvance(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteAdvance(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
@@ -562,7 +562,7 @@ func (h *Handler) createPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreatePayment(r.Context(), in)
-	respond(w, http.StatusCreated, toPaymentDTO(out), err)
+	httpx.Respond(w, http.StatusCreated, toPaymentDTO(out), err)
 }
 
 func (h *Handler) updatePayment(w http.ResponseWriter, r *http.Request) {
@@ -578,7 +578,7 @@ func (h *Handler) updatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdatePayment(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, toPaymentDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toPaymentDTO(out), err)
 }
 
 func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
@@ -586,11 +586,11 @@ func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 	if err == nil && !ok {
 		err = httpx.ErrNotFound("Platba nenalezena.")
 	}
-	respond(w, http.StatusOK, toPaymentDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toPaymentDTO(out), err)
 }
 
 func (h *Handler) deletePayment(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeletePayment(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeletePayment(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +628,7 @@ func (h *Handler) createPeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreatePeriod(r.Context(), in)
-	respond(w, http.StatusCreated, toPeriodDTO(out), err)
+	httpx.Respond(w, http.StatusCreated, toPeriodDTO(out), err)
 }
 
 func (h *Handler) updatePeriod(w http.ResponseWriter, r *http.Request) {
@@ -644,7 +644,7 @@ func (h *Handler) updatePeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdatePeriod(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, toPeriodDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toPeriodDTO(out), err)
 }
 
 func (h *Handler) getPeriod(w http.ResponseWriter, r *http.Request) {
@@ -652,11 +652,11 @@ func (h *Handler) getPeriod(w http.ResponseWriter, r *http.Request) {
 	if err == nil && !ok {
 		err = httpx.ErrNotFound("Zúčtovací období nenalezeno.")
 	}
-	respond(w, http.StatusOK, toPeriodDTO(out), err)
+	httpx.Respond(w, http.StatusOK, toPeriodDTO(out), err)
 }
 
 func (h *Handler) deletePeriod(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeletePeriod(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeletePeriod(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---------------------------------------------------------------------------
@@ -708,20 +708,4 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, toHistoryDTO(points))
-}
-
-func respond(w http.ResponseWriter, status int, v any, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	httpx.JSON(w, status, v)
-}
-
-func respondNoContent(w http.ResponseWriter, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

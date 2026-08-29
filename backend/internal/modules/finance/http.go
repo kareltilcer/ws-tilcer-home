@@ -34,7 +34,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.List(r.Context(), limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -44,12 +44,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := h.svc.Create(r.Context(), in)
-	respond(w, http.StatusCreated, m, err)
+	httpx.Respond(w, http.StatusCreated, m, err)
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	m, err := h.svc.Get(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, m, err)
+	httpx.Respond(w, http.StatusOK, m, err)
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
@@ -59,25 +59,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := h.svc.Update(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, m, err)
+	httpx.Respond(w, http.StatusOK, m, err)
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.Delete(r.Context(), chi.URLParam(r, "id")))
-}
-
-func respond(w http.ResponseWriter, status int, v any, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	httpx.JSON(w, status, v)
-}
-
-func respondNoContent(w http.ResponseWriter, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	httpx.NoContent(w, h.svc.Delete(r.Context(), chi.URLParam(r, "id")))
 }

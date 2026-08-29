@@ -121,7 +121,7 @@ func (h *Handler) listPlants(w http.ResponseWriter, r *http.Request) {
 		PlantType:  q.Get("plant_type"),
 		Unverified: q.Get("unverified") == "true",
 	}, limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createPlant(w http.ResponseWriter, r *http.Request) {
@@ -131,12 +131,12 @@ func (h *Handler) createPlant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.svc.CreatePlant(r.Context(), in)
-	respond(w, http.StatusCreated, p, err)
+	httpx.Respond(w, http.StatusCreated, p, err)
 }
 
 func (h *Handler) getPlant(w http.ResponseWriter, r *http.Request) {
 	p, err := h.svc.GetPlant(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, p, err)
+	httpx.Respond(w, http.StatusOK, p, err)
 }
 
 func (h *Handler) updatePlant(w http.ResponseWriter, r *http.Request) {
@@ -146,11 +146,11 @@ func (h *Handler) updatePlant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.svc.UpdatePlant(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, p, err)
+	httpx.Respond(w, http.StatusOK, p, err)
 }
 
 func (h *Handler) deletePlant(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeletePlant(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeletePlant(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ============================= varieties =============================
@@ -158,7 +158,7 @@ func (h *Handler) deletePlant(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listVarieties(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	page, err := h.svc.ListVarieties(r.Context(), chi.URLParam(r, "id"), limit, r.URL.Query().Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createVariety(w http.ResponseWriter, r *http.Request) {
@@ -168,12 +168,12 @@ func (h *Handler) createVariety(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := h.svc.CreateVariety(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, v, err)
+	httpx.Respond(w, http.StatusCreated, v, err)
 }
 
 func (h *Handler) getVariety(w http.ResponseWriter, r *http.Request) {
 	v, err := h.svc.GetVariety(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, v, err)
+	httpx.Respond(w, http.StatusOK, v, err)
 }
 
 func (h *Handler) updateVariety(w http.ResponseWriter, r *http.Request) {
@@ -183,18 +183,18 @@ func (h *Handler) updateVariety(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := h.svc.UpdateVariety(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, v, err)
+	httpx.Respond(w, http.StatusOK, v, err)
 }
 
 func (h *Handler) deleteVariety(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeleteVariety(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteVariety(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ================================ beds ================================
 
 func (h *Handler) listBeds(w http.ResponseWriter, r *http.Request) {
 	beds, err := h.svc.ListBeds(r.Context(), r.URL.Query().Get("include_inactive") == "true")
-	respond(w, http.StatusOK, map[string]any{"items": beds}, err)
+	httpx.Respond(w, http.StatusOK, map[string]any{"items": beds}, err)
 }
 
 func (h *Handler) createBed(w http.ResponseWriter, r *http.Request) {
@@ -204,12 +204,12 @@ func (h *Handler) createBed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := h.svc.CreateBed(r.Context(), in)
-	respond(w, http.StatusCreated, b, err)
+	httpx.Respond(w, http.StatusCreated, b, err)
 }
 
 func (h *Handler) getBed(w http.ResponseWriter, r *http.Request) {
 	b, err := h.svc.GetBed(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, b, err)
+	httpx.Respond(w, http.StatusOK, b, err)
 }
 
 func (h *Handler) updateBed(w http.ResponseWriter, r *http.Request) {
@@ -219,11 +219,11 @@ func (h *Handler) updateBed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := h.svc.UpdateBed(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, b, err)
+	httpx.Respond(w, http.StatusOK, b, err)
 }
 
 func (h *Handler) deleteBed(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeleteBed(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteBed(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) moveBed(w http.ResponseWriter, r *http.Request) {
@@ -237,19 +237,19 @@ func (h *Handler) moveBed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := h.svc.MoveBed(r.Context(), chi.URLParam(r, "id"), in.Zone, in.AfterID, in.BeforeID)
-	respond(w, http.StatusOK, b, err)
+	httpx.Respond(w, http.StatusOK, b, err)
 }
 
 func (h *Handler) bedHistory(w http.ResponseWriter, r *http.Request) {
 	hist, err := h.svc.BedHistory(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, hist, err)
+	httpx.Respond(w, http.StatusOK, hist, err)
 }
 
 // =============================== seasons ===============================
 
 func (h *Handler) listSeasons(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.ListSeasons(r.Context())
-	respond(w, http.StatusOK, map[string]any{"items": items}, err)
+	httpx.Respond(w, http.StatusOK, map[string]any{"items": items}, err)
 }
 
 // createSeason: dry_run DEFAULTS FALSE here (D129), unlike the import. A season
@@ -282,7 +282,7 @@ func (h *Handler) getSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se, err := h.svc.GetSeason(r.Context(), year)
-	respond(w, http.StatusOK, se, err)
+	httpx.Respond(w, http.StatusOK, se, err)
 }
 
 func (h *Handler) updateSeason(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +297,7 @@ func (h *Handler) updateSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se, err := h.svc.UpdateSeason(r.Context(), year, in)
-	respond(w, http.StatusOK, se, err)
+	httpx.Respond(w, http.StatusOK, se, err)
 }
 
 func (h *Handler) closeSeason(w http.ResponseWriter, r *http.Request) {
@@ -312,7 +312,7 @@ func (h *Handler) closeSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se, err := h.svc.CloseSeason(r.Context(), year, in)
-	respond(w, http.StatusOK, se, err)
+	httpx.Respond(w, http.StatusOK, se, err)
 }
 
 func (h *Handler) reopenSeason(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +322,7 @@ func (h *Handler) reopenSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se, err := h.svc.ReopenSeason(r.Context(), year)
-	respond(w, http.StatusOK, se, err)
+	httpx.Respond(w, http.StatusOK, se, err)
 }
 
 // ================================ check ================================
@@ -334,7 +334,7 @@ func (h *Handler) checkSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.svc.CheckSeason(r.Context(), year)
-	respond(w, http.StatusOK, res, err)
+	httpx.Respond(w, http.StatusOK, res, err)
 }
 
 func (h *Handler) dismissWarning(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +356,7 @@ func (h *Handler) dismissWarning(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.svc.CheckSeason(r.Context(), year)
-	respond(w, http.StatusOK, res, err)
+	httpx.Respond(w, http.StatusOK, res, err)
 }
 
 func (h *Handler) restoreWarning(w http.ResponseWriter, r *http.Request) {
@@ -365,7 +365,7 @@ func (h *Handler) restoreWarning(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	noContent(w, h.svc.RestoreWarning(r.Context(), year, chi.URLParam(r, "key")))
+	httpx.NoContent(w, h.svc.RestoreWarning(r.Context(), year, chi.URLParam(r, "key")))
 }
 
 // ============================== plantings ==============================
@@ -389,7 +389,7 @@ func (h *Handler) listPlantings(w http.ResponseWriter, r *http.Request) {
 		f.Permanent = bp(false)
 	}
 	page, err := h.svc.ListPlantings(r.Context(), f, limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createPlanting(w http.ResponseWriter, r *http.Request) {
@@ -399,12 +399,12 @@ func (h *Handler) createPlanting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.svc.CreatePlanting(r.Context(), in)
-	respond(w, http.StatusCreated, p, err)
+	httpx.Respond(w, http.StatusCreated, p, err)
 }
 
 func (h *Handler) getPlanting(w http.ResponseWriter, r *http.Request) {
 	p, err := h.svc.GetPlanting(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, p, err)
+	httpx.Respond(w, http.StatusOK, p, err)
 }
 
 func (h *Handler) updatePlanting(w http.ResponseWriter, r *http.Request) {
@@ -414,11 +414,11 @@ func (h *Handler) updatePlanting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.svc.UpdatePlanting(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, p, err)
+	httpx.Respond(w, http.StatusOK, p, err)
 }
 
 func (h *Handler) deletePlanting(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeletePlanting(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeletePlanting(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) shiftTasks(w http.ResponseWriter, r *http.Request) {
@@ -431,7 +431,7 @@ func (h *Handler) shiftTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tasks, err := h.svc.ShiftTasks(r.Context(), chi.URLParam(r, "id"), in.Days, in.Kinds)
-	respond(w, http.StatusOK, map[string]any{"items": tasks}, err)
+	httpx.Respond(w, http.StatusOK, map[string]any{"items": tasks}, err)
 }
 
 // ================================ tasks ================================
@@ -456,7 +456,7 @@ func (h *Handler) listTasks(w http.ResponseWriter, r *http.Request) {
 		f.Year = &year
 	}
 	page, err := h.svc.ListTasks(r.Context(), f, limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createTask(w http.ResponseWriter, r *http.Request) {
@@ -466,12 +466,12 @@ func (h *Handler) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.svc.CreateTask(r.Context(), in)
-	respond(w, http.StatusCreated, t, err)
+	httpx.Respond(w, http.StatusCreated, t, err)
 }
 
 func (h *Handler) getTask(w http.ResponseWriter, r *http.Request) {
 	t, err := h.svc.GetTask(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, t, err)
+	httpx.Respond(w, http.StatusOK, t, err)
 }
 
 func (h *Handler) updateTask(w http.ResponseWriter, r *http.Request) {
@@ -481,11 +481,11 @@ func (h *Handler) updateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.svc.UpdateTask(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, t, err)
+	httpx.Respond(w, http.StatusOK, t, err)
 }
 
 func (h *Handler) deleteTask(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeleteTask(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteTask(r.Context(), chi.URLParam(r, "id")))
 }
 
 // completeTask is IDEMPOTENT (D131): a second call on an already-complete task
@@ -499,12 +499,12 @@ func (h *Handler) completeTask(w http.ResponseWriter, r *http.Request) {
 	// An empty body is fine — the widget sends meta, a page may not.
 	_ = decode(r, &in)
 	t, err := h.svc.CompleteTask(r.Context(), chi.URLParam(r, "id"), in.Meta)
-	respond(w, http.StatusOK, t, err)
+	httpx.Respond(w, http.StatusOK, t, err)
 }
 
 func (h *Handler) reopenTask(w http.ResponseWriter, r *http.Request) {
 	t, err := h.svc.ReopenTask(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, t, err)
+	httpx.Respond(w, http.StatusOK, t, err)
 }
 
 // ============================ harvest, storage ============================
@@ -522,7 +522,7 @@ func (h *Handler) listHarvests(w http.ResponseWriter, r *http.Request) {
 		year = &n
 	}
 	page, err := h.svc.ListHarvests(r.Context(), q.Get("planting_id"), year, limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createHarvest(w http.ResponseWriter, r *http.Request) {
@@ -532,12 +532,12 @@ func (h *Handler) createHarvest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreateHarvest(r.Context(), in)
-	respond(w, http.StatusCreated, out, err)
+	httpx.Respond(w, http.StatusCreated, out, err)
 }
 
 func (h *Handler) getHarvest(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Store().GetHarvest(r.Context(), nil, chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, out, mapNotFound(err))
+	httpx.Respond(w, http.StatusOK, out, mapNotFound(err))
 }
 
 func (h *Handler) updateHarvest(w http.ResponseWriter, r *http.Request) {
@@ -547,18 +547,18 @@ func (h *Handler) updateHarvest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdateHarvest(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 func (h *Handler) deleteHarvest(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeleteHarvest(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteHarvest(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) listStorage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.ListStorage(r.Context(), q.Get("status"), limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createStorage(w http.ResponseWriter, r *http.Request) {
@@ -568,12 +568,12 @@ func (h *Handler) createStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreateStorage(r.Context(), in)
-	respond(w, http.StatusCreated, out, err)
+	httpx.Respond(w, http.StatusCreated, out, err)
 }
 
 func (h *Handler) getStorage(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Store().GetStorage(r.Context(), nil, chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, out, mapNotFound(err))
+	httpx.Respond(w, http.StatusOK, out, mapNotFound(err))
 }
 
 func (h *Handler) updateStorage(w http.ResponseWriter, r *http.Request) {
@@ -583,11 +583,11 @@ func (h *Handler) updateStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdateStorage(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 func (h *Handler) deleteStorage(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeleteStorage(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteStorage(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ========================= rules, settings, ref =========================
@@ -596,7 +596,7 @@ func (h *Handler) listRules(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.ListRules(r.Context(), q.Get("scope"), q.Get("include_disabled") != "false", limit, q.Get("cursor"))
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createRule(w http.ResponseWriter, r *http.Request) {
@@ -606,12 +606,12 @@ func (h *Handler) createRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.CreateRule(r.Context(), in)
-	respond(w, http.StatusCreated, out, err)
+	httpx.Respond(w, http.StatusCreated, out, err)
 }
 
 func (h *Handler) getRule(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Store().GetRule(r.Context(), nil, chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, out, mapNotFound(err))
+	httpx.Respond(w, http.StatusOK, out, mapNotFound(err))
 }
 
 func (h *Handler) updateRule(w http.ResponseWriter, r *http.Request) {
@@ -621,16 +621,16 @@ func (h *Handler) updateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdateRule(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 func (h *Handler) deleteRule(w http.ResponseWriter, r *http.Request) {
-	noContent(w, h.svc.DeleteRule(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteRule(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.GetSettings(r.Context())
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
@@ -640,13 +640,13 @@ func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.UpdateSettings(r.Context(), in)
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 func (h *Handler) weather(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	out, err := h.svc.Weather(r.Context(), q.Get("from"), q.Get("to"))
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 // enums serves the SAME registry that generates the importer's validator and the
@@ -682,7 +682,7 @@ func (h *Handler) importPlants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.ImportPlants(r.Context(), body, model, dryRun)
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 // promptTemplate hands off the Czech prompt plus the schema generated from the
@@ -690,12 +690,12 @@ func (h *Handler) importPlants(w http.ResponseWriter, r *http.Request) {
 // so the model fills gaps rather than overwriting what somebody already checked.
 func (h *Handler) promptTemplate(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.PromptTemplate(r.Context(), r.URL.Query().Get("plant_id"))
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Export(r.Context())
-	respond(w, http.StatusOK, out, err)
+	httpx.Respond(w, http.StatusOK, out, err)
 }
 
 // ============================== plumbing ==============================
@@ -719,20 +719,4 @@ func decode(r *http.Request, v any) error {
 		return httpx.ErrUnprocessable("Tělo požadavku není platný JSON nebo obsahuje neznámá pole.")
 	}
 	return nil
-}
-
-func respond(w http.ResponseWriter, status int, v any, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	httpx.JSON(w, status, v)
-}
-
-func noContent(w http.ResponseWriter, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

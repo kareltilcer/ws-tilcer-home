@@ -193,7 +193,7 @@ func (h *Handler) uploadImage(w http.ResponseWriter, r *http.Request) {
 		}
 		res, err := h.svc.UploadImage(r.Context(), noteID, part)
 		_ = part.Close()
-		respond(w, http.StatusCreated, res, err)
+		httpx.Respond(w, http.StatusCreated, res, err)
 		return
 	}
 }
