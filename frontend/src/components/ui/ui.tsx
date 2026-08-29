@@ -85,6 +85,29 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   )
 })
 
+/** Field is a labelled form row: the label text above its control, wrapped in a
+ *  <label> so tapping the text focuses the control.
+ *
+ *  ⚠ IT LIVES HERE BECAUSE IT EXISTED FIVE TIMES, byte-identical, once in each
+ *  electricity dialog — and a sixth copy was the obvious thing to write for the
+ *  next dialog.
+ *
+ *  ⚠ THE OTHER LABELS THAT LOOK LIKE THIS ARE NOT THIS ONE. `EventForm` and
+ *  `ColumnMenu` declare a `Field` of their own that renders a <div> at a
+ *  different type scale; Administrace, `AudiencePicker`, `ScheduleBuilder`,
+ *  `ConditionsBuilder` and garden's `PlanTab` hand-write the markup at `mb-1`,
+ *  or without the <label> at all. Adopting this in any of them would move a
+ *  label by 2px or change what a tap focuses — a visual change wearing a
+ *  refactor's clothes. Worth doing one day, but as a design decision. */
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[12.5px] font-semibold text-muted">{label}</span>
+      {children}
+    </label>
+  )
+}
+
 export function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold', className)}>

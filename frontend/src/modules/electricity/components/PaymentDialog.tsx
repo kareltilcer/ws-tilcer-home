@@ -5,7 +5,7 @@ import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
 import { todayISO } from '@/i18n/format'
 import { ApiError } from '@/api/client'
-import { Button, Input } from '@/components/ui/ui'
+import { Button, Field, Input } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { createPayment, updatePayment } from '../api/endpoints'
 import type { ElPayment } from '../api/types'
@@ -135,14 +135,5 @@ export function PaymentDialog({
         )}
       </div>
     </ResponsiveModal>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[12.5px] font-semibold text-muted">{label}</span>
-      {children}
-    </label>
   )
 }
