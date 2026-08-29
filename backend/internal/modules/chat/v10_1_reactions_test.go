@@ -382,3 +382,32 @@ func TestReactionChipsAreInPaletteOrder(t *testing.T) {
 		t.Errorf("chips came back as %v, want palette order %v", got, want)
 	}
 }
+
+// TestReactionRefusesABodyWithNoReacted is the field's absence, which used to be a
+// removal (review round 2).
+//
+// ⚠ `reacted` IS THE WHOLE OF WHAT THIS ROUTE DECIDES, so decoding a missing one as
+// Go's zero `false` made a body that named only the emoji delete the caller's chip
+// and answer 200 saying so — the opposite of what a client sending it plainly meant,
+// with no error to notice. The spec has said `required: [emoji, reacted]` since
+// 0.13.0; the code now says it too.
+func TestReactionRefusesABodyWithNoReacted(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	c := hh.group(kaja, "Rodiče", andy)
+	msg := hh.send(kaja, c.ID, "Ahoj")
+
+	if rr := hh.as(andy, "PUT", "/api/chat/messages/"+msg.ID+"/reactions",
+		`{"emoji":"`+heart+`","reacted":true}`); rr.Code != http.StatusOK {
+		t.Fatalf("react: %d %s", rr.Code, rr.Body.String())
+	}
+	rr := hh.as(andy, "PUT", "/api/chat/messages/"+msg.ID+"/reactions", `{"emoji":"`+heart+`"}`)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a body with no `reacted` was answered %d, want 422 — read as false it "+
+			"deletes the chip the caller was trying to add", rr.Code)
+	}
+	// And the chip it did not mention is still there.
+	page := decode[chat.MessagePage](t, hh.as(kaja, "GET", "/api/chat/conversations/"+c.ID+"/messages", ""))
+	if len(page.Items) != 1 || len(page.Items[0].Reactions) != 1 {
+		t.Errorf("the refused request removed the reaction anyway: %+v", page.Items)
+	}
+}

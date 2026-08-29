@@ -16,6 +16,8 @@ Version history for the `home` service. Full detail lives in `PRD.md` (§10 Deci
 
 ⚠ **One defect found by opening the page**, and the third release running for that sentence: the preview line made the list pane's min-content width the sentence's width, so the pane measured 415 px inside a 375 px grid and the ＋ button and every timestamp were clipped. `min-w-0` on the aside — the width twin of a `min-h-0` note that has been in that file since v10.
 
+⚠ **Two `xhigh` review rounds, seventeen findings** (§V10-14). The second round is the one worth the name: it found that D266 had quietly given `chat_message.updated` a second consumer, so fixing a typo left every sidebar quoting the typo — and that the first round's own control guard had created a two-finger swipe that replied to a message nobody swiped. **One finding is recorded and NOT fixed**: the published `reply_to` is a per-recipient field on a frame marshalled once, which is v10's defect on the send path and not this pass's — every quote a reaction could leak has already been leaked by the reply's own creation frame. It is on the outstanding list with the shape of the fix.
+
 ---
 
 ## v10 — 2026-08-26 (spec) · **PR 1 merged, PR 2 built, PR 3 outstanding** · Chat (`chat`)

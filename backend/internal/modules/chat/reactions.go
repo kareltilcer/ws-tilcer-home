@@ -190,6 +190,14 @@ func (s *Service) SetReaction(ctx context.Context, messageID string, in Reaction
 		// a fact about their own request and not an oracle about anybody's room.
 		return Message{}, httpx.ErrUnprocessable("Tuto emotikonu nelze použít jako reakci.")
 	}
+	// ⚠ AN ABSENT `reacted` IS A MALFORMED REQUEST, NOT A REMOVAL (v10.1 review round
+	// 2). The field is the whole of what this route decides, and a missing one used
+	// to decode as `false` — so a client that sent only the emoji got its own chip
+	// deleted and a 200 saying so. The spec has said `required` since 0.13.0.
+	if in.Reacted == nil {
+		return Message{}, httpx.ErrUnprocessable("Chybí údaj, zda má reakce zůstat.")
+	}
+	reacted := *in.Reacted
 	labels, err := s.labels(ctx)
 	if err != nil {
 		return Message{}, err
@@ -214,7 +222,7 @@ func (s *Service) SetReaction(ctx context.Context, messageID string, in Reaction
 		if row.DeletedAt.Valid {
 			return httpx.ErrUnprocessable("Na smazanou zprávu nelze reagovat.")
 		}
-		if err := s.store.SetReaction(ctx, tx, messageID, actor, in.Emoji, in.Reacted, now); err != nil {
+		if err := s.store.SetReaction(ctx, tx, messageID, actor, in.Emoji, reacted, now); err != nil {
 			return err
 		}
 		// The floor bounds the AUDIENCE, not only the read — the correction

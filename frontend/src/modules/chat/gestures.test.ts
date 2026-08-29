@@ -261,6 +261,25 @@ describe('presses that begin on a control', () => {
     gesture(view, { x: 100, y: 100 }, [])
     expect(actions.onDoubleTap).not.toHaveBeenCalled()
   })
+
+  // ⚠ TWO FINGERS, AND THE SECOND ONE IS ON A CHIP (review round 2). The control's
+  // press used to return while leaving the bubble's sequence open, so the chip's own
+  // release was measured from the OTHER finger's start point — with `panning` already
+  // true and the chip sitting well to the right, that release read as a committed
+  // swipe and sent a reply nobody asked for.
+  it('does not turn a second finger on a chip into a reply', () => {
+    const { actions, view } = setup()
+    // One thumb starts a swipe on the bubble and is still travelling.
+    act(() => view.result.current.handlers.onPointerDown(touch({ x: 40, y: 100 })))
+    act(() => view.result.current.handlers.onPointerMove(touch({ x: 40 + GESTURE.SLOP + 5, y: 100 })))
+    // A second finger lands on a chip further right and lifts.
+    const chip = { x: 40 + GESTURE.SWIPE_COMMIT + 30, y: 100 }
+    act(() => view.result.current.handlers.onPointerDown(onButton(chip)))
+    act(() => view.result.current.handlers.onPointerUp(touch(chip)))
+    expect(actions.onSwipeReply).not.toHaveBeenCalled()
+    expect(actions.onDoubleTap).not.toHaveBeenCalled()
+    expect(view.result.current.swipeX).toBe(0)
+  })
 })
 
 // ⚠ A PRESS THAT IS STILL HELD WHEN THE THREAD GOES left a 500 ms timeout pointing at

@@ -219,8 +219,15 @@ func (s *Service) ListConversations(ctx context.Context, state, cursor string, l
 	} else {
 		s.logger.Warn("chat: could not read the conversation threshold for the list", "err", thErr)
 	}
-	if err := s.attachPreviews(ctx, actor, items); err != nil {
-		return ConversationPage{}, err
+	// ⚠ NOT ON THE KOŠ LISTING (v10.1 review round 2). LastMessages carries
+	// memberScope's own `deleted_at IS NULL` term, so every row here is one it is
+	// guaranteed to answer nothing for — and running it anyway spent the whole
+	// directory projection plus the preview CTE, on a pool capped at a single
+	// connection, every time somebody opened the section.
+	if state != "trash" {
+		if err := s.attachPreviews(ctx, actor, items); err != nil {
+			return ConversationPage{}, err
+		}
 	}
 	page := ConversationPage{Items: items}
 	// ⚠ ON BOTH LISTINGS, because the sidebar hides an empty koš (D267) and the koš
@@ -600,7 +607,17 @@ func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversa
 	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	// ⚠ AND IT CARRIES THE PREVIEW LIKE EVERY OTHER `Conversation` (v10.1 review
+	// round 2). This is the one response in the module built from the store's row
+	// directly rather than through Service.GetConversation, so it was the one that
+	// serialised `last_message: null` for a room full of messages — the exact
+	// disagreement between two Conversation-shaped answers that GetConversation's own
+	// note says must not exist.
+	restored := []Conversation{c}
+	if err := s.attachPreviews(ctx, actor, restored); err != nil {
+		return nil, err
+	}
+	return &restored[0], nil
 }
 
 // conversationForDestructiveVerb resolves a conversation for delete, purge and

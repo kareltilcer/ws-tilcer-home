@@ -11,7 +11,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
-// Handler serves the `chat` tag of openapi.yaml 0.12.0.
+// Handler serves the `chat` tag of openapi.yaml 0.13.0.
 type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }

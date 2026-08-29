@@ -240,3 +240,30 @@ func TestTrashedCountIsTheCallersKošAndNobodyElses(t *testing.T) {
 		t.Errorf("?state=trash reports %d, want the same 1 the active listing reports", got)
 	}
 }
+
+// TestRestoreAnswersWithThePreviewTheListWouldGive is the one Conversation-shaped
+// response that was built from the store's row directly (review round 2).
+//
+// ⚠ TWO ANSWERS TO ONE QUESTION IS THE DEFECT, not the missing line. `GET
+// /conversations/{id}` and the listing both carry `last_message`; the restore
+// response asked the store for the row and skipped `attachPreviews`, so it said
+// `null` for a room full of messages — a required field that lies, and a trap for the
+// next caller that reads the body instead of refetching.
+func TestRestoreAnswersWithThePreviewTheListWouldGive(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	c := hh.group(kaja, "Rodiče", andy)
+	last := hh.send(kaja, c.ID, "Klíče jsou pod květináčem.")
+
+	if err := hh.svc.DeleteConversation(hh.ctx(kaja), c.ID, false); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+	rr := hh.as(kaja, "POST", "/api/chat/conversations/"+c.ID+"/restore", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("restore: %d %s", rr.Code, rr.Body.String())
+	}
+	restored := decode[chat.Conversation](t, rr)
+	if restored.LastMessage == nil || restored.LastMessage.ID != last.ID {
+		t.Fatalf("the restore response previews %+v, want the same message %s the list and "+
+			"the single GET both give", restored.LastMessage, last.ID)
+	}
+}

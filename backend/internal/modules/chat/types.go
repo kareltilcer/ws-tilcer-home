@@ -193,9 +193,15 @@ type ReactionActor struct {
 //
 // ⚠ Reacted IS THE DESIRED STATE, NOT A TOGGLE — see Store.SetReaction for why the
 // double-tap gesture is what settles that.
+//
+// ⚠ AND IT IS A POINTER SO ITS ABSENCE IS NOT A DECISION (v10.1 review round 2). A
+// plain bool decodes a body that never mentioned `reacted` as `false`, which this
+// route executes as a REMOVAL — so a client that sent only the emoji watched its own
+// chip disappear with a 200. The spec has always said `required: [emoji, reacted]`;
+// nil is how the server can tell the difference and answer 422.
 type ReactionUpdate struct {
 	Emoji   string `json:"emoji"`
-	Reacted bool   `json:"reacted"`
+	Reacted *bool  `json:"reacted"`
 }
 
 // MessageQuote is the quoted parent of a reply.

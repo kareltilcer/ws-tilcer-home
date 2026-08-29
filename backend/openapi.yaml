@@ -5094,9 +5094,12 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "422":
           description: >-
-            An emoji outside the palette, or a reaction to a tombstone. ⚠ A 422 rather than a
-            404 because neither is a fact about anybody's conversation: what is wrong is the
-            caller's own request, and the membership question was already answered above it.
+            An emoji outside the palette, a body that omits `reacted`, or a reaction to a
+            tombstone. ⚠ A 422 rather than a 404 because none of them is a fact about
+            anybody's conversation: what is wrong is the caller's own request, and the
+            membership question was already answered above it. ⚠ **An absent `reacted` is
+            refused rather than read as `false`** — the field is the whole of what this route
+            decides, so defaulting it would delete a chip for a client that meant to add one.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -9516,7 +9519,8 @@ components:
           description: >-
             ⚠ The DESIRED state, not a toggle. `true` adds the caller's reaction, `false`
             removes it, and both are idempotent — which is what makes a double tap that fired
-            twice land where the member meant rather than on the opposite of it.
+            twice land where the member meant rather than on the opposite of it. ⚠ **Required
+            in earnest: omitting it is a 422, not a `false`.**
 
     ChatMessageQuote:
       type: object

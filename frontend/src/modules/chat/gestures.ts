@@ -141,7 +141,19 @@ export function useMessageGestures(actions: MessageGestureActions): MessageGestu
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (e.pointerType !== 'touch' || onAControl(e)) return
+      if (e.pointerType !== 'touch') return
+      // ⚠ A PRESS THAT BEGINS ON A CONTROL ENDS WHATEVER WAS IN PROGRESS (review
+      // round 2). Returning while leaving the bubble's sequence open meant the
+      // control's own pointerup was measured against the OTHER finger's start point:
+      // a thumb mid-swipe plus a finger landing on a chip further right released as
+      // `dx >= SWIPE_COMMIT` with `panning` already true, and fired a reply nobody
+      // swiped for. The control keeps its press; this state machine keeps none.
+      if (onAControl(e)) {
+        reset()
+        lastTap.current = 0
+        longFired.current = false
+        return
+      }
       longFired.current = false
       swipe.current = { x: e.clientX, y: e.clientY, active: true, panning: false }
       setSwipeX(0)
@@ -157,7 +169,7 @@ export function useMessageGestures(actions: MessageGestureActions): MessageGestu
         latest.current.onLongPress()
       }, LONG_PRESS_MS)
     },
-    [cancelTimer],
+    [cancelTimer, reset],
   )
 
   const onPointerMove = useCallback(
