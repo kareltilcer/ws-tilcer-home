@@ -1,4 +1,4 @@
-import type { FinanceRates, FinanceSplit } from '@/api/types'
+import type { FinanceRates, FinanceSplit } from './api/types'
 
 // A MIRROR of the locked split formula, not a second source of truth.
 //

@@ -12,30 +12,8 @@ import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { count, PLURAL } from '@/i18n/plural'
 import { qk } from '@/api/keys'
-import {
-  createNotificationRule,
-  createNotificationSchedule,
-  deleteNotificationRule,
-  deleteNotificationSchedule,
-  getNotificationCatalog,
-  listDeliveries,
-  listNotificationRules,
-  listNotificationSchedules,
-  sendBroadcast,
-  testNotificationRule,
-  testNotificationSchedule,
-  updateNotificationRule,
-  updateNotificationSchedule,
-} from '@/api/endpoints'
-import type {
-  ActionDescriptor,
-  Audience,
-  DeliveryStatus,
-  NotificationCatalog,
-  NotificationRule,
-  NotificationSchedule,
-  SendResult,
-} from '@/api/types'
+import { createNotificationRule, createNotificationSchedule, deleteNotificationRule, deleteNotificationSchedule, getNotificationCatalog, listDeliveries, listNotificationRules, listNotificationSchedules, sendBroadcast, testNotificationRule, testNotificationSchedule, updateNotificationRule, updateNotificationSchedule } from './api/endpoints'
+import type { ActionDescriptor, Audience, DeliveryStatus, NotificationCatalog, NotificationRule, NotificationSchedule, SendResult } from './api/types'
 import { ApiError, apiErrorMessage } from '@/api/client'
 import { Button, Input } from '@/components/ui/ui'
 import { ScreenHeader } from '@/components/common/states'

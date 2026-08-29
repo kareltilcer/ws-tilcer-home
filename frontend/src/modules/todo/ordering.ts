@@ -1,4 +1,4 @@
-import type { BoardTreeColumn } from '@/api/types'
+import type { BoardTreeColumn } from './api/types'
 import { comparePositions } from '@/lib/lexorank'
 
 export type SortMode = 'manual' | 'priority'

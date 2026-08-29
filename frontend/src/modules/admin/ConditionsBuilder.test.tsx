@@ -8,7 +8,7 @@ import {
   conditionsPhrase,
   conditionsValid,
 } from './ConditionsBuilder'
-import type { NotificationCatalog, NotificationConditions } from '@/api/types'
+import type { NotificationCatalog, NotificationConditions } from './api/types'
 
 const catalog: NotificationCatalog = {
   actions: [],

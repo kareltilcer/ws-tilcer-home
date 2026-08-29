@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { AuditEvent, AuditEventDetail } from '@/api/types'
+import type { AuditEvent, AuditEventDetail } from './api/types'
 import { LogPage } from './LogPage'
 
 // A FAILED REQUEST IS NOT AN EMPTY LOG. Every view here falls back to `?? []`,
@@ -15,7 +15,7 @@ const listLogs = vi.hoisted(() => vi.fn())
 const getLog = vi.hoisted(() => vi.fn())
 const getEntityTimeline = vi.hoisted(() => vi.fn())
 const getLogStats = vi.hoisted(() => vi.fn())
-vi.mock('@/api/endpoints', () => ({ listLogs, getLog, getEntityTimeline, getLogStats }))
+vi.mock('./api/endpoints', () => ({ listLogs, getLog, getEntityTimeline, getLogStats }))
 
 const event = (): AuditEvent => ({
   redacted: false,

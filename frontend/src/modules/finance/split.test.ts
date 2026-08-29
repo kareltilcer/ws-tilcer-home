@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FinanceRates } from '@/api/types'
+import type { FinanceRates } from './api/types'
 import { computeSplit, ratesSum, savingsOf } from './split'
 
 const r = (personal: number, operational: number, fun: number, no_fun: number): FinanceRates => ({

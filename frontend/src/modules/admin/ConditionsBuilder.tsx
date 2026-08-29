@@ -10,11 +10,7 @@ import { Plus, X } from 'lucide-react'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { Button, Input } from '@/components/ui/ui'
-import type {
-  ConditionOp,
-  NotificationCatalog,
-  NotificationConditions,
-} from '@/api/types'
+import type { ConditionOp, NotificationCatalog, NotificationConditions } from './api/types'
 
 /** Mirrors the server's maxConditionItems (openapi maxItems: 8) so the limit
  *  is unreachable in the UI instead of a 422 after the round-trip. */

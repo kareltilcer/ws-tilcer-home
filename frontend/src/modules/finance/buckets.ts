@@ -1,4 +1,4 @@
-import type { FinanceSplit } from '@/api/types'
+import type { FinanceSplit } from './api/types'
 import { cs } from '@/i18n/cs'
 import { fmtNumber } from '@/i18n/format'
 

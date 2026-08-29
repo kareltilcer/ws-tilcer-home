@@ -1,5 +1,5 @@
 import { AlertTriangle } from 'lucide-react'
-import type { FinanceMonth } from '@/api/types'
+import type { FinanceMonth } from './api/types'
 import { cs } from '@/i18n/cs'
 import { monthLabel } from '@/i18n/format'
 import { Button } from '@/components/ui/ui'

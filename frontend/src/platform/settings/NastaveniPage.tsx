@@ -18,7 +18,7 @@ import { ScreenHeader } from '@/components/common/states'
 import { useTheme } from '@/theme/theme'
 import { usePushDevice, usePushPreferences } from '@/platform/push/usePush'
 import { useInstallPrompt, useOnline } from '@/platform/pwa/offline'
-import { sendPushTest } from '@/api/endpoints'
+import { sendPushTest } from '@/api/push'
 import { apiErrorMessage } from '@/api/client'
 import type { PushCategories, PushTestResult } from '@/api/types'
 

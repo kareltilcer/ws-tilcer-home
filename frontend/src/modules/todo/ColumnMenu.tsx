@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Column, ColumnKind } from '@/api/types'
+import type { Column, ColumnKind } from './api/types'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Input } from '@/components/ui/ui'
 import { KINDS, PRIORITIES } from './columnFields'

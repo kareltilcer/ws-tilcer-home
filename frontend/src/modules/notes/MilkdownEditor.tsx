@@ -7,7 +7,7 @@ import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { toast } from 'sonner'
 import '@milkdown/crepe/theme/common/style.css'
 import './crepe-theme.css'
-import { uploadNoteImage } from '@/api/endpoints'
+import { uploadNoteImage } from './api/endpoints'
 import { cs } from '@/i18n/cs'
 import { MAX_INLINE_IMAGE_DATA_LEN } from './inlineImage'
 

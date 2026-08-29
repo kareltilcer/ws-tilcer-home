@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { Composer, type ComposerContext } from './Composer'
-import type { NotificationCatalog } from '@/api/types'
+import type { NotificationCatalog } from './api/types'
 
 const catalog: NotificationCatalog = {
   actions: [{ key: 'card.move', module: 'todo', label: 'Když někdo přesune úkol' }],

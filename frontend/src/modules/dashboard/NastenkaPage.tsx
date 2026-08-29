@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ChevronDown, ChevronUp, EyeOff, Plus, SlidersHorizontal, X } from 'lucide-react'
 import { qk } from '@/api/keys'
-import * as api from '@/api/endpoints'
+import * as api from './api/endpoints'
+import { completeReminder as completeReminderCall } from '@/modules/events/api/endpoints'
+import { moveCard, updateCard } from '@/modules/todo/api/endpoints'
 import type { Dashboard, DashboardReminder, DashboardTask, LayoutItem, WidgetCatalogEntry, WidgetSize } from '@/api/types'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
@@ -45,14 +47,14 @@ export function NastenkaPage() {
   const completeTask = useMutation({
     mutationFn: (t: DashboardTask) =>
       t.done_column_id
-        ? api.moveCard(t.card_id, { column_id: t.done_column_id }, 'dashboard')
-        : api.updateCard(t.card_id, { archived: true }),
+        ? moveCard(t.card_id, { column_id: t.done_column_id }, 'dashboard')
+        : updateCard(t.card_id, { archived: true }),
     onError: () => toast.error('Nepodařilo se dokončit úkol'),
     onSettled: () => void qc.invalidateQueries({ queryKey: qk.dashboard }),
   })
 
   const completeReminder = useMutation({
-    mutationFn: (r: DashboardReminder) => api.completeReminder(r.event_id, r.occurrence_on, 'dashboard'),
+    mutationFn: (r: DashboardReminder) => completeReminderCall(r.event_id, r.occurrence_on, 'dashboard'),
     onError: () => toast.error('Nepodařilo se odškrtnout připomínku'),
     onSettled: () => void qc.invalidateQueries({ queryKey: qk.dashboard }),
   })

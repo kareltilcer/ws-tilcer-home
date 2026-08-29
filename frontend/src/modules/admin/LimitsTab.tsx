@@ -4,9 +4,9 @@ import { toast } from 'sonner'
 import { cs } from '@/i18n/cs'
 import { fmtStorageBytes } from '@/i18n/format'
 import { qk } from '@/api/keys'
-import { getStorageSnapshot, setStorageThresholds } from '@/api/endpoints'
+import { getStorageSnapshot, setStorageThresholds } from './api/endpoints'
 import { Input, Spinner } from '@/components/ui/ui'
-import type { StorageSnapshot } from '@/api/types'
+import type { StorageSnapshot } from './api/types'
 
 /**
  * Správa úložiště → Limity (D263, D236).

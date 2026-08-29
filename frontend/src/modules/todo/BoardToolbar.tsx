@@ -1,6 +1,6 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { MoreHorizontal, Plus, Tag, Pencil, Trash2 } from 'lucide-react'
-import type { Board } from '@/api/types'
+import type { Board } from './api/types'
 import { cn } from '@/lib/utils'
 import type { SortMode } from './ordering'
 

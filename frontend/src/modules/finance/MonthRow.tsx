@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Pencil, Trash2 } from 'lucide-react'
-import type { FinanceMonth } from '@/api/types'
+import type { FinanceMonth } from './api/types'
 import { cs } from '@/i18n/cs'
 import { monthLabel } from '@/i18n/format'
 import { czPlural, PLURAL } from '@/i18n/plural'

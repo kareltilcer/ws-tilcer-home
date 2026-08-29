@@ -1,4 +1,4 @@
-import type { ColumnKind } from '@/api/types'
+import type { ColumnKind } from './api/types'
 
 // Column kind/priority options shared by AddColumnModal (create) and ColumnMenu
 // (edit) so the labels stay in lockstep across both UIs.

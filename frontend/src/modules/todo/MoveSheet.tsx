@@ -1,4 +1,4 @@
-import type { ColumnKind } from '@/api/types'
+import type { ColumnKind } from './api/types'
 import { ResponsiveModal } from '@/components/ui/modal'
 
 type Target = { id: string; name: string; kind: ColumnKind }

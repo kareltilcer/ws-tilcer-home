@@ -1,4 +1,4 @@
-import type { FinanceSplit } from '@/api/types'
+import type { FinanceSplit } from './api/types'
 import { cn } from '@/lib/utils'
 import { BUCKETS, bucketValues, fmtMoney, type Bucket } from './buckets'
 

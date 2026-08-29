@@ -1,8 +1,8 @@
 import { useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import * as api from '@/api/endpoints'
-import type { BoardTree, BoardTreeColumn } from '@/api/types'
+import * as api from './api/endpoints'
+import type { BoardTree, BoardTreeColumn } from './api/types'
 import { between, canInsertBetween, comparePositions } from '@/lib/lexorank'
 
 type Ordered = BoardTreeColumn[]

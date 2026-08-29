@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { FinanceMonth } from '@/api/types'
+import type { FinanceMonth } from './api/types'
 import { MonthFormModal } from './MonthFormModal'
 
 const recorded: FinanceMonth = {

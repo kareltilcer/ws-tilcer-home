@@ -16,17 +16,9 @@ import {
 } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { ApiError } from '@/api/client'
-import * as api from '@/api/endpoints'
-import type {
-  DocFolder,
-  DocFolderNode,
-  DocumentDetail,
-  DocumentPage,
-  DocumentSummary,
-  DocumentsTree,
-  DocFolderDetail,
-  Scope,
-} from '@/api/types'
+import * as api from './api/endpoints'
+import type { Scope } from '@/api/types'
+import type { DocFolder, DocFolderDetail, DocFolderNode, DocumentDetail, DocumentPage, DocumentSummary, DocumentsTree } from './api/types'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { count, PLURAL } from '@/i18n/plural'

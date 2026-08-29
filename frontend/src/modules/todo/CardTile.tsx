@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ArrowLeftRight, GripVertical } from 'lucide-react'
-import type { Card, Label } from '@/api/types'
+import type { Card, Label } from './api/types'
 import { cn } from '@/lib/utils'
 import { fmtDate } from '@/i18n/format'
 

@@ -17,9 +17,12 @@ import { RootSwitcher } from './RootSwitcher'
 
 const getNotesTree = vi.hoisted(() => vi.fn())
 const getDocumentsTree = vi.hoisted(() => vi.fn())
-vi.mock('@/api/endpoints', async (orig) => ({
+vi.mock('@/modules/notes/api/endpoints', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   getNotesTree,
+}))
+vi.mock('@/modules/documents/api/endpoints', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   getDocumentsTree,
 }))
 vi.mock('@/app/auth', () => ({ useAuth: () => ({ canWrite: true, isAdmin: false }) }))

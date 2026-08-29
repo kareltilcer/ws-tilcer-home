@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
-import type { FinanceMonth, FinanceRates } from '@/api/types'
+import type { FinanceMonth, FinanceRates } from './api/types'
 import { cs } from '@/i18n/cs'
 import { monthLabel } from '@/i18n/format'
 import { Button, Input } from '@/components/ui/ui'

@@ -1,5 +1,5 @@
 import { ArrowRight } from 'lucide-react'
-import type { FinanceMonth } from '@/api/types'
+import type { FinanceMonth } from './api/types'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { BUCKETS, displayNeeds, fmtMoney } from './buckets'
