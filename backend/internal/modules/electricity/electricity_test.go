@@ -68,15 +68,6 @@ func status(t *testing.T, err error) int {
 	return 0
 }
 
-func countRows(t *testing.T, db *sql.DB, table string) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
-		t.Fatalf("count %s: %v", table, err)
-	}
-	return n
-}
-
 // addReading enters a reading in WHOLE kWh, the way the form does (D148): the
 // wire carries tenths, so the helper multiplies, exactly as the UI will.
 func addReading(t *testing.T, x *h, on string, vt, nt int64) electricity.Reading {
@@ -101,7 +92,7 @@ func TestModuleHasNoSeedSource(t *testing.T) {
 		"electricity_readings", "electricity_tariffs", "electricity_advances",
 		"electricity_payments", "electricity_periods",
 	} {
-		if n := countRows(t, db, table); n != 0 {
+		if n := testsupport.CountRows(t, db, table); n != 0 {
 			t.Errorf("%s holds %d rows on a fresh database, want 0 — this module has no seed "+
 				"source and must not grow one (D152)", table, n)
 		}
@@ -416,7 +407,7 @@ func TestEveryMutationWritesExactlyOneAuditEvent(t *testing.T) {
 func TestRolledBackWriteLeavesNoAuditEvent(t *testing.T) {
 	x := newH(t)
 	addReading(t, x, "2026-04-01", 12000, 30000)
-	before := countRows(t, x.db, "audit_events")
+	before := testsupport.CountRows(t, x.db, "audit_events")
 
 	// Refused by the monotonicity guard INSIDE the transaction.
 	if _, err := x.svc.CreateReading(editorCtx(), electricity.ReadingInput{
@@ -424,10 +415,10 @@ func TestRolledBackWriteLeavesNoAuditEvent(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected the write to be refused")
 	}
-	if got := countRows(t, x.db, "audit_events"); got != before {
+	if got := testsupport.CountRows(t, x.db, "audit_events"); got != before {
 		t.Errorf("audit_events = %d, want %d — a rolled-back write must leave no event", got, before)
 	}
-	if got := countRows(t, x.db, "electricity_readings"); got != 1 {
+	if got := testsupport.CountRows(t, x.db, "electricity_readings"); got != 1 {
 		t.Errorf("electricity_readings = %d, want 1", got)
 	}
 }
@@ -480,14 +471,10 @@ func TestTariffUpdateCarriesFieldLevelDiffs(t *testing.T) {
 	}
 }
 
+// auditCount narrows to THIS module as well as the action — electricity shares
+// its test database with the seeded rows of every other module.
 func auditCount(t *testing.T, db *sql.DB, action string) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM audit_events WHERE action = ? AND module = 'electricity'`, action).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
+	return testsupport.CountAudit(t, db, "electricity", action)
 }
 
 // ---------------------------------------------------------------------------

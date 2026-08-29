@@ -1348,14 +1348,7 @@ func TestDeliveriesAreNotAudited(t *testing.T) {
 	}
 }
 
-func (f *fixture) auditCount(t *testing.T) int {
-	t.Helper()
-	var n int
-	if err := f.db.QueryRow(`SELECT COUNT(*) FROM audit_events`).Scan(&n); err != nil {
-		t.Fatalf("count audit: %v", err)
-	}
-	return n
-}
+func (f *fixture) auditCount(t *testing.T) int { return testsupport.CountAudit(t, f.db, "", "") }
 
 // ---- catalog ----
 

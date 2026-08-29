@@ -530,12 +530,7 @@ func assertPosition(t *testing.T, db *sql.DB, cardID, want string) {
 }
 
 func auditCount(t *testing.T, db *sql.DB, action string) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action=?`, action).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
+	return testsupport.CountAudit(t, db, "", action)
 }
 
 func strPtr(s string) *string { return &s }

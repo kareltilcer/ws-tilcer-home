@@ -11,15 +11,6 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
-func countRows(t *testing.T, db *sql.DB, table string) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil {
-		t.Fatalf("count %s: %v", table, err)
-	}
-	return n
-}
-
 // TestRecord_RollbackLeavesNoEvent: if the surrounding transaction rolls back,
 // the event goes with it. (Atomicity, direction 1.)
 func TestRecord_RollbackLeavesNoEvent(t *testing.T) {
@@ -40,7 +31,7 @@ func TestRecord_RollbackLeavesNoEvent(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("WithTx err = %v, want boom", err)
 	}
-	if n := countRows(t, db, "audit_events"); n != 0 {
+	if n := testsupport.CountRows(t, db, "audit_events"); n != 0 {
 		t.Fatalf("audit_events = %d, want 0 after rollback", n)
 	}
 }
@@ -71,10 +62,10 @@ func TestRecord_EventFailureRollsBackMutation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the bad-level audit insert to fail the transaction")
 	}
-	if n := countRows(t, db, "boards"); n != 0 {
+	if n := testsupport.CountRows(t, db, "boards"); n != 0 {
 		t.Fatalf("boards = %d, want 0 (mutation must roll back with the failed audit write)", n)
 	}
-	if n := countRows(t, db, "audit_events"); n != 0 {
+	if n := testsupport.CountRows(t, db, "audit_events"); n != 0 {
 		t.Fatalf("audit_events = %d, want 0", n)
 	}
 }
