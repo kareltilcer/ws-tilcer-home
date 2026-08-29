@@ -37,11 +37,9 @@ func countCS(n int, one, few, many string) string {
 	return strconv.Itoa(n) + " " + plural(n, one, few, many)
 }
 
-func yearsCS(n int) string  { return countCS(n, "rok", "roky", "let") }
-func daysCS(n int) string   { return countCS(n, "den", "dny", "dní") }
-func tasksCS(n int) string  { return countCS(n, "práce", "práce", "prací") }
-func bedsCS(n int) string   { return countCS(n, "záhon", "záhony", "záhonů") }
-func warningsCS(n int) string { return countCS(n, "varování", "varování", "varování") }
+func yearsCS(n int) string { return countCS(n, "rok", "roky", "let") }
+func daysCS(n int) string  { return countCS(n, "den", "dny", "dní") }
+func tasksCS(n int) string { return countCS(n, "práce", "práce", "prací") }
 
 // yearsAgoCS renders a gap in seasons the way a person says it. "Před 1 lety" is
 // the kind of phrasing that makes an app feel machine-written, and this string

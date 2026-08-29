@@ -9,6 +9,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
@@ -188,7 +189,7 @@ func (s *Service) SetThresholds(ctx context.Context, in StorageThresholdsUpdate)
 				fmt.Sprintf("Limit musí být mezi 1 a %d MB.", storage.MaxThresholdMB))
 		}
 	}
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	// ⚠ THE SEED'S LAYOUT, NOT admin's tsFormat. `storage_thresholds` is a PLATFORM
 	// table written by this module and read by `chat`, and 02004 seeds it with a
 	// fixed-millisecond RFC 3339 string — which is also what every chat timestamp

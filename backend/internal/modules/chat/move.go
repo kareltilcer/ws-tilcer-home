@@ -9,6 +9,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
@@ -68,7 +69,7 @@ func (s *Service) faultAt(step moveStep) error {
 // Gated member ∧ (editor | admin) — the same gate as the rest of the clean-up
 // surface (D241), because this is one of its two actions.
 func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID string) (Attachment, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return Attachment{}, httpx.ErrUnauthorized("")
 	}
@@ -152,9 +153,9 @@ func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID str
 		return s.recordAttachment(ctx, tx, "attachment.moved", attachmentID,
 			fmt.Sprintf("Soubor „%s“ přesunut z konverzace „%s“ do Dokumentů", att.OriginalFilename, name),
 			[]audit.Change{
-				{Field: "state", Old: ap(stateLive), New: ap(stateMoved)},
-				{Field: "document_id", New: ap(result.DocumentID)},
-				{Field: "conversation", New: ap(name)},
+				{Field: "state", Old: audit.Ptr(stateLive), New: audit.Ptr(stateMoved)},
+				{Field: "document_id", New: audit.Ptr(result.DocumentID)},
+				{Field: "conversation", New: audit.Ptr(name)},
 			})
 	})
 	if err != nil {

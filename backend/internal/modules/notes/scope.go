@@ -160,7 +160,7 @@ func ParseScope(ctx context.Context, raw string) (Scope, error) {
 	case "", scopeParamShared:
 		return Scope{}, nil
 	case scopeParamPrivate:
-		uid := actorID(ctx)
+		uid := reqctx.ActorID(ctx)
 		if uid == "" {
 			// No authenticated actor: there is no "my private root" to resolve.
 			// 401 territory, but the session middleware has already run, so this is

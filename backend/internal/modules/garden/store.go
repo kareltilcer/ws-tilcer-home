@@ -7,19 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx. Reads use the store's *sql.DB;
-// mutations take the explicit tx so the audit write commits atomically with them.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 // Store is the garden module's SQL layer.
 type Store struct{ db *sql.DB }
@@ -32,7 +29,7 @@ func (s *Store) DB() *sql.DB { return s.db }
 
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 const (
 	defaultLimit = 50
@@ -53,6 +50,21 @@ func NormalizeLimit(n int) int {
 type scanner interface{ Scan(dest ...any) error }
 
 var errNotFound = errors.New("garden: not found")
+
+// softDelete stamps deleted_at (and updated_at) on one live row. It is the whole
+// of every SoftDeleteX below: eight tables, one statement, and `AND deleted_at IS
+// NULL` on all of them so a second delete is a no-op rather than a fresh
+// timestamp on an already-dead row.
+//
+// The table name is interpolated, which is safe here and only here: every caller
+// passes a compile-time constant from the eight wrappers, none of it reaches a
+// request. The wrappers stay — they are the module's vocabulary and the service
+// calls them by name, so a reader still sees which table a delete touches.
+func (s *Store) softDelete(ctx context.Context, tx DBTX, table, id, at string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE `+table+` SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
+	return err
+}
 
 // ============================== plants ==============================
 
@@ -156,7 +168,7 @@ func (s *Store) attachVarietyCounts(ctx context.Context, plants []Plant) error {
 		ids = append(ids, p.ID)
 	}
 	q := `SELECT plant_id, COUNT(*) FROM garden_varieties
-	      WHERE deleted_at IS NULL AND plant_id IN (` + placeholders(len(ids)) + `)
+	      WHERE deleted_at IS NULL AND plant_id IN (` + appdb.Placeholders(len(ids)) + `)
 	      GROUP BY plant_id`
 	rows, err := s.db.QueryContext(ctx, q, ids...)
 	if err != nil {
@@ -218,7 +230,7 @@ func (s *Store) InsertPlant(ctx context.Context, tx DBTX, p Plant) error {
 	args = append(args, coreValues(p.PlantCore)...)
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_plants (`+plantIdentCols+`, search_blob, `+coreColumns+`)
-		 VALUES (`+placeholders(14+coreColumnCount)+`)`, args...)
+		 VALUES (`+appdb.Placeholders(14+coreColumnCount)+`)`, args...)
 	return err
 }
 
@@ -238,9 +250,7 @@ func (s *Store) UpdatePlant(ctx context.Context, tx DBTX, p Plant) error {
 }
 
 func (s *Store) SoftDeletePlant(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_plants SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_plants", id, at)
 }
 
 // PlantingsUsingPlant counts live plantings of a crop, so a delete that would
@@ -343,7 +353,7 @@ func (s *Store) InsertVariety(ctx context.Context, tx DBTX, v Variety, createdBy
 	args = append(args, coreValues(v.PlantCore)...)
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_varieties (`+varietyIdentCols+`, created_by, `+coreColumns+`)
-		 VALUES (`+placeholders(15+coreColumnCount)+`)`, args...)
+		 VALUES (`+appdb.Placeholders(15+coreColumnCount)+`)`, args...)
 	return err
 }
 
@@ -362,9 +372,7 @@ func (s *Store) UpdateVariety(ctx context.Context, tx DBTX, v Variety, at string
 }
 
 func (s *Store) SoftDeleteVariety(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_varieties SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_varieties", id, at)
 }
 
 // ================================ beds ================================
@@ -430,7 +438,7 @@ func (s *Store) GetBed(ctx context.Context, db DBTX, id string) (Bed, error) {
 
 func (s *Store) InsertBed(ctx context.Context, tx DBTX, b Bed, createdBy string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO garden_beds (`+bedCols+`, created_by) VALUES (`+placeholders(15)+`)`,
+		`INSERT INTO garden_beds (`+bedCols+`, created_by) VALUES (`+appdb.Placeholders(15)+`)`,
 		b.ID, b.Name, b.Code, b.Type, b.LengthCM, b.WidthCM, b.AreaM2,
 		b.SunExposure, b.Zone, b.SoilNotesMD, b2i(b.IsActive), b.Position,
 		b.CreatedAt, b.UpdatedAt, createdBy)
@@ -448,9 +456,7 @@ func (s *Store) UpdateBed(ctx context.Context, tx DBTX, b Bed) error {
 }
 
 func (s *Store) SoftDeleteBed(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_beds SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_beds", id, at)
 }
 
 // BedHasOpenPlantings reports whether a bed holds plantings in a season that is
@@ -638,7 +644,7 @@ func (s *Store) ClosedSeasonCount(ctx context.Context, db DBTX) (int, error) {
 
 func (s *Store) InsertSeason(ctx context.Context, tx DBTX, se Season, createdBy string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO garden_seasons (`+seasonCols+`, created_by) VALUES (`+placeholders(13)+`)`,
+		`INSERT INTO garden_seasons (`+seasonCols+`, created_by) VALUES (`+appdb.Placeholders(13)+`)`,
 		se.ID, se.Year, se.Status, se.LastFrostOn, se.FirstFrostOn,
 		se.LastFrostActualOn, se.FirstFrostActualOn, se.NotesMD, se.ClosedAt, se.ClosedBy,
 		se.CreatedAt, se.UpdatedAt, createdBy)
@@ -794,7 +800,7 @@ func (s *Store) InsertPlanting(ctx context.Context, tx DBTX, p Planting, created
 		    area_m2, plant_count, rows, sow_indoor_on, sow_direct_on, transplant_on, harvest_from, harvest_to,
 		    manual_dates, sowed_on, transplanted_on, first_harvest_on, cleared_on, status, fail_reason,
 		    planted_on, rootstock, removed_on, notes_md, created_by, created_at, updated_at)
-		 VALUES (`+placeholders(28)+`)`,
+		 VALUES (`+appdb.Placeholders(28)+`)`,
 		p.ID, p.SeasonID, p.BedID, p.LocationLabel, p.PlantID, p.VarietyID,
 		p.AreaM2, p.PlantCount, p.Rows, p.SowIndoorOn, p.SowDirectOn, p.TransplantOn, p.HarvestFrom, p.HarvestTo,
 		encodeStrings(p.ManualDates), p.SowedOn, p.TransplantedOn, p.FirstHarvestOn, p.ClearedOn,
@@ -821,9 +827,7 @@ func (s *Store) UpdatePlanting(ctx context.Context, tx DBTX, p Planting) error {
 }
 
 func (s *Store) SoftDeletePlanting(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_plantings SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_plantings", id, at)
 }
 
 // YieldFor sums a planting's harvests in the crop's own unit.
@@ -857,7 +861,7 @@ func (s *Store) YieldsFor(ctx context.Context, db DBTX, plantingIDs []string) (m
 	args := toAny(plantingIDs)
 	rows, err := db.QueryContext(ctx,
 		`SELECT planting_id, unit, SUM(quantity) FROM garden_harvests
-		 WHERE deleted_at IS NULL AND planting_id IN (`+placeholders(len(args))+`)
+		 WHERE deleted_at IS NULL AND planting_id IN (`+appdb.Placeholders(len(args))+`)
 		 GROUP BY planting_id, unit`, args...)
 	if err != nil {
 		return nil, err
@@ -1071,7 +1075,7 @@ func (s *Store) InsertTask(ctx context.Context, tx DBTX, t Task, createdBy, at s
 		    window_from, window_to, due_hint, status, completed_by, completed_at,
 		    is_generated, is_edited, generation_key, suppressed, notes_md, position,
 		    created_by, created_at, updated_at)
-		 VALUES (`+placeholders(21)+`)`,
+		 VALUES (`+appdb.Placeholders(21)+`)`,
 		t.ID, t.Kind, t.SeasonID, t.PlantingID, t.BedID, t.TitleCS,
 		t.WindowFrom, t.WindowTo, t.DueHint, t.Status, t.CompletedBy, t.CompletedAt,
 		b2i(t.IsGenerated), b2i(t.IsEdited), t.GenerationKey, b2i(t.Suppressed), t.NotesMD, t.Position,
@@ -1112,9 +1116,7 @@ func (s *Store) SuppressTask(ctx context.Context, tx DBTX, id, at string) error 
 }
 
 func (s *Store) SoftDeleteTask(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_tasks SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_tasks", id, at)
 }
 
 // CountTasks powers the two task metrics without loading rows.
@@ -1232,7 +1234,7 @@ func (s *Store) InsertHarvest(ctx context.Context, tx DBTX, h Harvest, createdBy
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_harvests (id, planting_id, harvested_on, quantity, unit,
 		    destination, quality, note, created_by, created_at, updated_at)
-		 VALUES (`+placeholders(11)+`)`,
+		 VALUES (`+appdb.Placeholders(11)+`)`,
 		h.ID, h.PlantingID, h.HarvestedOn, h.Quantity, h.Unit,
 		h.Destination, h.Quality, h.Note, createdBy, at, at)
 	return err
@@ -1248,9 +1250,7 @@ func (s *Store) UpdateHarvest(ctx context.Context, tx DBTX, h Harvest, at string
 }
 
 func (s *Store) SoftDeleteHarvest(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_harvests SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_harvests", id, at)
 }
 
 // SeasonHarvestKg sums a season's harvest IN KG ONLY. Rows in ks/l/svazek are
@@ -1353,7 +1353,7 @@ func (s *Store) GetStorage(ctx context.Context, db DBTX, id string) (StorageItem
 
 func (s *Store) InsertStorage(ctx context.Context, tx DBTX, it StorageItem, createdBy, at string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO garden_storage_items (`+storageCols+`, created_by) VALUES (`+placeholders(16)+`)`,
+		`INSERT INTO garden_storage_items (`+storageCols+`, created_by) VALUES (`+appdb.Placeholders(16)+`)`,
 		it.ID, it.HarvestID, it.PlantingID, it.ProductName, it.Method, it.Location,
 		it.QuantityInitial, it.QuantityRemaining, it.Unit, it.StoredOn, it.BestBefore,
 		it.Status, it.Note, at, at, createdBy)
@@ -1371,9 +1371,7 @@ func (s *Store) UpdateStorage(ctx context.Context, tx DBTX, it StorageItem, at s
 }
 
 func (s *Store) SoftDeleteStorage(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_storage_items SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_storage_items", id, at)
 }
 
 // ================================ rules ================================
@@ -1451,7 +1449,7 @@ func (s *Store) GetRule(ctx context.Context, db DBTX, id string) (Rule, error) {
 func (s *Store) InsertRule(ctx context.Context, tx DBTX, r Rule, createdBy, at string) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_rules (`+ruleCols+`, created_by, created_at, updated_at)
-		 VALUES (`+placeholders(14)+`)`,
+		 VALUES (`+appdb.Placeholders(14)+`)`,
 		r.ID, r.Scope, r.ARef, r.BRef, r.Verdict, r.Severity, r.MinYearsGap,
 		r.ReasonCS, r.Source, b2i(r.IsBuiltin), b2i(r.IsDisabled), createdBy, at, at)
 	return err
@@ -1467,9 +1465,7 @@ func (s *Store) UpdateRule(ctx context.Context, tx DBTX, r Rule, at string) erro
 }
 
 func (s *Store) SoftDeleteRule(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_rules SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_rules", id, at)
 }
 
 // rulesForMatching loads the ENABLED rules with built-in plant pairs resolved
@@ -1902,7 +1898,7 @@ func (s *Store) plantsByID(ctx context.Context, db DBTX, ids []string) (map[stri
 	args := toAny(ids)
 	rows, err := db.QueryContext(ctx,
 		`SELECT `+plantIdentCols+`, `+coreColumns+` FROM garden_plants
-		 WHERE id IN (`+placeholders(len(args))+`)`, args...)
+		 WHERE id IN (`+appdb.Placeholders(len(args))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1925,7 +1921,7 @@ func (s *Store) varietiesByID(ctx context.Context, db DBTX, ids []string) (map[s
 	args := toAny(ids)
 	rows, err := db.QueryContext(ctx,
 		`SELECT `+varietyIdentCols+`, `+coreColumns+` FROM garden_varieties
-		 WHERE id IN (`+placeholders(len(args))+`)`, args...)
+		 WHERE id IN (`+appdb.Placeholders(len(args))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

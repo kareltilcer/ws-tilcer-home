@@ -1,0 +1,24 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+
+  // WHAT THIS GATES, AND WHAT IT DELIBERATELY DOES NOT.
+  //
+  // `npm run lint` fails on an unused FILE, an unused DEPENDENCY, a dependency
+  // used but not declared, an unresolved import, or a missing binary. Those are
+  // the categories the refactor sweep cleared — nine dependencies with zero
+  // references, `src/App.css` and three Vite-template images — and without a
+  // check they come straight back: nothing in this repo noticed a whole unused
+  // form stack (react-hook-form + @hookform/resolvers + zod) sitting in
+  // package.json across three versions.
+  "include": ["files", "dependencies", "unlisted", "unresolved", "binaries"],
+
+  // ⚠ `exports` and `types` are EXCLUDED ON PURPOSE, not because they are clean.
+  // knip reports 43 unused exports and 52 unused exported types today. Those are
+  // open work (REFACTOR.md items 29 and 30) and need triage rather than deletion:
+  // ~11 of the exports are endpoint wrappers for backend routes that still exist,
+  // and several of the types deliberately mirror OpenAPI schema names. Gating on
+  // them would mean a permanently red check, which is a check nobody reads.
+  //
+  // Run `npx knip --include exports,types` to see that list.
+  "exclude": ["exports", "types", "nsExports", "nsTypes", "enumMembers", "duplicates"]
+}

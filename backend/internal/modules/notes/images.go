@@ -16,6 +16,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Inline images for Poznámky. Pasted/dropped images stream to object storage under
@@ -59,7 +60,7 @@ func (s *Service) UploadImage(ctx context.Context, noteID string, file io.Reader
 	// one (leak table row 21, D204). GetNote is viewer-scoped, so a foreign private
 	// note reads back nil and gets the ordinary 404. GetNote does not filter
 	// archived, so that stays an explicit check here.
-	n, err := s.store.GetNote(ctx, s.db, noteID, actorID(ctx))
+	n, err := s.store.GetNote(ctx, s.db, noteID, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +120,7 @@ func (s *Service) UploadImage(ctx context.Context, noteID string, file io.Reader
 
 	// 4. Row. A failure orphans the object → delete it now rather than wait for the
 	// reconciliation pass.
-	if err := s.store.InsertNoteImage(ctx, s.db, id, noteID, contentType, size, checksum, actorID(ctx)); err != nil {
+	if err := s.store.InsertNoteImage(ctx, s.db, id, noteID, contentType, size, checksum, reqctx.ActorID(ctx)); err != nil {
 		s.purgeImageObjects(ctx, []string{id})
 		return nil, err
 	}
@@ -193,7 +194,7 @@ func (h *Handler) uploadImage(w http.ResponseWriter, r *http.Request) {
 		}
 		res, err := h.svc.UploadImage(r.Context(), noteID, part)
 		_ = part.Close()
-		respond(w, http.StatusCreated, res, err)
+		httpx.Respond(w, http.StatusCreated, res, err)
 		return
 	}
 }
@@ -214,7 +215,7 @@ func (h *Handler) getImage(w http.ResponseWriter, r *http.Request) {
 	// join is the whole check — and if it ran after the If-None-Match short-circuit,
 	// a second member holding a stale ETag would get a 304 instead of a 404, which
 	// is a "yes, and it hasn't changed" for a document they may not see.
-	im, err := h.svc.store.GetNoteImageForViewer(r.Context(), h.svc.db, id, actorID(r.Context()))
+	im, err := h.svc.store.GetNoteImageForViewer(r.Context(), h.svc.db, id, reqctx.ActorID(r.Context()))
 	if err != nil {
 		httpx.WriteError(w, err)
 		return

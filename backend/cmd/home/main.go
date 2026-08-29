@@ -376,9 +376,32 @@ func run(logger *slog.Logger) error {
 	// forbiddenImports["chat"] rather than only by not registering.
 	chatMod := chat.NewModule(chatSvc)
 
+	// THE SIX CONTRIBUTING MODULES, written once. They are the modules that
+	// publish to the household surfaces: the dashboard's widget catalog, the
+	// metric catalog and the list catalog, all three below.
+	//
+	// ⚠ IT IS A NAMED SLICE BECAUSE THE THREE LISTS HAD TO STAY IN STEP AND
+	// NOTHING CHECKED THAT THEY DID. `electricity` (D147) and `chat` (D252) are
+	// deliberately absent from ALL THREE — the comments on elecMod and chatMod
+	// above say so at length — and "absent from all three" is exactly the
+	// invariant one name expresses and three literals cannot. A module added to
+	// two of them and forgotten in the third used to be a silent bug.
+	//
+	// Not to be confused with featureModules below, which is a DIFFERENT and
+	// longer list: those ten are every module the action catalog reads verbs
+	// from, electricity, chat, logging and dashboard included.
+	contributingModules := []registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod}
+	// metrics.Collect and lists.Collect take `...any` where CollectWidgets takes
+	// []registry.Module, and Go will not spread the one into the other — so the
+	// same six need a []any beside them rather than a second literal.
+	contributingAny := make([]any, len(contributingModules))
+	for i, m := range contributingModules {
+		contributingAny[i] = m
+	}
+
 	// The dashboard host renders widgets contributed by the feature modules — it
 	// reaches feature data only through this catalog, never their tables (D28).
-	catalog, err := registry.NewCatalog(registry.CollectWidgets([]registry.Module{todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod}))
+	catalog, err := registry.NewCatalog(registry.CollectWidgets(contributingModules))
 	if err != nil {
 		return err
 	}
@@ -388,7 +411,7 @@ func run(logger *slog.Logger) error {
 	// and audit actions. Modules publish counts; the admin module's summaries
 	// reference them by key and never touch a feature table (D59/D28).
 	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, elecMod, chatMod, dashMod}
-	metricRegistry, err := metrics.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod)
+	metricRegistry, err := metrics.Collect(contributingAny...)
 	if err != nil {
 		return err
 	}
@@ -396,7 +419,7 @@ func run(logger *slog.Logger) error {
 	// behind those counts, so a summary can name today's reminders instead of
 	// only counting them. Collected the same way, read through the same kind of
 	// registry, so admin still imports no feature module.
-	listRegistry, err := lists.Collect(todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod)
+	listRegistry, err := lists.Collect(contributingAny...)
 	if err != nil {
 		return err
 	}
@@ -529,19 +552,33 @@ func run(logger *slog.Logger) error {
 		logger.Info("admin: pruned delivery log", "retention_days", cfg.Notif.DeliveryRetentionDays, "pruned", pruned)
 	}
 
+	// The two mirror jobs run on IDENTICAL settings — the same three cfg.Docs
+	// values, the same backup, the same logger — because note images live in the
+	// documents bucket under their own prefix and share its backup. The three
+	// derived values are computed once here so the pair cannot drift into two
+	// cadences by way of one edit.
+	//
+	// ⚠ THE TWO CONFIG LITERALS STAY SEPARATE. documents.MirrorConfig and
+	// notes.ImageMirrorConfig are field-identical but they are DIFFERENT TYPES,
+	// one per module — which is `notes/mirror.go`'s recorded point, that a change
+	// to one module's storage must not be able to quietly alter the other's.
+	mirrorInterval := cfg.Docs.MirrorInterval
+	orphanGrace := time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour
+	maxOrphanShare := float64(cfg.Docs.OrphanMaxPercent) / 100
+
 	documents.NewMirrorJob(docsSvc.Store(), docsBlob, documents.MirrorConfig{
-		Interval:       cfg.Docs.MirrorInterval,
-		OrphanGrace:    time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour,
-		MaxOrphanShare: float64(cfg.Docs.OrphanMaxPercent) / 100,
+		Interval:       mirrorInterval,
+		OrphanGrace:    orphanGrace,
+		MaxOrphanShare: maxOrphanShare,
 		Backup:         docsBackup,
 		Logger:         logger,
 	}).Run(bgCtx)
 	// Note images share the documents bucket + backup, mirrored/reconciled on the same
 	// cadence but scoped to the note-images/ prefix and the note_images table.
 	notes.NewImageMirrorJob(notesSvc.Store(), docsBlob, notes.ImageMirrorConfig{
-		Interval:       cfg.Docs.MirrorInterval,
-		OrphanGrace:    time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour,
-		MaxOrphanShare: float64(cfg.Docs.OrphanMaxPercent) / 100,
+		Interval:       mirrorInterval,
+		OrphanGrace:    orphanGrace,
+		MaxOrphanShare: maxOrphanShare,
 		Backup:         docsBackup,
 		Logger:         logger,
 	}).Run(bgCtx)

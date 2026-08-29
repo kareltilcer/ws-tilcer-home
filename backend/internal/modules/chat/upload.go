@@ -17,6 +17,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Attachment upload (FR-V10-6, D224/D227/D228).
@@ -101,7 +102,7 @@ func (f stagedFile) cleanup() {
 // could spend 500 MB of the droplet's disk discovering they are not in the room.
 // A cheap indexed read is the whole cost of closing that.
 func (s *Service) SendMessageMultipart(ctx context.Context, conversationID string, mr *multipart.Reader) (Message, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return Message{}, httpx.ErrUnauthorized("")
 	}
@@ -308,7 +309,7 @@ func (s *Service) putStaged(ctx context.Context, f *stagedFile) ([]string, error
 // differ only in what they carry, and a second ordering here would be a second
 // answer to "when is a message's id decided".
 func (s *Service) commitMessage(ctx context.Context, conversationID, body string, replyToID *string, files []stagedFile) (Message, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	labels, err := s.labels(ctx)
 	if err != nil {
 		return Message{}, err
@@ -376,10 +377,10 @@ func (s *Service) commitMessage(ctx context.Context, conversationID, body string
 			if err := s.recordAttachment(ctx, tx, "attachment.uploaded", f.id,
 				fmt.Sprintf("Nahrán soubor „%s“ do konverzace „%s“", f.filename, convName),
 				[]audit.Change{
-					{Field: "original_filename", New: ap(f.filename)},
-					{Field: "content_type", New: ap(f.contentType)},
-					{Field: "byte_size", New: ap(fmt.Sprint(f.size))},
-					{Field: "conversation", New: ap(convName)},
+					{Field: "original_filename", New: audit.Ptr(f.filename)},
+					{Field: "content_type", New: audit.Ptr(f.contentType)},
+					{Field: "byte_size", New: audit.Ptr(fmt.Sprint(f.size))},
+					{Field: "conversation", New: audit.Ptr(convName)},
 				}); err != nil {
 				return err
 			}
@@ -499,5 +500,3 @@ func readHead(path string) ([]byte, error) {
 	}
 	return head[:n], nil
 }
-
-func ap(s string) *string { return &s }

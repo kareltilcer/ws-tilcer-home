@@ -40,3 +40,32 @@ func DecodeJSON(r *http.Request, dst any) error {
 	}
 	return nil
 }
+
+// Respond is the terminal step of a handler: WriteError on a failure, otherwise
+// JSON at status. v may be nil for a body-less success.
+//
+// ⚠ IT LIVES HERE BECAUSE IT EXISTED EIGHT TIMES. `chat`, `documents`,
+// `electricity`, `events`, `finance`, `garden`, `notes` and `todo` each carried a
+// byte-identical copy of this pair beside the two functions it calls, which are
+// already in this package — so every module was one hop from the shared spelling
+// and took the copy instead. Sixteen copies fed 178 call sites, and all 178 were
+// migrated rather than left beside it: an extraction nobody adopts is a ninth copy
+// with a doc comment claiming otherwise (the platform/db precedent).
+func Respond(w http.ResponseWriter, status int, v any, err error) {
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	JSON(w, status, v)
+}
+
+// NoContent is Respond for a mutation that returns nothing: WriteError on a
+// failure, otherwise a bare 204. Seven modules spelled it `respondNoContent` and
+// `garden` spelled it `noContent`; this is the one name.
+func NoContent(w http.ResponseWriter, err error) {
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

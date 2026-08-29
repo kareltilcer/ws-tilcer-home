@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // The planning half of the service: seasons, plantings, the work calendar, the
@@ -180,7 +180,7 @@ func (s *Service) CreateSeason(ctx context.Context, in SeasonCreateInput, dryRun
 			if err := s.store.UpdateSeason(ctx, tx, se); err != nil {
 				return err
 			}
-		} else if err := s.store.InsertSeason(ctx, tx, se, actorID(ctx)); err != nil {
+		} else if err := s.store.InsertSeason(ctx, tx, se, reqctx.ActorID(ctx)); err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 				return httpx.ErrConflict("Sezóna " + strconv.Itoa(in.Year) + " už existuje.")
 			}
@@ -188,7 +188,7 @@ func (s *Service) CreateSeason(ctx context.Context, in SeasonCreateInput, dryRun
 		}
 		for i := range copied {
 			copied[i].SeasonID = sp(se.ID)
-			if err := s.store.InsertPlanting(ctx, tx, copied[i], actorID(ctx)); err != nil {
+			if err := s.store.InsertPlanting(ctx, tx, copied[i], reqctx.ActorID(ctx)); err != nil {
 				return err
 			}
 			if _, err := s.regeneratePlanting(ctx, tx, copied[i]); err != nil {
@@ -516,7 +516,7 @@ func (s *Service) CloseSeason(ctx context.Context, year int, in SeasonCloseInput
 					HarvestedOn: derefS(firstStr(p.ClearedOn, p.HarvestTo, sp(s.today().String()))),
 					Note:        sp("Zapsáno při uzavření sezóny"),
 				}
-				if err := s.store.InsertHarvest(ctx, tx, h, actorID(ctx), nowUTC()); err != nil {
+				if err := s.store.InsertHarvest(ctx, tx, h, reqctx.ActorID(ctx), nowUTC()); err != nil {
 					return err
 				}
 			}
@@ -539,7 +539,7 @@ func (s *Service) CloseSeason(ctx context.Context, year int, in SeasonCloseInput
 		if in.NotesMD != nil {
 			se.NotesMD = in.NotesMD
 		}
-		se.ClosedAt, se.ClosedBy = sp(nowUTC()), sp(actorID(ctx))
+		se.ClosedAt, se.ClosedBy = sp(nowUTC()), sp(reqctx.ActorID(ctx))
 		se.UpdatedAt = nowUTC()
 		if err := s.store.UpdateSeason(ctx, tx, se); err != nil {
 			return err
@@ -628,7 +628,7 @@ func (s *Service) DismissWarning(ctx context.Context, year int, key string, note
 		if err != nil {
 			return mapNotFound(err)
 		}
-		if err := s.store.InsertDismissal(ctx, tx, idgen.New(), se.ID, key, note, actorID(ctx), nowUTC()); err != nil {
+		if err := s.store.InsertDismissal(ctx, tx, idgen.New(), se.ID, key, note, reqctx.ActorID(ctx), nowUTC()); err != nil {
 			return err
 		}
 		summary := "Ignorováno varování v plánu " + strconv.Itoa(year)
@@ -840,7 +840,7 @@ func (s *Service) CreatePlanting(ctx context.Context, in PlantingInput) (Plantin
 		PlannedDates(&p, eff, season.Anchors())
 		now := nowUTC()
 		p.CreatedAt, p.UpdatedAt = now, now
-		if err := s.store.InsertPlanting(ctx, tx, p, actorID(ctx)); err != nil {
+		if err := s.store.InsertPlanting(ctx, tx, p, reqctx.ActorID(ctx)); err != nil {
 			return err
 		}
 		counts, err := s.regeneratePlanting(ctx, tx, p)
@@ -1231,7 +1231,7 @@ func (s *Service) regeneratePlanting(ctx context.Context, tx *sql.Tx, p Planting
 		t.ID = idgen.New()
 		t.Position = pos
 		pos = lexorank.Between(pos, "")
-		if err := s.store.InsertTask(ctx, tx, t, actorID(ctx), at); err != nil {
+		if err := s.store.InsertTask(ctx, tx, t, reqctx.ActorID(ctx), at); err != nil {
 			return nil, err
 		}
 	}
@@ -1407,20 +1407,4 @@ func plantingChanges(before *Planting, after Planting) []audit.Change {
 	}
 	diffPlain(&changes, "status", b.Status, after.Status)
 	return changes
-}
-
-// sortTasksForDisplay orders a task list the way every surface shows it:
-// overdue first, then by window start. Kept here so the widget, the calendar and
-// the print sheet cannot disagree.
-func sortTasksForDisplay(tasks []Task, today dates.Date) {
-	sort.SliceStable(tasks, func(i, j int) bool {
-		oi, oj := tasks[i].Overdue, tasks[j].Overdue
-		if oi != oj {
-			return oi
-		}
-		if tasks[i].WindowFrom != tasks[j].WindowFrom {
-			return tasks[i].WindowFrom < tasks[j].WindowFrom
-		}
-		return tasks[i].Position < tasks[j].Position
-	})
 }

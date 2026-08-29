@@ -4,18 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx. Reads use the store's *sql.DB;
-// mutations take the explicit tx so the audit write commits atomically with them.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 // Store is the electricity module's SQL layer. It stores INPUTS ONLY — every
 // figure the module displays is computed on read by compute.go (PRD D152). There
@@ -27,7 +24,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 type scanner interface{ Scan(dest ...any) error }
 

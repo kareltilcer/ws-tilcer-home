@@ -42,7 +42,7 @@ func (s *Store) Tree(ctx context.Context, boardID string, labelIDs []string, q s
 	}
 	if len(labelIDs) > 0 {
 		sb.WriteString(" AND c.id IN (SELECT card_id FROM card_labels WHERE label_id IN (")
-		sb.WriteString(placeholders(len(labelIDs)))
+		sb.WriteString(appdb.Placeholders(len(labelIDs)))
 		sb.WriteString("))")
 		for _, id := range labelIDs {
 			args = append(args, id)
@@ -140,7 +140,7 @@ func (s *Store) fillLabelIDs(ctx context.Context, cardIDs []string, cards []Card
 		return nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT card_id, label_id FROM card_labels WHERE card_id IN (`+placeholders(len(cardIDs))+`)`, toArgs(cardIDs)...)
+		`SELECT card_id, label_id FROM card_labels WHERE card_id IN (`+appdb.Placeholders(len(cardIDs))+`)`, toArgs(cardIDs)...)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func (s *Store) fillProgress(ctx context.Context, cardIDs []string, cards []Card
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT card_id, COUNT(*), COALESCE(SUM(done),0) FROM checklist_items
-		 WHERE card_id IN (`+placeholders(len(cardIDs))+`) GROUP BY card_id`, toArgs(cardIDs)...)
+		 WHERE card_id IN (`+appdb.Placeholders(len(cardIDs))+`) GROUP BY card_id`, toArgs(cardIDs)...)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func (s *Store) fillLinkCounts(ctx context.Context, cardIDs []string, cards []Ca
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT card_id, COUNT(*) FROM card_links
-		 WHERE card_id IN (`+placeholders(len(cardIDs))+`) GROUP BY card_id`, toArgs(cardIDs)...)
+		 WHERE card_id IN (`+appdb.Placeholders(len(cardIDs))+`) GROUP BY card_id`, toArgs(cardIDs)...)
 	if err != nil {
 		return err
 	}
@@ -206,11 +206,6 @@ func (s *Store) fillLinkCounts(ctx context.Context, cardIDs []string, cards []Ca
 	}
 	return rows.Err()
 }
-
-// placeholders is appdb.Placeholders — one implementation, five call sites (v10
-// review). It was copied into this module, `notes`, `documents`, `garden` and
-// `platform/push` before platform/db grew the shared one.
-func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func toArgs(ss []string) []any {
 	args := make([]any, len(ss))

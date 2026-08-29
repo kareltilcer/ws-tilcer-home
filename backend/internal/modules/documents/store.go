@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
@@ -12,18 +11,10 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx. Reads outside a mutation use the
-// store's *sql.DB; everything inside a mutation takes the explicit tx so the audit
-// write commits atomically with the change.
-//
-// IMPORTANT: inside a WithTx callback every read must go through the tx. The pool
-// is capped at one connection (platform/db), so a pooled read from inside a
-// transaction deadlocks against its own write lock.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 type Store struct{ db *sql.DB }
 
@@ -34,11 +25,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // cursor, which compares (updated_at, id) pairs lexically.
 const tsFormat = "2006-01-02T15:04:05.000000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
-
-// ParseTS parses a stored timestamp (used by the reconciliation pass to compare a
-// row's age against the orphan grace window).
-func ParseTS(s string) (time.Time, error) { return time.Parse(tsFormat, s) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {
@@ -240,7 +227,7 @@ func (s *Store) FolderMetaByIDs(ctx context.Context, q DBTX, ids []string) (map[
 		return out, nil
 	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, name, archived FROM document_folders WHERE id IN (`+placeholders(len(ids))+`)`, toArgs(ids)...)
+		`SELECT id, name, archived FROM document_folders WHERE id IN (`+appdb.Placeholders(len(ids))+`)`, toArgs(ids)...)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +259,7 @@ func (s *Store) DescendantFolderIDs(ctx context.Context, q DBTX, rootID string, 
 	visited := map[string]bool{rootID: true}
 	for len(frontier) > 0 {
 		rows, err := q.QueryContext(ctx,
-			`SELECT id FROM document_folders WHERE parent_id IN (`+placeholders(len(frontier))+`)`+filter,
+			`SELECT id FROM document_folders WHERE parent_id IN (`+appdb.Placeholders(len(frontier))+`)`+filter,
 			toArgs(frontier)...)
 		if err != nil {
 			return nil, err
@@ -314,7 +301,7 @@ func (s *Store) DocumentsInFolders(ctx context.Context, q DBTX, folderIDs []stri
 		filter = ""
 	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT `+documentCols+` FROM documents WHERE folder_id IN (`+placeholders(len(folderIDs))+`)`+filter,
+		`SELECT `+documentCols+` FROM documents WHERE folder_id IN (`+appdb.Placeholders(len(folderIDs))+`)`+filter,
 		toArgs(folderIDs)...)
 	if err != nil {
 		return nil, err
@@ -545,7 +532,7 @@ func (s *Store) PublishDescendants(ctx context.Context, tx DBTX, folderIDs []str
 	if len(folderIDs) == 0 {
 		return nil
 	}
-	ph := placeholders(len(folderIDs))
+	ph := appdb.Placeholders(len(folderIDs))
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE document_folders SET visibility = 'shared', owner_id = NULL, updated_at = ? WHERE id IN (`+ph+`)`,
@@ -1189,11 +1176,6 @@ func (s *Store) CountPinnedFor(ctx context.Context, userID string) (int, error) 
 }
 
 // ---- small SQL helpers ----
-
-// placeholders is appdb.Placeholders — one implementation, five call sites (v10
-// review). It was copied into this module, `notes`, `garden`, `todo` and
-// `platform/push` before platform/db grew the shared one.
-func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func toArgs(ids []string) []any {
 	args := make([]any, len(ids))

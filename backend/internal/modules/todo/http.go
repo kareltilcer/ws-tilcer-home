@@ -68,7 +68,7 @@ func boolParam(r *http.Request, name string) bool {
 
 func (h *Handler) listBoards(w http.ResponseWriter, r *http.Request) {
 	boards, err := h.svc.ListBoards(r.Context())
-	respond(w, http.StatusOK, boards, err)
+	httpx.Respond(w, http.StatusOK, boards, err)
 }
 
 func (h *Handler) createBoard(w http.ResponseWriter, r *http.Request) {
@@ -78,12 +78,12 @@ func (h *Handler) createBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := h.svc.CreateBoard(r.Context(), in)
-	respond(w, http.StatusCreated, b, err)
+	httpx.Respond(w, http.StatusCreated, b, err)
 }
 
 func (h *Handler) getBoard(w http.ResponseWriter, r *http.Request) {
 	b, err := h.svc.GetBoard(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, b, err)
+	httpx.Respond(w, http.StatusOK, b, err)
 }
 
 func (h *Handler) updateBoard(w http.ResponseWriter, r *http.Request) {
@@ -93,25 +93,25 @@ func (h *Handler) updateBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := h.svc.UpdateBoard(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, b, err)
+	httpx.Respond(w, http.StatusOK, b, err)
 }
 
 func (h *Handler) deleteBoard(w http.ResponseWriter, r *http.Request) {
 	err := h.svc.DeleteBoard(r.Context(), chi.URLParam(r, "id"), boolParam(r, "hard"))
-	respondNoContent(w, err)
+	httpx.NoContent(w, err)
 }
 
 func (h *Handler) tree(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	t, err := h.svc.Tree(r.Context(), chi.URLParam(r, "id"), q["label"], q.Get("q"), boolParam(r, "include_archived"))
-	respond(w, http.StatusOK, t, err)
+	httpx.Respond(w, http.StatusOK, t, err)
 }
 
 // ---- Columns ----
 
 func (h *Handler) listColumns(w http.ResponseWriter, r *http.Request) {
 	cols, err := h.svc.ListColumns(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, cols, err)
+	httpx.Respond(w, http.StatusOK, cols, err)
 }
 
 func (h *Handler) createColumn(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +121,7 @@ func (h *Handler) createColumn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.CreateColumn(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, c, err)
+	httpx.Respond(w, http.StatusCreated, c, err)
 }
 
 func (h *Handler) updateColumn(w http.ResponseWriter, r *http.Request) {
@@ -131,12 +131,12 @@ func (h *Handler) updateColumn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.UpdateColumn(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 func (h *Handler) deleteColumn(w http.ResponseWriter, r *http.Request) {
 	err := h.svc.DeleteColumn(r.Context(), chi.URLParam(r, "id"), boolParam(r, "cascade"))
-	respondNoContent(w, err)
+	httpx.NoContent(w, err)
 }
 
 func (h *Handler) moveColumn(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +146,7 @@ func (h *Handler) moveColumn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.MoveColumn(r.Context(), chi.URLParam(r, "id"), in.Position)
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 func (h *Handler) reorderColumns(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +156,7 @@ func (h *Handler) reorderColumns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cols, err := h.svc.ReorderColumns(r.Context(), chi.URLParam(r, "id"), in.Columns)
-	respond(w, http.StatusOK, cols, err)
+	httpx.Respond(w, http.StatusOK, cols, err)
 }
 
 // ---- Cards ----
@@ -168,12 +168,12 @@ func (h *Handler) createCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.CreateCard(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, c, err)
+	httpx.Respond(w, http.StatusCreated, c, err)
 }
 
 func (h *Handler) getCard(w http.ResponseWriter, r *http.Request) {
 	c, err := h.svc.GetCardDetail(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 func (h *Handler) updateCard(w http.ResponseWriter, r *http.Request) {
@@ -183,12 +183,12 @@ func (h *Handler) updateCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.UpdateCard(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 func (h *Handler) deleteCard(w http.ResponseWriter, r *http.Request) {
 	err := h.svc.DeleteCard(r.Context(), chi.URLParam(r, "id"), boolParam(r, "hard"))
-	respondNoContent(w, err)
+	httpx.NoContent(w, err)
 }
 
 func (h *Handler) moveCard(w http.ResponseWriter, r *http.Request) {
@@ -198,14 +198,14 @@ func (h *Handler) moveCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.MoveCard(r.Context(), chi.URLParam(r, "id"), in, r.URL.Query().Get("via"))
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 // ---- Card links ----
 
 func (h *Handler) listLinks(w http.ResponseWriter, r *http.Request) {
 	links, err := h.svc.ListCardLinks(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, links, err)
+	httpx.Respond(w, http.StatusOK, links, err)
 }
 
 func (h *Handler) createLink(w http.ResponseWriter, r *http.Request) {
@@ -215,18 +215,18 @@ func (h *Handler) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, err := h.svc.CreateCardLink(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, l, err)
+	httpx.Respond(w, http.StatusCreated, l, err)
 }
 
 func (h *Handler) deleteLink(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteCardLink(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteCardLink(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---- Checklist ----
 
 func (h *Handler) listChecklist(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.ListChecklist(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, items, err)
+	httpx.Respond(w, http.StatusOK, items, err)
 }
 
 func (h *Handler) createChecklist(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +236,7 @@ func (h *Handler) createChecklist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := h.svc.CreateChecklistItem(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, it, err)
+	httpx.Respond(w, http.StatusCreated, it, err)
 }
 
 func (h *Handler) updateChecklist(w http.ResponseWriter, r *http.Request) {
@@ -246,18 +246,18 @@ func (h *Handler) updateChecklist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, err := h.svc.UpdateChecklistItem(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, it, err)
+	httpx.Respond(w, http.StatusOK, it, err)
 }
 
 func (h *Handler) deleteChecklist(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteChecklistItem(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteChecklistItem(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---- Labels ----
 
 func (h *Handler) listLabels(w http.ResponseWriter, r *http.Request) {
 	labels, err := h.svc.ListLabels(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, labels, err)
+	httpx.Respond(w, http.StatusOK, labels, err)
 }
 
 func (h *Handler) createLabel(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +267,7 @@ func (h *Handler) createLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, err := h.svc.CreateLabel(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, l, err)
+	httpx.Respond(w, http.StatusCreated, l, err)
 }
 
 func (h *Handler) updateLabel(w http.ResponseWriter, r *http.Request) {
@@ -277,35 +277,17 @@ func (h *Handler) updateLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, err := h.svc.UpdateLabel(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, l, err)
+	httpx.Respond(w, http.StatusOK, l, err)
 }
 
 func (h *Handler) deleteLabel(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteLabel(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteLabel(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) attachLabel(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.AttachLabel(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "labelId")))
+	httpx.NoContent(w, h.svc.AttachLabel(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "labelId")))
 }
 
 func (h *Handler) detachLabel(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DetachLabel(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "labelId")))
-}
-
-// ---- response helpers ----
-
-func respond(w http.ResponseWriter, status int, v any, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	httpx.JSON(w, status, v)
-}
-
-func respondNoContent(w http.ResponseWriter, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	httpx.NoContent(w, h.svc.DetachLabel(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "labelId")))
 }

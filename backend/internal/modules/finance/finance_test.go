@@ -70,15 +70,6 @@ func status(t *testing.T, err error) int {
 	return 0
 }
 
-func countRows(t *testing.T, db *sql.DB, table string) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
-		t.Fatalf("count %s: %v", table, err)
-	}
-	return n
-}
-
 // ---- the seed split (D91) — the test that keeps the two migration sources honest ----
 
 // TestSeedIsExcludedFromTestDatabases is the guard on the whole arrangement: a
@@ -87,7 +78,7 @@ func countRows(t *testing.T, db *sql.DB, table string) int {
 // this fails, and it is the only thing that would notice.
 func TestSeedIsExcludedFromTestDatabases(t *testing.T) {
 	db := testsupport.NewDB(t)
-	if n := countRows(t, db, "finance_months"); n != 0 {
+	if n := testsupport.CountRows(t, db, "finance_months"); n != 0 {
 		t.Fatalf("fresh test database holds %d months, want 0 — the production-only seed "+
 			"has leaked into bootstrap.MigrationSources (D91)", n)
 	}
@@ -110,7 +101,7 @@ func TestSeedAppliesUnderMigrationFSWithSeed(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	if n := countRows(t, db, "finance_months"); n != 15 {
+	if n := testsupport.CountRows(t, db, "finance_months"); n != 15 {
 		t.Fatalf("seeded database holds %d months, want the 15 exported from fin", n)
 	}
 	var first, last string
@@ -248,7 +239,7 @@ func TestDeleteIsPermanentAndTheMonthIsReEnterable(t *testing.T) {
 	if err := x.svc.Delete(editorCtx(), m.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if n := countRows(t, x.db, "finance_months"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "finance_months"); n != 0 {
 		t.Fatalf("%d rows survive a permanent delete, want 0", n)
 	}
 	if _, err := x.svc.Get(editorCtx(), m.ID); status(t, err) != http.StatusNotFound {
@@ -408,15 +399,15 @@ func TestAuditDeleteCarriesTheWholeRow(t *testing.T) {
 func TestFailedMutationWritesNoAuditEvent(t *testing.T) {
 	x := newH(t)
 	x.month(x.svc.Create(editorCtx(), create("2026-08", 1000, 1000, rates(20, 60, 10, 10))))
-	before := countRows(t, x.db, "audit_events")
+	before := testsupport.CountRows(t, x.db, "audit_events")
 
 	if _, err := x.svc.Create(editorCtx(), create("2026-08", 5, 5, rates(20, 60, 10, 10))); err == nil {
 		t.Fatal("expected the duplicate month to fail")
 	}
-	if got := countRows(t, x.db, "audit_events"); got != before {
+	if got := testsupport.CountRows(t, x.db, "audit_events"); got != before {
 		t.Errorf("audit events = %d after a failed create, want %d", got, before)
 	}
-	if got := countRows(t, x.db, "finance_months"); got != 1 {
+	if got := testsupport.CountRows(t, x.db, "finance_months"); got != 1 {
 		t.Errorf("finance_months = %d, want 1", got)
 	}
 }

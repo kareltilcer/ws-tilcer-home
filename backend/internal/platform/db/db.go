@@ -41,9 +41,6 @@ func Open(path string) (*sql.DB, error) {
 	return sqldb, nil
 }
 
-// Ping checks database connectivity (used by the readiness probe).
-func Ping(ctx context.Context, sqldb *sql.DB) error { return sqldb.PingContext(ctx) }
-
 // ProbeFTS5 verifies the driver was built with FTS5 by creating and dropping a
 // throwaway virtual table. A failure here should abort startup — the log
 // browser's free-text search depends on FTS5, and a missing build surfaces at

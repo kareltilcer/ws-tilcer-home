@@ -42,15 +42,6 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
 // providers.
 func (s *Service) Store() *Store { return s.store }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
-func ap(v string) *string { return &v }
-
 func itoa(v int) string { return strconv.Itoa(v) }
 
 // monthTaken maps a UNIQUE constraint failure onto the SAME 409 the in-tx
@@ -198,7 +189,7 @@ func (s *Service) Create(ctx context.Context, in MonthCreate) (*Month, error) {
 		if taken {
 			return httpx.ErrConflict("Tento měsíc už je zadaný.")
 		}
-		out, err = s.store.Insert(ctx, tx, m, actorID(ctx))
+		out, err = s.store.Insert(ctx, tx, m, reqctx.ActorID(ctx))
 		if err != nil {
 			return monthTaken(err)
 		}
@@ -377,12 +368,12 @@ func rowDiff(before, after *Month) []audit.Change {
 		switch {
 		case hasOld && hasNew:
 			if o != n {
-				changes = append(changes, field(name, ap(o), ap(n)))
+				changes = append(changes, field(name, audit.Ptr(o), audit.Ptr(n)))
 			}
 		case hasNew:
-			changes = append(changes, field(name, nil, ap(n)))
+			changes = append(changes, field(name, nil, audit.Ptr(n)))
 		case hasOld:
-			changes = append(changes, field(name, ap(o), nil))
+			changes = append(changes, field(name, audit.Ptr(o), nil))
 		}
 	}
 	return changes

@@ -12,6 +12,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slug"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
@@ -73,7 +74,7 @@ func (s *Service) AcceptBlob(ctx context.Context, req storage.AcceptRequest) (st
 	if req.SourceKey == "" || req.ByteSize <= 0 {
 		return storage.AcceptResult{}, httpx.ErrUnprocessable("the source object is not described")
 	}
-	if !writeAllowed(ctx) {
+	if !reqctx.CanWrite(ctx) {
 		return storage.AcceptResult{}, httpx.ErrForbidden("Nemáte oprávnění zapisovat do Dokumentů.")
 	}
 
@@ -133,17 +134,17 @@ func (s *Service) AcceptBlob(ctx context.Context, req storage.AcceptRequest) (st
 			return posErr
 		}
 		if _, insErr := s.store.InsertDocument(ctx, tx, id, &folderID, title, sl, "",
-			file, pos, actorID(ctx), sc); insErr != nil {
+			file, pos, reqctx.ActorID(ctx), sc); insErr != nil {
 			return insErr
 		}
 		changes := []audit.Change{
-			{Field: "title", New: ap(title)},
-			{Field: "slug", New: ap(sl)},
-			{Field: "original_filename", New: ap(req.Filename)},
-			{Field: "content_type", New: ap(req.ContentType)},
-			{Field: "byte_size", New: ap(fmt.Sprint(req.ByteSize))},
-			{Field: "checksum", New: ap(req.Checksum)},
-			{Field: "folder_id", New: ap(folderID)},
+			{Field: "title", New: audit.Ptr(title)},
+			{Field: "slug", New: audit.Ptr(sl)},
+			{Field: "original_filename", New: audit.Ptr(req.Filename)},
+			{Field: "content_type", New: audit.Ptr(req.ContentType)},
+			{Field: "byte_size", New: audit.Ptr(fmt.Sprint(req.ByteSize))},
+			{Field: "checksum", New: audit.Ptr(req.Checksum)},
+			{Field: "folder_id", New: audit.Ptr(folderID)},
 		}
 		// ⚠ `meta.via` is what makes a transferred document distinguishable from an
 		// uploaded one a year later — the same key v5's cross-module triggers use,
@@ -188,7 +189,7 @@ func (s *Service) AcceptBlob(ctx context.Context, req storage.AcceptRequest) (st
 // would produce the message "scope disagrees with the parent folder", which
 // describes a mistake nobody made.
 func (s *Service) sinkTarget(ctx context.Context, folderID string) (Scope, error) {
-	f, err := s.store.GetFolder(ctx, s.db, folderID, actorID(ctx))
+	f, err := s.store.GetFolder(ctx, s.db, folderID, reqctx.ActorID(ctx))
 	if err != nil {
 		return Scope{}, err
 	}

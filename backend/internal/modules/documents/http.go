@@ -113,7 +113,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.List(r.Context(), q.Get("q"), folderParam(r), boolParam(r, "include_archived"), limit, q.Get("cursor"), sc)
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 // scopeParam resolves ?scope= against the CALLER's identity. Default `shared`,
@@ -182,7 +182,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 			Scope:       meta.Scope,
 		})
 		_ = part.Close()
-		respond(w, http.StatusCreated, doc, err)
+		httpx.Respond(w, http.StatusCreated, doc, err)
 		return
 	}
 }
@@ -224,7 +224,7 @@ func readMetaField(part *multipart.Part, meta *UploadMeta) error {
 
 func (h *Handler) getDocument(w http.ResponseWriter, r *http.Request) {
 	d, err := h.svc.GetDocumentDetail(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, d, err)
+	httpx.Respond(w, http.StatusOK, d, err)
 }
 
 func (h *Handler) updateDocument(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +234,7 @@ func (h *Handler) updateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := h.svc.UpdateDocument(r.Context(), chi.URLParam(r, "id"), in, r.URL.Query().Get("via"))
-	respond(w, http.StatusOK, d, err)
+	httpx.Respond(w, http.StatusOK, d, err)
 }
 
 func (h *Handler) moveDocument(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +244,7 @@ func (h *Handler) moveDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := h.svc.MoveDocument(r.Context(), chi.URLParam(r, "id"), in, r.URL.Query().Get("via"))
-	respond(w, http.StatusOK, d, err)
+	httpx.Respond(w, http.StatusOK, d, err)
 }
 
 func (h *Handler) deleteDocument(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +255,7 @@ func (h *Handler) deleteDocument(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.ErrForbidden("hard delete requires admin"))
 		return
 	}
-	respondNoContent(w, h.svc.DeleteDocument(r.Context(), chi.URLParam(r, "id"), hard))
+	httpx.NoContent(w, h.svc.DeleteDocument(r.Context(), chi.URLParam(r, "id"), hard))
 }
 
 func (h *Handler) pin(w http.ResponseWriter, r *http.Request) {
@@ -265,12 +265,12 @@ func (h *Handler) pin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := h.svc.Pin(r.Context(), chi.URLParam(r, "id"), in.Scope, r.URL.Query().Get("via"))
-	respond(w, http.StatusOK, st, err)
+	httpx.Respond(w, http.StatusOK, st, err)
 }
 
 func (h *Handler) unpin(w http.ResponseWriter, r *http.Request) {
 	st, err := h.svc.Unpin(r.Context(), chi.URLParam(r, "id"), r.URL.Query().Get("scope"), r.URL.Query().Get("via"))
-	respond(w, http.StatusOK, st, err)
+	httpx.Respond(w, http.StatusOK, st, err)
 }
 
 // ---- Folders ----
@@ -282,12 +282,12 @@ func (h *Handler) createFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f, err := h.svc.CreateFolder(r.Context(), in)
-	respond(w, http.StatusCreated, f, err)
+	httpx.Respond(w, http.StatusCreated, f, err)
 }
 
 func (h *Handler) getFolder(w http.ResponseWriter, r *http.Request) {
 	f, err := h.svc.GetFolderDetail(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, f, err)
+	httpx.Respond(w, http.StatusOK, f, err)
 }
 
 func (h *Handler) updateFolder(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +297,7 @@ func (h *Handler) updateFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f, err := h.svc.UpdateFolder(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, f, err)
+	httpx.Respond(w, http.StatusOK, f, err)
 }
 
 func (h *Handler) deleteFolder(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +307,7 @@ func (h *Handler) deleteFolder(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.ErrForbidden("hard delete requires admin"))
 		return
 	}
-	respondNoContent(w, h.svc.DeleteFolder(r.Context(), chi.URLParam(r, "id"), boolParam(r, "cascade"), hard))
+	httpx.NoContent(w, h.svc.DeleteFolder(r.Context(), chi.URLParam(r, "id"), boolParam(r, "cascade"), hard))
 }
 
 func (h *Handler) moveFolder(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +317,7 @@ func (h *Handler) moveFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f, err := h.svc.MoveFolder(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, f, err)
+	httpx.Respond(w, http.StatusOK, f, err)
 }
 
 // ---- Tree / resolve ----
@@ -329,7 +329,7 @@ func (h *Handler) tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.svc.Tree(r.Context(), boolParam(r, "include_archived"), sc)
-	respond(w, http.StatusOK, t, err)
+	httpx.Respond(w, http.StatusOK, t, err)
 }
 
 func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +339,7 @@ func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.svc.Resolve(r.Context(), r.URL.Query().Get("path"), sc)
-	respond(w, http.StatusOK, res, err)
+	httpx.Respond(w, http.StatusOK, res, err)
 }
 
 // ---- Publish (v9) ----
@@ -351,7 +351,7 @@ func (h *Handler) publishDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := h.svc.PublishDocument(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, d, err)
+	httpx.Respond(w, http.StatusOK, d, err)
 }
 
 func (h *Handler) publishFolder(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +361,7 @@ func (h *Handler) publishFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f, err := h.svc.PublishFolder(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, f, err)
+	httpx.Respond(w, http.StatusOK, f, err)
 }
 
 // decodePublish accepts an absent or empty body: publishing to the shared ROOT is
@@ -445,22 +445,4 @@ func mimeTypeHeader(ct string) string {
 		return "application/octet-stream"
 	}
 	return ct
-}
-
-// ---- response helpers ----
-
-func respond(w http.ResponseWriter, status int, v any, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	httpx.JSON(w, status, v)
-}
-
-func respondNoContent(w http.ResponseWriter, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

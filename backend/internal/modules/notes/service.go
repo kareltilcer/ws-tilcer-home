@@ -116,35 +116,6 @@ func (s *Service) notifyScoped(ctx context.Context, typ, id string, private bool
 	s.notify(ctx, typ, map[string]string{"id": id})
 }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
-func writeAllowed(ctx context.Context) bool {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return reqctx.HasRole(a.Roles, "editor", "admin")
-	}
-	return false
-}
-
-func ap(s string) *string { return &s }
-
-func eqp(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func diff(changes *[]audit.Change, field string, old, newVal *string) {
-	if !eqp(old, newVal) {
-		*changes = append(*changes, audit.Change{Field: field, Old: old, New: newVal})
-	}
-}
-
 // record writes one audit event in the caller's transaction.
 //
 // ⚠ v9 made the Scope a REQUIRED parameter rather than something a caller can add
@@ -277,13 +248,13 @@ func (s *Service) CreateNote(ctx context.Context, in NoteCreate) (*NoteDetail, e
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertNote(ctx, tx, in.FolderID, title, sl, in.BodyMD, pos, actorID(ctx), sc)
+		out, err = s.store.InsertNote(ctx, tx, in.FolderID, title, sl, in.BodyMD, pos, reqctx.ActorID(ctx), sc)
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "title", New: ap(title)}, {Field: "slug", New: ap(sl)}}
+		changes := []audit.Change{{Field: "title", New: audit.Ptr(title)}, {Field: "slug", New: audit.Ptr(sl)}}
 		if in.BodyMD != "" {
-			changes = append(changes, audit.Change{Field: "body_md", New: ap(in.BodyMD)})
+			changes = append(changes, audit.Change{Field: "body_md", New: audit.Ptr(in.BodyMD)})
 		}
 		return s.record(ctx, tx, "note.create", "note", out.ID,
 			fmt.Sprintf("Vytvořena poznámka „%s“", title), changes, nil, sc)
@@ -299,7 +270,7 @@ func (s *Service) CreateNote(ctx context.Context, in NoteCreate) (*NoteDetail, e
 // never forbidden (D180). A 403 would confirm the id exists, which is all an
 // existence oracle over the private tree needs.
 func (s *Service) GetNoteDetail(ctx context.Context, id string) (*NoteDetail, error) {
-	n, err := s.store.GetNote(ctx, s.db, id, actorID(ctx))
+	n, err := s.store.GetNote(ctx, s.db, id, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +293,7 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 	var oldBody string // captured for image GC: refs present before this edit but not after
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		// Viewer-scoped: another member's private note is simply not here (D180).
-		before, err := s.store.GetNote(ctx, tx, id, actorID(ctx))
+		before, err := s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -387,15 +358,15 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 		if err := s.store.UpdateNote(ctx, tx, id, patch); err != nil {
 			return err
 		}
-		out, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
+		out, err = s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "title", ap(before.Title), ap(out.Title))
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "body_md", before.BodyMD, out.BodyMD) // full, untruncated (D36)
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "title", audit.Ptr(before.Title), audit.Ptr(out.Title))
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "body_md", before.BodyMD, out.BodyMD) // full, untruncated (D36)
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		// A no-op PATCH leaves no audit trail and doesn't broadcast. The patch above
 		// carries only genuinely-changed fields, so an empty diff means the store wrote
 		// nothing and updated_at didn't move — there's nothing to tell other clients.
@@ -427,7 +398,7 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 	var out *Note
 	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetNote(ctx, tx, id, actorID(ctx))
+		before, err := s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -467,21 +438,21 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		// broadcast — mirroring UpdateNote's no-op gating. Otherwise a re-sent move
 		// would log a contentless note.move and make every other client refetch and
 		// raise a bogus "changed elsewhere" toast for a change that never happened.
-		if eqp(before.FolderID, in.FolderID) && before.Position == in.Position && before.Slug == sl {
+		if audit.EqualPtr(before.FolderID, in.FolderID) && before.Position == in.Position && before.Slug == sl {
 			out = before
 			return nil
 		}
 		if err := s.store.MoveNoteRow(ctx, tx, id, in.FolderID, in.Position, sl); err != nil {
 			return err
 		}
-		out, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
+		out, err = s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "folder_id", before.FolderID, out.FolderID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "position", ap(before.Position), ap(out.Position))
+		audit.Diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "note.move", "note", id,
 			fmt.Sprintf("Přesunuta poznámka „%s“", out.Title), changes, metaVia(nil, via), sc)
@@ -524,7 +495,7 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 			// admin-only. It reads across scopes ON PURPOSE — see the D181 note above.
 			before, err = s.store.GetNoteAnyScope(ctx, tx, id)
 		} else {
-			before, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
+			before, err = s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		}
 		if err != nil {
 			return err
@@ -609,7 +580,7 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 		changed = true
 		return s.record(ctx, tx, "note.delete", "note", id,
 			fmt.Sprintf("Smazána poznámka „%s“", before.Title),
-			[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, metaHard(false), sc)
+			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, metaHard(false), sc)
 	})
 	if err != nil {
 		return err
@@ -649,13 +620,13 @@ func (s *Service) CreateFolder(ctx context.Context, in FolderCreate) (*FolderDet
 			return err
 		}
 		icon := foldericon.Normalize(in.Icon)
-		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, actorID(ctx), icon, sc)
+		out, err = s.store.InsertFolder(ctx, tx, in.ParentID, name, sl, pos, reqctx.ActorID(ctx), icon, sc)
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "name", New: ap(name)}, {Field: "slug", New: ap(sl)}}
+		changes := []audit.Change{{Field: "name", New: audit.Ptr(name)}, {Field: "slug", New: audit.Ptr(sl)}}
 		if icon != "" {
-			changes = append(changes, audit.Change{Field: "icon", New: ap(icon)})
+			changes = append(changes, audit.Change{Field: "icon", New: audit.Ptr(icon)})
 		}
 		return s.record(ctx, tx, "folder.create", "folder", out.ID,
 			fmt.Sprintf("Vytvořena složka „%s“", name), changes, nil, sc)
@@ -668,7 +639,7 @@ func (s *Service) CreateFolder(ctx context.Context, in FolderCreate) (*FolderDet
 }
 
 func (s *Service) GetFolderDetail(ctx context.Context, id string) (*FolderDetail, error) {
-	f, err := s.store.GetFolder(ctx, s.db, id, actorID(ctx))
+	f, err := s.store.GetFolder(ctx, s.db, id, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +656,7 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 	var out *Folder
 	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		before, err := s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -752,15 +723,15 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 				return err
 			}
 		}
-		out, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		out, err = s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "name", ap(before.Name), ap(out.Name))
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "icon", ap(before.Icon), ap(out.Icon))
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "name", audit.Ptr(before.Name), audit.Ptr(out.Name))
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "icon", audit.Ptr(before.Icon), audit.Ptr(out.Icon))
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		// A no-op PATCH (nothing actually changed) leaves no audit trail and doesn't
 		// broadcast a change that other clients would needlessly refetch on.
 		if len(changes) == 0 {
@@ -786,7 +757,7 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 	var out *Folder
 	var changed, private bool
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		before, err := s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -827,21 +798,21 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		// A move that re-sends the folder's current parent/position/slug changes
 		// nothing: skip the write, audit, and broadcast — mirroring UpdateFolder's
 		// no-op gating (see MoveNote for the spurious-broadcast rationale).
-		if eqp(before.ParentID, in.ParentID) && before.Position == in.Position && before.Slug == sl {
+		if audit.EqualPtr(before.ParentID, in.ParentID) && before.Position == in.Position && before.Slug == sl {
 			out = before
 			return nil
 		}
 		if err := s.store.MoveFolderRow(ctx, tx, id, in.ParentID, in.Position, sl); err != nil {
 			return err
 		}
-		out, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		out, err = s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "parent_id", before.ParentID, out.ParentID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "position", ap(before.Position), ap(out.Position))
+		audit.Diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "folder.move", "folder", id,
 			fmt.Sprintf("Přesunuta složka „%s“", out.Name), changes, nil, sc)
@@ -872,7 +843,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 		if hard {
 			before, err = s.store.GetFolderAnyScope(ctx, tx, id)
 		} else {
-			before, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
+			before, err = s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		}
 		if err != nil {
 			return err
@@ -955,7 +926,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			changed = true
 			if err := s.record(ctx, tx, "note.delete", "note", n.ID,
 				fmt.Sprintf("Smazána poznámka „%s“ (kaskádou)", n.Title),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}},
+				[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}},
 				map[string]any{"via": "cascade"}, sc); err != nil {
 				return err
 			}
@@ -987,7 +958,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			}
 			if err := s.record(ctx, tx, "folder.delete", "folder", fID,
 				fmt.Sprintf("Smazána složka „%s“", meta.Name),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, m, sc); err != nil {
+				[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, m, sc); err != nil {
 				return err
 			}
 		}
@@ -1014,7 +985,7 @@ func (s *Service) wouldCycle(ctx context.Context, tx DBTX, movingID string, newP
 		if *cur == movingID {
 			return true, nil
 		}
-		f, err := s.store.GetFolder(ctx, tx, *cur, actorID(ctx))
+		f, err := s.store.GetFolder(ctx, tx, *cur, reqctx.ActorID(ctx))
 		if err != nil {
 			return false, err
 		}
@@ -1053,7 +1024,7 @@ func (s *Service) assertFolder(ctx context.Context, q DBTX, folderID *string, re
 		}
 		return root, assertPairing(root)
 	}
-	f, err := s.store.GetFolder(ctx, q, *folderID, actorID(ctx))
+	f, err := s.store.GetFolder(ctx, q, *folderID, reqctx.ActorID(ctx))
 	if err != nil {
 		return Scope{}, err
 	}
@@ -1075,7 +1046,7 @@ func (s *Service) assertParentLive(ctx context.Context, q DBTX, parentID *string
 	if parentID == nil {
 		return nil
 	}
-	f, err := s.store.GetFolder(ctx, q, *parentID, actorID(ctx))
+	f, err := s.store.GetFolder(ctx, q, *parentID, reqctx.ActorID(ctx))
 	if err != nil {
 		return err
 	}
@@ -1119,7 +1090,7 @@ func (s *Service) Tree(ctx context.Context, includeArchived bool, sc Scope) (*No
 	if err != nil {
 		return nil, err
 	}
-	hh, pers, err := s.store.PinSets(ctx, actorID(ctx))
+	hh, pers, err := s.store.PinSets(ctx, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1177,7 +1148,7 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 	var err error
 	switch {
 	case q != "":
-		match := ftsQuery(q)
+		match := appdb.FTSQuery(q)
 		if match == "" {
 			// A punctuation-only query has no searchable tokens. Return an empty result
 			// rather than run `notes_fts MATCH ''`, whose empty-phrase match behavior is
@@ -1193,7 +1164,7 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 	if err != nil {
 		return NotePage{}, err
 	}
-	hh, pers, err := s.store.PinSets(ctx, actorID(ctx))
+	hh, pers, err := s.store.PinSets(ctx, reqctx.ActorID(ctx))
 	if err != nil {
 		return NotePage{}, err
 	}
@@ -1278,7 +1249,7 @@ func (s *Service) Resolve(ctx context.Context, path string, sc Scope) (*ResolveR
 func (s *Service) PublishNote(ctx context.Context, id string, in PublishRequest) (*NoteDetail, error) {
 	var out *Note
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetNote(ctx, tx, id, actorID(ctx))
+		before, err := s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -1292,7 +1263,7 @@ func (s *Service) PublishNote(ctx context.Context, id string, in PublishRequest)
 		// Ownership, restated: the viewer-scoped load above already refuses another
 		// member's private note, so reaching here with a foreign owner is impossible.
 		// The check stays as a guard against a future load that forgets.
-		if deref(before.OwnerID) != actorID(ctx) {
+		if deref(before.OwnerID) != reqctx.ActorID(ctx) {
 			return errPublishNotFound
 		}
 		dest, err := s.assertFolder(ctx, tx, in.FolderID, nil)
@@ -1315,16 +1286,16 @@ func (s *Service) PublishNote(ctx context.Context, id string, in PublishRequest)
 		if err := s.store.PublishNoteRow(ctx, tx, id, in.FolderID, pos, sl); err != nil {
 			return err
 		}
-		out, err = s.store.GetNote(ctx, tx, id, actorID(ctx))
+		out, err = s.store.GetNote(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
 		changes := []audit.Change{
-			{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+			{Field: "visibility", Old: audit.Ptr(visibilityPrivate), New: audit.Ptr(visibilityShared)},
 			{Field: "owner_id", Old: before.OwnerID, New: nil},
 		}
-		diff(&changes, "folder_id", before.FolderID, out.FolderID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		audit.Diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
 		// Audited against the item's NEW scope (shared): the event describes a note
 		// the household can now see, so there is nothing left to redact — and
 		// redacting the one event that says "this became visible to everyone" would
@@ -1347,7 +1318,7 @@ func (s *Service) PublishNote(ctx context.Context, id string, in PublishRequest)
 func (s *Service) PublishFolder(ctx context.Context, id string, in PublishRequest) (*FolderDetail, error) {
 	var out *Folder
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		before, err := s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		before, err := s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -1357,7 +1328,7 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 		if before.Visibility != visibilityPrivate {
 			return httpx.ErrUnprocessable("složka už je sdílená")
 		}
-		if deref(before.OwnerID) != actorID(ctx) {
+		if deref(before.OwnerID) != reqctx.ActorID(ctx) {
 			return errPublishFolderNotFound
 		}
 		dest, err := s.assertFolder(ctx, tx, in.FolderID, nil)
@@ -1426,7 +1397,7 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 		if err := s.store.PublishDescendants(ctx, tx, folderIDs); err != nil {
 			return err
 		}
-		out, err = s.store.GetFolder(ctx, tx, id, actorID(ctx))
+		out, err = s.store.GetFolder(ctx, tx, id, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -1455,8 +1426,8 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 			}
 		}
 		changes := publishChanges(before.OwnerID)
-		diff(&changes, "parent_id", before.ParentID, out.ParentID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		audit.Diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
 		meta := publishMeta(owner, false)
 		meta["folders"] = len(folderIDs)
 		meta["notes"] = len(childNotes)
@@ -1476,7 +1447,7 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 // one shape rather than three.
 func publishChanges(oldOwner *string) []audit.Change {
 	return []audit.Change{
-		{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+		{Field: "visibility", Old: audit.Ptr(visibilityPrivate), New: audit.Ptr(visibilityShared)},
 		{Field: "owner_id", Old: oldOwner, New: nil},
 	}
 }
@@ -1520,7 +1491,7 @@ func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinSt
 	if err != nil {
 		return nil, err
 	}
-	n, err := s.store.GetNote(ctx, s.db, noteID, actorID(ctx))
+	n, err := s.store.GetNote(ctx, s.db, noteID, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1531,7 +1502,7 @@ func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinSt
 		return nil, httpx.ErrUnprocessable(
 			"soukromou poznámku nelze připnout pro všechny — ostatní ji nevidí")
 	}
-	uid := actorID(ctx)
+	uid := reqctx.ActorID(ctx)
 
 	if scope == scopePersonal {
 		// No audit/broadcast (D35), but still run the read-then-write (MAX(position)
@@ -1560,7 +1531,7 @@ func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinSt
 	}
 
 	// household
-	if !writeAllowed(ctx) {
+	if !reqctx.CanWrite(ctx) {
 		return nil, httpx.ErrForbidden("household pin requires editor or admin")
 	}
 	var changed bool
@@ -1604,14 +1575,14 @@ func (s *Service) Unpin(ctx context.Context, noteID, scopeStr, via string) (*Pin
 	if err != nil {
 		return nil, err
 	}
-	n, err := s.store.GetNote(ctx, s.db, noteID, actorID(ctx))
+	n, err := s.store.GetNote(ctx, s.db, noteID, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
 	if n == nil {
 		return nil, httpx.ErrNotFound("note not found")
 	}
-	uid := actorID(ctx)
+	uid := reqctx.ActorID(ctx)
 
 	if scope == scopePersonal {
 		if _, err := s.store.DeletePin(ctx, s.db, noteID, scopePersonal, &uid); err != nil {
@@ -1620,7 +1591,7 @@ func (s *Service) Unpin(ctx context.Context, noteID, scopeStr, via string) (*Pin
 		return s.pinState(ctx, noteID, uid)
 	}
 
-	if !writeAllowed(ctx) {
+	if !reqctx.CanWrite(ctx) {
 		return nil, httpx.ErrForbidden("household pin requires editor or admin")
 	}
 	var changed bool
@@ -1661,7 +1632,7 @@ func (s *Service) noteDetail(ctx context.Context, q DBTX, n *Note) (*NoteDetail,
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.store.GetPinState(ctx, q, n.ID, actorID(ctx))
+	st, err := s.store.GetPinState(ctx, q, n.ID, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1687,7 +1658,7 @@ func (s *Service) folderDetail(ctx context.Context, q DBTX, f *Folder) (*FolderD
 	if err != nil {
 		return nil, err
 	}
-	hh, pers, err := s.store.PinSets(ctx, actorID(ctx))
+	hh, pers, err := s.store.PinSets(ctx, reqctx.ActorID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1710,7 +1681,7 @@ func (s *Service) ancestors(ctx context.Context, q DBTX, folderID *string) ([]Pa
 	chain := []PathSegment{}
 	cur := folderID
 	for depth := 0; cur != nil && depth < 1000; depth++ {
-		f, err := s.store.GetFolder(ctx, q, *cur, actorID(ctx))
+		f, err := s.store.GetFolder(ctx, q, *cur, reqctx.ActorID(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -1743,7 +1714,7 @@ func metaHard(hard bool) map[string]any {
 // deleting a shared item is doing an ordinary admin thing, and marking that would
 // dilute the flag until it stopped meaning anything.
 func metaByAdmin(ctx context.Context, base map[string]any, sc Scope) map[string]any {
-	if !sc.Private || sc.OwnerID == actorID(ctx) || !isAdminCtx(ctx) {
+	if !sc.Private || sc.OwnerID == reqctx.ActorID(ctx) || !isAdminCtx(ctx) {
 		return base
 	}
 	if base == nil {
@@ -1808,17 +1779,6 @@ func splitPath(p string) []string {
 	}
 	return out
 }
-
-// ftsQuery turns a free-text query into a safe FTS5 prefix MATCH. Each whitespace
-// token becomes a quoted prefix term so punctuation can't break the FTS syntax.
-// Returns "" when the query has no searchable tokens (e.g. punctuation-only) — the
-// caller must treat that as "matches nothing" and skip the MATCH entirely.
-//
-// ⚠ IT IS appdb.FTSQuery AND NOT A COPY OF IT (v10 review). This module,
-// `documents` and v10's `chat` carried three byte-identical spellings of it; the
-// next FTS5 metacharacter somebody discovers has to reach every search box in the
-// house, and under three spellings it reaches one.
-func ftsQuery(q string) string { return appdb.FTSQuery(q) }
 
 // ---- Inline-image helpers ----
 

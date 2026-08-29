@@ -13,6 +13,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // The work half of the service: tasks, harvest, storage, rules and settings.
@@ -97,7 +98,7 @@ func (s *Service) CreateTask(ctx context.Context, in TaskInput) (Task, error) {
 		}
 		t.ID = idgen.New()
 		t.Position = lexorank.First()
-		if err := s.store.InsertTask(ctx, tx, t, actorID(ctx), nowUTC()); err != nil {
+		if err := s.store.InsertTask(ctx, tx, t, reqctx.ActorID(ctx), nowUTC()); err != nil {
 			return err
 		}
 		return s.record(ctx, tx, "task.create", "garden_task", t.ID, "Přidána práce: "+t.TitleCS, nil, nil)
@@ -170,7 +171,7 @@ func (s *Service) UpdateTask(ctx context.Context, id string, in TaskInput) (Task
 			}
 			after.Status = *in.Status
 			if after.Status == TaskDone && after.CompletedAt == nil {
-				after.CompletedBy, after.CompletedAt = sp(actorID(ctx)), sp(nowUTC())
+				after.CompletedBy, after.CompletedAt = sp(reqctx.ActorID(ctx)), sp(nowUTC())
 			}
 			if after.Status == TaskOpen {
 				after.CompletedBy, after.CompletedAt = nil, nil
@@ -218,7 +219,7 @@ func (s *Service) CompleteTask(ctx context.Context, id string, meta map[string]a
 			return nil // already done; say so with a 200 and write nothing
 		}
 		t.Status = TaskDone
-		t.CompletedBy, t.CompletedAt = sp(actorID(ctx)), sp(nowUTC())
+		t.CompletedBy, t.CompletedAt = sp(reqctx.ActorID(ctx)), sp(nowUTC())
 		if err := s.store.UpdateTask(ctx, tx, t, nowUTC()); err != nil {
 			return err
 		}
@@ -368,8 +369,8 @@ func (s *Service) CreateHarvest(ctx context.Context, in HarvestInput) (Harvest, 
 			}
 		}
 		now := nowUTC()
-		h.CreatedAt, h.CreatedBy = now, sp(actorID(ctx))
-		if err := s.store.InsertHarvest(ctx, tx, h, actorID(ctx), now); err != nil {
+		h.CreatedAt, h.CreatedBy = now, sp(reqctx.ActorID(ctx))
+		if err := s.store.InsertHarvest(ctx, tx, h, reqctx.ActorID(ctx), now); err != nil {
 			return err
 		}
 		// The first harvest is also an actual date — recorded once, here, so the
@@ -539,7 +540,7 @@ func (s *Service) CreateStorage(ctx context.Context, in StorageInput) (StorageIt
 	now := nowUTC()
 	it.CreatedAt, it.UpdatedAt = now, now
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if err := s.store.InsertStorage(ctx, tx, it, actorID(ctx), now); err != nil {
+		if err := s.store.InsertStorage(ctx, tx, it, reqctx.ActorID(ctx), now); err != nil {
 			return err
 		}
 		return s.record(ctx, tx, "storage.create", "garden_storage_item", it.ID,
@@ -748,7 +749,7 @@ func (s *Service) CreateRule(ctx context.Context, in RuleInput) (Rule, error) {
 		return Rule{}, err
 	}
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if err := s.store.InsertRule(ctx, tx, r, actorID(ctx), nowUTC()); err != nil {
+		if err := s.store.InsertRule(ctx, tx, r, reqctx.ActorID(ctx), nowUTC()); err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 				return httpx.ErrConflict("Pravidlo pro tuhle dvojici už existuje.")
 			}

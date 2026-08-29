@@ -39,30 +39,6 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
 // Store exposes the underlying read store (used by the dashboard module).
 func (s *Service) Store() *Store { return s.store }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
-func ap(s string) *string { return &s }
-
-// eqp reports whether two optional strings are equal.
-func eqp(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-// diff appends a change when old != new.
-func diff(changes *[]audit.Change, field string, old, newVal *string) {
-	if !eqp(old, newVal) {
-		*changes = append(*changes, audit.Change{Field: field, Old: old, New: newVal})
-	}
-}
-
 // ---- Boards ----
 
 func (s *Service) ListBoards(ctx context.Context) ([]Board, error) { return s.store.ListBoards(ctx) }
@@ -99,13 +75,13 @@ func (s *Service) CreateBoard(ctx context.Context, in BoardCreate) (*Board, erro
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertBoard(ctx, tx, in.Name, in.Description, pos, actorID(ctx))
+		out, err = s.store.InsertBoard(ctx, tx, in.Name, in.Description, pos, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
 		return s.record(ctx, tx, "board.create", "board", out.ID,
 			fmt.Sprintf("Vytvořena nástěnka „%s“", out.Name),
-			[]audit.Change{{Field: "name", New: ap(out.Name)}}, nil)
+			[]audit.Change{{Field: "name", New: audit.Ptr(out.Name)}}, nil)
 	})
 	if err != nil {
 		return nil, err
@@ -135,9 +111,9 @@ func (s *Service) UpdateBoard(ctx context.Context, id string, in BoardUpdate) (*
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "name", ap(before.Name), ap(out.Name))
-		diff(&changes, "description", before.Description, out.Description)
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "name", audit.Ptr(before.Name), audit.Ptr(out.Name))
+		audit.Diff(&changes, "description", before.Description, out.Description)
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		return s.record(ctx, tx, "board.update", "board", id,
 			fmt.Sprintf("Upravena nástěnka „%s“", out.Name), changes, nil)
 	})
@@ -166,7 +142,7 @@ func (s *Service) DeleteBoard(ctx context.Context, id string, hard bool) error {
 			if err := s.store.UpdateBoard(ctx, tx, id, BoardUpdate{Archived: boolPtr(true)}); err != nil {
 				return err
 			}
-			changes = []audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}
+			changes = []audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}
 		}
 		return s.record(ctx, tx, "board.delete", "board", id,
 			fmt.Sprintf("Smazána nástěnka „%s“", before.Name), changes, metaHard(hard))
@@ -214,7 +190,7 @@ func (s *Service) CreateColumn(ctx context.Context, boardID string, in ColumnCre
 		}
 		return s.record(ctx, tx, "column.create", "column", out.ID,
 			fmt.Sprintf("Vytvořen sloupec „%s“", out.Name),
-			[]audit.Change{{Field: "name", New: ap(out.Name)}, {Field: "kind", New: ap(kind)}}, nil)
+			[]audit.Change{{Field: "name", New: audit.Ptr(out.Name)}, {Field: "kind", New: audit.Ptr(kind)}}, nil)
 	})
 	if err != nil {
 		return nil, err
@@ -247,9 +223,9 @@ func (s *Service) UpdateColumn(ctx context.Context, id string, in ColumnUpdate) 
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "name", ap(before.Name), ap(out.Name))
-		diff(&changes, "priority", ap(fmt.Sprint(before.Priority)), ap(fmt.Sprint(out.Priority)))
-		diff(&changes, "kind", ap(before.Kind), ap(out.Kind))
+		audit.Diff(&changes, "name", audit.Ptr(before.Name), audit.Ptr(out.Name))
+		audit.Diff(&changes, "priority", audit.Ptr(fmt.Sprint(before.Priority)), audit.Ptr(fmt.Sprint(out.Priority)))
+		audit.Diff(&changes, "kind", audit.Ptr(before.Kind), audit.Ptr(out.Kind))
 		return s.record(ctx, tx, "column.update", "column", id,
 			fmt.Sprintf("Upraven sloupec „%s“", out.Name), changes, nil)
 	})
@@ -280,7 +256,7 @@ func (s *Service) MoveColumn(ctx context.Context, id, position string) (*Column,
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "position", Old: ap(before.Position), New: ap(position)}}
+		changes := []audit.Change{{Field: "position", Old: audit.Ptr(before.Position), New: audit.Ptr(position)}}
 		return s.record(ctx, tx, "column.move", "column", id,
 			fmt.Sprintf("Přesunut sloupec „%s“", out.Name), changes, nil)
 	})
@@ -354,7 +330,7 @@ func (s *Service) ReorderColumns(ctx context.Context, boardID string, items []Co
 			}
 			if err := s.record(ctx, tx, "column.move", "column", it.ID,
 				fmt.Sprintf("Přesunut sloupec „%s“", before.Name),
-				[]audit.Change{{Field: "position", Old: ap(before.Position), New: ap(it.Position)}}, nil); err != nil {
+				[]audit.Change{{Field: "position", Old: audit.Ptr(before.Position), New: audit.Ptr(it.Position)}}, nil); err != nil {
 				return err
 			}
 		}

@@ -14,6 +14,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
@@ -175,7 +176,7 @@ func validateBody(body string) (string, error) {
 // The auto-join has already run: it is the router's own middleware (http.go), so
 // every chat request carries it rather than each service method remembering to.
 func (s *Service) ListConversations(ctx context.Context, state, cursor string, limit int) (ConversationPage, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return ConversationPage{}, httpx.ErrUnauthorized("")
 	}
@@ -255,7 +256,7 @@ func (s *Service) purgeAfter(deletedAt *string) *string {
 // this path used. scope.go's rule is unchanged: this is still one predicate, in
 // SQL, refusing non-member, trashed and unknown with the same answer.
 func (s *Service) GetConversation(ctx context.Context, id string) (Conversation, error) {
-	c, err := s.store.GetConversation(ctx, s.db, actorID(ctx), id)
+	c, err := s.store.GetConversation(ctx, s.db, reqctx.ActorID(ctx), id)
 	return c, mapScopeErr(err)
 }
 
@@ -270,7 +271,7 @@ func (s *Service) GetConversation(ctx context.Context, id string) (Conversation,
 // joins a new conversation with history behind them, and there is no history yet
 // anyway.
 func (s *Service) CreateConversation(ctx context.Context, in ConversationCreate) (Conversation, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return Conversation{}, httpx.ErrUnauthorized("")
 	}
@@ -352,7 +353,7 @@ func (s *Service) CreateConversation(ctx context.Context, in ConversationCreate)
 }
 
 func (s *Service) RenameConversation(ctx context.Context, id string, in ConversationUpdate) (Conversation, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	name, err := validateName(in.Name)
 	if err != nil {
 		return Conversation{}, err
@@ -410,7 +411,7 @@ func (s *Service) publishConversation(ctx context.Context, audience []string, id
 // NEVER TOLD TO COME BACK IN SEVEN DAYS. It rewrites the queued keys' purge_after
 // to now rather than deleting anything inline — the drain still does the work.
 func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) error {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	now := nowUTC()
 	var audience []string
 	err := mapScopeErr(appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
@@ -488,7 +489,7 @@ func (s *Service) DeleteConversation(ctx context.Context, id string, hard bool) 
 // Returning the room to whoever may see it, and nothing to whoever may not, is what
 // keeps those two answers consistent.
 func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversation, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	var audience []string
 	err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		_, trashed, err := s.conversationForDestructiveVerb(ctx, tx, actor, id, true)
@@ -638,7 +639,7 @@ func (s *Service) ListMembers(ctx context.Context, id string) (ConversationMembe
 // memberScope. The directory cache exists because this module was measured asking
 // for the projection on every path; the fix belongs one level up from the SQL.
 func (s *Service) listMembersWith(ctx context.Context, id string, labels map[string]string) (ConversationMemberList, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	sc, err := s.store.memberScope(ctx, s.db, actor, id)
 	if err != nil {
 		return ConversationMemberList{}, mapScopeErr(err)
@@ -665,7 +666,7 @@ func (s *Service) listMembersWith(ctx context.Context, id string, labels map[str
 // than 422, on RestoreConversation's precedent one file up: a double tap has plainly
 // got what it asked for.
 func (s *Service) AddMember(ctx context.Context, id string, in ConversationMemberAdd) (ConversationMemberList, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if strings.TrimSpace(in.UserID) == "" {
 		return ConversationMemberList{}, httpx.ErrUnprocessable("Chybí uživatel.")
 	}
@@ -766,7 +767,7 @@ func (s *Service) AddMember(ctx context.Context, id string, in ConversationMembe
 // their already-fetched page is not scrubbed; the next request 404s. That is the
 // accepted bound in leak row 22.
 func (s *Service) RemoveMember(ctx context.Context, id, userID string) error {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	var (
 		removed  bool
 		audience []string
@@ -860,7 +861,7 @@ func withoutMember(ids []string, exclude string) []string {
 
 // UpdateSelf sets the caller's own per-conversation mute (D248).
 func (s *Service) UpdateSelf(ctx context.Context, id string, in ConversationMemberSelfUpdate) (Conversation, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if in.Muted == nil {
 		return Conversation{}, httpx.ErrUnprocessable("Není co změnit.")
 	}

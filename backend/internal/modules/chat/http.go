@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Handler serves the `chat` tag of openapi.yaml 0.12.0.
@@ -107,7 +108,7 @@ func (h *Handler) Mount(r chi.Router) {
 // database.
 func (h *Handler) autoJoin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if actor := actorID(r.Context()); actor != "" {
+		if actor := reqctx.ActorID(r.Context()); actor != "" {
 			if err := h.svc.store.EnsureDefaultMembership(r.Context(), actor); err != nil {
 				h.svc.logger.Warn("chat: auto-join Všichni", "err", err, "user", actor)
 			}
@@ -122,7 +123,7 @@ func (h *Handler) listConversations(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.ListConversations(r.Context(), q.Get("state"), q.Get("cursor"), limit)
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
@@ -132,12 +133,12 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.CreateConversation(r.Context(), in)
-	respond(w, http.StatusCreated, c, err)
+	httpx.Respond(w, http.StatusCreated, c, err)
 }
 
 func (h *Handler) getConversation(w http.ResponseWriter, r *http.Request) {
 	c, err := h.svc.GetConversation(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 func (h *Handler) renameConversation(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +148,7 @@ func (h *Handler) renameConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.RenameConversation(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 // deleteConversation is the koš, or the purge.
@@ -163,7 +164,7 @@ func (h *Handler) renameConversation(w http.ResponseWriter, r *http.Request) {
 // the safe direction (false), which is what ParseBool's error branch leaves it as.
 func (h *Handler) deleteConversation(w http.ResponseWriter, r *http.Request) {
 	hard := queryBool(r, "hard")
-	respondNoContent(w, h.svc.DeleteConversation(r.Context(), chi.URLParam(r, "id"), hard))
+	httpx.NoContent(w, h.svc.DeleteConversation(r.Context(), chi.URLParam(r, "id"), hard))
 }
 
 // restoreConversation brings a room back from the koš.
@@ -190,7 +191,7 @@ func (h *Handler) restoreConversation(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 	list, err := h.svc.ListMembers(r.Context(), chi.URLParam(r, "id"))
-	respond(w, http.StatusOK, list, err)
+	httpx.Respond(w, http.StatusOK, list, err)
 }
 
 func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
@@ -200,11 +201,11 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	list, err := h.svc.AddMember(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, list, err)
+	httpx.Respond(w, http.StatusOK, list, err)
 }
 
 func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.RemoveMember(r.Context(),
+	httpx.NoContent(w, h.svc.RemoveMember(r.Context(),
 		chi.URLParam(r, "id"), chi.URLParam(r, "user_id")))
 }
 
@@ -215,7 +216,7 @@ func (h *Handler) updateSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.svc.UpdateSelf(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, c, err)
+	httpx.Respond(w, http.StatusOK, c, err)
 }
 
 // ---- messages ----
@@ -225,7 +226,7 @@ func (h *Handler) thread(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.Thread(r.Context(), chi.URLParam(r, "id"),
 		q.Get("direction"), q.Get("cursor"), limit)
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 // sendMessage takes JSON, or multipart/form-data when the message carries files.
@@ -245,7 +246,7 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m, err := h.svc.SendMessageMultipart(r.Context(), chi.URLParam(r, "id"), mr)
-		respond(w, http.StatusCreated, m, err)
+		httpx.Respond(w, http.StatusCreated, m, err)
 		return
 	}
 	var in MessageCreate
@@ -254,7 +255,7 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := h.svc.SendMessage(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusCreated, m, err)
+	httpx.Respond(w, http.StatusCreated, m, err)
 }
 
 func isMultipart(r *http.Request) bool {
@@ -273,7 +274,7 @@ func (h *Handler) attachmentThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) removeAttachment(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.RemoveAttachment(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.RemoveAttachment(r.Context(), chi.URLParam(r, "id")))
 }
 
 func (h *Handler) moveAttachment(w http.ResponseWriter, r *http.Request) {
@@ -283,21 +284,21 @@ func (h *Handler) moveAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := h.svc.MoveAttachment(r.Context(), chi.URLParam(r, "id"), in.FolderID)
-	respond(w, http.StatusOK, a, err)
+	httpx.Respond(w, http.StatusOK, a, err)
 }
 
 // ---- storage and clean-up ----
 
 func (h *Handler) storage(w http.ResponseWriter, r *http.Request) {
 	s, err := h.svc.Storage(r.Context())
-	respond(w, http.StatusOK, s, err)
+	httpx.Respond(w, http.StatusOK, s, err)
 }
 
 func (h *Handler) cleanup(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.Cleanup(r.Context(), q.Get("conversation_id"), q.Get("sort"), q.Get("cursor"), limit)
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) advanceRead(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +308,7 @@ func (h *Handler) advanceRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, err := h.svc.AdvanceRead(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, state, err)
+	httpx.Respond(w, http.StatusOK, state, err)
 }
 
 func (h *Handler) editMessage(w http.ResponseWriter, r *http.Request) {
@@ -317,11 +318,11 @@ func (h *Handler) editMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := h.svc.EditMessage(r.Context(), chi.URLParam(r, "id"), in)
-	respond(w, http.StatusOK, m, err)
+	httpx.Respond(w, http.StatusOK, m, err)
 }
 
 func (h *Handler) deleteMessage(w http.ResponseWriter, r *http.Request) {
-	respondNoContent(w, h.svc.DeleteMessage(r.Context(), chi.URLParam(r, "id")))
+	httpx.NoContent(w, h.svc.DeleteMessage(r.Context(), chi.URLParam(r, "id")))
 }
 
 // ---- search and directory ----
@@ -330,12 +331,12 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	page, err := h.svc.Search(r.Context(), q.Get("q"), q.Get("conversation_id"), q.Get("cursor"), limit)
-	respond(w, http.StatusOK, page, err)
+	httpx.Respond(w, http.StatusOK, page, err)
 }
 
 func (h *Handler) directory(w http.ResponseWriter, r *http.Request) {
 	d, err := h.svc.Directory(r.Context())
-	respond(w, http.StatusOK, d, err)
+	httpx.Respond(w, http.StatusOK, d, err)
 }
 
 // queryBool reads a boolean query parameter the way the spec declares it: any
@@ -369,22 +370,4 @@ func hasBareFlag(rawQuery, name string) bool {
 		}
 	}
 	return false
-}
-
-// ---- rendering ----
-
-func respond(w http.ResponseWriter, status int, v any, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	httpx.JSON(w, status, v)
-}
-
-func respondNoContent(w http.ResponseWriter, err error) {
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

@@ -659,7 +659,7 @@ func TestPreviewWorker_ReEnqueuesPendingOnBootAndIsIdempotent(t *testing.T) {
 	x.worker.Enqueue(d.ID)
 	time.Sleep(300 * time.Millisecond)
 	waitForStatus(t, x.db, d.ID, "ready")
-	if n := countRows(t, x.db, "documents"); n != 1 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 1 {
 		t.Errorf("documents rows = %d, want 1", n)
 	}
 }

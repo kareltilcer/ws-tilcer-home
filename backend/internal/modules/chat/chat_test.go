@@ -249,11 +249,6 @@ func decode[T any](t *testing.T, rr *httptest.ResponseRecorder) T {
 	return v
 }
 
-func auditCount(t *testing.T, db *sql.DB) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_events`).Scan(&n); err != nil {
-		t.Fatalf("count audit events: %v", err)
-	}
-	return n
-}
+// auditCount is every audit event, unfiltered: chat's assertions are about
+// whether a mutation recorded ANYTHING, never about which verb.
+func auditCount(t *testing.T, db *sql.DB) int { return testsupport.CountAudit(t, db, "", "") }

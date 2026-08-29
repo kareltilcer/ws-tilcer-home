@@ -15,6 +15,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slug"
 )
 
@@ -160,25 +161,25 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*DocumentDetail, 
 			return err
 		}
 		out, err = s.store.InsertDocument(ctx, tx, id, in.FolderID, title, sl,
-			strings.TrimSpace(in.Description), file, pos, actorID(ctx), sc)
+			strings.TrimSpace(in.Description), file, pos, reqctx.ActorID(ctx), sc)
 		if err != nil {
 			return err
 		}
 		// document.create records what the file IS; there is no "old" value for any of
 		// it (null → new), and the bytes themselves are never diffed (D50).
 		changes := []audit.Change{
-			{Field: "title", New: ap(title)},
-			{Field: "slug", New: ap(sl)},
-			{Field: "original_filename", New: ap(filename)},
-			{Field: "content_type", New: ap(contentType)},
-			{Field: "byte_size", New: ap(fmt.Sprint(size))},
-			{Field: "checksum", New: ap(checksum)},
+			{Field: "title", New: audit.Ptr(title)},
+			{Field: "slug", New: audit.Ptr(sl)},
+			{Field: "original_filename", New: audit.Ptr(filename)},
+			{Field: "content_type", New: audit.Ptr(contentType)},
+			{Field: "byte_size", New: audit.Ptr(fmt.Sprint(size))},
+			{Field: "checksum", New: audit.Ptr(checksum)},
 		}
 		if in.FolderID != nil {
 			changes = append(changes, audit.Change{Field: "folder_id", New: in.FolderID})
 		}
 		if d := strings.TrimSpace(in.Description); d != "" {
-			changes = append(changes, audit.Change{Field: "description", New: ap(d)})
+			changes = append(changes, audit.Change{Field: "description", New: audit.Ptr(d)})
 		}
 		return s.record(ctx, tx, "document.create", "document", id,
 			fmt.Sprintf("Nahrán dokument „%s“", title), changes, nil, sc)

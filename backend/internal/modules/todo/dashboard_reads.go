@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
 // CountCardsInKind counts non-archived cards sitting in columns of the given
@@ -61,7 +63,7 @@ func (s *Store) TitlesInKind(ctx context.Context, kinds []string) ([]string, err
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.title
 		  FROM cards c
-		  JOIN columns col ON col.id = c.column_id AND col.kind IN (`+placeholders(len(kinds))+`)
+		  JOIN columns col ON col.id = c.column_id AND col.kind IN (`+appdb.Placeholders(len(kinds))+`)
 		  JOIN boards b ON b.id = col.board_id AND b.archived = 0
 		 WHERE c.archived = 0
 		 ORDER BY b.position, col.priority, col.position, c.position, c.id`, args...)
@@ -159,7 +161,7 @@ func (s *Store) NowCards(ctx context.Context) ([]NowCard, error) {
 
 	// Batch label ids.
 	lrows, err := s.db.QueryContext(ctx,
-		`SELECT card_id, label_id FROM card_labels WHERE card_id IN (`+placeholders(len(ids))+`)`, toArgs(ids)...)
+		`SELECT card_id, label_id FROM card_labels WHERE card_id IN (`+appdb.Placeholders(len(ids))+`)`, toArgs(ids)...)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +182,7 @@ func (s *Store) NowCards(ctx context.Context) ([]NowCard, error) {
 	// Batch checklist progress.
 	prows, err := s.db.QueryContext(ctx,
 		`SELECT card_id, COUNT(*), COALESCE(SUM(done),0) FROM checklist_items
-		 WHERE card_id IN (`+placeholders(len(ids))+`) GROUP BY card_id`, toArgs(ids)...)
+		 WHERE card_id IN (`+appdb.Placeholders(len(ids))+`) GROUP BY card_id`, toArgs(ids)...)
 	if err != nil {
 		return nil, err
 	}

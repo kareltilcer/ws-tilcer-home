@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
@@ -12,13 +11,10 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx. Reads use the store's *sql.DB;
-// mutations take the explicit tx so the audit write commits atomically with them.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 type Store struct{ db *sql.DB }
 
@@ -31,7 +27,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // equality, which plain second precision (time.RFC3339) could not disambiguate.
 const tsFormat = "2006-01-02T15:04:05.000000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {
@@ -225,7 +221,7 @@ func (s *Store) FolderMetaByIDs(ctx context.Context, q DBTX, ids []string) (map[
 	if len(ids) == 0 {
 		return out, nil
 	}
-	ph := placeholders(len(ids))
+	ph := appdb.Placeholders(len(ids))
 	rows, err := q.QueryContext(ctx, `SELECT id, name, archived FROM folders WHERE id IN (`+ph+`)`, toArgs(ids)...)
 	if err != nil {
 		return nil, err
@@ -265,7 +261,7 @@ func (s *Store) DescendantFolderIDs(ctx context.Context, q DBTX, rootID string, 
 	// depth/visited caps in wouldCycle, ancestors, and Tree.build.
 	visited := map[string]bool{rootID: true}
 	for len(frontier) > 0 {
-		ph := placeholders(len(frontier))
+		ph := appdb.Placeholders(len(frontier))
 		args := toArgs(frontier)
 		rows, err := q.QueryContext(ctx,
 			`SELECT id FROM folders WHERE parent_id IN (`+ph+`)`+filter, args...)
@@ -306,7 +302,7 @@ func (s *Store) NotesInFolders(ctx context.Context, q DBTX, folderIDs []string, 
 	if includeArchived {
 		filter = ""
 	}
-	ph := placeholders(len(folderIDs))
+	ph := appdb.Placeholders(len(folderIDs))
 	rows, err := q.QueryContext(ctx,
 		`SELECT `+noteCols+` FROM notes WHERE folder_id IN (`+ph+`)`+filter, toArgs(folderIDs)...)
 	if err != nil {
@@ -483,7 +479,7 @@ func (s *Store) PublishDescendants(ctx context.Context, tx DBTX, folderIDs []str
 	if len(folderIDs) == 0 {
 		return nil
 	}
-	ph := placeholders(len(folderIDs))
+	ph := appdb.Placeholders(len(folderIDs))
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE folders SET visibility = 'shared', owner_id = NULL, updated_at = ? WHERE id IN (`+ph+`)`,
@@ -1000,11 +996,6 @@ func (s *Store) CountPinnedFor(ctx context.Context, userID string) (int, error) 
 
 // ---- small SQL helpers ----
 
-// placeholders is appdb.Placeholders — one implementation, five call sites (v10
-// review). It was copied into this module, `documents`, `garden`, `todo` and
-// `platform/push` before platform/db grew the shared one.
-func placeholders(n int) string { return appdb.Placeholders(n) }
-
 func toArgs(ids []string) []any {
 	args := make([]any, len(ids))
 	for i, id := range ids {
@@ -1195,7 +1186,7 @@ func (s *Store) DeleteNoteImages(ctx context.Context, q DBTX, ids []string) erro
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := q.ExecContext(ctx, `DELETE FROM note_images WHERE id IN (`+placeholders(len(ids))+`)`, toArgs(ids)...)
+	_, err := q.ExecContext(ctx, `DELETE FROM note_images WHERE id IN (`+appdb.Placeholders(len(ids))+`)`, toArgs(ids)...)
 	return err
 }
 

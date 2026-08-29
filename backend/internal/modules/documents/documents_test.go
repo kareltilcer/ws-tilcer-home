@@ -116,7 +116,6 @@ func (x *h) upload(ctx context.Context, filename string, body []byte, folderID *
 func editorCtx() context.Context { return testsupport.CtxUser("u-editor", "editor") }
 func readerCtx() context.Context { return testsupport.CtxUser("u-reader", "reader") }
 func adminCtx() context.Context  { return testsupport.CtxUser("u-admin", "admin") }
-func otherCtx() context.Context  { return testsupport.CtxUser("u-other", "editor") }
 
 func status(t *testing.T, err error) int {
 	t.Helper()
@@ -251,7 +250,7 @@ func TestUpload_OverTheCapWritesNothing(t *testing.T) {
 	if got := status(t, err); got != 413 {
 		t.Fatalf("over-cap upload status = %d, want 413", got)
 	}
-	if n := countRows(t, x.db, "documents"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 0 {
 		t.Errorf("documents rows = %d, want 0 — nothing may be committed", n)
 	}
 	objects, _ := x.blob.List(ctx, "documents/")
@@ -276,10 +275,10 @@ func TestUpload_StorageFailureYields502AndNoRow(t *testing.T) {
 	if got := status(t, err); got != 502 {
 		t.Fatalf("upload with failing storage = %d, want 502", got)
 	}
-	if n := countRows(t, x.db, "documents"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 0 {
 		t.Errorf("documents rows = %d, want 0 — a document must never exist without its bytes", n)
 	}
-	if n := countRows(t, x.db, "audit_events"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "audit_events"); n != 0 {
 		t.Errorf("audit events = %d, want 0", n)
 	}
 }
@@ -294,7 +293,7 @@ func TestUpload_AllowlistRejectsWithNothingWritten(t *testing.T) {
 	}); status(t, err) != 415 {
 		t.Errorf("disallowed type should be 415")
 	}
-	if n := countRows(t, x.db, "documents"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 0 {
 		t.Errorf("documents rows = %d, want 0", n)
 	}
 	// The wildcard entry admits images.
@@ -557,7 +556,7 @@ func TestDeleteFolder_HardStillRequiresCascadeForANonEmptyFolder(t *testing.T) {
 	if _, err := x.blob.Stat(ctx, "documents/"+d.ID+"/original"); err != nil {
 		t.Errorf("the refused purge must leave the bytes alone: %v", err)
 	}
-	if n := countRows(t, x.db, "documents"); n != 1 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 1 {
 		t.Errorf("documents rows = %d, want the refused purge to have changed nothing", n)
 	}
 }
@@ -584,7 +583,7 @@ func TestDeleteFolder_HardIsRefusedWhenTheOnlyChildIsArchived(t *testing.T) {
 		if _, err := x.blob.Stat(ctx, "documents/"+d.ID+"/original"); err != nil {
 			t.Errorf("the refused purge must leave the archived document's bytes alone: %v", err)
 		}
-		if n := countRows(t, x.db, "documents"); n != 1 {
+		if n := testsupport.CountRows(t, x.db, "documents"); n != 1 {
 			t.Errorf("documents rows = %d, want the refused purge to have changed nothing", n)
 		}
 	}
@@ -620,10 +619,10 @@ func TestDeleteFolder_HardCascadeIsRefusedWhenTheSubtreeHidesArchivedRows(t *tes
 			t.Errorf("the refused purge must leave every object alone (%s): %v", id, err)
 		}
 	}
-	if n := countRows(t, x.db, "documents"); n != 2 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 2 {
 		t.Errorf("documents rows = %d, want 2 — the refused purge changes nothing", n)
 	}
-	if n := countRows(t, x.db, "document_folders"); n != 2 {
+	if n := testsupport.CountRows(t, x.db, "document_folders"); n != 2 {
 		t.Errorf("document_folders rows = %d, want 2 — the refused purge changes nothing", n)
 	}
 
@@ -635,7 +634,7 @@ func TestDeleteFolder_HardCascadeIsRefusedWhenTheSubtreeHidesArchivedRows(t *tes
 	if err := x.svc.DeleteFolder(ctx, f.ID, true, true); err != nil {
 		t.Fatalf("hard cascade after the archived child was purged: %v", err)
 	}
-	if n := countRows(t, x.db, "documents"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 0 {
 		t.Errorf("documents rows = %d, want 0", n)
 	}
 }
@@ -652,7 +651,7 @@ func TestDeleteFolder_HardPurgesAnArchivedTarget(t *testing.T) {
 	if err := x.svc.DeleteFolder(ctx, f.ID, false, true); err != nil {
 		t.Fatalf("hard delete of an archived folder: %v", err)
 	}
-	if n := countRows(t, x.db, "document_folders"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "document_folders"); n != 0 {
 		t.Errorf("document_folders rows = %d, want 0", n)
 	}
 }
@@ -684,17 +683,17 @@ func TestDeleteFolder_HardPurgesAPreviouslySoftDeletedSubtree(t *testing.T) {
 	if got := status(t, err); got != 409 {
 		t.Fatalf("purging a soft-deleted subtree without cascade = %d, want 409", got)
 	}
-	if n := countRows(t, x.db, "documents"); n != 1 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 1 {
 		t.Errorf("documents rows = %d, want the refused purge to have changed nothing", n)
 	}
 
 	if err := x.svc.DeleteFolder(ctx, f.ID, true, true); err != nil {
 		t.Fatalf("purging a soft-deleted subtree with cascade: %v", err)
 	}
-	if n := countRows(t, x.db, "documents"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 0 {
 		t.Errorf("documents rows = %d, want 0", n)
 	}
-	if n := countRows(t, x.db, "document_folders"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "document_folders"); n != 0 {
 		t.Errorf("document_folders rows = %d, want 0", n)
 	}
 	if _, err := x.blob.Stat(ctx, "documents/"+d.ID+"/original"); !errors.Is(err, blobstore.ErrNotFound) {
@@ -714,7 +713,7 @@ func TestDeleteFolder_HardPurgesDescendantObjects(t *testing.T) {
 	if _, err := x.blob.Stat(ctx, "documents/"+d.ID+"/original"); !errors.Is(err, blobstore.ErrNotFound) {
 		t.Errorf("a hard folder delete must purge every descendant's bytes, got %v", err)
 	}
-	if n := countRows(t, x.db, "documents"); n != 0 {
+	if n := testsupport.CountRows(t, x.db, "documents"); n != 0 {
 		t.Errorf("documents rows = %d, want 0", n)
 	}
 	// Every purged descendant is audited before the FK cascade destroys it.
@@ -803,7 +802,7 @@ func TestPin_HouseholdIsGatedAndAudited_PersonalIsNeither(t *testing.T) {
 	// personal: any member, NOT audited, NOT broadcast.
 	rd := readerCtx()
 	before := len(*x.events)
-	auditBefore := countRows(t, x.db, "audit_events")
+	auditBefore := testsupport.CountRows(t, x.db, "audit_events")
 	st, err := x.svc.Pin(rd, d.ID, "personal", "")
 	if err != nil {
 		t.Fatalf("reader personal pin: %v", err)
@@ -811,7 +810,7 @@ func TestPin_HouseholdIsGatedAndAudited_PersonalIsNeither(t *testing.T) {
 	if !st.Personal {
 		t.Error("the reader's personal pin was not recorded")
 	}
-	if got := countRows(t, x.db, "audit_events"); got != auditBefore {
+	if got := testsupport.CountRows(t, x.db, "audit_events"); got != auditBefore {
 		t.Error("a personal pin must not write an audit event (D47)")
 	}
 	if len(*x.events) != before {
@@ -851,7 +850,7 @@ func TestPin_PartialIndexesKeepOnePinPerScope(t *testing.T) {
 			t.Fatalf("personal pin %d: %v", i, err)
 		}
 	}
-	if n := countRows(t, x.db, "document_pins"); n != 2 {
+	if n := testsupport.CountRows(t, x.db, "document_pins"); n != 2 {
 		t.Errorf("document_pins rows = %d, want 2 (one per scope)", n)
 	}
 }
@@ -1074,7 +1073,7 @@ func TestAudit_EveryMutationExceptPersonalPinsIsLogged(t *testing.T) {
 		}
 	}
 	// 7 events exactly: the personal pin adds nothing.
-	if n := countRows(t, x.db, "audit_events"); n != len(want) {
+	if n := testsupport.CountRows(t, x.db, "audit_events"); n != len(want) {
 		t.Errorf("audit events = %d, want %d (personal pins emit nothing)", n, len(want))
 	}
 }
@@ -1135,15 +1134,6 @@ func isArchived(t *testing.T, db *sql.DB, table, id string) bool {
 		t.Fatalf("read %s.archived: %v", table, err)
 	}
 	return archived != 0
-}
-
-func countRows(t *testing.T, db *sql.DB, table string) int {
-	t.Helper()
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
-		t.Fatalf("count %s: %v", table, err)
-	}
-	return n
 }
 
 // auditEvents returns the ids of events with the given action, oldest first.

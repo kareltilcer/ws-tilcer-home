@@ -6,16 +6,15 @@ import (
 	"strings"
 	"time"
 
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 // Store holds the DB handle for reads; mutations take an explicit tx.
 type Store struct{ db *sql.DB }
@@ -24,7 +23,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
 const defaultTimezone = "Europe/Prague"
 
-func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
+func nowUTC() string { return appdb.NowUTC(time.RFC3339) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {

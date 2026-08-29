@@ -4,16 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
+
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx. Reads use the store's *sql.DB;
-// mutations take the explicit tx so the audit write commits atomically with them.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 // Store is the finance module's SQL layer. It reads and writes the INPUTS only —
 // the split is composed in Go by withSplit after scanning, and is never part of
@@ -28,7 +26,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // never by a timestamp.
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 const monthCols = `id, month, income_kaja, income_andy,
 	rate_personal, rate_operational, rate_fun, rate_nofun,

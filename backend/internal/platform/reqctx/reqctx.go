@@ -57,6 +57,37 @@ func RequestFrom(ctx context.Context) (RequestInfo, bool) {
 	return r, ok
 }
 
+// ActorID returns the id of ctx's authenticated user, or "" when there is no
+// actor — a system or service caller, or a code path that never went through the
+// session middleware. Callers stamp it onto rows as `created_by` / `updated_by`,
+// where "" is the honest answer rather than a failure.
+//
+// ⚠ IT LIVES HERE BECAUSE IT EXISTED NINE TIMES. `admin`, `chat`, `documents`,
+// `electricity`, `events`, `finance`, `garden`, `notes` and `todo` each declared
+// a byte-identical five-line wrapper over ActorFrom — the widest duplication in
+// the backend, and a thin one over this package's own accessor.
+func ActorID(ctx context.Context) string {
+	if a, ok := ActorFrom(ctx); ok {
+		return a.UserID
+	}
+	return ""
+}
+
+// CanWrite reports whether ctx's actor holds `editor` or `admin`. It is the
+// SERVICE-layer half of the write gate; httpx.RequireWrite is the HTTP-layer
+// half, and the two name the same two roles on purpose — a service reached
+// through a route is gated twice, and a service reached from a job or another
+// module is still gated once.
+//
+// No actor is not a writer: a system caller that must write does so on a path
+// that does not ask.
+func CanWrite(ctx context.Context) bool {
+	if a, ok := ActorFrom(ctx); ok {
+		return HasRole(a.Roles, "editor", "admin")
+	}
+	return false
+}
+
 // HasRole reports whether roles grants access to any of allowed. The superuser
 // token "*" always grants access.
 func HasRole(roles []string, allowed ...string) bool {

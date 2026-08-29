@@ -445,14 +445,6 @@ func tally(results []DeliveryResult) (sent, failed, expired int) {
 	return
 }
 
-// Disabled is the inert channel used when no VAPID keypair is configured: the
-// app runs, the settings panel explains itself, and nothing is ever sent.
-type Disabled struct{}
-
-func (Disabled) Send(context.Context, []string, Envelope) []DeliveryResult { return nil }
-func (Disabled) VAPIDPublicKey() string                                    { return "" }
-func (Disabled) Enabled() bool                                             { return false }
-
 // ErrPushDisabled is returned by the HTTP layer when a device tries to subscribe
 // while the server has no keypair.
 var ErrPushDisabled = errors.New("push is not configured on this server")
