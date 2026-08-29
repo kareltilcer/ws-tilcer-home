@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { completeTask, listBeds, listTasks, reopenTask, updateTask } from '../api/endpoints'
 import { toastGardenError } from '../api/hooks'
 import type { GardenSeason, GardenTask } from '../api/types'
+import { isoWeekKey } from '../isoWeek'
 import { fmtWindow } from '../components/labels'
 
 // KALENDÁŘ — WORK AS WINDOWS, NOT DATES.
@@ -324,18 +325,6 @@ function groupByWeek(tasks: GardenTask[], missed: GardenTask[]) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, items]) => ({ key, label: weekLabel(key), items }))
   return { overdue, weeks }
-}
-
-function isoWeekKey(iso: string): string {
-  const d = new Date(iso + 'T00:00:00Z')
-  if (Number.isNaN(d.getTime())) return '0000-W00'
-  // ISO week: Thursday of the current week decides the year.
-  const target = new Date(d.getTime())
-  target.setUTCDate(target.getUTCDate() + 3 - ((target.getUTCDay() + 6) % 7))
-  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4))
-  const week =
-    1 + Math.round(((target.getTime() - firstThursday.getTime()) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7)
-  return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
 }
 
 function weekLabel(key: string): string {
