@@ -10,6 +10,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Attachment delivery (FR-V10-7, leak rows 5 and 6).
@@ -53,7 +54,7 @@ func (h *Handler) serveAttachment(w http.ResponseWriter, r *http.Request, id str
 		httpx.WriteError(w, httpx.ErrInternal("chat attachment storage is not configured"))
 		return
 	}
-	actor := actorID(r.Context())
+	actor := reqctx.ActorID(r.Context())
 	if actor == "" {
 		httpx.WriteError(w, httpx.ErrUnauthorized(""))
 		return

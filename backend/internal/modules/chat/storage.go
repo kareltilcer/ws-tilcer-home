@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
@@ -75,7 +76,7 @@ type ConversationStorage struct {
 
 // Storage returns the caller's storage picture.
 func (s *Service) Storage(ctx context.Context) (ChatStorage, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return ChatStorage{}, httpx.ErrUnauthorized("")
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
@@ -68,7 +69,7 @@ func (s *Service) faultAt(step moveStep) error {
 // Gated member ∧ (editor | admin) — the same gate as the rest of the clean-up
 // surface (D241), because this is one of its two actions.
 func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID string) (Attachment, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return Attachment{}, httpx.ErrUnauthorized("")
 	}

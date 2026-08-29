@@ -17,6 +17,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Attachment upload (FR-V10-6, D224/D227/D228).
@@ -101,7 +102,7 @@ func (f stagedFile) cleanup() {
 // could spend 500 MB of the droplet's disk discovering they are not in the room.
 // A cheap indexed read is the whole cost of closing that.
 func (s *Service) SendMessageMultipart(ctx context.Context, conversationID string, mr *multipart.Reader) (Message, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return Message{}, httpx.ErrUnauthorized("")
 	}
@@ -308,7 +309,7 @@ func (s *Service) putStaged(ctx context.Context, f *stagedFile) ([]string, error
 // differ only in what they carry, and a second ordering here would be a second
 // answer to "when is a message's id decided".
 func (s *Service) commitMessage(ctx context.Context, conversationID, body string, replyToID *string, files []stagedFile) (Message, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	labels, err := s.labels(ctx)
 	if err != nil {
 		return Message{}, err

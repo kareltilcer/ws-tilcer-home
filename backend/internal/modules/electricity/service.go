@@ -56,13 +56,6 @@ func (s *Service) Store() *Store { return s.store }
 // so all three computed endpoints agree about what day it is.
 func (s *Service) Today() dates.Date { return dates.Today(s.loc) }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
 // record writes one audit event through the spine, INSIDE the caller's tx. The
 // error is returned unchanged so the transaction rolls back: an action that
 // succeeds unlogged is the bug the spine exists to prevent.
@@ -266,7 +259,7 @@ func (s *Service) CreateReading(ctx context.Context, in ReadingInput) (Reading, 
 		ID: idgen.New(), ReadOn: *in.ReadOn, VTDkwh: *in.VTDkwh, NTDkwh: *in.NTDkwh,
 		Note: in.Note, CreatedAt: now, UpdatedAt: now,
 	}
-	if a := actorID(ctx); a != "" {
+	if a := reqctx.ActorID(ctx); a != "" {
 		r.CreatedBy = &a
 	}
 
@@ -404,7 +397,7 @@ func (s *Service) CreateTariff(ctx context.Context, in TariffInput) (Tariff, err
 		PriceVTHaler: *in.PriceVTHaler, PriceNTHaler: *in.PriceNTHaler,
 		MonthlyFeeHaler: *in.MonthlyFeeHaler, Note: in.Note, CreatedAt: now, UpdatedAt: now,
 	}
-	if a := actorID(ctx); a != "" {
+	if a := reqctx.ActorID(ctx); a != "" {
 		t.CreatedBy = &a
 	}
 	msg := fmt.Sprintf("Ceník od %s už existuje.", czDate(t.EffectiveFrom))
@@ -583,7 +576,7 @@ func (s *Service) CreateAdvance(ctx context.Context, in AdvanceInput) (Advance, 
 		ID: idgen.New(), EffectiveFrom: *in.EffectiveFrom, AmountHaler: *in.AmountHaler,
 		DueDay: *in.DueDay, Note: in.Note, CreatedAt: now, UpdatedAt: now,
 	}
-	if id := actorID(ctx); id != "" {
+	if id := reqctx.ActorID(ctx); id != "" {
 		a.CreatedBy = &id
 	}
 	msg := fmt.Sprintf("Předpis záloh od %s už existuje.", czDate(a.EffectiveFrom))
@@ -719,7 +712,7 @@ func (s *Service) CreatePayment(ctx context.Context, in PaymentInput) (Payment, 
 		ID: idgen.New(), Month: *in.Month, AmountHaler: *in.AmountHaler,
 		PaidOn: in.PaidOn, Note: in.Note, CreatedAt: now, UpdatedAt: now,
 	}
-	if id := actorID(ctx); id != "" {
+	if id := reqctx.ActorID(ctx); id != "" {
 		p.CreatedBy = &id
 	}
 	msg := fmt.Sprintf("Platba za %s už je zapsaná.", p.Month)
@@ -884,7 +877,7 @@ func (s *Service) CreatePeriod(ctx context.Context, in PeriodInput) (Period, err
 	p.Note, p.CreatedAt, p.UpdatedAt = in.Note, now, now
 	p.InvoicedTotalHaler, p.InvoicedBalanceHaler = in.InvoicedTotalHaler, in.InvoicedBalanceHaler
 	p.InvoicedVTDkwh, p.InvoicedNTDkwh, p.InvoicedAt = in.InvoicedVTDkwh, in.InvoicedNTDkwh, in.InvoicedAt
-	if id := actorID(ctx); id != "" {
+	if id := reqctx.ActorID(ctx); id != "" {
 		p.CreatedBy = &id
 	}
 

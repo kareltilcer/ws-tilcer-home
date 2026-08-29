@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // The four content endpoints stream bytes from object storage THROUGH the backend
@@ -64,7 +65,7 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 	// what makes a foreign private document 404 on eight routes — including the
 	// HEAD branch, which is live code and would otherwise be a HEAD-only existence
 	// oracle. A miss is indistinguishable from an unknown id (D180).
-	sd, err := h.svc.Store().GetStoredDocument(r.Context(), h.svc.db, id, actorID(r.Context()))
+	sd, err := h.svc.Store().GetStoredDocument(r.Context(), h.svc.db, id, reqctx.ActorID(r.Context()))
 	if err != nil {
 		httpx.WriteError(w, err)
 		return

@@ -60,7 +60,7 @@ const (
 // passed the gate and simply has nothing to clean, which is a different sentence
 // from "you may not do this" and gets a different screen.
 func (s *Service) Cleanup(ctx context.Context, conversationID, sort, cursor string, limit int) (CleanupPage, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return CleanupPage{}, httpx.ErrUnauthorized("")
 	}
@@ -132,7 +132,7 @@ func (s *Service) Cleanup(ctx context.Context, conversationID, sort, cursor stri
 // the epitaph, so the thread stays legible, a member can ask for the file again
 // knowing exactly what it was, and the clean-up is attributed. Only the bytes go.
 func (s *Service) RemoveAttachment(ctx context.Context, attachmentID string) error {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return httpx.ErrUnauthorized("")
 	}
@@ -192,10 +192,7 @@ func (s *Service) RemoveAttachment(ctx context.Context, attachmentID string) err
 // membership, in SQL (scope.go). A second one appearing anywhere in `chat` is
 // almost certainly a mistake — D222 is explicit that a reader posts, replies,
 // edits, creates rooms and manages membership.
-func writeAllowedCtx(ctx context.Context) bool {
-	a, ok := reqctx.ActorFrom(ctx)
-	if !ok {
-		return false
-	}
-	return reqctx.HasRole(a.Roles, "editor", "admin")
-}
+//
+// The check itself is reqctx.CanWrite, shared with the eight other modules that
+// ask it; the named wrapper stays so the warning above has something to sit on.
+func writeAllowedCtx(ctx context.Context) bool { return reqctx.CanWrite(ctx) }

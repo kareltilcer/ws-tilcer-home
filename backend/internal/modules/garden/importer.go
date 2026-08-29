@@ -12,6 +12,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // THE LLM ESCAPE HATCH (PRD FR-G3, D114, D126).
@@ -226,7 +227,7 @@ func (s *Service) importOne(ctx context.Context, index int, rec map[string]any, 
 		}
 		target.ID = idgen.New()
 		target.CreatedAt, target.UpdatedAt = now, now
-		target.CreatedBy = sp(actorID(ctx))
+		target.CreatedBy = sp(reqctx.ActorID(ctx))
 		if err := s.store.InsertPlant(ctx, tx, target); err != nil {
 			return duplicateName(err)
 		}

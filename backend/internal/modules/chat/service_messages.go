@@ -9,6 +9,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Message operations. Every one of them resolves a Scope first, and the Scope is
@@ -16,7 +17,7 @@ import (
 
 // Thread renders a page of messages for a member.
 func (s *Service) Thread(ctx context.Context, conversationID, direction, cursor string, limit int) (MessagePage, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if direction != "" && direction != directionBackward && direction != directionForward {
 		return MessagePage{}, httpx.ErrUnprocessable("Parametr direction musí být backward nebo forward.")
 	}
@@ -180,7 +181,7 @@ func (s *Service) quoteMap(ctx context.Context, q querier, sc Scope, rows []mess
 // after the commit would let a member removed in between still receive the payload,
 // and in this module the payload IS the content.
 func (s *Service) SendMessage(ctx context.Context, conversationID string, in MessageCreate) (Message, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	body, err := validateBody(in.Body)
 	if err != nil {
 		return Message{}, err
@@ -325,7 +326,7 @@ func (s *Service) pushAfterSend(ctx context.Context, conversationName string, re
 
 // EditMessage rewrites a body. Own messages only, no time limit (D225).
 func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageUpdate) (Message, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	body, err := validateBody(in.Body)
 	if err != nil {
 		return Message{}, err
@@ -417,7 +418,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 
 // DeleteMessage leaves a tombstone (D223) and writes no audit event (D231).
 func (s *Service) DeleteMessage(ctx context.Context, messageID string) error {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	labels, err := s.labels(ctx)
 	if err != nil {
 		return err
@@ -507,7 +508,7 @@ func mapMessageErr(err error) error {
 
 // AdvanceRead moves the caller's marker (D250).
 func (s *Service) AdvanceRead(ctx context.Context, conversationID string, in ReadUpdate) (ReadState, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if strings.TrimSpace(in.UntilMessageID) == "" {
 		return ReadState{}, httpx.ErrUnprocessable("Chybí zpráva, po kterou se má značka posunout.")
 	}
@@ -562,7 +563,7 @@ func (s *Service) AdvanceRead(ctx context.Context, conversationID string, in Rea
 // the v9 `private-items` precedent, which this spec invokes again for the clean-up
 // page's sort=size.
 func (s *Service) Search(ctx context.Context, query, conversationID, cursor string, limit int) (SearchPage, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return SearchPage{}, httpx.ErrUnprocessable("Zadejte, co hledat.")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // Handler serves the `chat` tag of openapi.yaml 0.12.0.
@@ -107,7 +108,7 @@ func (h *Handler) Mount(r chi.Router) {
 // database.
 func (h *Handler) autoJoin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if actor := actorID(r.Context()); actor != "" {
+		if actor := reqctx.ActorID(r.Context()); actor != "" {
 			if err := h.svc.store.EnsureDefaultMembership(r.Context(), actor); err != nil {
 				h.svc.logger.Warn("chat: auto-join Všichni", "err", err, "user", actor)
 			}

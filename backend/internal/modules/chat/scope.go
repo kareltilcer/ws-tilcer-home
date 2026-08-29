@@ -141,13 +141,6 @@ func (s *Store) adminScope(ctx context.Context, q querier, conversationID string
 
 // ---- request plumbing ----
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
 func isAdminCtx(ctx context.Context) bool {
 	a, ok := reqctx.ActorFrom(ctx)
 	if !ok {

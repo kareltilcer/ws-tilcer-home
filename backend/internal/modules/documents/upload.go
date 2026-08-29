@@ -15,6 +15,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slug"
 )
 
@@ -160,7 +161,7 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*DocumentDetail, 
 			return err
 		}
 		out, err = s.store.InsertDocument(ctx, tx, id, in.FolderID, title, sl,
-			strings.TrimSpace(in.Description), file, pos, actorID(ctx), sc)
+			strings.TrimSpace(in.Description), file, pos, reqctx.ActorID(ctx), sc)
 		if err != nil {
 			return err
 		}

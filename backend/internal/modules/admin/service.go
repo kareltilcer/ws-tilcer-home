@@ -151,7 +151,7 @@ func (s *Service) CreateRule(ctx context.Context, in RuleCreate) (*Rule, error) 
 		TitleTemplate:    in.TitleTemplate,
 		BodyTemplate:     in.BodyTemplate,
 		ExcludeActor:     false,
-		CreatedBy:        actorID(ctx),
+		CreatedBy:        reqctx.ActorID(ctx),
 	}
 	if in.Enabled != nil {
 		r.Enabled = *in.Enabled
@@ -511,7 +511,7 @@ func (s *Service) CreateSchedule(ctx context.Context, in ScheduleCreate) (*Sched
 		TitleTemplate: in.TitleTemplate,
 		BodyTemplate:  in.BodyTemplate,
 		Conditions:    in.Conditions.normalized(),
-		CreatedBy:     actorID(ctx),
+		CreatedBy:     reqctx.ActorID(ctx),
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -730,7 +730,7 @@ func (s *Service) TestSchedule(ctx context.Context, id string) (SendResult, erro
 	if err != nil {
 		return SendResult{}, err
 	}
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	rc := s.summaryContext(ctx, *sc, actor)
 	return s.sendTest(ctx, push.Envelope{
 		Module: "admin", Type: "summary",
@@ -740,7 +740,7 @@ func (s *Service) TestSchedule(ctx context.Context, id string) (SendResult, erro
 }
 
 func (s *Service) sendTest(ctx context.Context, env push.Envelope, what string) (SendResult, error) {
-	actor := actorID(ctx)
+	actor := reqctx.ActorID(ctx)
 	if actor == "" {
 		return SendResult{}, httpx.ErrUnauthorized("")
 	}
@@ -1156,13 +1156,6 @@ func (s *Service) PruneDeliveries(ctx context.Context, retentionDays int) (int64
 }
 
 // ---- helpers ----
-
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
 
 // maxInAppURLBytes caps a broadcast's click target. Web Push allows about 4 KB
 // per ENCRYPTED record and the whole envelope is JSON inside it: title and body

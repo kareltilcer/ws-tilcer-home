@@ -10,6 +10,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
 // ---- Cards ----
@@ -42,7 +43,7 @@ func (s *Service) CreateCard(ctx context.Context, columnID string, in CardCreate
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertCard(ctx, tx, columnID, in.Title, in.Notes, pos, actorID(ctx))
+		out, err = s.store.InsertCard(ctx, tx, columnID, in.Title, in.Notes, pos, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}

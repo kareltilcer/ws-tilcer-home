@@ -75,13 +75,6 @@ func (s *Service) Options() Options { return s.opts }
 
 func (s *Service) today() dates.Date { return dates.Today(s.opts.Location) }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
 // record writes one audit event through the spine, inside the caller's tx. The
 // error is returned unchanged so the transaction rolls back: an action that
 // succeeds unlogged is the bug the spine exists to prevent.
@@ -237,7 +230,7 @@ func (s *Service) CreatePlant(ctx context.Context, in PlantInput) (Plant, error)
 	now := nowUTC()
 	p.ID = idgen.New()
 	p.CreatedAt, p.UpdatedAt = now, now
-	p.CreatedBy = sp(actorID(ctx))
+	p.CreatedBy = sp(reqctx.ActorID(ctx))
 	if p.Provenance.Source == "" {
 		p.Provenance.Source = SourceManual
 	}
@@ -282,7 +275,7 @@ func (s *Service) UpdatePlant(ctx context.Context, id string, in PlantInput) (Pl
 		// stamps who and when rather than just touching updated_at.
 		if in.Verified != nil {
 			if *in.Verified {
-				after.Provenance.VerifiedBy = sp(actorID(ctx))
+				after.Provenance.VerifiedBy = sp(reqctx.ActorID(ctx))
 				after.Provenance.VerifiedAt = sp(nowUTC())
 			} else {
 				after.Provenance.VerifiedBy, after.Provenance.VerifiedAt = nil, nil
@@ -554,7 +547,7 @@ func (s *Service) CreateVariety(ctx context.Context, plantID string, in VarietyI
 		if err != nil {
 			return mapNotFound(err)
 		}
-		if err := s.store.InsertVariety(ctx, tx, v, actorID(ctx), now); err != nil {
+		if err := s.store.InsertVariety(ctx, tx, v, reqctx.ActorID(ctx), now); err != nil {
 			return duplicateName(err)
 		}
 		return s.record(ctx, tx, "variety.create", "garden_variety", v.ID,
@@ -596,7 +589,7 @@ func (s *Service) UpdateVariety(ctx context.Context, id string, in VarietyInput)
 		// one the next reader cannot trust. Same both ways as UpdatePlant.
 		if in.Verified != nil {
 			if *in.Verified {
-				after.Provenance.VerifiedBy = sp(actorID(ctx))
+				after.Provenance.VerifiedBy = sp(reqctx.ActorID(ctx))
 				after.Provenance.VerifiedAt = sp(nowUTC())
 			} else {
 				after.Provenance.VerifiedBy, after.Provenance.VerifiedAt = nil, nil
@@ -781,7 +774,7 @@ func (s *Service) CreateBed(ctx context.Context, in BedInput) (Bed, error) {
 			return err
 		}
 		b.Position = lexorank.Between(pos, "")
-		if err := s.store.InsertBed(ctx, tx, b, actorID(ctx)); err != nil {
+		if err := s.store.InsertBed(ctx, tx, b, reqctx.ActorID(ctx)); err != nil {
 			return err
 		}
 		return s.record(ctx, tx, "bed.create", "garden_bed", b.ID,

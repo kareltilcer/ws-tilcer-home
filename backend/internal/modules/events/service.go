@@ -42,13 +42,6 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, maxOccurrences, ma
 // Store exposes the read store (used by the dashboard module).
 func (s *Service) Store() *Store { return s.store }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityID, summary string, changes []audit.Change, meta map[string]any) error {
 	_, err := s.sink.Record(ctx, tx, audit.Event{
 		Module:     audit.ModuleEvents,
@@ -118,7 +111,7 @@ func (s *Service) CreateEvent(ctx context.Context, in EventCreate) (*Event, erro
 	var out *Event
 	err = appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		var err error
-		out, err = s.store.InsertEvent(ctx, tx, ev, actorID(ctx))
+		out, err = s.store.InsertEvent(ctx, tx, ev, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
@@ -316,7 +309,7 @@ func (s *Service) Complete(ctx context.Context, eventID, occurrenceOn, via strin
 		if !recur.IsOccurrence(anchor, rule, occDate) {
 			return httpx.ErrUnprocessable("occurrence_on is not a real occurrence of this event")
 		}
-		inserted, err := s.store.InsertCompletion(ctx, tx, eventID, occDate.String(), actorID(ctx))
+		inserted, err := s.store.InsertCompletion(ctx, tx, eventID, occDate.String(), reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}

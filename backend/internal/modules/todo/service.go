@@ -39,13 +39,6 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
 // Store exposes the underlying read store (used by the dashboard module).
 func (s *Service) Store() *Store { return s.store }
 
-func actorID(ctx context.Context) string {
-	if a, ok := reqctx.ActorFrom(ctx); ok {
-		return a.UserID
-	}
-	return ""
-}
-
 // ---- Boards ----
 
 func (s *Service) ListBoards(ctx context.Context) ([]Board, error) { return s.store.ListBoards(ctx) }
@@ -82,7 +75,7 @@ func (s *Service) CreateBoard(ctx context.Context, in BoardCreate) (*Board, erro
 		if err != nil {
 			return err
 		}
-		out, err = s.store.InsertBoard(ctx, tx, in.Name, in.Description, pos, actorID(ctx))
+		out, err = s.store.InsertBoard(ctx, tx, in.Name, in.Description, pos, reqctx.ActorID(ctx))
 		if err != nil {
 			return err
 		}
