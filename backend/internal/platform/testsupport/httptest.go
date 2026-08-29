@@ -30,12 +30,13 @@ import (
 // documents nil as "no CSRF check", which is what a test wants: the double-submit
 // token is a browser mechanism, and requiring it here would test the test harness.
 //
-// Four router literals in the test tree are NOT this one, and each has a reason:
-// `dashboard`'s layout PUT sets CSRFMW because the CSRF path is what it asserts;
-// `documents` builds one with NO bypass actor (its 401 test) and one with no DB
-// (re-mounting an existing store as a reader); and `platform/httpx`'s and
-// `platform/auth`'s own suites test this router and that middleware, so building
-// them from a helper would be assuming what they exist to check.
+// ELEVEN router literals in the test tree are NOT this one, in four groups, and
+// each group has a reason: `dashboard`'s layout PUT (1) sets CSRFMW because the
+// CSRF path is what it asserts; `documents` (2) builds one with NO bypass actor
+// (its 401 test) and one with no DB (re-mounting an existing store as a reader);
+// and `platform/httpx`'s (6) and `platform/auth`'s (2) own suites test this
+// router and that middleware, so building them from a helper would be assuming
+// what they exist to check.
 //
 // The logger discards: a passing test should print nothing, and a failing one
 // says what it wanted in its own message.

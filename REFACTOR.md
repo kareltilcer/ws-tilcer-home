@@ -1052,16 +1052,19 @@ column. A repo-wide `gofmt -w` is its own commit, and belongs to whoever wants i
 Six commits, one per item, in the order the wave table gives. Corrections the
 implementation forced, so the counts in this document stay honest:
 
-- **Item 34** — `apiErrorMessage(e, fallback)` in `api/client.ts`, **fifteen**
-  call sites across nine files. The ternary had drifted into THREE spellings,
-  not one: `?? f`, `|| f`, and `e.detail ? e.detail : f`. They agree only
-  because `Detail` is `omitempty` on the wire, so an empty-string detail never
-  reaches the client — the helper keeps the truthy test, which is the spelling
-  that survives if that ever changes. The ten garden sites do NOT call it: they
-  call `toastGardenError`, which the module already had and nothing used.
-  `gardenError` is gone, folded in as the item's ⚠ asked.
+- **Item 34** — `apiErrorMessage(e, fallback)` in `api/client.ts`. The
+  expression occurs **nineteen times in twelve files** on `origin/main`, not
+  "~20 sites" loosely: **seventeen were migrated, across eleven files**, and
+  **thirteen of the seventeen are in garden**. The ternary had also drifted into
+  THREE spellings, not one: `?? f`, `|| f`, and `e.detail ? e.detail : f`. They
+  agree only because `Detail` is `omitempty` on the wire, so an empty-string
+  detail never reaches the client — the helper keeps the truthy test, which is
+  the spelling that survives if that ever changes. The thirteen garden sites do
+  NOT call it: they call `toastGardenError`, which the module already had and
+  nothing used. `gardenError` is gone, folded in as the item's ⚠ asked.
 
-  > ⚠ `CenikTab`'s two handlers were NOT migrated, against the item's list. They
+  > ⚠ `CenikTab`'s two handlers are the other two of the nineteen, NOT migrated
+  > against the item's list. They
   > fall back to `e.message` — the bare error CODE — where the helper falls back
   > to the Czech sentence, so adopting it would stop showing `conflict` to a
   > user. An improvement, but a visible change. Both sites now carry a comment
@@ -1103,11 +1106,12 @@ implementation forced, so the counts in this document stay honest:
   too (as the item predicted), `todo`'s `send` returns `rr.Code`, `logging`
   passes its admin-gate mount closure as the parameter.
 
-  > Four router literals are deliberately left: `dashboard` sets `CSRFMW`
-  > because the CSRF path is what it asserts; `documents` builds one with no
-  > bypass actor and one with no DB; and `platform/httpx`'s and
-  > `platform/auth`'s own suites test this router and that middleware, so
-  > building them from a helper would assume what they exist to check.
+  > **Eleven** router literals are deliberately left, in four groups:
+  > `dashboard` (1) sets `CSRFMW` because the CSRF path is what it asserts;
+  > `documents` (2) builds one with no bypass actor and one with no DB; and
+  > `platform/httpx` (6) and `platform/auth` (2) test this router and that
+  > middleware, so building them from a helper would assume what they exist to
+  > check.
 
 Baseline after wave 2: `go build ./...` clean · `go vet ./...` clean ·
 `go test ./...` 28 packages ok · `tsc -b --noEmit` clean ·

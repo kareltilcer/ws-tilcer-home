@@ -92,13 +92,20 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
  *  electricity dialog — and a sixth copy was the obvious thing to write for the
  *  next dialog.
  *
- *  ⚠ THE OTHER LABELS THAT LOOK LIKE THIS ARE NOT THIS ONE. `EventForm` and
- *  `ColumnMenu` declare a `Field` of their own that renders a <div> at a
- *  different type scale; Administrace, `AudiencePicker`, `ScheduleBuilder`,
- *  `ConditionsBuilder` and garden's `PlanTab` hand-write the markup at `mb-1`,
- *  or without the <label> at all. Adopting this in any of them would move a
- *  label by 2px or change what a tap focuses — a visual change wearing a
- *  refactor's clothes. Worth doing one day, but as a design decision. */
+ *  ⚠ THE OTHER LABELS THAT LOOK LIKE THIS ARE NOT THIS ONE. Twelve sites, in
+ *  three groups, and each group breaks a different way:
+ *
+ *    - `EventForm` and `ColumnMenu` declare a `Field` of their OWN that renders
+ *      a <div> at a different type scale.
+ *    - `AdministracePage` (×5), `Composer` (×2) and `ScheduleBuilder`'s time
+ *      field space the label at `mb-1`, so adopting this moves it by 2px.
+ *    - `ConditionsBuilder`, `AudiencePicker` and `ScheduleBuilder`'s day picker
+ *      are bare <div>s, and garden's `PlanTab` season picker is an inline-flex
+ *      <label> whose span has neither `block` nor a margin. Wrapping a builder
+ *      full of <select>s in this <label> changes what a tap focuses.
+ *
+ *  Every one of those is a visual change wearing a refactor's clothes. Worth
+ *  doing one day, but as a design decision. */
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
