@@ -43,7 +43,7 @@ type Options struct {
 type Service struct {
 	db     *sql.DB
 	store  *Store
-	sink   audit.Sink
+	sink   audit.ModuleSink
 	notify Notifier
 	opts   Options
 	logger *slog.Logger
@@ -62,7 +62,7 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, opts Options) *Ser
 	if opts.ImportMaxBytes <= 0 {
 		opts.ImportMaxBytes = 1 << 20
 	}
-	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify, opts: opts, logger: opts.Logger}
+	return &Service{db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleGarden), notify: notify, opts: opts, logger: opts.Logger}
 }
 
 // Store exposes the read store to this module's widget, metric and list
@@ -79,8 +79,7 @@ func (s *Service) today() dates.Date { return dates.Today(s.opts.Location) }
 // error is returned unchanged so the transaction rolls back: an action that
 // succeeds unlogged is the bug the spine exists to prevent.
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, entityID, summary string, changes []audit.Change, meta map[string]any) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleGarden,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: entityType,
 		EntityID:   entityID,
@@ -88,7 +87,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 		Meta:       meta,
 		Changes:    changes,
 	})
-	return err
 }
 
 func mapNotFound(err error) error {

@@ -25,7 +25,7 @@ import (
 type Handler struct {
 	svc  *Service
 	db   *sql.DB
-	sink audit.Sink
+	sink audit.ModuleSink
 	now  func() time.Time
 }
 
@@ -35,7 +35,7 @@ func NewHandler(svc *Service, db *sql.DB, sink audit.Sink) *Handler {
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{svc: svc, db: db, sink: sink, now: now}
+	return &Handler{svc: svc, db: db, sink: audit.For(sink, audit.ModulePlatform), now: now}
 }
 
 // Mount registers the push routes on the authenticated /api router.
@@ -128,8 +128,8 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case res.Created:
-			_, err = h.sink.Record(r.Context(), tx, audit.Event{
-				Module: audit.ModulePlatform, Action: "push.subscribe",
+			err = h.sink.Record(r.Context(), tx, audit.Event{
+				Action:     "push.subscribe",
 				EntityType: "push_subscription", EntityID: sub.ID,
 				Summary: fmt.Sprintf("Zapnutá oznámení na zařízení (%s)", deviceLabel(ua)),
 			})
@@ -139,8 +139,8 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 			// device follows whoever is signed in — and the previous member stops
 			// receiving. That is a consent decision on both sides, so it is audited
 			// even though no row was created.
-			_, err = h.sink.Record(r.Context(), tx, audit.Event{
-				Module: audit.ModulePlatform, Action: "push.subscribe",
+			err = h.sink.Record(r.Context(), tx, audit.Event{
+				Action:     "push.subscribe",
 				EntityType: "push_subscription", EntityID: sub.ID,
 				Summary: fmt.Sprintf("Oznámení na zařízení (%s) převzata od jiného člena", deviceLabel(ua)),
 				Meta:    map[string]any{"previous_user_id": res.PreviousUserID},
@@ -190,8 +190,8 @@ func (h *Handler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		if err != nil || !removed {
 			return err
 		}
-		_, err = h.sink.Record(r.Context(), tx, audit.Event{
-			Module: audit.ModulePlatform, Action: "push.unsubscribe",
+		err = h.sink.Record(r.Context(), tx, audit.Event{
+			Action:     "push.unsubscribe",
 			EntityType: "push_subscription",
 			Summary:    "Vypnutá oznámení na zařízení",
 		})
@@ -273,8 +273,8 @@ func (h *Handler) test(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := appdb.WithTx(r.Context(), h.db, func(tx *sql.Tx) error {
-		_, err := h.sink.Record(r.Context(), tx, audit.Event{
-			Module: audit.ModulePlatform, Action: "push.test",
+		err := h.sink.Record(r.Context(), tx, audit.Event{
+			Action:  "push.test",
 			Summary: fmt.Sprintf("Zkušební oznámení na vlastní zařízení (%d z %d doručeno)", res.Sent, res.Subscriptions),
 		})
 		return err
@@ -343,8 +343,8 @@ func (h *Handler) patchPreferences(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		_, err = h.sink.Record(r.Context(), tx, audit.Event{
-			Module: audit.ModulePlatform, Action: "push.prefs",
+		err = h.sink.Record(r.Context(), tx, audit.Event{
+			Action:  "push.prefs",
 			Summary: fmt.Sprintf("Změna nastavení oznámení (%s)", prefsSummary(prefs)),
 		})
 		return err

@@ -32,8 +32,7 @@ func Prune(ctx context.Context, db *sql.DB, sink audit.Sink, retentionDays int) 
 		}
 		deleted, _ = res.RowsAffected()
 		if deleted > 0 {
-			if _, err := sink.Record(ctx, tx, audit.Event{
-				Module:  audit.ModuleLogging,
+			if err := audit.For(sink, audit.ModuleLogging).Record(ctx, tx, audit.Event{
 				Action:  "prune",
 				Summary: fmt.Sprintf("Vymazáno %d starých záznamů (starších než %d dní)", deleted, retentionDays),
 			}); err != nil {

@@ -28,7 +28,7 @@ import (
 type Service struct {
 	db        *sql.DB
 	store     *Store
-	sink      audit.Sink
+	sink      audit.ModuleSink
 	sender    push.Sender
 	pushStore *push.Store
 	metrics   *Registry
@@ -86,7 +86,7 @@ func NewService(db *sql.DB, sink audit.Sink, opts Options) *Service {
 		now = time.Now
 	}
 	s := &Service{
-		db: db, store: NewStore(db), sink: sink,
+		db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleAdmin),
 		sender: opts.Sender, pushStore: opts.PushStore,
 		metrics: opts.Metrics, lists: opts.Lists, actions: opts.Actions,
 		location: opts.Location, logger: opts.Logger, now: now,
@@ -177,12 +177,11 @@ func (s *Service) CreateRule(ctx context.Context, in RuleCreate) (*Rule, error) 
 		if err := s.store.InsertRule(ctx, tx, r); err != nil {
 			return err
 		}
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "rule.create",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:     "rule.create",
 			EntityType: "notification_rule", EntityID: r.ID,
 			Summary: fmt.Sprintf("Vytvořeno pravidlo oznámení „%s“ (%s)", r.Name, ruleTriggerLabel(r)),
 		})
-		return err
 	}); err != nil {
 		return nil, err
 	}
@@ -256,13 +255,12 @@ func (s *Service) UpdateRule(ctx context.Context, id string, in RuleUpdate) (*Ru
 		if err := s.store.UpdateRule(ctx, tx, r); err != nil {
 			return err
 		}
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "rule.update",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:     "rule.update",
 			EntityType: "notification_rule", EntityID: r.ID,
 			Summary: fmt.Sprintf("Upraveno pravidlo oznámení „%s“", r.Name),
 			Changes: ruleChanges(*existing, r),
 		})
-		return err
 	}); err != nil {
 		return nil, err
 	}
@@ -282,12 +280,11 @@ func (s *Service) DeleteRule(ctx context.Context, id string) error {
 		if err := s.store.DeleteRule(ctx, tx, id); err != nil {
 			return err
 		}
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "rule.delete",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:     "rule.delete",
 			EntityType: "notification_rule", EntityID: id,
 			Summary: fmt.Sprintf("Smazáno pravidlo oznámení „%s“", existing.Name),
 		})
-		return err
 	}); err != nil {
 		return err
 	}
@@ -527,12 +524,11 @@ func (s *Service) CreateSchedule(ctx context.Context, in ScheduleCreate) (*Sched
 		if err := s.store.InsertSchedule(ctx, tx, sc); err != nil {
 			return err
 		}
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "schedule.create",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:     "schedule.create",
 			EntityType: "notification_schedule", EntityID: sc.ID,
 			Summary: fmt.Sprintf("Vytvořen souhrn „%s“ (%s)", sc.Name, sc.Description),
 		})
-		return err
 	}); err != nil {
 		return nil, err
 	}
@@ -581,12 +577,11 @@ func (s *Service) UpdateSchedule(ctx context.Context, id string, in ScheduleUpda
 		if err := s.store.UpdateSchedule(ctx, tx, sc); err != nil {
 			return err
 		}
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "schedule.update",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:     "schedule.update",
 			EntityType: "notification_schedule", EntityID: sc.ID,
 			Summary: fmt.Sprintf("Upraven souhrn „%s“ (%s)", sc.Name, sc.Description),
 		})
-		return err
 	}); err != nil {
 		return nil, err
 	}
@@ -605,12 +600,11 @@ func (s *Service) DeleteSchedule(ctx context.Context, id string) error {
 		if err := s.store.DeleteSchedule(ctx, tx, id); err != nil {
 			return err
 		}
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "schedule.delete",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:     "schedule.delete",
 			EntityType: "notification_schedule", EntityID: id,
 			Summary: fmt.Sprintf("Smazán souhrn „%s“", existing.Name),
 		})
-		return err
 	})
 }
 
@@ -686,15 +680,14 @@ func (s *Service) Broadcast(ctx context.Context, in BroadcastRequest) (SendResul
 
 	res := SendResult{Recipients: push.DistinctUsers(results), Subscriptions: len(results)}
 	if err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "broadcast.send",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:  "broadcast.send",
 			Summary: fmt.Sprintf("Rozesláno oznámení „%s“ (%s)", title, czRecipients(res.Recipients)),
 			Meta: map[string]any{
 				"recipients": res.Recipients, "subscriptions": res.Subscriptions,
 				"audience": in.Audience.Scope,
 			},
 		})
-		return err
 	}); err != nil {
 		// The push already went out; failing the request now would invite a
 		// duplicate send. Record the bookkeeping failure and report success.
@@ -751,11 +744,10 @@ func (s *Service) sendTest(ctx context.Context, env push.Envelope, what string) 
 	res := SendResult{Recipients: push.DistinctUsers(results), Subscriptions: len(results)}
 
 	if err := appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "notification.test",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:  "notification.test",
 			Summary: fmt.Sprintf("Zkušební oznámení %s odesláno na vlastní zařízení", what),
 		})
-		return err
 	}); err != nil {
 		s.logger.Error("admin: audit test send", "err", err)
 	}
@@ -1353,11 +1345,10 @@ func (s *Service) RecordPrivateItemsView(ctx context.Context, f storage.ItemFilt
 		meta = nil
 	}
 	return appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		_, err := s.sink.Record(ctx, tx, audit.Event{
-			Module: audit.ModuleAdmin, Action: "private_items.view",
+		return s.sink.Record(ctx, tx, audit.Event{
+			Action:  "private_items.view",
 			Summary: "Správce otevřel seznam soukromých položek",
 			Meta:    meta,
 		})
-		return err
 	})
 }

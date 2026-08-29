@@ -25,14 +25,14 @@ const (
 type Handler struct {
 	cfg     Config
 	db      *sql.DB
-	sink    audit.Sink
+	sink    audit.ModuleSink
 	limiter *rateLimiter
 }
 
 // NewHandler builds the auth handler. sink records platform.login / platform.logout
 // atomically with the session write.
 func NewHandler(cfg Config, db *sql.DB, sink audit.Sink) *Handler {
-	return &Handler{cfg: cfg, db: db, sink: sink, limiter: newRateLimiter(loginMaxAttempts, loginWindow, cfg.Now)}
+	return &Handler{cfg: cfg, db: db, sink: audit.For(sink, audit.ModulePlatform), limiter: newRateLimiter(loginMaxAttempts, loginWindow, cfg.Now)}
 }
 
 // Mount registers the auth routes on the /api router (OUTSIDE the session gate —
@@ -114,8 +114,8 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		rawToken = raw
-		_, err = h.sink.Record(actorCtx, tx, audit.Event{
-			Module: audit.ModulePlatform, Action: "login",
+		err = h.sink.Record(actorCtx, tx, audit.Event{
+			Action:  "login",
 			Summary: fmt.Sprintf("Přihlášení uživatele %s", id.Email),
 		})
 		return err
@@ -193,8 +193,8 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		revokedID = sessionID
-		_, err = h.sink.Record(actorCtx, tx, audit.Event{
-			Module: audit.ModulePlatform, Action: "logout",
+		err = h.sink.Record(actorCtx, tx, audit.Event{
+			Action:  "logout",
 			Summary: fmt.Sprintf("Odhlášení uživatele %s", sess.Email),
 		})
 		return err

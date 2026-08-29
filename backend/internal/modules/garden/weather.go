@@ -246,8 +246,7 @@ func (s *Service) evaluateFrost(ctx context.Context) error {
 		// actor_type "system": nobody did this, the weather did. The precedent is
 		// logging.prune.
 		sysCtx := reqctx.WithActor(ctx, reqctx.Actor{Type: "system", Label: "zahrada"})
-		_, err = s.sink.Record(sysCtx, tx, audit.Event{
-			Module:     audit.ModuleGarden,
+		return s.sink.Record(sysCtx, tx, audit.Event{
 			Action:     "frost_warning",
 			EntityType: "garden_season",
 			EntityID:   frostDay.String(),
@@ -255,7 +254,6 @@ func (s *Service) evaluateFrost(ctx context.Context) error {
 			Level:      audit.LevelWarn,
 			Meta:       map[string]any{"temp_min": tempMin, "count": len(sensitive)},
 		})
-		return err
 	})
 }
 

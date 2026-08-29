@@ -74,7 +74,7 @@ type UploadOptions struct {
 type Service struct {
 	db        *sql.DB
 	store     *Store
-	sink      audit.Sink
+	sink      audit.ModuleSink
 	notifyTo  TargetedNotifier
 	pusher    push.Sender
 	directory DirectorySource
@@ -116,7 +116,7 @@ func NewService(db *sql.DB, sink audit.Sink, notifyTo TargetedNotifier, pusher p
 		opts.Upload.MaxBytes = 50 << 20
 	}
 	return &Service{
-		db: db, store: NewStore(db), sink: sink, notifyTo: notifyTo,
+		db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleChat), notifyTo: notifyTo,
 		pusher: pusher, directory: directory,
 		trashDays: opts.TrashDays, logger: opts.Logger,
 		blob: opts.Blob, blobSink: opts.Sink, upload: opts.Upload,
@@ -132,15 +132,13 @@ func (s *Service) Store() *Store { return s.store }
 //
 // ⚠ THERE IS NO MESSAGE EQUIVALENT OF THIS FUNCTION, and there must not be (D231).
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityID, summary string, changes []audit.Change) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleChat,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: "chat_conversation",
 		EntityID:   entityID,
 		Summary:    summary,
 		Changes:    changes,
 	})
-	return err
 }
 
 // ---- validation ----
