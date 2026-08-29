@@ -994,7 +994,7 @@ Sequenced so each step is independently shippable and reviewable.
 | Wave | Items | Why here |
 |---|---|---|
 | **1 — free wins** ✅ **LANDED** | 1, 2, 4, 8, 9, 10, 12, 23, 24, 26, 27, 28, 45, 46, plus `actorID`/`writeAllowed` from 15 | Mechanical, zero-risk, no design decisions. Clears noise before the real work. Shipped on `refactor/wave-1` as one commit per item — see §Wave 1, as landed. |
-| **2 — frontend hygiene** | 31, 32, 34, 36, 39, 44 | Small, self-contained, each one commit. Item 34 first: it is the pattern most likely to be copied wrong next. |
+| **2 — frontend hygiene** ✅ **LANDED** | 31, 32, 34, 36, 39, 44 | Small, self-contained, each one commit. Item 34 went first: it is the pattern most likely to be copied wrong next. Shipped on `refactor/wave-2` — see §Wave 2, as landed. |
 | **3 — platform seams** | 3, 6, 22, 25, then 5, 11 | Bigger, still behaviour-neutral. Item 3 (`appdb.Collect`) is the largest single line-count win in the repo, but read its signature caveat before starting. Items **5** and **11** carry the two ⚠ that survived the review pass — take only the safe half of 5, and pin garden's importer path before touching 11. |
 | **4 — decide, then act** | 7, 33, 41, 42, 43 | Each needs a call from Karel first — wire format (7), skip semantics (33), directory layout (41/42), scope (43). |
 | **5 — the twin** | 14, 15, 13+16, 17, 21, 37, 38, 19, 18, 20 | Only after **§Part 2's recorded decision is explicitly revisited.** Ordered by ascending risk: `scope.go` proves the pattern, `DeleteFolder` and the mirror jobs come last. Item 13 rides with 16 — see its note. |
@@ -1046,6 +1046,82 @@ a trailing blank line in `garden/store.go`, `chat/move.go`; comment-list
 indentation in `documents/sink.go`). Wave 1 kept every file it touched no worse
 than it found it, and re-formatted only where a deletion moved an alignment
 column. A repo-wide `gofmt -w` is its own commit, and belongs to whoever wants it.
+
+# Wave 2, as landed (`refactor/wave-2`)
+
+Six commits, one per item, in the order the wave table gives. Corrections the
+implementation forced, so the counts in this document stay honest:
+
+- **Item 34** — `apiErrorMessage(e, fallback)` in `api/client.ts`, **fifteen**
+  call sites across nine files. The ternary had drifted into THREE spellings,
+  not one: `?? f`, `|| f`, and `e.detail ? e.detail : f`. They agree only
+  because `Detail` is `omitempty` on the wire, so an empty-string detail never
+  reaches the client — the helper keeps the truthy test, which is the spelling
+  that survives if that ever changes. The ten garden sites do NOT call it: they
+  call `toastGardenError`, which the module already had and nothing used.
+  `gardenError` is gone, folded in as the item's ⚠ asked.
+
+  > ⚠ `CenikTab`'s two handlers were NOT migrated, against the item's list. They
+  > fall back to `e.message` — the bare error CODE — where the helper falls back
+  > to the Czech sentence, so adopting it would stop showing `conflict` to a
+  > user. An improvement, but a visible change. Both sites now carry a comment
+  > saying so, so the divergence is a decision rather than an oversight.
+
+- **Item 31** — `Field` moved to `components/ui/ui.tsx`. **Five copies, not
+  seventeen sites.** The other twelve the item counts are near-variants:
+  Administrace, `Composer`, `ConditionsBuilder` and `ScheduleBuilder` space the
+  label at `mb-1` rather than `mb-1.5` (a 2px move), and `ConditionsBuilder`,
+  `AudiencePicker`, `ScheduleBuilder`'s day picker and garden's `PlanTab` season
+  picker are not `<label>`-wrapped at all, so adopting `Field` would change what
+  a tap focuses. Doing those twelve is a spacing decision, not a refactor;
+  `Field`'s doc comment names them so the next reader need not re-derive it.
+  The item's existing ⚠ about `EventForm`/`ColumnMenu` was right and is in that
+  comment too.
+
+- **Item 32** — `FormError` in `ui.tsx`, five copies. `LoginScreen`'s two left
+  alone as the item asks, and the component says why.
+
+- **Item 36** — `PinScopeBadge` in `platform/widgets/shared.tsx`, taking the
+  label bundle as a prop. `PinScope` is exported beside it, because both payload
+  types spelled the three-way union inline.
+
+- **Item 39** — `src/modules/garden/isoWeek.ts` holds `addDays`, `toISO`,
+  `weeksInISOYear`, `isoWeekMonday` and `isoWeekKey`. `isoWeek.test.ts` is 10
+  cases and **every expected value was computed by the backend**, not read off
+  the implementation — the week-53 years (2020, 2026, 2032) and the years either
+  side. One case round-trips `isoWeekKey(isoWeekMonday(2026, w))` for all 53
+  weeks: the two directions were written independently, and that is the
+  assertion that would have caught them disagreeing. The week-53 clamp
+  `TimingWindowInput` documents survives, now pinned at the arithmetic as well
+  as through `resolveWindow`.
+
+- **Item 44** — `testsupport.Router` / `testsupport.Send`, plus a
+  `testsupport.RouterAs` the item did not anticipate: the same `httpx.Deps`
+  literal existed **twelve times in ten packages**, not four, and four of those
+  authenticate a NAMED member rather than an anonymous one. 178 lines removed,
+  not ~90. Each package keeps its wrapper — `electricity`'s returns the Service
+  too (as the item predicted), `todo`'s `send` returns `rr.Code`, `logging`
+  passes its admin-gate mount closure as the parameter.
+
+  > Four router literals are deliberately left: `dashboard` sets `CSRFMW`
+  > because the CSRF path is what it asserts; `documents` builds one with no
+  > bypass actor and one with no DB; and `platform/httpx`'s and
+  > `platform/auth`'s own suites test this router and that middleware, so
+  > building them from a helper would assume what they exist to check.
+
+Baseline after wave 2: `go build ./...` clean · `go vet ./...` clean ·
+`go test ./...` 28 packages ok · `tsc -b --noEmit` clean ·
+`npm run lint` 0 errors / 25 warnings / knip clean ·
+`vitest run` **22 files, 161 tests pass** (was 21/151 — item 39's new file).
+
+⚠ `gofmt -l` is still not clean, for the reason wave 1 recorded: this is a CRLF
+worktree with LF blobs, so gofmt lists 225 files repo-wide regardless of content.
+Every Go file wave 2 touched is gofmt-clean once the carriage returns are
+stripped, which was checked rather than assumed.
+
+⚠ None of the five frontend components extracted here has a rendering test. The
+extractions are byte-identical markup, so what is unverified is the wiring, not
+the markup — `tsc` and the existing suite cover the rest.
 
 ## Guard rails for every wave
 
