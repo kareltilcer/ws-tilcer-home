@@ -121,6 +121,26 @@ func parseDate(s string, field string) (dates.Date, error) {
 	return d, nil
 }
 
+// assignDate parses an optional wire date into an optional dates.Date field, and
+// does nothing when the field was omitted. Five request bodies repeated the
+// four-line if/parse/check/assign shape six times between them.
+//
+// ⚠ IT IS NOT THE SEVENTH SITE. `periodBody.invoiced_at` also parses a *string
+// but keeps the STRING on the input (PeriodInput.InvoicedAt) and parses only to
+// validate, so it stays written out — a helper that assigned there would be
+// changing what the service stores.
+func assignDate(src *string, field string, dst **dates.Date) error {
+	if src == nil {
+		return nil
+	}
+	d, err := parseDate(*src, field)
+	if err != nil {
+		return err
+	}
+	*dst = &d
+	return nil
+}
+
 type readingBody struct {
 	ReadOn *string `json:"read_on"`
 	VTDkwh *int64  `json:"vt_dkwh"`
@@ -131,12 +151,8 @@ type readingBody struct {
 func (b readingBody) toInput(raw map[string]json.RawMessage) (ReadingInput, error) {
 	in := ReadingInput{VTDkwh: b.VTDkwh, NTDkwh: b.NTDkwh, Note: b.Note}
 	_, in.NoteSet = raw["note"]
-	if b.ReadOn != nil {
-		d, err := parseDate(*b.ReadOn, "read_on")
-		if err != nil {
-			return in, err
-		}
-		in.ReadOn = &d
+	if err := assignDate(b.ReadOn, "read_on", &in.ReadOn); err != nil {
+		return in, err
 	}
 	return in, nil
 }
@@ -153,12 +169,8 @@ func (b tariffBody) toInput(raw map[string]json.RawMessage) (TariffInput, error)
 	in := TariffInput{PriceVTHaler: b.PriceVTHaler, PriceNTHaler: b.PriceNTHaler,
 		MonthlyFeeHaler: b.MonthlyFeeHaler, Note: b.Note}
 	_, in.NoteSet = raw["note"]
-	if b.EffectiveFrom != nil {
-		d, err := parseDate(*b.EffectiveFrom, "effective_from")
-		if err != nil {
-			return in, err
-		}
-		in.EffectiveFrom = &d
+	if err := assignDate(b.EffectiveFrom, "effective_from", &in.EffectiveFrom); err != nil {
+		return in, err
 	}
 	return in, nil
 }
@@ -173,12 +185,8 @@ type advanceBody struct {
 func (b advanceBody) toInput(raw map[string]json.RawMessage) (AdvanceInput, error) {
 	in := AdvanceInput{AmountHaler: b.AmountHaler, DueDay: b.DueDay, Note: b.Note}
 	_, in.NoteSet = raw["note"]
-	if b.EffectiveFrom != nil {
-		d, err := parseDate(*b.EffectiveFrom, "effective_from")
-		if err != nil {
-			return in, err
-		}
-		in.EffectiveFrom = &d
+	if err := assignDate(b.EffectiveFrom, "effective_from", &in.EffectiveFrom); err != nil {
+		return in, err
 	}
 	return in, nil
 }
@@ -201,12 +209,8 @@ func (b paymentBody) toInput(raw map[string]json.RawMessage) (PaymentInput, erro
 		}
 		in.Month = &m
 	}
-	if b.PaidOn != nil {
-		d, err := parseDate(*b.PaidOn, "paid_on")
-		if err != nil {
-			return in, err
-		}
-		in.PaidOn = &d
+	if err := assignDate(b.PaidOn, "paid_on", &in.PaidOn); err != nil {
+		return in, err
 	}
 	return in, nil
 }
@@ -245,19 +249,11 @@ func (b periodBody) toInput(raw map[string]json.RawMessage) (PeriodInput, error)
 			return in, err
 		}
 	}
-	if b.StartsOn != nil {
-		d, err := parseDate(*b.StartsOn, "starts_on")
-		if err != nil {
-			return in, err
-		}
-		in.StartsOn = &d
+	if err := assignDate(b.StartsOn, "starts_on", &in.StartsOn); err != nil {
+		return in, err
 	}
-	if b.EndsOn != nil {
-		d, err := parseDate(*b.EndsOn, "ends_on")
-		if err != nil {
-			return in, err
-		}
-		in.EndsOn = &d
+	if err := assignDate(b.EndsOn, "ends_on", &in.EndsOn); err != nil {
+		return in, err
 	}
 	return in, nil
 }
