@@ -20,15 +20,20 @@ weakening the module boundaries the arch tests enforce.
   rationale in comments. Merging two copies means merging their comments, not picking
   one.
 
-## Baseline (verified 2026-08-28 @ `f676473`; re-verified 2026-08-29 @ `f8e27cf`)
+## Baseline
 
-| Check | Result |
-|---|---|
-| `go build ./...` | clean |
-| `go vet ./...` | clean |
-| `go test ./...` | 28 packages ok |
-| `tsc -b --noEmit` | clean |
-| `vitest run` | **22 files, 161 tests pass** — ⚠ corrected at wave 4. This row read 21 / 151, which was the count before waves 2 and 3 added tests; the baseline it claimed to verify had moved twice underneath it. |
+⚠ **This table has now been wrong twice, both times the same way: it names the
+counts at the commit it was written against, and every wave since has moved them.**
+So it names TWO points, and the second is the one a wave is measured against.
+
+| Check | At `f676473` (2026-08-28, before wave 1) | At `f885a0a` (2026-08-29, after wave 4) |
+|---|---|---|
+| `go build ./...` | clean | clean |
+| `go vet ./...` | clean | clean |
+| `go test ./...` | 28 packages ok | 29 packages ok (wave 4 added `platform/cursor`) |
+| `tsc -b --noEmit` | clean | clean |
+| `npm run lint` | 0 errors / 25 warnings / knip clean | 0 errors / 25 warnings / knip clean |
+| `vitest run` | 21 files, 151 tests | **23 files, 169 tests** |
 
 Scale: **58.8k** LOC Go (non-test) + **32.4k** LOC Go tests; **38.7k** LOC TS/TSX.
 
@@ -360,6 +365,13 @@ column list without a shared scanner is a trap.
 This is the single largest opportunity in the repository and also the one that
 contradicts a recorded decision. **Read the whole section before acting on any of it.**
 
+> ⚠ **REVISITED AT WAVE 5 (2026-08-29), AND IT STANDS.** Karel was asked how far the
+> sharing goes and answered that `notes` and `documents` remain one behaviour in two
+> implementations. Items **13, 14, 16, 17, 18, 19 and 21 are therefore not happening**;
+> the subset that is worth doing anyway — 15, 20's comment half, 37's helpers, 38 —
+> shipped on `refactor/wave-5`. Everything below is kept as the evidence that was put
+> in front of the question, not as a pending proposal. See §Wave 5, as landed.
+
 > ### The recorded decision
 >
 > `documents/scope.go` states: *"This is deliberately duplicated from the `notes` module
@@ -406,18 +418,23 @@ roughly a third of the backend.
 
 ### The drift the decision predicted has already happened
 
-The two copies **are** out of step, in ways nothing catches:
+The two copies **are** out of step, in ways nothing catches. ✅ marks what wave 5
+closed without merging anything:
 
-- `notes/mirror.go`'s `safeToDelete` is missing the six-line comment that explains *why*
-  the floor carries a second bound — the comment `documents` learned the hard way. (It
-  does point at `documents` for the general rationale: *"see documents' MirrorJob for
-  the full rationale."* What it omits is the specific reasoning behind
-  `orphans <= claimedPresent`, which is the subtle half.)
+- ✅ `notes/mirror.go`'s `safeToDelete` was missing the six-line comment that explains
+  *why* the floor carries a second bound — the comment `documents` learned the hard way.
+  (It did point at `documents` for the general rationale: *"see documents' MirrorJob for
+  the full rationale."* What it omitted was the specific reasoning behind
+  `orphans <= claimedPresent`, which is the subtle half.) **Backported at wave 5, in
+  both directions.**
 - `DeleteFolder` is **186 lines** in `documents` and **141** in `notes` for the same
-  algorithm.
-- On the frontend twin, `DocumentsDialogs.tsx` has `min-h-11` and `aria-hidden` where
-  `NotesDialogs.tsx` has neither — an accessibility and touch-target fix that reached
-  one copy.
+  algorithm. Still true; item 18 is not happening.
+- ✅ On the frontend twin, `DocumentsDialogs.tsx` had `min-h-11` and `aria-hidden` where
+  `NotesDialogs.tsx` had neither — an accessibility and touch-target fix that reached
+  one copy. **Both now render one shared dialog and Poznámky has both (wave 5, item 38).**
+- ⚠ And one wave 5 FOUND rather than closed: the two delete confirmations count
+  different things. Poznámky reports the whole subtree, Dokumenty its direct children.
+  See §Wave 5, as landed.
 
 That is the cost side of the ledger, and it is worth putting in front of the decision.
 
@@ -997,7 +1014,7 @@ Sequenced so each step is independently shippable and reviewable.
 | **2 — frontend hygiene** ✅ **LANDED** | 31, 32, 34, 36, 39, 44 | Small, self-contained, each one commit. Item 34 went first: it is the pattern most likely to be copied wrong next. Shipped on `refactor/wave-2` — see §Wave 2, as landed. |
 | **3 — platform seams** ✅ **LANDED** | 3, 6, 22, 25, then 5, 11 | Bigger, still behaviour-neutral. Item 3 (`appdb.Collect`) is the largest single line-count win in the repo, but read its signature caveat before starting. Items **5** and **11** carry the two ⚠ that survived the review pass — take only the safe half of 5, and pin garden's importer path before touching 11. Shipped on `refactor/wave-3` — see §Wave 3, as landed. |
 | **4 — decide, then act** ✅ **LANDED (43 deferred)** | 7, 33, 41, 42 | Each needed a call from Karel first — wire format (7), skip semantics (33), directory layout (41/42), scope (43). All four decisions and what they cost are in §Wave 4, as landed. **Item 43 was not taken**: the Czech-literal extraction is still open, and still wants a tranche picked before it starts. Shipped on `refactor/wave-4`. |
-| **5 — the twin** | 14, 15, 13+16, 17, 21, 37, 38, 19, 18, 20 | Only after **§Part 2's recorded decision is explicitly revisited.** Ordered by ascending risk: `scope.go` proves the pattern, `DeleteFolder` and the mirror jobs come last. Item 13 rides with 16 — see its note. |
+| **5 — the twin** ⚠ **LANDED IN PART** | 15 (partial), 20 (comment half), 37 (helpers), 38 | **§Part 2's recorded decision was revisited, and Karel's answer is that it STANDS**: `notes` and `documents` remain one behaviour in two implementations. That takes items **13, 14, 16, 17, 18, 19 and 21 off the table** — every one of them is the structural merge the decision refuses. What shipped is the subset that is worth doing anyway, on `refactor/wave-5` — see §Wave 5, as landed. |
 | **not in this pass** | 30, 40 | Item 30 is low value; item 40 is a UX change, not a refactor. |
 
 ---
@@ -1345,24 +1362,196 @@ so wave 4 is items 7, 33, 41 and 42.
 
 Wave 4 is 4 commits, 97 files, +2008 / −1584.
 
-⚠ The baseline table at the top of this document was stale when wave 4 started
-and is corrected there: `go test ./...` is **28** packages at `origin/main`
-(29 with wave 4's `platform/cursor`), and `vitest run` was **22 files / 161
-tests**, not 21 / 151 — waves 2 and 3 added tests without updating the number
-they are measured against.
+⚠ The baseline table at the top of this document was stale when wave 4 started:
+`go test ./...` was **28** packages at `origin/main` (29 with wave 4's
+`platform/cursor`), and `vitest run` was **22 files / 161 tests**, not 21 / 151 —
+waves 2 and 3 had added tests without updating the number they were measured
+against. Wave 5 rebuilt that table around two fixed points rather than correcting
+it a third time.
+
+
+# Wave 5, as landed (`refactor/wave-5`)
+
+## The decision this wave was gated on
+
+**§Part 2's recorded decision STANDS.** Karel was asked how far the sharing goes
+and answered that `notes` and `documents` stay twinned — the v4 D40 precedent
+holds, Dokumenty mirrors Poznámky, one behaviour in two implementations.
+
+That is an answer, not a deferral, and it decides seven items:
+
+| Item | Why not taken |
+|---|---|
+| **13** `folderCols` | Rides with 16 by its own note; a shared column list without a shared scanner is the trap the item names. |
+| **14** `platform/treescope` | The structural merge itself. |
+| **16** folder half of the store | Same. |
+| **17** pin half of the store | Same. |
+| **18** `Service.DeleteFolder` | Same, and depends on 14/16/17. |
+| **19** the remaining structural twins | Same. |
+| **21** the two `pripnute.go` providers | Same. |
+
+What shipped is what the item list is worth **even if the twin survives** — which
+is how items 15, 20, 37 and 38 were each described before the question was put.
+Four commits, one per item.
+
+## Corrections the implementation forced
+
+- **Item 15** — six of the seventeen moved, not thirteen.
+
+  `boolPtr` was not five copies but **SIX**: `chat` had already written it GENERIC
+  (`func ptr[T any](v T) *T`, store.go, five call sites) plus a `ptrBool` in its
+  realtime test, and nothing in the item knew. That is the `platform/db/sql.go`
+  failure in miniature — nobody was going to find chat's version from `documents`.
+
+  The package is **`platform/optional`, not `platform/ptr`**, because `documents`,
+  `events`, `notes` and `todo` each declare a package-level
+  `ptr(sql.NullString) *string` — a scan helper, a different function with the
+  same obvious name — so an import called `ptr` does not compile in the four
+  packages that need it most. `optional.Of(true)` also says what the call site
+  means: nil is "leave this field alone".
+
+  The other five: `metaHard` (4 copies) → `audit.HardMeta`; `metaVia` (2) →
+  `audit.WithVia`; `shortID` (2) → `idgen.Short`; `splitPath` (2) →
+  `platform/slugpath.Split`.
+
+  **Seven of the seventeen cannot move while the decision stands**, and the item
+  half-predicted it. `metaByAdmin`, `isReservedRootSlug`, `parsePinScope` and
+  `publishChanges` reference `Scope` or the modules' own scope/visibility
+  constants, so the item routes them through item 14's `treescope`.
+  `assertLiveForMutation` and `publishMeta` are the same story by a different
+  road: their only sensible home was also treescope, and inventing a
+  tree-semantics package for two five-line functions is doing item 14 through the
+  back door. `slugPathFrom` takes `[]PathSegment` — each module's own WIRE type —
+  and moving a wire type into platform is a structural change belonging to the
+  decision that stands.
+
+  ⚠ `audit.Ptr` was NOT folded into `optional.Of`. Same idea, strings only, 103
+  call sites, and a doc comment recording why six modules converged on it after
+  each spelling it `ap`. Unifying them is a rename across every module and wants
+  its own commit; until then the repo has two spellings, and that is written down
+  in both.
+
+- **Item 20** — the comment half only, and the worked example had to be re-derived
+  rather than copied.
+
+  `documents`' `safeToDelete` explains why the delete floor carries a SECOND bound
+  (`orphans <= claimedPresent`); `notes` had five lines pointing at documents for
+  "the full rationale". Both halves are now in `notes`, and `documents` gained a
+  line pointing back, so the pairing is stated from both sides and is checkable.
+
+  Documents' example — "3 documents restored down to 1 row leaves 6 orphans among
+  9 objects" — does not describe anything that can happen in `notes`:
+  `ExpectedObjects` claims up to THREE objects per document row (original,
+  preview, thumbnail) where `ExpectedImageObjects` claims exactly one. Notes' now
+  reads: 9 images restored down to 4 rows leaves 5 orphans among 9 objects, 56%,
+  and exactly ON a floor of 5 — a case the second bound catches and the floor
+  alone would not.
+
+  Not touched: `sweepUnreferencedRows`, the sixth phase `notes` has and
+  `documents` does not. Its guard genuinely is a different rule
+  (`len(ids) > floor && share > max`, the inverse shape) and carries its own
+  comment saying so.
+
+- **Item 37** — the helper half, and the two copies had already drifted.
+
+  `src/lib/foldertree.ts`: a generic `indexTree` over an `itemsOf` accessor, plus
+  `findNode` and `subtreeCounts`. `tailOf` was byte-identical and went to
+  `lib/lexorank.ts` beside `tail`, whose business "the key after these siblings"
+  actually is.
+
+  The drift the item did not name: **`DokumentyPage` had grown an `ancestorsById`
+  map and filtered the move picker with it in one pass, while `PoznamkyPage` kept
+  a `flatten` helper and re-walked the subtree to build a blocked set.** Same
+  answer, two implementations, only one of them cheap. `findNode` likewise had two
+  bodies — a recursion with an early return, and a `flatten`-then-scan that built
+  an array of the whole subtree to find one node. `subtreeCounts` had two
+  SIGNATURES, one taking a node and one taking `(idx, folderId)`.
+
+  The shared index holds ITEMS, which renames four fields at 32 call sites in
+  Poznámky and 30 in Dokumenty (`noteById`/`documentById` → `itemById`, and so
+  on). The names are more accurate than what they replace: the index really does
+  not know what a note is.
+
+  ⚠ NOT shared, despite looking like twins: `folderCountLabel` and `rootLabel`.
+  Dokumenty omits a zero document count and falls back to a label where Poznámky
+  always renders one, and each names its own root. Merging them would have been a
+  behaviour change wearing a refactor's clothes.
+
+- **Item 38** — the a11y drift was taken deliberately, and there was a THIRD
+  difference going the other way.
+
+  `components/common/TreeDialogs.tsx`, with each module passing a label bundle
+  rather than a `cs` namespace. Poznámky gains `min-h-11` (the 44px touch target)
+  and `aria-hidden` on the two decorative marks, on Karel's call.
+
+  The third difference the item did not list: Poznámky wrapped the fallback ▸ in
+  `text-subtle` and Dokumenty rendered it bare. The shared component keeps
+  `text-subtle` — a subdued mark is what "this row has no icon" should look like,
+  and the bare literal reads as the copy nobody thought about. Every folder row
+  gets an icon from the index (`f.icon || DEFAULT_FOLDER_ICON`), so the only row
+  this reaches is the ROOT entry: **in Dokumenty its ▸ is now dimmed where it was
+  not.**
+
+  The hard delete is an optional SLOT rather than a flag — absent means there is
+  no checkbox at all, which is the guarantee that sharing the dialog did not hand
+  Poznámky a capability it has never had.
+
+## Found on the way, not fixed
+
+⚠ **The two delete confirmations do not count the same thing.** Poznámky passes
+`subtreeCounts` — every descendant at any depth. Dokumenty passes
+`delNode.subfolders.length` / `delNode.documents.length` — direct children only.
+So a Dokumenty folder holding nothing directly but one subfolder of forty says
+"1 podsložka", while its Poznámky equivalent says what the cascade will really
+take. Both numbers are rendered verbatim by the shared dialog, because changing
+either is a behaviour change and was not what this wave was asked for. Poznámky's
+`subtreeCounts` comment already argues the case: delete and publish both walk the
+whole subtree in one transaction, and publish has no undo (D182). Worth its own
+change.
+
+## Baseline after wave 5
+
+`go build ./...` clean · `go vet ./...` clean · `go test ./...` **29 packages ok** ·
+`tsc -b --noEmit` clean · `npm run lint` 0 errors / 25 warnings / knip clean ·
+`vitest run` **25 files, 194 tests pass** (was 23 / 169: 13 new cases for
+`lib/foldertree`, 12 for `components/common/TreeDialogs`).
+
+⚠ `gofmt -l` is still not clean repo-wide, for the reason wave 1 recorded: this is
+a CRLF worktree over LF blobs, so `gofmt` reports nearly every file. Compared on
+CR-stripped copies, every Go file wave 5 touched is clean except
+`chat/v10_realtime_test.go`, which was already unformatted at `origin/main` and
+was left exactly as found.
+
+⚠ **`optional.Of` and `slugpath.Split` ship without tests of their own**, which is
+why the package count stays at 29. Both are covered transitively — `Split` by
+every resolver test in `notes` and `documents`, `Of` by every archive path in four
+modules — and both are code that was already there, moved. `go test ./...` proves
+the move; nothing proves the functions in isolation.
+
+⚠ `go test -race` was not run anywhere in this wave: unavailable on this host
+(windows/arm64).
+
+⚠ Neither page has component tests, here or before this wave. The item 37
+migration is carried by `tsc`: every renamed index field is a type error if
+missed, which is what caught the two optional-chaining sites a plain rename would
+have flattened.
 
 ## Guard rails for every wave
 
 - The baseline at the top of this file is the contract: `go test ./...`, `tsc -b` and
   `vitest run` must all still pass after each commit. The COUNTS drift as waves add
-  tests, so treat them as a floor rather than a target: 28 Go packages at wave 3, 29
-  after wave 4 added `platform/cursor`; `vitest run` was 22 files / 161 tests before
-  wave 4 and is 23 / 169 after it. The 151 this line used to name was two waves stale.
+  tests, so the table names two fixed points rather than one moving number, and a
+  wave is measured against the later one. For the record: 28 Go packages before wave
+  1, 29 after wave 4 added `platform/cursor`, still 29 after wave 5 (its two new
+  packages have no tests of their own); `vitest run` ran 21 files / 151 tests before
+  wave 1, 23 / 169 after wave 4, and 25 / 194 after wave 5.
 - `internal/arch` must stay green — it is the thing that keeps a "share this helper"
   from becoming a cross-module import.
 - One concern per commit. Item 41 in particular must be a pure move with no other edits.
 - When two copies merge, **merge their comments too.** Item 20's missing `safeToDelete`
-  rationale is what a lost comment looks like six months on.
+  rationale was what a lost comment looks like six months on — the code was right in
+  both modules and the reason it was right lived in only one. Wave 5 backported it
+  even though the merge itself was refused.
 - Three items do not compile as first written — 3 (scanner parameter type), 23
   (`[]Module` into `...any`), 24 (two different config structs). `go build ./...` catches
   all three immediately; the note on each says what the fix is.
