@@ -58,26 +58,15 @@ const strictSandbox = "sandbox"
 
 // serveContent implements all four content endpoints; they differ only in which
 // object they open and how the disposition is chosen.
+//
+// The stages are in the order they must run, and two of the orderings are the
+// whole point of the endpoint rather than housekeeping: the viewer-scoped load
+// comes before the ETag branch, and the response headers go out only after the
+// bytes are in hand. Each stage below says why.
 func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode contentMode) {
 	id := chi.URLParam(r, "id")
-	// ⚠ Viewer-scoped (leak table row 5). All four content endpoints share this one
-	// handler and each is registered for GET *and* HEAD, so this single load is
-	// what makes a foreign private document 404 on eight routes — including the
-	// HEAD branch, which is live code and would otherwise be a HEAD-only existence
-	// oracle. A miss is indistinguishable from an unknown id (D180).
-	sd, err := h.svc.Store().GetStoredDocument(r.Context(), h.svc.db, id, reqctx.ActorID(r.Context()))
-	if err != nil {
-		httpx.WriteError(w, err)
-		return
-	}
-	// An archived (soft-deleted) document is gone as far as every reader is
-	// concerned, and its permanent URL has to go with it: without this check a link
-	// shared before the delete keeps streaming the bytes as if nothing happened,
-	// while the tree, resolve, search and the pins all agree the document is gone.
-	// The row and the objects survive untouched — a soft delete is reversible, so
-	// only the reads stop, and restoring the document restores its URL with it.
-	if sd == nil || sd.Archived {
-		httpx.WriteError(w, httpx.ErrNotFound("document not found"))
+	sd, ok := h.loadForContent(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -93,56 +82,22 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 		return
 	}
 
-	// Cache validators. The ETag is the content checksum for the original and a
-	// derived-object marker otherwise, so a preview PDF and its original never share
-	// a validator.
-	etag := `"` + sd.Checksum + `"`
-	switch mode {
-	case contentPreview:
-		if sd.PreviewKind == previewKindPDF {
-			etag = `"` + sd.Checksum + `-preview"`
-		}
-	case contentThumbnail:
-		etag = `"` + sd.Checksum + `-thumb"`
-	}
-
+	etag := contentETag(*sd, mode)
 	// A matching validator means the browser already has these exact bytes — and
 	// since they can never change, that answer is always correct.
 	if httpx.IfNoneMatch(r, etag) {
 		// Reached only after the viewer-scoped load above, which is the ordering that
-		// matters: were the check to run after this branch, a second member holding a
-		// stale ETag would get a 304 — "yes, and it hasn't changed" — for a document
-		// they may not see.
+		// matters: were the check to run before it, a second member holding a stale
+		// ETag would get a 304 — "yes, and it hasn't changed" — for a document they
+		// may not see.
 		setContentCache(w, etag, sd.Visibility == visibilityPrivate)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
-	rng, hasRange, err := parseRange(r.Header.Get("Range"))
-	if err != nil {
-		httpx.WriteError(w, err)
+	rng, hasRange, ok := h.resolveRange(w, r, id, key)
+	if !ok {
 		return
-	}
-
-	// A Range request is resolved against the object's real size BEFORE the body is
-	// opened, so an unsatisfiable range is a clean 416 rather than a half-written
-	// 206. It also converts a suffix range ("bytes=-500") into the absolute window
-	// the store expects — storage APIs take an offset, not a negative one.
-	var start, length int64
-	if hasRange {
-		stat, serr := h.svc.blob.Stat(r.Context(), key)
-		if serr != nil {
-			h.writeObjectError(w, id, key, serr)
-			return
-		}
-		var ok bool
-		start, length, ok = clampRange(rng, stat.Size)
-		if !ok {
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", stat.Size))
-			httpx.WriteError(w, httpx.ErrRangeNotSatisfiable("requested range is outside the object"))
-			return
-		}
-		rng = blobstore.ByteRange{Offset: start, Length: length}
 	}
 
 	var body io.ReadCloser
@@ -158,25 +113,10 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 	}
 	defer func() { _ = body.Close() }()
 
-	// Only NOW, with the bytes actually in hand, do the response headers go out. Set
-	// any earlier they would ride along on every failure above — and a 404/416/502
-	// carrying a one-year `immutable` lifetime on a URL whose content never changes
-	// means one transient storage blip breaks that document in that browser for a
-	// year.
-	setContentCache(w, etag, sd.Visibility == visibilityPrivate)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Type", mimeTypeHeader(contentType))
-	if isPDF(contentType) && mode == contentPreview {
-		w.Header().Set("Content-Security-Policy", pdfSandbox)
-	} else {
-		w.Header().Set("Content-Security-Policy", strictSandbox)
-	}
-	w.Header().Set("Content-Disposition", dispositionFor(mode, contentType, sd.OriginalFilename))
-	w.Header().Set("Accept-Ranges", "bytes")
-
+	writeContentHeaders(w, *sd, mode, contentType, etag)
 	if hasRange {
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+length-1, info.Size))
-		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rng.Offset, rng.Offset+rng.Length-1, info.Size))
+		w.Header().Set("Content-Length", strconv.FormatInt(rng.Length, 10))
 		w.WriteHeader(http.StatusPartialContent)
 	} else if info.Size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
@@ -191,6 +131,98 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 		// and the header is already written so an error envelope is impossible.
 		h.svc.logger.Debug("documents: streaming ended early", "document_id", id, "err", err)
 	}
+}
+
+// loadForContent resolves the id to a document this viewer may read, writing the
+// response and reporting false when it does not.
+//
+// ⚠ Viewer-scoped (leak table row 5). All four content endpoints share this one
+// load and each is registered for GET *and* HEAD, so this is what makes a foreign
+// private document 404 on eight routes — including the HEAD branch, which is live
+// code and would otherwise be a HEAD-only existence oracle. A miss is
+// indistinguishable from an unknown id (D180).
+func (h *Handler) loadForContent(w http.ResponseWriter, r *http.Request, id string) (*storedDocument, bool) {
+	sd, err := h.svc.Store().GetStoredDocument(r.Context(), h.svc.db, id, reqctx.ActorID(r.Context()))
+	if err != nil {
+		httpx.WriteError(w, err)
+		return nil, false
+	}
+	// An archived (soft-deleted) document is gone as far as every reader is
+	// concerned, and its permanent URL has to go with it: without this check a link
+	// shared before the delete keeps streaming the bytes as if nothing happened,
+	// while the tree, resolve, search and the pins all agree the document is gone.
+	// The row and the objects survive untouched — a soft delete is reversible, so
+	// only the reads stop, and restoring the document restores its URL with it.
+	if sd == nil || sd.Archived {
+		httpx.WriteError(w, httpx.ErrNotFound("document not found"))
+		return nil, false
+	}
+	return sd, true
+}
+
+// contentETag is the cache validator: the content checksum for the original and a
+// derived-object marker otherwise, so a preview PDF and its original never share
+// a validator.
+func contentETag(sd storedDocument, mode contentMode) string {
+	switch mode {
+	case contentPreview:
+		if sd.PreviewKind == previewKindPDF {
+			return `"` + sd.Checksum + `-preview"`
+		}
+	case contentThumbnail:
+		return `"` + sd.Checksum + `-thumb"`
+	}
+	return `"` + sd.Checksum + `"`
+}
+
+// resolveRange reads the Range header and resolves it against the object's real
+// size, writing the response and reporting false when it cannot be satisfied.
+//
+// The size lookup happens BEFORE the body is opened, so an unsatisfiable range is
+// a clean 416 rather than a half-written 206. It also converts a suffix range
+// ("bytes=-500") into the absolute window the store expects — storage APIs take
+// an offset, not a negative one.
+func (h *Handler) resolveRange(w http.ResponseWriter, r *http.Request, id, key string) (blobstore.ByteRange, bool, bool) {
+	rng, hasRange, err := parseRange(r.Header.Get("Range"))
+	if err != nil {
+		httpx.WriteError(w, err)
+		return rng, false, false
+	}
+	if !hasRange {
+		return rng, false, true
+	}
+	stat, err := h.svc.blob.Stat(r.Context(), key)
+	if err != nil {
+		h.writeObjectError(w, id, key, err)
+		return rng, true, false
+	}
+	start, length, ok := clampRange(rng, stat.Size)
+	if !ok {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", stat.Size))
+		httpx.WriteError(w, httpx.ErrRangeNotSatisfiable("requested range is outside the object"))
+		return rng, true, false
+	}
+	return blobstore.ByteRange{Offset: start, Length: length}, true, true
+}
+
+// writeContentHeaders stamps the cache validators and the untrusted-content
+// isolation headers this file's package comment describes.
+//
+// ⚠ IT IS CALLED ONLY WITH THE BYTES ALREADY IN HAND. Set any earlier these would
+// ride along on every failure before it — and a 404/416/502 carrying a one-year
+// `immutable` lifetime, on a URL whose content never changes, means one transient
+// storage blip breaks that document in that browser for a year.
+func writeContentHeaders(w http.ResponseWriter, sd storedDocument, mode contentMode, contentType, etag string) {
+	setContentCache(w, etag, sd.Visibility == visibilityPrivate)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", mimeTypeHeader(contentType))
+	if isPDF(contentType) && mode == contentPreview {
+		w.Header().Set("Content-Security-Policy", pdfSandbox)
+	} else {
+		w.Header().Set("Content-Security-Policy", strictSandbox)
+	}
+	w.Header().Set("Content-Disposition", dispositionFor(mode, contentType, sd.OriginalFilename))
+	w.Header().Set("Accept-Ranges", "bytes")
 }
 
 // setContentCache stamps the cache validators. Only ever called on a response that

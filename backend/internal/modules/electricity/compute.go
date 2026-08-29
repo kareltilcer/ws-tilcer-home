@@ -752,24 +752,66 @@ func czDate(d dates.Date) string { return fmt.Sprintf("%d. %d. %d", d.D, int(d.M
 
 // Summarize computes everything Přehled shows. Nothing here is stored or cached
 // (D152).
+//
+// The five stages below run in order and each one narrows the answer: what is
+// owed regardless of any reading, whether the period can be priced at all, the
+// measured half, the projected half, and the balance that exists only once a
+// total does. They share `c`, which holds the derived inputs — computing those
+// once is what stops two stages disagreeing about which readings are in the
+// period.
 func Summarize(s Snapshot) Summary {
+	c := newSummarizer(s)
+	sum := Summary{Period: c.s.Period, Today: c.s.Today, Blocking: c.blocking}
+
+	c.countAdvances(&sum)
+	c.setBlockedStatus(&sum)
+	c.measureActual(&sum)
+	c.project(&sum)
+	c.settle(&sum)
+	return sum
+}
+
+// summarizer holds the values every stage of Summarize derives from.
+type summarizer struct {
+	s         Snapshot
+	rs        []Reading // the readings inside the period, in order
+	endExcl   dates.Date
+	intervals []Interval
+	blocking  []Blocking
+
+	// hasOpening and openTariff are the two facts the shape of the whole answer
+	// turns on: without a reading ON the period's first day there is no measured
+	// side at all (D140), and without a tariff covering that day nothing can be
+	// priced.
+	hasOpening bool
+	openTariff *Tariff
+
+	// forecastFrom is the reading the average is measured TO, and therefore where
+	// the forecast starts. measureActual sets it; it stays zero when the measured
+	// side does not exist, which is exactly when project does not read it.
+	forecastFrom dates.Date
+}
+
+func newSummarizer(s Snapshot) *summarizer {
 	s = s.sorted()
-	rs := s.readingsInPeriod()
-	endExcl := s.periodEndExclusive()
+	c := &summarizer{
+		s:       s,
+		rs:      s.readingsInPeriod(),
+		endExcl: s.periodEndExclusive(),
+	}
+	c.intervals, c.blocking = BuildIntervals(s)
+	c.hasOpening = len(c.rs) > 0 && c.rs[0].ReadOn.Equal(s.Period.StartsOn)
+	c.openTariff = tariffOn(s.Tariffs, s.Period.StartsOn)
+	return c
+}
 
-	sum := Summary{Period: s.Period, Today: s.Today}
-
-	intervals, blocking := BuildIntervals(s)
-	sum.Blocking = blocking
-
-	hasOpening := len(rs) > 0 && rs[0].ReadOn.Equal(s.Period.StartsOn)
-	openTariff := tariffOn(s.Tariffs, s.Period.StartsOn)
-
-	// The counted months and the zálohy do not depend on any of the above: they
-	// are calendar arithmetic over the period's bounds, and they are the one
-	// thing this module can always answer. Computed first so even the emptiest
-	// screen has them.
-	sum.Months = countedMonths(s)
+// countAdvances fills the counted months and their three totals.
+//
+// It runs FIRST because it depends on none of the rest: it is calendar
+// arithmetic over the period's bounds, and it is the one thing this module can
+// always answer. So even the emptiest screen has it.
+func (c *summarizer) countAdvances(sum *Summary) {
+	sum.Months = countedMonths(c.s)
 	for _, m := range sum.Months {
 		sum.AdvancesTotalHaler += m.AmountHaler
 		if m.IsDue {
@@ -777,98 +819,115 @@ func Summarize(s Snapshot) Summary {
 			sum.MonthsDue++
 		}
 	}
+}
 
+// setBlockedStatus records why the period cannot be priced, if it cannot. A
+// period that CAN be priced is left with an empty Status here — project below
+// sets the successful one, and it is the only stage that does.
+func (c *summarizer) setBlockedStatus(sum *Summary) {
 	switch {
-	case !hasOpening:
+	case !c.hasOpening:
 		sum.Status = StatusBlocked
 		sum.Reason = ReasonBlockedOpening
-	case openTariff == nil:
+	case c.openTariff == nil:
 		// NOT a Blocking: nothing is missing from the MEASUREMENTS. This is
 		// missing configuration, and the Czech copy says so.
 		sum.Status = StatusInsufficientData
 		sum.Reason = ReasonNoTariff
-	case len(blocking) > 0:
+	case len(c.blocking) > 0:
 		sum.Status = StatusBlocked
 		sum.Reason = ReasonBlockedInterval
 	}
+}
 
-	// forecastFrom is the reading the average is measured TO, and therefore where
-	// the forecast starts. Set only when the measured side exists at all.
-	var forecastFrom dates.Date
-
-	// ---- Actual: the measured side, up to the last usable reading.
-	if hasOpening && openTariff != nil {
-		priced := pricedIntervals(intervals)
-		lastActual := s.Period.StartsOn
-		if len(priced) > 0 {
-			lastActual = priced[len(priced)-1].ToOn
-		}
-
-		actual := &Span{FromOn: s.Period.StartsOn, ToOn: lastActual,
-			Days: s.Period.StartsOn.DaysUntil(lastActual)}
-		for _, iv := range priced {
-			actual.VTDkwh += iv.VTDkwh
-			actual.NTDkwh += iv.NTDkwh
-			actual.EnergyHaler += iv.EnergyHaler
-			actual.EnergyVTHaler += iv.EnergyVTHaler
-		}
-		// EnergyHaler is DEFINED as the sum of the interval costs, never
-		// recomputed from a span-wide delta: that definition is what makes the
-		// Odečty list and the Přehled headline provably the same number.
-		actual.EnergyNTHaler = actual.EnergyHaler - actual.EnergyVTHaler
-		actual.FeeHaler = sumFees(feeChunks(s.Tariffs, s.Period.StartsOn, lastActual))
-		actual.CostHaler = actual.EnergyHaler + actual.FeeHaler
-		sum.Actual = actual
-
-		// THE FORECAST BASIS. When an interval is blocked it is the reading that
-		// OPENS the blocked interval, not the newest one on file — everything
-		// after the gap is unusable, so the average cannot be measured to it.
-		basis := rs[len(rs)-1]
-		if len(blocking) > 0 && blocking[0].Kind == BlockTariffChange {
-			for _, r := range rs {
-				if !r.ReadOn.After(lastActual) {
-					basis = r
-				}
-			}
-		}
-		forecastFrom = basis.ReadOn
-		sum.ElapsedDays = s.Period.StartsOn.DaysUntil(forecastFrom)
-		sum.Closed = forecastFrom.Equal(endExcl)
-
-		// ⚠ LastReadingOn is DELIBERATELY NOT the basis above. This pair is the
-		// only source for the plain nudge line "poslední odečet před N dny"
-		// (D156), so it must always name the NEWEST reading actually on file.
-		// Rewinding it past a block would tell someone no odečet has been taken
-		// since January while the one they entered this morning sits on Odečty —
-		// and it would contradict the `else if` branch below, which reports the
-		// newest reading for the other blocked state.
-		lastOn := rs[len(rs)-1].ReadOn
-		age := lastOn.DaysUntil(s.Today)
-		sum.LastReadingOn = &lastOn
-		sum.LastReadingAgeDays = &age
-	} else if len(rs) > 0 {
+// measureActual fills the measured side — the span up to the last usable
+// reading — along with the nudge line's pair, and sets c.forecastFrom.
+func (c *summarizer) measureActual(sum *Summary) {
+	if !c.hasOpening || c.openTariff == nil {
 		// Blocked or unpriced, but readings exist: the nudge must still say when
 		// the last one was, not claim there has never been one.
-		lastOn := rs[len(rs)-1].ReadOn
-		age := lastOn.DaysUntil(s.Today)
-		sum.LastReadingOn = &lastOn
-		sum.LastReadingAgeDays = &age
+		if len(c.rs) > 0 {
+			c.noteLastReading(sum)
+		}
+		return
 	}
 
-	// ---- Forecast (D141, D142). The boundary between fact and forecast is the
-	// LAST USABLE READING (forecastFrom), not today — and not LastReadingOn,
-	// which reports the newest reading on file for the nudge line.
-	canForecast := hasOpening && openTariff != nil && len(blocking) == 0 &&
-		sum.ElapsedDays >= 1 && !sum.Closed && forecastFrom.Before(endExcl)
+	priced := pricedIntervals(c.intervals)
+	lastActual := c.s.Period.StartsOn
+	if len(priced) > 0 {
+		lastActual = priced[len(priced)-1].ToOn
+	}
+
+	actual := &Span{FromOn: c.s.Period.StartsOn, ToOn: lastActual,
+		Days: c.s.Period.StartsOn.DaysUntil(lastActual)}
+	for _, iv := range priced {
+		actual.VTDkwh += iv.VTDkwh
+		actual.NTDkwh += iv.NTDkwh
+		actual.EnergyHaler += iv.EnergyHaler
+		actual.EnergyVTHaler += iv.EnergyVTHaler
+	}
+	// EnergyHaler is DEFINED as the sum of the interval costs, never
+	// recomputed from a span-wide delta: that definition is what makes the
+	// Odečty list and the Přehled headline provably the same number.
+	actual.EnergyNTHaler = actual.EnergyHaler - actual.EnergyVTHaler
+	actual.FeeHaler = sumFees(feeChunks(c.s.Tariffs, c.s.Period.StartsOn, lastActual))
+	actual.CostHaler = actual.EnergyHaler + actual.FeeHaler
+	sum.Actual = actual
+
+	// THE FORECAST BASIS. When an interval is blocked it is the reading that
+	// OPENS the blocked interval, not the newest one on file — everything
+	// after the gap is unusable, so the average cannot be measured to it.
+	basis := c.rs[len(c.rs)-1]
+	if len(c.blocking) > 0 && c.blocking[0].Kind == BlockTariffChange {
+		for _, r := range c.rs {
+			if !r.ReadOn.After(lastActual) {
+				basis = r
+			}
+		}
+	}
+	c.forecastFrom = basis.ReadOn
+	sum.ElapsedDays = c.s.Period.StartsOn.DaysUntil(c.forecastFrom)
+	sum.Closed = c.forecastFrom.Equal(c.endExcl)
+
+	// ⚠ LastReadingOn is DELIBERATELY NOT the basis above. This pair is the
+	// only source for the plain nudge line "poslední odečet před N dny"
+	// (D156), so it must always name the NEWEST reading actually on file.
+	// Rewinding it past a block would tell someone no odečet has been taken
+	// since January while the one they entered this morning sits on Odečty —
+	// and it would contradict the unpriced branch above, which reports the
+	// newest reading for the other blocked state.
+	c.noteLastReading(sum)
+}
+
+// noteLastReading fills the pair behind "poslední odečet před N dny" (D156) from
+// the NEWEST reading on file. Both branches of measureActual call this one
+// function, which is the point: the two states must not disagree about which
+// reading that is — see the ⚠ above.
+func (c *summarizer) noteLastReading(sum *Summary) {
+	lastOn := c.rs[len(c.rs)-1].ReadOn
+	age := lastOn.DaysUntil(c.s.Today)
+	sum.LastReadingOn = &lastOn
+	sum.LastReadingAgeDays = &age
+}
+
+// project fills the forecast half and the three totals — or refuses to, and
+// says what is missing instead.
+//
+// The boundary between fact and forecast is the LAST USABLE READING
+// (c.forecastFrom), not today, and not LastReadingOn, which reports the newest
+// reading on file for the nudge line (D141, D142).
+func (c *summarizer) project(sum *Summary) {
+	canForecast := c.hasOpening && c.openTariff != nil && len(c.blocking) == 0 &&
+		sum.ElapsedDays >= 1 && !sum.Closed && c.forecastFrom.Before(c.endExcl)
 
 	switch {
 	case canForecast:
-		sum.Forecast = buildForecast(s, forecastFrom, endExcl,
+		sum.Forecast = buildForecast(c.s, c.forecastFrom, c.endExcl,
 			sum.Actual.VTDkwh, sum.Actual.NTDkwh, int64(sum.ElapsedDays))
 		// The fee is chunked over the WHOLE period once and the forecast side
 		// takes the difference — ONE SUBTRACTION, not a second helper, so
 		// FeeTotalHaler cannot disagree with its two halves.
-		feeTotal := sumFees(feeChunks(s.Tariffs, s.Period.StartsOn, endExcl))
+		feeTotal := sumFees(feeChunks(c.s.Tariffs, c.s.Period.StartsOn, c.endExcl))
 		sum.Forecast.FeeHaler = feeTotal - sum.Actual.FeeHaler
 		sum.Forecast.CostHaler = sum.Forecast.EnergyHaler + sum.Forecast.FeeHaler
 		sum.setTotals(feeTotal)
@@ -879,7 +938,7 @@ func Summarize(s Snapshot) Summary {
 		// D157: the closing reading exists, so the forecast span is EMPTY and the
 		// period is entirely actual. Without this case the module would go on
 		// forecasting a period it already knows the answer to.
-		sum.Forecast = &Span{FromOn: endExcl, ToOn: endExcl}
+		sum.Forecast = &Span{FromOn: c.endExcl, ToOn: c.endExcl}
 		sum.setTotals(sum.Actual.FeeHaler)
 		sum.Status = StatusComplete
 
@@ -889,7 +948,7 @@ func Summarize(s Snapshot) Summary {
 		if sum.Status == "" {
 			sum.Status = StatusInsufficientData
 			switch {
-			case len(rs) < 2:
+			case len(c.rs) < 2:
 				sum.Reason = ReasonNeedSecond
 			case sum.ElapsedDays < 1:
 				sum.Reason = ReasonSameDay
@@ -897,17 +956,22 @@ func Summarize(s Snapshot) Summary {
 				sum.Reason = ReasonNeedSecond
 			}
 		}
-		sum.Headroom = buildHeadroom(s)
+		sum.Headroom = buildHeadroom(c.s)
 	}
+}
 
-	if sum.CostTotalHaler != nil {
-		balance := sum.AdvancesTotalHaler - *sum.CostTotalHaler
-		sum.BalanceHaler = &balance
-		sum.RecommendedKc = recommendedAdvanceKc(*sum.CostTotalHaler, sum.AdvancesDueHaler,
-			len(sum.Months)-sum.MonthsDue)
-		sum.Invoice = buildInvoiceComparison(s, sum)
+// settle derives what exists only once a cost total does: the balance against
+// the zálohy, the recommendation for the months still to come, and the
+// comparison against the supplier's invoice.
+func (c *summarizer) settle(sum *Summary) {
+	if sum.CostTotalHaler == nil {
+		return
 	}
-	return sum
+	balance := sum.AdvancesTotalHaler - *sum.CostTotalHaler
+	sum.BalanceHaler = &balance
+	sum.RecommendedKc = recommendedAdvanceKc(*sum.CostTotalHaler, sum.AdvancesDueHaler,
+		len(sum.Months)-sum.MonthsDue)
+	sum.Invoice = buildInvoiceComparison(c.s, *sum)
 }
 
 // setTotals fills the three totals together, so a caller cannot set one and
