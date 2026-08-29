@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
@@ -15,8 +14,10 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/foldericon"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slug"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slugpath"
 )
 
 // Notifier publishes a websocket change after commit (mirrors the other modules).
@@ -168,19 +169,6 @@ func metaByAdmin(ctx context.Context, base map[string]any, sc Scope) map[string]
 	return base
 }
 
-func metaVia(base map[string]any, via string) map[string]any {
-	if via != "" {
-		if base == nil {
-			base = map[string]any{}
-		}
-		base["via"] = via
-	}
-	if len(base) == 0 {
-		return nil
-	}
-	return base
-}
-
 // freeSlug returns base, or base-2/base-3/… until free among the siblings of one
 // parent IN ONE ROOT SCOPE, across BOTH tables (the cross-table check plus the two
 // sibling indexes together are the addressing invariant, D32/D40).
@@ -203,7 +191,7 @@ func metaVia(base map[string]any, via string) map[string]any {
 // `soukrome-2`/`soukrome-3` sequence with no second rule.
 func (s *Service) freeSlug(ctx context.Context, tx DBTX, parentID *string, sc Scope, base, excludeFolderID, excludeDocumentID string) (string, error) {
 	if base == "" {
-		base = shortID()
+		base = idgen.Short()
 	}
 	reserved := isReservedRootSlug(base, parentID, sc)
 	candidate := base
@@ -349,7 +337,7 @@ func (s *Service) UpdateDocument(ctx context.Context, id string, in DocumentUpda
 		}
 		changed = true
 		return s.record(ctx, tx, "document.update", "document", id,
-			fmt.Sprintf("Upraven dokument „%s“", out.Title), changes, metaVia(nil, via), sc)
+			fmt.Sprintf("Upraven dokument „%s“", out.Title), changes, audit.WithVia(nil, via), sc)
 	})
 	if err != nil {
 		return nil, err
@@ -424,7 +412,7 @@ func (s *Service) MoveDocument(ctx context.Context, id string, in DocumentMoveRe
 		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "document.move", "document", id,
-			fmt.Sprintf("Přesunut dokument „%s“", out.Title), changes, metaVia(nil, via), sc)
+			fmt.Sprintf("Přesunut dokument „%s“", out.Title), changes, audit.WithVia(nil, via), sc)
 	})
 	if err != nil {
 		return nil, err
@@ -488,20 +476,20 @@ func (s *Service) DeleteDocument(ctx context.Context, id string, hard bool) erro
 			// the one power v9 grants across the privacy boundary.
 			return s.record(ctx, tx, "document.delete", "document", id,
 				fmt.Sprintf("Smazán dokument „%s“", before.Title), nil,
-				metaByAdmin(ctx, metaHard(true), sc), sc)
+				metaByAdmin(ctx, audit.HardMeta(true), sc), sc)
 		}
 		// Soft delete is idempotent: archiving an already-archived document writes
 		// nothing, emits no bogus false→true diff, and broadcasts nothing.
 		if before.Archived {
 			return nil
 		}
-		if err := s.store.UpdateDocument(ctx, tx, id, documentPatch{Archived: boolPtr(true)}); err != nil {
+		if err := s.store.UpdateDocument(ctx, tx, id, documentPatch{Archived: optional.Of(true)}); err != nil {
 			return err
 		}
 		changed = true
 		return s.record(ctx, tx, "document.delete", "document", id,
 			fmt.Sprintf("Smazán dokument „%s“", before.Title),
-			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, metaHard(false), sc)
+			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, audit.HardMeta(false), sc)
 	})
 	if err != nil {
 		return err
@@ -915,7 +903,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			return err
 		}
 		for _, d := range childDocs {
-			if err := s.store.UpdateDocument(ctx, tx, d.ID, documentPatch{Archived: boolPtr(true)}); err != nil {
+			if err := s.store.UpdateDocument(ctx, tx, d.ID, documentPatch{Archived: optional.Of(true)}); err != nil {
 				return err
 			}
 			changed = true
@@ -1190,7 +1178,7 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 // path names a different item in the shared tree and in each private one — so the
 // walk starts from the named root and never leaves it.
 func (s *Service) Resolve(ctx context.Context, path string, sc Scope) (*DocResolveResult, error) {
-	segs := splitPath(path)
+	segs := slugpath.Split(path)
 	if len(segs) == 0 {
 		return nil, httpx.ErrNotFound("empty path")
 	}
@@ -1541,7 +1529,7 @@ func (s *Service) Pin(ctx context.Context, documentID, scopeStr, via string) (*P
 		if inserted { // idempotent: only audit a real change
 			return s.record(ctx, tx, "document.pin", "document", documentID,
 				fmt.Sprintf("Připnut dokument „%s“ pro všechny", d.Title), nil,
-				metaVia(map[string]any{"scope": scopeHousehold}, via), scopeOfDocument(d))
+				audit.WithVia(map[string]any{"scope": scopeHousehold}, via), scopeOfDocument(d))
 		}
 		return nil
 	})
@@ -1589,7 +1577,7 @@ func (s *Service) Unpin(ctx context.Context, documentID, scopeStr, via string) (
 		if removed {
 			return s.record(ctx, tx, "document.unpin", "document", documentID,
 				fmt.Sprintf("Odepnut dokument „%s“ (pro všechny)", d.Title), nil,
-				metaVia(map[string]any{"scope": scopeHousehold}, via), scopeOfDocument(d))
+				audit.WithVia(map[string]any{"scope": scopeHousehold}, via), scopeOfDocument(d))
 		}
 		return nil
 	})
@@ -1696,15 +1684,6 @@ func (s *Service) ancestors(ctx context.Context, q DBTX, folderID *string) ([]Pa
 
 // ---- small helpers ----
 
-func boolPtr(b bool) *bool { return &b }
-
-func metaHard(hard bool) map[string]any {
-	if hard {
-		return map[string]any{"hard": true}
-	}
-	return nil
-}
-
 // parsePinScope parses the PIN scope ("household" | "personal"), a different axis
 // from the v9 root scope that ParseScope in scope.go handles. Renamed in v9 so the
 // two cannot be confused at a call site.
@@ -1714,14 +1693,6 @@ func parsePinScope(s string) (string, error) {
 		return s, nil
 	}
 	return "", httpx.ErrUnprocessable("scope must be household or personal")
-}
-
-func shortID() string {
-	id := strings.ReplaceAll(idgen.New(), "-", "")
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	return id
 }
 
 func orEmptyDocs(x []DocumentSummary) []DocumentSummary {
@@ -1740,25 +1711,6 @@ func slugPathFrom(segs []PathSegment, ownSlug string) string {
 		parts = append(parts, ownSlug)
 	}
 	return strings.Join(parts, "/")
-}
-
-func splitPath(p string) []string {
-	p = strings.Trim(strings.TrimSpace(p), "/")
-	if p == "" {
-		return nil
-	}
-	raw := strings.Split(p, "/")
-	out := make([]string, 0, len(raw))
-	for _, seg := range raw {
-		if seg == "" {
-			continue
-		}
-		if dec, err := url.PathUnescape(seg); err == nil {
-			seg = dec
-		}
-		out = append(out, seg)
-	}
-	return out
 }
 
 // encodeCursor packs the `(updated_at, id)` pair the ORDER BY pages on. `updated_at`

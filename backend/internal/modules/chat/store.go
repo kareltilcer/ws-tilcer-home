@@ -579,5 +579,3 @@ func nullStr(v sql.NullString) *string {
 	s := v.String
 	return &s
 }
-
-func ptr[T any](v T) *T { return &v }

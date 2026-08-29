@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 )
 
 // TestMessagePublishReachesExactlyTheMembers is D233.
@@ -246,7 +247,7 @@ func TestPushGoesToEveryMemberButTheAuthorAndHonoursTheMute(t *testing.T) {
 
 	// Andy silences this room.
 	if _, err := hh.svc.UpdateSelf(hh.ctx(andy), c.ID,
-		chat.ConversationMemberSelfUpdate{Muted: ptrBool(true)}); err != nil {
+		chat.ConversationMemberSelfUpdate{Muted: optional.Of(true)}); err != nil {
 		t.Fatalf("mute: %v", err)
 	}
 
@@ -265,8 +266,6 @@ func TestPushGoesToEveryMemberButTheAuthorAndHonoursTheMute(t *testing.T) {
 		t.Fatalf("push went to %v, want only %s", recipients, quiet.id)
 	}
 }
-
-func ptrBool(b bool) *bool { return &b }
 
 // TestEditAndDeleteReachOnlyTheMembersAboveWhoseFloorTheMessageSits is the floor
 // applied to the AUDIENCE rather than only to the read (D218/D226).
