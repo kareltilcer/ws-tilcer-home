@@ -403,7 +403,10 @@ func (s *Service) commitMessage(ctx context.Context, conversationID, body string
 	rendered := Message{
 		ID: id, ConversationID: conversationID, AuthorID: actor,
 		AuthorLabel: label(labels, actor), Body: body,
-		Attachments: make([]Attachment, 0, len(files)), CreatedAt: now,
+		Attachments: make([]Attachment, 0, len(files)),
+		// Never null (D174), the same as the text-only send one file over.
+		Reactions: []Reaction{},
+		CreatedAt: now,
 	}
 	for _, f := range files {
 		a := Attachment{

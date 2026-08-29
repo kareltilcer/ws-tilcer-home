@@ -252,6 +252,86 @@ func (s *Store) GetConversation(ctx context.Context, q querier, actor, conversat
 	}, nil
 }
 
+// TrashedCount is how many of the caller's conversations are in the koš (v10.1,
+// D267).
+//
+// ⚠ IT IS THE CALLER'S KOŠ, NOT THE HOUSEHOLD'S. The membership join is the same one
+// ListConversations is built on, so a room the caller is not in never enters the
+// count — a number that leaked how many rooms exist would be the leak table's row 11
+// answered in the affirmative by a scalar.
+//
+// ⚠ AND AN ADMIN GETS NO WIDER ANSWER. Restore and purge are verbs an admin has over
+// a room they may not read (D255); this is a READ, so it stays member-scoped like
+// every other one in the module.
+func (s *Store) TrashedCount(ctx context.Context, q querier, actor string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM chat_members m
+		  JOIN chat_conversations c ON c.id = m.conversation_id
+		 WHERE m.user_id = ? AND c.deleted_at IS NOT NULL`, actor).Scan(&n)
+	return n, err
+}
+
+// LastMessages is the newest message each named room has FOR THIS CALLER (v10.1,
+// D266) — the conversation row's preview line.
+//
+// ⚠ THE FLOOR IS IN THE QUERY, TWICE, AND BOTH ARE LOAD-BEARING. `MAX(id)` over a
+// conversation is the newest message the ROOM has, which for a member added
+// yesterday is a body they may not read — printed on the row they see before they
+// open anything, which is a worse leak than the thread's would be because nobody
+// has to click. The membership join supplies the bound and the inner MAX applies it
+// too, so the row picked and the row returned are the same row.
+//
+// ⚠ AND A TOMBSTONE IS STILL THE NEWEST MESSAGE. It is not skipped: `body` is
+// already blank on one (D223) and the preview says *Zpráva byla smazána*, exactly
+// as the thread does. Skipping back to the newest non-deleted message would print a
+// line the room no longer ends with.
+//
+// It takes the ids the caller has already been listed, so it inherits the access
+// decision rather than making a second one — the AttachmentsForMessages shape.
+func (s *Store) LastMessages(ctx context.Context, q querier, actor string, conversationIDs []string) (map[string]ConversationPreview, error) {
+	out := map[string]ConversationPreview{}
+	if actor == "" || len(conversationIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(conversationIDs)+1)
+	args = append(args, actor)
+	for _, id := range conversationIDs {
+		args = append(args, id)
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT x.conversation_id, x.id, x.author_id, x.body, x.created_at,
+		       x.deleted_at IS NOT NULL,
+		       (SELECT COUNT(*) FROM chat_attachments a WHERE a.message_id = x.id)
+		  FROM chat_messages x
+		  JOIN chat_members m
+		    ON m.conversation_id = x.conversation_id AND m.user_id = ?
+		 WHERE x.conversation_id IN (`+appdb.Placeholders(len(conversationIDs))+`)
+		   AND x.id > m.effective_from_id
+		   AND x.id = (SELECT MAX(y.id) FROM chat_messages y
+		                WHERE y.conversation_id = x.conversation_id
+		                  AND y.id > m.effective_from_id)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			convID string
+			p      ConversationPreview
+			body   string
+		)
+		if err := rows.Scan(&convID, &p.ID, &p.AuthorID, &body, &p.CreatedAt,
+			&p.Deleted, &p.AttachmentCount); err != nil {
+			return nil, err
+		}
+		p.Excerpt = excerpt(body)
+		out[convID] = p
+	}
+	return out, rows.Err()
+}
+
 // ConversationName reads a room's name for an audit summary or a push title. It
 // takes no actor because every caller has already passed a scope; a name is not a
 // second access decision.

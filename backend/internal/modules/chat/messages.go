@@ -303,6 +303,11 @@ func (s *Store) SoftDeleteMessage(ctx context.Context, q querier, id, author, no
 		`UPDATE chat_attachments SET original_filename = '' WHERE message_id = ?`, id); err != nil {
 		return false, err
 	}
+	// The reactions go with it (v10.1). They are not content the tombstone is
+	// keeping a place for — see ClearReactions.
+	if err := s.ClearReactions(ctx, q, id); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 

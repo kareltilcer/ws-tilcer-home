@@ -86,6 +86,13 @@ func (s *Service) renderMessages(ctx context.Context, q querier, sc Scope, rows 
 	if err != nil {
 		return nil, err
 	}
+	// ⚠ AND ONE QUERY FOR THE PAGE'S REACTIONS, for the same reason and on the same
+	// ids (v10.1). A chip is a second read of a second table, and the floor reaches
+	// it the way it reaches an attachment: through the ids Thread already bounded.
+	reactions, err := s.store.ReactionsForMessages(ctx, q, ids, labels)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Message, 0, len(rows))
 	for _, r := range rows {
 		m := Message{
@@ -94,6 +101,7 @@ func (s *Service) renderMessages(ctx context.Context, q querier, sc Scope, rows 
 			Body:        r.Body,
 			// ALWAYS an array, never null (D174).
 			Attachments: []Attachment{},
+			Reactions:   []Reaction{},
 			CreatedAt:   r.CreatedAt,
 			EditedAt:    nullStr(r.EditedAt),
 			Deleted:     r.DeletedAt.Valid,
@@ -101,6 +109,7 @@ func (s *Service) renderMessages(ctx context.Context, q querier, sc Scope, rows 
 		for _, a := range attachments[r.ID] {
 			m.Attachments = append(m.Attachments, a.wire(labels))
 		}
+		m.Reactions = append(m.Reactions, reactions[r.ID]...)
 		if r.ReplyToID.Valid {
 			m.ReplyTo = quotes[r.ReplyToID.String]
 		}
@@ -280,7 +289,11 @@ func (s *Service) SendMessage(ctx context.Context, conversationID string, in Mes
 	rendered = Message{
 		ID: id, ConversationID: conversationID, AuthorID: actor,
 		AuthorLabel: label(labels, actor), Body: body,
-		Attachments: []Attachment{}, CreatedAt: now, Deleted: false,
+		// A message a millisecond old has no reactions, but the field is an ARRAY
+		// rather than null on every path (D174) — a `.map` on the other side does
+		// not care that this one could not have had any.
+		Attachments: []Attachment{}, Reactions: []Reaction{},
+		CreatedAt: now, Deleted: false,
 	}
 	if replyTo != nil {
 		quote, qerr := s.store.Quote(ctx, s.db, sentScope, *replyTo, labels)
@@ -376,8 +389,9 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 		out = Message{
 			ID: messageID, ConversationID: sc.ConversationID, AuthorID: actor,
 			AuthorLabel: label(labels, actor), Body: body,
-			Attachments: []Attachment{}, CreatedAt: row.CreatedAt,
-			EditedAt: optional.Of(now), Deleted: false,
+			Attachments: []Attachment{}, Reactions: []Reaction{},
+			CreatedAt: row.CreatedAt,
+			EditedAt:  optional.Of(now), Deleted: false,
 		}
 		// ⚠ THE QUOTE IS RE-RENDERED, BECAUSE THE FRAME REPLACES THE WHOLE MESSAGE
 		// (v10 review). replaceMessage swaps the cached object outright, so a field
@@ -404,6 +418,15 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 		for _, a := range byMessage[messageID] {
 			out.Attachments = append(out.Attachments, a.wire(labels))
 		}
+		// ⚠ AND THE REACTIONS RIDE FOR EXACTLY THE SAME REASON (v10.1). The frame
+		// replaces the whole message, so omitting the chips here would make fixing a
+		// typo silently wipe every reaction off that bubble on every other member's
+		// screen — an edit erasing other people's marks, with nothing to say it had.
+		reactions, err := s.store.ReactionsForMessages(ctx, tx, []string{messageID}, labels)
+		if err != nil {
+			return err
+		}
+		out.Reactions = append(out.Reactions, reactions[messageID]...)
 		return nil
 	})
 	if err != nil {
@@ -450,10 +473,15 @@ func (s *Service) DeleteMessage(ctx context.Context, messageID string) error {
 		if err != nil {
 			return err
 		}
+		// ⚠ NO REACTIONS ON A TOMBSTONE, AND THE EMPTY ARRAY IS THE TRUTH RATHER THAN
+		// AN OMISSION: SoftDeleteMessage has just dropped the rows (v10.1). D223 keeps
+		// the message so replies do not point at nothing; it does not keep six
+		// people's ❤️ on a sentence nobody can read any more.
 		out = Message{
 			ID: messageID, ConversationID: sc.ConversationID, AuthorID: actor,
 			AuthorLabel: label(labels, actor), Body: "",
-			Attachments: []Attachment{}, CreatedAt: row.CreatedAt, Deleted: true,
+			Attachments: []Attachment{}, Reactions: []Reaction{},
+			CreatedAt: row.CreatedAt, Deleted: true,
 		}
 		return nil
 	})

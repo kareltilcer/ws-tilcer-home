@@ -149,5 +149,8 @@ func (m *Module) StorageTables() []string {
 	return append([]string{
 		"chat_conversations", "chat_members", "chat_messages",
 		"chat_attachments", "chat_deleted_keys",
+		// v10.1's `12003`. A table in the schema that no module declares fails the
+		// completeness guard immediately, which is exactly what that guard is for.
+		"chat_reactions",
 	}, storage.FTSShadows("chat_messages_fts")...)
 }
