@@ -1140,7 +1140,7 @@ implementation forced, so the counts in this document stay honest:
   The signature caveat was right and WIDER than stated: nine files declared the
   scanner interface, not five — the five module-local `scanner` types plus
   `todo`'s `rowScanner`, `logging`'s `scannable`, and four inline literals
-  (`chat`, `documents`, `events`, `notes`). All **40** signatures moved to
+  (`chat`, `documents`, `events`, `notes`). All **32** `scanX` functions moved to
   `appdb.Scanner` and the seven type declarations are gone.
 
   > ⚠ A caveat this document did NOT have, and it is wire-visible. Nine of the
@@ -1162,7 +1162,7 @@ implementation forced, so the counts in this document stay honest:
   that it falls back to the default where the shared helper clamps. Fixing that
   is a visible change and belongs to v8's own release.
 
-- **Item 22** — `run()` went from **611 lines to 74**: seven steps, seven
+- **Item 22** — `run()` went from **597 lines to 74**: seven steps, seven
   functions, four small structs (`authParts`, `pushParts`, `appModules`,
   `shutdownDeps`). Three checks stand behind "no wiring changed", because
   `cmd/home` has no test package: the boot logs of a binary built from
@@ -1184,9 +1184,9 @@ implementation forced, so the counts in this document stay honest:
   call. The item's other five functions are left, with reasons in the commit.
 
 - **Item 5** — `audit.For(sink, module)` returning a `ModuleSink`, adopted at
-  **27** Record sites: eight `record` wrappers plus admin's nine inline sites,
-  push's five, auth's two, and one each in garden's weather job, chat's upload
-  and logging's prune.
+  **28** Record sites: eight `record` wrappers plus admin's nine inline sites,
+  push's five, auth's two, and one each in garden's weather job, chat's upload,
+  logging's prune and the cross-module threshold write below.
 
   > ⚠ Two deviations. It is a FREE FUNCTION, not `Sink.For` as this document
   > proposed: the package doc says the Sink interface is narrow on purpose so a
@@ -1200,7 +1200,9 @@ implementation forced, so the counts in this document stay honest:
   > document did not know about: `admin`'s clean-up page writes
   > `chat.threshold.update`. `ModuleSink.For(module)` re-binds for it, spelled
   > out at that call site. The first sweep bound it to `admin` and
-  > `TestThresholdUpdateIsAuditedAsChat` caught it.
+  > `TestSetThresholdsWritesAuditsAndInvalidates`
+  > (`admin/v10_storage_chat_test.go:126`), which asserts the row is
+  > `chat.threshold.update`, caught it.
 
 - **Item 11** — `httpx.PatchKeys(b, dst)` and `httpx.DecodePatch(r, dst)`: one
   mechanism in the two shapes its callers need, which is why it is a PAIR and
@@ -1230,7 +1232,8 @@ Baseline after wave 3: `go build ./...` clean · `go vet ./...` clean ·
 `npm run lint` 0 errors / 25 warnings / knip clean ·
 `vitest run` 22 files, 161 tests pass (unchanged — wave 3 is backend-only).
 
-Net: 39 files, +1389 / −1100.
+Net across the six code commits: 39 files, +1389 / −1100; with this document's
+own entry, 40 files, +1502 / −1101.
 
 ⚠ `gofmt -l` is still not clean repo-wide, for the reason wave 1 recorded: this
 is a CRLF worktree with LF blobs, so gofmt lists every Go file regardless of
