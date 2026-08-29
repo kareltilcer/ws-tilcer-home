@@ -92,7 +92,20 @@ function ChatLayout() {
             was never smaller than what it held: the newest messages and the
             composer were simply cut off the bottom of the page, with no scrollbar
             to say so. The two panes are where the height has to stop. */}
-        <aside className={id ? 'hidden min-h-0 lg:flex lg:flex-col lg:border-r lg:border-border' : 'flex min-h-0 flex-col lg:border-r lg:border-border'}>
+        {/* ⚠ `min-w-0` IS LOAD-BEARING HERE TOO, and it is the width twin of the
+            `min-h-0` note above — found by opening the page at 375 px, not by any
+            test (v10.1). `<main>` has carried it since v10; the aside did not, and
+            nothing noticed while its second line said "5 členů". A grid item
+            defaults to `min-width: auto`, which resolves to its MIN-CONTENT width,
+            and a `truncate` line is `white-space: nowrap` — so the moment the row's
+            second line became a preview of a real sentence, the pane's minimum
+            width became that sentence's. It measured 415 px inside a 375 px grid
+            and `overflow-hidden` clipped the difference: the ＋ button lost its
+            right half, every row's timestamp read "21" instead of "21:45", and
+            nothing scrolled to say so. The truncation could not help — it shortens
+            text to the width it is GIVEN, and the pane was being given the width of
+            the untruncated text. */}
+        <aside className={id ? 'hidden min-h-0 min-w-0 lg:flex lg:flex-col lg:border-r lg:border-border' : 'flex min-h-0 min-w-0 flex-col lg:border-r lg:border-border'}>
           {/* ⚠ THE MODULE-TOTAL WARNING SITS ON THE LIST, NOT IN A THREAD. It is
               about the household's bucket, so a member meets it where they choose a
               room rather than inside one — and it never appears beside the
