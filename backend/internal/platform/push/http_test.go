@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,10 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	. "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
@@ -28,13 +23,7 @@ import (
 func pushRouter(t *testing.T, sqldb *sql.DB, svc *Service, userID, role string) http.Handler {
 	t.Helper()
 	h := NewHandler(svc, sqldb, audit.NewSink())
-	return httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        sqldb,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: userID, Type: "user", Roles: []string{role}}}),
-		MountAPI:  func(api chi.Router) { h.Mount(api) },
-	})
+	return testsupport.RouterAs(t, sqldb, reqctx.Actor{UserID: userID, Type: "user", Roles: []string{role}}, h.Mount)
 }
 
 // The self-test is the last step of the permission gauntlet, and it must make a

@@ -44,28 +44,13 @@ func newAPI(t *testing.T, roles ...string) *api {
 		TempDir:        t.TempDir(),
 	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	h := documents.NewHandler(svc)
-	handler := httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u", Type: "user", Roles: roles}}),
-		MountAPI:  func(r chi.Router) { h.Mount(r) },
-	})
+	handler := testsupport.Router(t, db, h.Mount, roles...)
 	return &api{t: t, handler: handler, svc: svc, blob: store}
 }
 
 func (a *api) do(method, path, body string) *httptest.ResponseRecorder {
 	a.t.Helper()
-	var r *http.Request
-	if body != "" {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-	} else {
-		r = httptest.NewRequest(method, path, nil)
-	}
-	rr := httptest.NewRecorder()
-	a.handler.ServeHTTP(rr, r)
-	return rr
+	return testsupport.Send(a.t, a.handler, method, path, body)
 }
 
 func (a *api) get(path string, headers ...[2]string) *httptest.ResponseRecorder {

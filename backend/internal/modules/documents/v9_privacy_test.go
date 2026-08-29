@@ -19,12 +19,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
@@ -60,13 +57,7 @@ func newHousehold(t *testing.T, members ...member) *household {
 	handlers := map[string]http.Handler{}
 	for _, m := range members {
 		actor := reqctx.Actor{UserID: m.id, Type: "user", Label: m.id, Roles: m.roles}
-		handlers[m.id] = httpx.NewRouter(httpx.Deps{
-			Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-			DB:        db,
-			Site:      "home",
-			SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &actor}),
-			MountAPI:  func(r chi.Router) { h.Mount(r) },
-		})
+		handlers[m.id] = testsupport.RouterAs(t, db, actor, h.Mount)
 	}
 	return &household{t: t, svc: svc, db: &dbHandle{handler: handlers}}
 }

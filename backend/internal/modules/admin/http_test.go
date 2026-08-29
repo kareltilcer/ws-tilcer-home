@@ -2,47 +2,30 @@ package admin_test
 
 import (
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
 // router mounts the admin module the way main.go does, with a fixed actor.
 func (f *fixture) router(roles ...string) http.Handler {
 	f.t.Helper()
 	mod := admin.NewModule(f.svc)
-	return httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        f.db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u-admin", Type: "user", Roles: roles}}),
-		MountAPI:  func(api chi.Router) { mod.RegisterRoutes(api) },
-	})
+	// A NAMED actor, not testsupport.Router's anonymous "u": several assertions
+	// here read the actor back out of audit_events.
+	return testsupport.RouterAs(f.t, f.db, reqctx.Actor{UserID: "u-admin", Type: "user", Roles: roles}, mod.RegisterRoutes)
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	var r *http.Request
-	if body == "" {
-		r = httptest.NewRequest(method, path, nil)
-	} else {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-	}
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, r)
-	return rr
+	return testsupport.Send(t, h, method, path, body)
 }
 
 // Administrace is admin-only, exactly like the log browser (D62). There is no

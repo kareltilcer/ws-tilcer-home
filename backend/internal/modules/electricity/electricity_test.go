@@ -5,22 +5,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -518,32 +513,20 @@ func TestModulePublishesNothing(t *testing.T) {
 // HTTP: role gating, cursors, and the D161 nulls on the wire
 // ---------------------------------------------------------------------------
 
+// router hands back the Service alongside the handler: several tests here seed
+// through the service and then assert over HTTP, and the two must share one
+// database.
 func router(t *testing.T, roles ...string) (http.Handler, *electricity.Service) {
 	t.Helper()
 	db := testsupport.NewDB(t)
 	svc := electricity.NewService(db, audit.NewSink(), nil, time.UTC)
 	hd := electricity.NewHandler(svc)
-	return httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u", Type: "user", Roles: roles}}),
-		MountAPI:  func(api chi.Router) { hd.Mount(api) },
-	}), svc
+	return testsupport.Router(t, db, hd.Mount, roles...), svc
 }
 
 func send(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	var r *http.Request
-	if body != "" {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-	} else {
-		r = httptest.NewRequest(method, path, nil)
-	}
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, r)
-	return rr
+	return testsupport.Send(t, h, method, path, body)
 }
 
 // TestReaderReadsEverythingAndWritesNothing — an ordinary all-roles module with
