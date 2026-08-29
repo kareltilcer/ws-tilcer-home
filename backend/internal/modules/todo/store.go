@@ -22,7 +22,7 @@ type Store struct{ db *sql.DB }
 // NewStore returns a todo store over db.
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
-func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
+func nowUTC() string { return appdb.NowUTC(time.RFC3339) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {

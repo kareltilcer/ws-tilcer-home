@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
@@ -30,7 +29,7 @@ func (s *Store) DB() *sql.DB { return s.db }
 
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 const (
 	defaultLimit = 50

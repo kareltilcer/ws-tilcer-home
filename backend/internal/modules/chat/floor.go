@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
 // The read floor, and the one place its two forms are minted (D218).
@@ -45,7 +47,7 @@ import (
 // other module's `nowUTC`.
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 // floor is a member's read floor in both its forms.
 //

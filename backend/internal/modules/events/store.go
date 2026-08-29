@@ -23,7 +23,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
 const defaultTimezone = "Europe/Prague"
 
-func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
+func nowUTC() string { return appdb.NowUTC(time.RFC3339) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {

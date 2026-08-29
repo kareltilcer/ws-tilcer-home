@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
@@ -28,7 +27,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // equality, which plain second precision (time.RFC3339) could not disambiguate.
 const tsFormat = "2006-01-02T15:04:05.000000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {

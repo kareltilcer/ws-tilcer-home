@@ -26,7 +26,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // cursor, which compares (updated_at, id) pairs lexically.
 const tsFormat = "2006-01-02T15:04:05.000000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 // ParseTS parses a stored timestamp (used by the reconciliation pass to compare a
 // row's age against the orphan grace window).

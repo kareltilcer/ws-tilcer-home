@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
@@ -27,7 +26,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 // never by a timestamp.
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 const monthCols = `id, month, income_kaja, income_andy,
 	rate_personal, rate_operational, rate_fun, rate_nofun,

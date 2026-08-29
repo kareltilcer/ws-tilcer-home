@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
@@ -25,7 +24,7 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
 const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
-func nowUTC() string { return time.Now().UTC().Format(tsFormat) }
+func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
 type scanner interface{ Scan(dest ...any) error }
 
