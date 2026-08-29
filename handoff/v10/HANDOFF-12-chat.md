@@ -2,6 +2,8 @@
 
 > **Read first:** root `CLAUDE.md`, then `PRD.md` **§V10-1…§V10-11** (decisions **D216–D262**), `openapi.yaml` **0.12.0**, the scope brief `V10-chat-brief.md`, and the design addendum `HANDOFF-design.md` **§v10**. Build guide for v10. Owner: Karel. Issued 2026-08-26.
 >
+> ⚠ **THIS IS THE v10 BUILD GUIDE AND v10 IS BUILT.** The served contract is now **0.13.0**, not the 0.12.0 this document keeps naming, and three as-built sections correct it: `PRD.md` **§V10-12** (PR 2), **§V10-13** (PR 3) and **§V10-14** (v10.1 — reactions, the row preview, the koš, the gestures, decisions **D265–D269**). Read those before trusting a version number or a table below. The `openapi.yaml` in this folder is the frozen **0.12.0 spec snapshot** and has not been updated since it was issued; `backend/openapi.yaml` is the contract the server actually serves.
+>
 > ⚠ **This is a module build with two platform changes underneath it, and the platform changes are the risky half.** `HANDOFF-5` through `HANDOFF-10` were all the same shape — a new package, a new migration block, a registry entry, three or four host maps, done. v10 has all of that **plus** a change to `platform/ws`, which ten modules already publish through, **plus** a new verb in `platform/storage` that spans two modules and two object-store calls with no transaction over them.
 >
 > ⚠ **It ships as THREE pull requests (D261), not one.** v7, v8 and v9 each shipped as one PR; v10 is roughly twice the size of any of them and its riskiest change sits at the bottom of the stack. Building it as one PR means the `ws` change is first written and last verified.
