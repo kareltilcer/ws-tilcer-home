@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -59,11 +60,101 @@ func main() {
 	}
 }
 
+// run composes the process and blocks until it is asked to stop.
+//
+// The numbered steps are the steps of the boot: each is one function below, in
+// the order it runs, and the value one step returns is what the next steps take.
+// Nothing here decides anything — the decisions are in the functions, with the
+// comments that explain them — so what this reads as is the wiring ORDER, which
+// is the part of composition that is genuinely load-bearing. Three edges in
+// particular are order and not preference: the hub exists before auth, chat is
+// built after documents, and the shutdown sequence at the end joins the tailer
+// before it flushes.
 func run(logger *slog.Logger) error {
 	// 1. Configuration — fail fast and loud.
-	cfg, err := config.LoadFromEnv()
+	cfg, err := loadConfig(logger)
 	if err != nil {
 		return err
+	}
+
+	// 2. Database: open → migrate → verify FTS5 → seed (only when empty).
+	sqldb, err := openDatabase(cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sqldb.Close() }()
+
+	// The audit spine writer — every module (and login/logout) records through it.
+	sink := audit.NewSink()
+	if err := pruneAudit(cfg, sqldb, sink, logger); err != nil {
+		return err
+	}
+
+	// 3. Mode B auth + session (D23, D29), the shared push channel, and the
+	// websocket hub.
+	//
+	// The hub is built here rather than at step 4 because AUTH needs it: revoking
+	// a session has to close that member's sockets too, or the socket keeps
+	// delivering private payloads to an account that is 401 everywhere else (v10).
+	hub := ws.NewHub(logger)
+	authp := buildAuth(cfg, sqldb, sink, hub, logger)
+	pushp := buildPush(cfg, sqldb, sink, logger)
+
+	// 4. Websocket hub — session-authenticated on connect (the browser sends the
+	// session cookie on a same-origin upgrade; no bearer token). Feature modules
+	// publish change events so open boards and dashboards stay live.
+	wsHandler := hub.Handler(wsConfig(cfg, authp))
+
+	// 5. Feature modules, composed through the registry (PRD §10 D25).
+	app, err := buildModules(cfg, sqldb, sink, hub, pushp, logger)
+	if err != nil {
+		return err
+	}
+
+	// Background workers live for the process's lifetime and stop with this context,
+	// which is cancelled on the shutdown signal below.
+	bgCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+	notifier := startBackground(bgCtx, cfg, sqldb, sink, app, logger)
+
+	// 6. HTTP server.
+	handler := httpx.NewRouter(httpx.Deps{
+		Logger:       logger,
+		DB:           sqldb,
+		Site:         cfg.SiteKey,
+		InsecureAuth: cfg.DevAuthBypass,
+		MountAuth:    func(api chi.Router) { authp.handler.Mount(api, authp.csrfMW) },
+		SessionMW:    authp.sessionMW,
+		CSRFMW:       authp.csrfMW,
+		MountAPI: func(api chi.Router) {
+			// /api/push/** is platform, not a module: every member (reader included)
+			// manages their own device here, whether or not any module sends anything.
+			pushp.handler.Mount(api)
+			app.mountAPI(api)
+		},
+		WS:        wsHandler,
+		StaticDir: cfg.StaticDir,
+	})
+
+	// 7. Serve until interrupted, then shut down gracefully.
+	return serve(cfg, logger, handler, shutdownDeps{
+		stopBackground: stopBackground,
+		preview:        app.preview,
+		notifier:       notifier,
+		admin:          app.admin,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// 1. Configuration
+// ---------------------------------------------------------------------------
+
+// loadConfig reads the environment, then reports what it corrected and what it
+// switched off.
+func loadConfig(logger *slog.Logger) (*config.Config, error) {
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	logger.Info("config loaded", "config", cfg.Redacted())
 	// Values that were corrected rather than refused — a window clamped to its
@@ -76,13 +167,28 @@ func run(logger *slog.Logger) error {
 		logger.Warn("AUTH BYPASS ACTIVE — ALL REQUESTS ARE FAKE-AUTHENTICATED — DO NOT DEPLOY",
 			"dev_actor", cfg.DevActorID, "dev_roles", cfg.DevActorRoles)
 	}
+	return cfg, nil
+}
 
-	// 2. Database: open → migrate → verify FTS5 → seed (only when empty).
+// ---------------------------------------------------------------------------
+// 2. Database
+// ---------------------------------------------------------------------------
+
+// openDatabase opens the SQLite file, migrates it, verifies FTS5 and seeds the
+// default board when the database is empty.
+//
+// Every failure below closes the handle before returning it as an error: the
+// caller only gets a *sql.DB it is expected to defer a Close on, so the failure
+// paths have to do it themselves.
+func openDatabase(cfg *config.Config, logger *slog.Logger) (*sql.DB, error) {
 	sqldb, err := appdb.Open(cfg.DBPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = sqldb.Close() }()
+	fail := func(err error) (*sql.DB, error) {
+		_ = sqldb.Close()
+		return nil, err
+	}
 
 	// WithSeed: the server — and only the server — also applies the one-off
 	// migration carrying `fin`'s historic months (v6, D91). It is INSERT OR
@@ -90,41 +196,59 @@ func run(logger *slog.Logger) error {
 	// schema-only bootstrap.MigrationFS().
 	migFS, err := bootstrap.MigrationFSWithSeed()
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	if err := appdb.Migrate(sqldb, migFS); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := appdb.ProbeFTS5(context.Background(), sqldb); err != nil {
-		return err
+		return fail(err)
 	}
 	seeded, err := appdb.SeedIfEmpty(context.Background(), sqldb)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	logger.Info("database ready", "path", cfg.DBPath, "seeded_default_board", seeded)
+	return sqldb, nil
+}
 
-	// The audit spine writer — every module (and login/logout) records through it.
-	sink := audit.NewSink()
-
-	// Optional audit retention (FR-L7). Default 0 = keep forever (no-op). There is
-	// no scheduler (D9); prune runs once on boot when configured.
-	if cfg.LogRetentionDays > 0 {
-		pruned, err := logging.Prune(context.Background(), sqldb, sink, cfg.LogRetentionDays)
-		if err != nil {
-			return err
-		}
-		logger.Info("audit prune", "retention_days", cfg.LogRetentionDays, "pruned", pruned)
+// pruneAudit applies the optional audit retention (FR-L7). Default 0 = keep
+// forever (no-op). There is no scheduler (D9); prune runs once on boot when
+// configured.
+func pruneAudit(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, logger *slog.Logger) error {
+	if cfg.LogRetentionDays <= 0 {
+		return nil
 	}
+	pruned, err := logging.Prune(context.Background(), sqldb, sink, cfg.LogRetentionDays)
+	if err != nil {
+		return err
+	}
+	logger.Info("audit prune", "retention_days", cfg.LogRetentionDays, "pruned", pruned)
+	return nil
+}
 
-	// 3. Mode B auth + session (D23, D29). Home hosts login and owns its session;
-	// the browser carries no token. Under the dev bypass a fixed actor is injected
-	// and no auth service / session store is used, so the app runs offline.
-	// The hub is built here rather than at step 4 because auth needs it: revoking
-	// a session has to close that member's sockets too, or the socket keeps
-	// delivering private payloads to an account that is 401 everywhere else (v10).
-	hub := ws.NewHub(logger)
-	authConf := auth.Config{
+// ---------------------------------------------------------------------------
+// 3. Auth and push
+// ---------------------------------------------------------------------------
+
+// authParts is what the rest of the process needs from the auth strand.
+type authParts struct {
+	conf      auth.Config
+	handler   *auth.Handler
+	sessionMW func(http.Handler) http.Handler
+	csrfMW    func(http.Handler) http.Handler
+	// sessions is NIL under the dev bypass, and step 4 reads it as exactly that
+	// question: with no session store there is nothing for a socket to
+	// re-authenticate against, so the whole revalidation strand is left unset.
+	sessions *auth.SessionStore
+}
+
+// buildAuth wires Mode B auth + session (D23, D29). Home hosts login and owns
+// its session; the browser carries no token. Under the dev bypass a fixed actor
+// is injected and no auth service / session store is used, so the app runs
+// offline.
+func buildAuth(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, hub *ws.Hub, logger *slog.Logger) authParts {
+	conf := auth.Config{
 		RoleRefresh:      time.Duration(cfg.RoleRefreshMinutes) * time.Minute,
 		SessionTTL:       time.Duration(cfg.SessionTTLDays) * 24 * time.Hour,
 		Secure:           cfg.IsProduction(), // TLS-only cookies in production (PRD §8)
@@ -134,7 +258,7 @@ func run(logger *slog.Logger) error {
 	}
 	var sessions *auth.SessionStore
 	if cfg.DevAuthBypass {
-		authConf.BypassActor = &reqctx.Actor{
+		conf.BypassActor = &reqctx.Actor{
 			UserID: cfg.DevActorID,
 			Type:   "user",
 			Label:  cfg.DevActorID,
@@ -142,22 +266,35 @@ func run(logger *slog.Logger) error {
 		}
 	} else {
 		sessions = auth.NewSessionStore(sqldb)
-		authConf.Sessions = sessions
-		authConf.Authr = auth.NewHTTPAuthenticator(cfg.AuthBaseURL, cfg.AuthServiceSecret, cfg.AuthJWTSecret, cfg.AuthJWTIssuer, cfg.SiteKey, logger)
+		conf.Sessions = sessions
+		conf.Authr = auth.NewHTTPAuthenticator(cfg.AuthBaseURL, cfg.AuthServiceSecret, cfg.AuthJWTSecret, cfg.AuthJWTIssuer, cfg.SiteKey, logger)
 	}
-	authHandler := auth.NewHandler(authConf, sqldb, sink)
-	sessionMW := auth.NewSessionAuth(authConf)
-	csrfMW := auth.NewCSRF(cfg.AllowedOrigins, cfg.DevAuthBypass)
+	return authParts{
+		conf:      conf,
+		handler:   auth.NewHandler(conf, sqldb, sink),
+		sessionMW: auth.NewSessionAuth(conf),
+		csrfMW:    auth.NewCSRF(cfg.AllowedOrigins, cfg.DevAuthBypass),
+		sessions:  sessions,
+	}
+}
 
-	// 3b. The shared Web Push channel (v5, D52). One service worker on one origin
-	// ⇒ one subscription per device ⇒ one channel every module sends through. It
-	// is platform infrastructure, not the admin module: a member's consent and
-	// mutes must outlive whatever module wants to notify them (D53).
-	//
-	// With no VAPID keypair the channel is inert — subscribing is refused with a
-	// clear reason and nothing is ever sent — so the whole app still runs.
-	pushStore := push.NewStore(sqldb)
-	pushSvc := push.NewService(pushStore, push.Config{
+// pushParts is the shared Web Push channel and its HTTP surface.
+type pushParts struct {
+	svc     *push.Service
+	store   *push.Store
+	handler *push.Handler
+}
+
+// buildPush wires the shared Web Push channel (v5, D52). One service worker on
+// one origin ⇒ one subscription per device ⇒ one channel every module sends
+// through. It is platform infrastructure, not the admin module: a member's
+// consent and mutes must outlive whatever module wants to notify them (D53).
+//
+// With no VAPID keypair the channel is inert — subscribing is refused with a
+// clear reason and nothing is ever sent — so the whole app still runs.
+func buildPush(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, logger *slog.Logger) pushParts {
+	store := push.NewStore(sqldb)
+	svc := push.NewService(store, push.Config{
 		VAPIDPublicKey:  cfg.Notif.VAPIDPublicKey,
 		VAPIDPrivateKey: cfg.Notif.VAPIDPrivateKey,
 		VAPIDSubject:    cfg.Notif.VAPIDSubject,
@@ -168,83 +305,115 @@ func run(logger *slog.Logger) error {
 		AllowedEndpointHosts: push.EndpointHosts(cfg.Notif.PushEndpointHosts),
 		Logger:               logger,
 	})
-	if pushSvc.Enabled() {
+	if svc.Enabled() {
 		logger.Info("push: channel ready", "subject", cfg.Notif.VAPIDSubject)
 	} else {
 		logger.Warn("push: DISABLED — no VAPID keypair configured; notifications will not be sent " +
 			"(set HOME_VAPID_PUBLIC_KEY / HOME_VAPID_PRIVATE_KEY / HOME_VAPID_SUBJECT; generate with `go run ./cmd/vapidgen`)")
 	}
-	pushHandler := push.NewHandler(pushSvc, sqldb, sink)
+	return pushParts{svc: svc, store: store, handler: push.NewHandler(svc, sqldb, sink)}
+}
 
-	// 4. Websocket hub — session-authenticated on connect (the browser sends the
-	// session cookie on a same-origin upgrade; no bearer token). Feature modules
-	// publish change events so open boards and dashboards stay live.
+// ---------------------------------------------------------------------------
+// 4. Websocket
+// ---------------------------------------------------------------------------
+
+// wsConfig builds the hub's configuration. With no session store (the dev
+// bypass) the three session seams below are left nil and the hub falls back to
+// the bypass actor.
+func wsConfig(cfg *config.Config, a authParts) ws.Config {
 	wsCfg := ws.Config{
-		BypassActor:     authConf.BypassActor,
+		BypassActor:     a.conf.BypassActor,
 		RevalidateEvery: time.Duration(cfg.WSRevalidateMinutes) * time.Minute,
 	}
-	if sessions != nil {
-		// The upgrade decision. Collapsing a store error onto "reject" is right
-		// HERE — refusing a new connection costs a reconnect and the browser is
-		// already backing off — and wrong for the revalidation below, which would
-		// be tearing down live sockets instead.
-		wsCfg.Authenticate = func(r *http.Request) (ws.Upgrade, bool) {
-			c, err := r.Cookie("session")
-			if err != nil || c.Value == "" {
-				return ws.Upgrade{}, false
-			}
-			s, ok, err := sessions.Lookup(r.Context(), c.Value, time.Now())
-			if err != nil || !ok {
-				return ws.Upgrade{}, false
-			}
-			return ws.Upgrade{
-				Actor:     reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles},
-				SessionID: s.ID,
-				Token:     c.Value,
-			}, true
-		}
-		// ⚠ The pump re-takes the decision through auth's OWN revalidation, not
-		// through a second Lookup here. Re-checking only that the session row is
-		// live is what every HTTP request does NOT do: the middleware fails closed
-		// on a re-mint that says the account is disabled, and a socket whose tab
-		// issues no HTTP request would otherwise never meet that check and keep
-		// receiving targeted payloads for the whole session TTL. It also reports
-		// "could not tell" apart from "revoked", so a slow query does not close
-		// every socket in the household.
-		wsCfg.Revalidate = func(ctx context.Context, token string) (string, ws.Revalidation) {
-			userID, verdict := authConf.RevalidateSession(ctx, token)
-			return userID, wsRevalidation(verdict)
-		}
-		// ⚠ The CONNECT-TIME check is a bare row check (auth.CheckSession),
-		// deliberately weaker than the pump's. The hole it closes is a revocation
-		// that landed between the upgrade decision and the hub registration, and
-		// the revoked row is enough to see that. Pointing it at RevalidateSession
-		// instead meant a second Lookup and — whenever roles were stale — a Mint
-		// PER SOCKET: on a deploy every tab in the household redials at once, and
-		// none of those mints sees another's roles_refreshed_at stamp, so they all
-		// go to the auth service together, over a pool of exactly one connection.
-		// The fail-closed re-mint still runs, on the session's ticker, once per
-		// session per interval.
-		//
-		// Both seams cross the verdict boundary through the SAME pinned pieces:
-		// auth's SessionVerdict (TestCheckSession) and the wsRevalidation bridge
-		// (TestWSRevalidation). An inline three-state mapping here was the one arm
-		// of this boundary nothing pinned.
-		wsCfg.Recheck = func(ctx context.Context, token string) (string, ws.Revalidation) {
-			userID, verdict := authConf.CheckSession(ctx, token)
-			return userID, wsRevalidation(verdict)
-		}
+	if a.sessions == nil {
+		return wsCfg
 	}
-	wsHandler := hub.Handler(wsCfg)
+	// The upgrade decision. Collapsing a store error onto "reject" is right
+	// HERE — refusing a new connection costs a reconnect and the browser is
+	// already backing off — and wrong for the revalidation below, which would
+	// be tearing down live sockets instead.
+	wsCfg.Authenticate = func(r *http.Request) (ws.Upgrade, bool) {
+		c, err := r.Cookie("session")
+		if err != nil || c.Value == "" {
+			return ws.Upgrade{}, false
+		}
+		s, ok, err := a.sessions.Lookup(r.Context(), c.Value, time.Now())
+		if err != nil || !ok {
+			return ws.Upgrade{}, false
+		}
+		return ws.Upgrade{
+			Actor:     reqctx.Actor{UserID: s.UserID, Type: "user", Label: s.Email, Roles: s.Roles},
+			SessionID: s.ID,
+			Token:     c.Value,
+		}, true
+	}
+	// ⚠ The pump re-takes the decision through auth's OWN revalidation, not
+	// through a second Lookup here. Re-checking only that the session row is
+	// live is what every HTTP request does NOT do: the middleware fails closed
+	// on a re-mint that says the account is disabled, and a socket whose tab
+	// issues no HTTP request would otherwise never meet that check and keep
+	// receiving targeted payloads for the whole session TTL. It also reports
+	// "could not tell" apart from "revoked", so a slow query does not close
+	// every socket in the household.
+	wsCfg.Revalidate = func(ctx context.Context, token string) (string, ws.Revalidation) {
+		userID, verdict := a.conf.RevalidateSession(ctx, token)
+		return userID, wsRevalidation(verdict)
+	}
+	// ⚠ The CONNECT-TIME check is a bare row check (auth.CheckSession),
+	// deliberately weaker than the pump's. The hole it closes is a revocation
+	// that landed between the upgrade decision and the hub registration, and
+	// the revoked row is enough to see that. Pointing it at RevalidateSession
+	// instead meant a second Lookup and — whenever roles were stale — a Mint
+	// PER SOCKET: on a deploy every tab in the household redials at once, and
+	// none of those mints sees another's roles_refreshed_at stamp, so they all
+	// go to the auth service together, over a pool of exactly one connection.
+	// The fail-closed re-mint still runs, on the session's ticker, once per
+	// session per interval.
+	//
+	// Both seams cross the verdict boundary through the SAME pinned pieces:
+	// auth's SessionVerdict (TestCheckSession) and the wsRevalidation bridge
+	// (TestWSRevalidation). An inline three-state mapping here was the one arm
+	// of this boundary nothing pinned.
+	wsCfg.Recheck = func(ctx context.Context, token string) (string, ws.Revalidation) {
+		userID, verdict := a.conf.CheckSession(ctx, token)
+		return userID, wsRevalidation(verdict)
+	}
+	return wsCfg
+}
 
-	// 5. Feature modules, composed through the registry (PRD §10 D25). Each module
-	// owns its routes/migrations/audit actions/widgets; the core only wires them.
-	// Modules publish websocket change events via the hub after commit. The push
-	// carries the originating request's client id (from reqctx) so each browser
-	// tab can tell its own echo apart from a change made on another device.
-	// hub.Notify stamps the Origin; hub.NotifyTo is its member-restricted sibling,
-	// so a targeted module gets the same echo-suppression without re-deriving the
-	// client id for itself (v10).
+// ---------------------------------------------------------------------------
+// 5. Feature modules and the four catalogs
+// ---------------------------------------------------------------------------
+
+// appModules is step 5's output: the mounted API, plus the handful of services
+// the server and the background workers still need by name.
+type appModules struct {
+	mountAPI func(chi.Router)
+
+	admin  *admin.Service
+	garden *garden.Service
+	chat   *chat.Service
+	docs   *documents.Service
+	notes  *notes.Service
+
+	preview *documents.PreviewWorker
+	// blob and backup are the documents object store and its mirror target. They
+	// are here because the two mirror jobs in step 5c take them, and those are
+	// started after this function returns.
+	blob   blobstore.BlobStore
+	backup blobstore.BlobStore
+}
+
+// buildModules constructs every feature module and the four catalogs they
+// publish into (PRD §10 D25). Each module owns its routes/migrations/audit
+// actions/widgets; the core only wires them. Modules publish websocket change
+// events via the hub after commit. The push carries the originating request's
+// client id (from reqctx) so each browser tab can tell its own echo apart from a
+// change made on another device. hub.Notify stamps the Origin; hub.NotifyTo is
+// its member-restricted sibling, so a targeted module gets the same
+// echo-suppression without re-deriving the client id for itself (v10).
+func buildModules(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, hub *ws.Hub, pushp pushParts, logger *slog.Logger) (appModules, error) {
 	notify := hub.Notify
 
 	todoSvc := todo.NewService(sqldb, sink, notify)
@@ -275,6 +444,20 @@ func run(logger *slog.Logger) error {
 		Logger:         logger,
 	})
 
+	// documents (v4) is the first module with bytes outside SQLite: it needs an object
+	// store, an async preview worker, and — because Litestream cannot back up a blob
+	// bucket — its own mirror/reconciliation job (D45).
+	docsBlob, docsBackup, err := openDocumentStores(cfg, logger)
+	if err != nil {
+		return appModules{}, err
+	}
+	docsSvc := documents.NewService(sqldb, sink, notify, docsBlob, documents.Options{
+		MaxUploadBytes: int64(cfg.Docs.MaxUploadMB) << 20,
+		AllowedMIME:    cfg.Docs.AllowedMIME,
+		PreviewEnabled: cfg.Docs.PreviewEnabled,
+		PublicBaseURL:  cfg.Docs.PublicBaseURL,
+	}, logger)
+
 	// chat (v10) is the ONLY module here that does not take `notify`. Every other
 	// one broadcasts "something changed" to every connected client; chat's payload
 	// IS the content, so it takes hub.NotifyTo instead and names its audience per
@@ -286,21 +469,8 @@ func run(logger *slog.Logger) error {
 	// pushSvc, as the notification channel. Chat narrows the directory to user id
 	// and display name at its own boundary, because /api/chat/directory is the
 	// first surface in Home that shows it to a non-admin (D230).
-	// documents (v4) is the first module with bytes outside SQLite: it needs an object
-	// store, an async preview worker, and — because Litestream cannot back up a blob
-	// bucket — its own mirror/reconciliation job (D45).
-	docsBlob, docsBackup, err := openDocumentStores(cfg, logger)
-	if err != nil {
-		return err
-	}
-	docsSvc := documents.NewService(sqldb, sink, notify, docsBlob, documents.Options{
-		MaxUploadBytes: int64(cfg.Docs.MaxUploadMB) << 20,
-		AllowedMIME:    cfg.Docs.AllowedMIME,
-		PreviewEnabled: cfg.Docs.PreviewEnabled,
-		PublicBaseURL:  cfg.Docs.PublicBaseURL,
-	}, logger)
-
-	// chat (v10) is constructed AFTER documents, and the order is the dependency:
+	//
+	// It is constructed AFTER documents, and the order is the dependency:
 	// `documents` is chat's `storage.BlobSink` — the receiving half of the move
 	// (D238) — handed over as a plain interface value at composition, because
 	// internal/arch forbids the two modules from importing each other.
@@ -316,7 +486,7 @@ func run(logger *slog.Logger) error {
 	// be MOVED into Dokumenty — the clean-up page's headline action would fail on
 	// exactly the files heavy enough to have caused the overrun. The thumbnail
 	// toolchain is shared for the same reason there is only one of it in the image.
-	chatSvc := chat.NewService(sqldb, sink, hub.NotifyTo, pushSvc, pushStore, chat.Options{
+	chatSvc := chat.NewService(sqldb, sink, hub.NotifyTo, pushp.svc, pushp.store, chat.Options{
 		TrashDays: cfg.ChatTrashDays,
 		Logger:    logger,
 		Blob:      docsBlob,
@@ -330,7 +500,6 @@ func run(logger *slog.Logger) error {
 				CwebpPath:      cfg.Docs.CwebpPath,
 				MaxPx:          cfg.Docs.ThumbMaxPx,
 				MaxImagePixels: cfg.Docs.ImageMaxMegapixels * 1_000_000,
-
 			},
 		},
 	})
@@ -403,7 +572,7 @@ func run(logger *slog.Logger) error {
 	// reaches feature data only through this catalog, never their tables (D28).
 	catalog, err := registry.NewCatalog(registry.CollectWidgets(contributingModules))
 	if err != nil {
-		return err
+		return appModules{}, err
 	}
 	dashMod := dashboard.NewModule(catalog, sqldb)
 
@@ -413,7 +582,7 @@ func run(logger *slog.Logger) error {
 	featureModules := []registry.Module{loggingMod, todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod, elecMod, chatMod, dashMod}
 	metricRegistry, err := metrics.Collect(contributingAny...)
 	if err != nil {
-		return err
+		return appModules{}, err
 	}
 	// The list catalog beside it: the same modules also publish WHICH items are
 	// behind those counts, so a summary can name today's reminders instead of
@@ -421,7 +590,7 @@ func run(logger *slog.Logger) error {
 	// registry, so admin still imports no feature module.
 	listRegistry, err := lists.Collect(contributingAny...)
 	if err != nil {
-		return err
+		return appModules{}, err
 	}
 	// The action catalog the trigger composer picks from: every module's declared
 	// verbs plus the platform-emitted ones (login, push.*), which belong to no
@@ -432,8 +601,8 @@ func run(logger *slog.Logger) error {
 	}
 
 	adminSvc := admin.NewService(sqldb, sink, admin.Options{
-		Sender:          pushSvc,
-		PushStore:       pushStore,
+		Sender:          pushp.svc,
+		PushStore:       pushp.store,
 		Metrics:         metricRegistry,
 		Lists:           listRegistry,
 		Actions:         actions,
@@ -444,7 +613,7 @@ func run(logger *slog.Logger) error {
 	adminMod := admin.NewModule(adminSvc)
 	// The delivery log's table belongs to the admin module, so platform/push
 	// records through it rather than writing another module's table directly.
-	pushSvc.SetRecorder(adminSvc.Store())
+	pushp.svc.SetRecorder(adminSvc.Store())
 
 	modules := append(featureModules, adminMod)
 
@@ -456,7 +625,7 @@ func run(logger *slog.Logger) error {
 	// admin owns tables too.
 	storageCatalog, err := storage.Collect(toAny(modules)...)
 	if err != nil {
-		return err
+		return appModules{}, err
 	}
 	adminSvc.SetStorage(admin.NewStorageService(admin.StorageDeps{
 		DB:            sqldb,
@@ -466,7 +635,7 @@ func run(logger *slog.Logger) error {
 		PrimaryBucket: cfg.Docs.R2Bucket,
 		Backup:        docsBackup,
 		BackupBucket:  cfg.Docs.BackupBucket,
-		Members:       pushStore,
+		Members:       pushp.store,
 		WarnTotalMB:   cfg.Storage.WarnTotalMB,
 		CacheSeconds:  cfg.Storage.CacheSeconds,
 		// ⚠ NO Litestream replica dependency, and its absence is a DECISION rather
@@ -477,20 +646,33 @@ func run(logger *slog.Logger) error {
 		// admin.StorageReplica for what that costs and what it does not.
 	}))
 
-	mountAPI := func(api chi.Router) {
-		// /api/push/** is platform, not a module: every member (reader included)
-		// manages their own device here, whether or not any module sends anything.
-		pushHandler.Mount(api)
-		registry.MountAll(api, modules)
-	}
+	return appModules{
+		mountAPI: func(api chi.Router) { registry.MountAll(api, modules) },
+		admin:    adminSvc,
+		garden:   gardenSvc,
+		chat:     chatSvc,
+		docs:     docsSvc,
+		notes:    notesSvc,
+		preview:  previewWorker,
+		blob:     docsBlob,
+		backup:   docsBackup,
+	}, nil
+}
 
-	// Background workers live for the process's lifetime and stop with this context,
-	// which is cancelled on the shutdown signal below.
-	bgCtx, stopBackground := context.WithCancel(context.Background())
-	defer stopBackground()
-	previewWorker.Start(bgCtx)
+// ---------------------------------------------------------------------------
+// 5c. Background workers
+// ---------------------------------------------------------------------------
 
-	// 5c. v5 background workers: the audit outbox tailer (trigger notifications)
+// startBackground starts everything that outlives a request: the preview worker,
+// the audit outbox tailer, the wall-clock scheduler and the two blob mirror
+// jobs. All of them stop with ctx.
+//
+// It returns the notifier because the shutdown sequence has to JOIN it — see
+// serve, where the ordering is the subtle part.
+func startBackground(ctx context.Context, cfg *config.Config, sqldb *sql.DB, sink *audit.Writer, app appModules, logger *slog.Logger) *audit.Notifier {
+	app.preview.Start(ctx)
+
+	// v5 background workers: the audit outbox tailer (trigger notifications)
 	// and the wall-clock scheduler (summaries). These two are the ONLY non-registry
 	// wiring v5 adds — everything else registers itself.
 	//
@@ -498,14 +680,14 @@ func run(logger *slog.Logger) error {
 	// COMMITTED rows, which is how a trigger fires after the change it describes
 	// without any module's write path knowing the notifier exists (D56).
 	notifier := audit.NewNotifier(sqldb, audit.NewSQLCursor(sqldb), audit.NotifierConfig{Logger: logger})
-	notifier.Register(adminSvc.Listener())
+	notifier.Register(app.admin.Listener())
 	// Record nudges the tailer so a trigger fires in about a second rather than
 	// waiting for the next poll. It runs inside the writer's transaction, so the
 	// nudge is non-blocking by construction.
 	sink.SetNudge(notifier.Nudge)
-	notifier.Start(bgCtx)
+	notifier.Start(ctx)
 
-	sched := scheduler.New(adminSvc.Store(), adminSvc.FireSchedule, scheduler.Config{
+	sched := scheduler.New(app.admin.Store(), app.admin.FireSchedule, scheduler.Config{
 		Location:     cfg.Timezone,
 		Tick:         cfg.Notif.SchedTick,
 		CatchupGrace: cfg.Notif.CatchupGrace,
@@ -523,7 +705,7 @@ func run(logger *slog.Logger) error {
 	// a scheduled summary or a trigger rule is chosen in Administrace at runtime
 	// (D113) — both work on day one because the module publishes for both.
 	if cfg.Garden.WeatherEnabled {
-		sched.RegisterJob("garden.weather", time.Duration(cfg.Garden.WeatherPollHours)*time.Hour, gardenSvc.WeatherJob)
+		sched.RegisterJob("garden.weather", time.Duration(cfg.Garden.WeatherPollHours)*time.Hour, app.garden.WeatherJob)
 	} else {
 		logger.Info("garden: weather poll disabled (HOME_GARDEN_WEATHER_ENABLED=false) — manual frost dates only")
 	}
@@ -540,69 +722,79 @@ func run(logger *slog.Logger) error {
 	//
 	// ⚠ THE JOB HAS NO ACTOR, which is the hazard §V10-4a names: every load it makes
 	// is an explicit any-membership variant (chat/drain.go).
-	sched.RegisterJob("chat.drain", chat.DrainInterval, chatSvc.DrainJob)
-	sched.Start(bgCtx)
+	sched.RegisterJob("chat.drain", chat.DrainInterval, app.chat.DrainJob)
+	sched.Start(ctx)
 
 	// Deliveries are operational, not audit (D64): prune them on boot, the same
 	// way the audit retention pass runs, so a long-lived household does not
 	// accumulate a delivery row per device per notification forever.
-	if pruned, err := adminSvc.PruneDeliveries(context.Background(), cfg.Notif.DeliveryRetentionDays); err != nil {
+	if pruned, err := app.admin.PruneDeliveries(context.Background(), cfg.Notif.DeliveryRetentionDays); err != nil {
 		logger.Warn("admin: prune deliveries", "err", err)
 	} else if pruned > 0 {
 		logger.Info("admin: pruned delivery log", "retention_days", cfg.Notif.DeliveryRetentionDays, "pruned", pruned)
 	}
 
-	// The two mirror jobs run on IDENTICAL settings — the same three cfg.Docs
-	// values, the same backup, the same logger — because note images live in the
-	// documents bucket under their own prefix and share its backup. The three
-	// derived values are computed once here so the pair cannot drift into two
-	// cadences by way of one edit.
-	//
-	// ⚠ THE TWO CONFIG LITERALS STAY SEPARATE. documents.MirrorConfig and
-	// notes.ImageMirrorConfig are field-identical but they are DIFFERENT TYPES,
-	// one per module — which is `notes/mirror.go`'s recorded point, that a change
-	// to one module's storage must not be able to quietly alter the other's.
+	startMirrors(ctx, cfg, app, logger)
+	return notifier
+}
+
+// startMirrors runs the documents and note-image mirror/reconciliation jobs.
+//
+// The two run on IDENTICAL settings — the same three cfg.Docs values, the same
+// backup, the same logger — because note images live in the documents bucket
+// under their own prefix and share its backup. The three derived values are
+// computed once here so the pair cannot drift into two cadences by way of one
+// edit.
+//
+// ⚠ THE TWO CONFIG LITERALS STAY SEPARATE. documents.MirrorConfig and
+// notes.ImageMirrorConfig are field-identical but they are DIFFERENT TYPES,
+// one per module — which is `notes/mirror.go`'s recorded point, that a change
+// to one module's storage must not be able to quietly alter the other's.
+func startMirrors(ctx context.Context, cfg *config.Config, app appModules, logger *slog.Logger) {
 	mirrorInterval := cfg.Docs.MirrorInterval
 	orphanGrace := time.Duration(cfg.Docs.OrphanGraceHours) * time.Hour
 	maxOrphanShare := float64(cfg.Docs.OrphanMaxPercent) / 100
 
-	documents.NewMirrorJob(docsSvc.Store(), docsBlob, documents.MirrorConfig{
+	documents.NewMirrorJob(app.docs.Store(), app.blob, documents.MirrorConfig{
 		Interval:       mirrorInterval,
 		OrphanGrace:    orphanGrace,
 		MaxOrphanShare: maxOrphanShare,
-		Backup:         docsBackup,
+		Backup:         app.backup,
 		Logger:         logger,
-	}).Run(bgCtx)
+	}).Run(ctx)
 	// Note images share the documents bucket + backup, mirrored/reconciled on the same
 	// cadence but scoped to the note-images/ prefix and the note_images table.
-	notes.NewImageMirrorJob(notesSvc.Store(), docsBlob, notes.ImageMirrorConfig{
+	notes.NewImageMirrorJob(app.notes.Store(), app.blob, notes.ImageMirrorConfig{
 		Interval:       mirrorInterval,
 		OrphanGrace:    orphanGrace,
 		MaxOrphanShare: maxOrphanShare,
-		Backup:         docsBackup,
+		Backup:         app.backup,
 		Logger:         logger,
-	}).Run(bgCtx)
+	}).Run(ctx)
+}
 
-	// 6. HTTP server.
-	handler := httpx.NewRouter(httpx.Deps{
-		Logger:       logger,
-		DB:           sqldb,
-		Site:         cfg.SiteKey,
-		InsecureAuth: cfg.DevAuthBypass,
-		MountAuth:    func(api chi.Router) { authHandler.Mount(api, csrfMW) },
-		SessionMW:    sessionMW,
-		CSRFMW:       csrfMW,
-		MountAPI:     mountAPI,
-		WS:           wsHandler,
-		StaticDir:    cfg.StaticDir,
-	})
+// ---------------------------------------------------------------------------
+// 7. Serve and shut down
+// ---------------------------------------------------------------------------
+
+// shutdownDeps is what the two-phase shutdown has to reach. It exists so the
+// ordering below reads as one screen: every line of it is load-bearing, and the
+// comments explaining why are longer than the code.
+type shutdownDeps struct {
+	stopBackground func()
+	preview        *documents.PreviewWorker
+	notifier       *audit.Notifier
+	admin          *admin.Service
+}
+
+// serve listens until interrupted, then shuts down gracefully.
+func serve(cfg *config.Config, logger *slog.Logger, handler http.Handler, sd shutdownDeps) error {
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// 7. Serve until interrupted, then shut down gracefully.
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("listening", "addr", cfg.Addr)
@@ -620,8 +812,8 @@ func run(logger *slog.Logger) error {
 		logger.Info("shutting down")
 		// Stop the background workers first so an in-flight preview conversion is
 		// cancelled rather than killed mid-write.
-		stopBackground()
-		previewWorker.Wait()
+		sd.stopBackground()
+		sd.preview.Wait()
 		// JOIN the outbox tailer before the flush below, don't just cancel it.
 		// stopBackground only asks it to stop: it can still be part way through a
 		// batch, and every event left in that batch is handed to the admin
@@ -631,7 +823,7 @@ func run(logger *slog.Logger) error {
 		// cursor has already advanced) or trip the WaitGroup's own misuse check.
 		// The join is bounded — with the context cancelled every query in the
 		// tailer fails at once.
-		notifier.Wait()
+		sd.notifier.Wait()
 		// Then send whatever is still sitting in a coalescing window. The outbox
 		// cursor has already moved past those events, so they will never be
 		// redelivered — a window killed by a deploy loses its notification rather
@@ -646,7 +838,7 @@ func run(logger *slog.Logger) error {
 		flushed := make(chan struct{})
 		go func() {
 			defer close(flushed)
-			adminSvc.FlushPending(flushCtx)
+			sd.admin.FlushPending(flushCtx)
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
