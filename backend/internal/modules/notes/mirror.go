@@ -320,11 +320,27 @@ func (j *NoteImageMirrorJob) reconcile(ctx context.Context, present map[string]b
 	}
 }
 
-// safeToDelete bounds the blast radius of the orphan sweep — "orphan" is inferred
-// from the ABSENCE of a row, so a pass is only as trustworthy as the database it read.
-// An empty/half-restored note_images table would make every object look orphaned;
-// refusing here is the only thing between that and an erased archive (see documents'
-// MirrorJob for the full rationale).
+// safeToDelete bounds the blast radius of the orphan sweep.
+//
+// "Orphan" is inferred from the ABSENCE of a row, so a pass is only as trustworthy
+// as the database it just read. A boot against an empty or half-restored
+// `note_images` table — a Litestream restore that was skipped or failed, a rebuilt
+// volume that re-ran the migrations from scratch — makes every object in the bucket
+// look orphaned, and two minutes later the first pass would delete every image
+// pasted into every note. Nothing else reliably covers that: the mirror bucket is
+// OPTIONAL (empty by default) and, on a first-ever pass, holds nothing yet; and R2
+// has no object versioning to undo a delete. So when the database reads as empty or
+// half-restored, refusing HERE is the only thing between it and an erased archive.
+//
+// A genuine orphan set is tiny — an upload that crashed between the Put and the
+// commit, or a purge whose delete failed. Anything that looks like "most of the
+// bucket" is a bug in the caller rather than 900 crashed uploads, so refuse, log,
+// and make a human decide. The cost of refusing wrongly is some wasted storage; the
+// cost of deleting wrongly is the images.
+//
+// Mirrors documents' MirrorJob.safeToDelete, deliberately (D40): the two jobs are
+// one behaviour in two implementations, so a change to this reasoning belongs in
+// both.
 func (j *NoteImageMirrorJob) safeToDelete(orphans, ours, claimed, claimedPresent int) bool {
 	if claimed == 0 {
 		j.logger.Error("notes: image reconciliation REFUSED to delete — no row claims any object, "+
@@ -332,6 +348,12 @@ func (j *NoteImageMirrorJob) safeToDelete(orphans, ours, claimed, claimedPresent
 			"orphans", orphans, "objects", ours)
 		return false
 	}
+	// The floor lets a small bucket out of the share guard, so it carries a bound of
+	// its own: a handful of objects AND never more than the surviving rows still
+	// account for. Without that second half the escape swallows the guard whole — a
+	// household of 9 note images restored down to 4 rows leaves 5 orphans among 9
+	// objects, which is 56%, far past any share limit and yet exactly ON a floor of 5.
+	// Half a bucket looking orphaned is the same signal in 9 objects as it is in 900.
 	if orphans <= imageOrphanDeleteFloor && orphans <= claimedPresent {
 		return true
 	}
