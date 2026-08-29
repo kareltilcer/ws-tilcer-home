@@ -1,6 +1,7 @@
 // Chat (v10) — the module's API surface (openapi.yaml 0.12.1).
 
 import { apiFetch, apiUpload } from '@/api/client'
+import { qs } from '@/api/qs'
 import type {
   Attachment,
   ChatMessage,
@@ -18,15 +19,6 @@ import type {
 } from './types'
 
 const base = '/api/chat'
-
-function qs(params: Record<string, string | number | undefined>): string {
-  const p = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== '') p.set(k, String(v))
-  }
-  const s = p.toString()
-  return s ? `?${s}` : ''
-}
 
 // ---- conversations ----
 

@@ -1,4 +1,5 @@
 import { apiFetch, apiUpload } from './client'
+import { qs } from './qs'
 import type {
   AuditEventDetail,
   AuditEventDetailPage,
@@ -63,17 +64,6 @@ import type {
   StorageThresholds,
   StorageThresholdsUpdate,
 } from './types'
-
-function qs(params: Record<string, string | boolean | number | string[] | undefined>): string {
-  const sp = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined) continue
-    if (Array.isArray(v)) v.forEach((x) => sp.append(k, x))
-    else sp.append(k, String(v))
-  }
-  const s = sp.toString()
-  return s ? `?${s}` : ''
-}
 
 // ---- Boards / tree ----
 export const listBoards = () => apiFetch<Board[]>('/api/boards')

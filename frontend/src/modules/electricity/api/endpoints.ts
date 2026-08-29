@@ -12,6 +12,7 @@
 // readings".
 
 import { apiFetch } from '@/api/client'
+import { qs } from '@/api/qs'
 import type {
   ElAdvance,
   ElAdvanceInput,
@@ -30,15 +31,6 @@ import type {
 } from './types'
 
 const base = '/api/electricity'
-
-function qs(params: Record<string, string | undefined>): string {
-  const p = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) {
-    if (v) p.set(k, v)
-  }
-  const s = p.toString()
-  return s ? `?${s}` : ''
-}
 
 // ---- readings ----
 
