@@ -489,15 +489,7 @@ func (e *InvalidError) Error() string { return fmt.Sprintf("invalid %s: %v", e.P
 
 func errInvalid(param string, err error) error { return &InvalidError{Param: param, Err: err} }
 
-func clampLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
+func clampLimit(n int) int { return appdb.ClampLimit(n, defaultLimit, maxLimit) }
 
 func dimensionExpr(dim string) (string, bool) {
 	switch dim {

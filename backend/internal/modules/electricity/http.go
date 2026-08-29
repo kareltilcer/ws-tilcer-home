@@ -68,6 +68,15 @@ func (h *Handler) Mount(r chi.Router) {
 
 const defaultLimit = 100
 
+// limitOf reads ?limit for v8's list endpoints.
+//
+// ⚠ IT IS DELIBERATELY NOT httpx.Limit, and the difference is not the numbers.
+// The shared helper CLAMPS an out-of-range value to the ceiling; this one falls
+// back to the DEFAULT, so `?limit=900` returns 100 rows rather than 500 —
+// chat/store.go calls that "a known defect and not a precedent to copy", and it
+// is right. Adopting httpx.Limit here would fix it, and a fixed defect is a
+// behaviour change a client could see, which belongs to this module's own
+// release rather than to a refactor that promised none.
 func limitOf(r *http.Request) int {
 	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if n <= 0 || n > 500 {

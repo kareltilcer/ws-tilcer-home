@@ -58,3 +58,27 @@ func FTSQuery(q string) string {
 	}
 	return strings.Join(terms, " ")
 }
+
+// ClampLimit normalises a caller-supplied page size to def..max: a missing or
+// non-positive n becomes def, anything above max becomes max.
+//
+// ⚠ IT LIVES HERE BECAUSE FIVE PLACES CLAMPED UNDER THREE NAMES. `chat` and
+// `garden` spelled it NormalizeLimit, `logging` clampLimit, `admin` folded it
+// into a query-string reader called limitOf, and four of the five agreed on
+// exactly 50/200 — so the bounds are arguments and not constants here, because
+// the numbers are each module's decision and the arithmetic is not.
+//
+// ⚠ `electricity` DELIBERATELY DOES NOT USE THIS. Its limitOf takes 100/500 and
+// falls back to the default on an out-of-range value rather than clamping, which
+// chat/store.go records as "a known defect and not a precedent to copy". Making
+// it call this would fix that defect — and a fixed defect is a behaviour change,
+// which belongs to electricity's own release rather than to a refactor.
+func ClampLimit(n, def, max int) int {
+	if n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
+}

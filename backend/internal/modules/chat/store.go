@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
 // Store is chat's data access. Every method that touches a conversation's contents
@@ -26,16 +28,9 @@ const (
 //
 // ⚠ IT CLAMPS RATHER THAN REFUSING, and it clamps rather than passing through.
 // v8's list endpoints take 100/500 and do NOT clamp, which is a known defect and
-// not a precedent to copy.
-func NormalizeLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
+// not a precedent to copy — appdb.ClampLimit's doc now carries that warning too,
+// since it is the shared arithmetic electricity is the one caller not using.
+func NormalizeLimit(n int) int { return appdb.ClampLimit(n, defaultLimit, maxLimit) }
 
 // ---- conversations ----
 

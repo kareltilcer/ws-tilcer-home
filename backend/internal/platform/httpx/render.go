@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 )
 
 // maxBodyBytes caps request bodies to a sane size for this API (notes/diffs can
@@ -68,4 +69,23 @@ func NoContent(w http.ResponseWriter, err error) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Limit reads ?limit from the query string and clamps it to def..max. An absent,
+// unparseable or non-positive value becomes def; anything above max becomes max.
+//
+// It is the request-side half of appdb.ClampLimit, which does the same
+// arithmetic for callers holding an int already (a store method taking a limit
+// from its service). `admin` was the only module reading the parameter and
+// clamping it in one function; the bounds stay arguments for the same reason
+// they do there.
+func Limit(r *http.Request, def, max int) int {
+	n, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
 }

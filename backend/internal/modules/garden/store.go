@@ -36,16 +36,8 @@ const (
 	maxLimit     = 200
 )
 
-// NormalizeLimit clamps a caller-supplied page size.
-func NormalizeLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
+// NormalizeLimit clamps a caller-supplied page size to the house 50/200.
+func NormalizeLimit(n int) int { return appdb.ClampLimit(n, defaultLimit, maxLimit) }
 
 var errNotFound = errors.New("garden: not found")
 

@@ -163,3 +163,30 @@ func TestAccessLogCarriesRequestID(t *testing.T) {
 		t.Errorf("access log missing status:\n%s", buf.String())
 	}
 }
+
+// TestLimit pins the CLAMPING semantics — the property that distinguishes this
+// helper from electricity's limitOf, which falls back to its default on an
+// out-of-range value instead. Both spellings existed when the helper was
+// extracted; only this one is shared, and the difference is behaviour, not style.
+func TestLimit(t *testing.T) {
+	cases := []struct {
+		query string
+		want  int
+	}{
+		{"", 50},           // absent → default
+		{"?limit=", 50},    // present but empty → default
+		{"?limit=abc", 50}, // unparseable → default
+		{"?limit=0", 50},   // non-positive → default
+		{"?limit=-3", 50},
+		{"?limit=1", 1},
+		{"?limit=200", 200},
+		{"?limit=201", 200}, // above the ceiling → CLAMPED, not defaulted
+		{"?limit=99999", 200},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "/x"+c.query, nil)
+		if got := httpx.Limit(r, 50, 200); got != c.want {
+			t.Errorf("Limit(%q) = %d, want %d", c.query, got, c.want)
+		}
+	}
+}
