@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,15 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -418,27 +413,12 @@ func router(t *testing.T, roles ...string) http.Handler {
 	t.Helper()
 	db := testsupport.NewDB(t)
 	h := finance.NewHandler(finance.NewService(db, audit.NewSink(), nil))
-	return httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u", Type: "user", Roles: roles}}),
-		MountAPI:  func(api chi.Router) { h.Mount(api) },
-	})
+	return testsupport.Router(t, db, h.Mount, roles...)
 }
 
 func send(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	var r *http.Request
-	if body != "" {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-	} else {
-		r = httptest.NewRequest(method, path, nil)
-	}
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, r)
-	return rr
+	return testsupport.Send(t, h, method, path, body)
 }
 
 const validBody = `{"month":"2026-08","income_kaja":60000,"income_andy":40000,` +

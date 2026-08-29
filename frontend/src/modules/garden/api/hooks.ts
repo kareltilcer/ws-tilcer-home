@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { qk } from '@/api/keys'
-import { ApiError } from '@/api/client'
+import { apiErrorMessage } from '@/api/client'
 import { cs } from '@/i18n/cs'
 
 /** useInvalidateGarden refreshes the whole module plus the dashboard.
@@ -19,14 +19,14 @@ export function useInvalidateGarden(): () => void {
   }
 }
 
-/** gardenError turns an API failure into the Czech sentence the server already
- *  wrote. The backend's 422s name the field and say what a valid value looks
- *  like, so surfacing `detail` is strictly better than a generic message. */
-export function gardenError(e: unknown): string {
-  return e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle
-}
-
-/** toastGardenError is the shared onError handler. */
+/** toastGardenError is the shared onError handler for every garden mutation:
+ *  the Czech sentence the server already wrote, or the generic title when the
+ *  failure never reached the server.
+ *
+ *  It used to wrap a `gardenError()` of its own, which was the module's spelling
+ *  of a ternary written out ~20 times across the app. That now lives once as
+ *  `apiErrorMessage` beside ApiError itself; this stays because "toast it" is
+ *  the part every garden mutation shares. */
 export function toastGardenError(e: unknown): void {
-  toast.error(gardenError(e))
+  toast.error(apiErrorMessage(e, cs.common.errorTitle))
 }

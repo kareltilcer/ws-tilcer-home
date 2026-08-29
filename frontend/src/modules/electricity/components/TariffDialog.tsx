@@ -5,7 +5,7 @@ import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
 import { todayISO } from '@/i18n/format'
 import { ApiError } from '@/api/client'
-import { Button, Input } from '@/components/ui/ui'
+import { Button, Field, FormError, Input } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { createTariff, updateTariff } from '../api/endpoints'
 import type { ElTariff } from '../api/types'
@@ -131,9 +131,7 @@ export function TariffDialog({
         </p>
 
         {error && (
-          <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-pretty">
-            {error}
-          </p>
+          <FormError>{error}</FormError>
         )}
       </div>
     </ResponsiveModal>
@@ -149,15 +147,6 @@ function MoneyInput({ value, onChange }: { value: string; onChange: (v: string) 
       className="h-12 font-mono text-[17px] font-semibold tabular-nums"
       autoComplete="off"
     />
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[12.5px] font-semibold text-muted">{label}</span>
-      {children}
-    </label>
   )
 }
 

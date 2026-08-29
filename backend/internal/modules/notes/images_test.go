@@ -14,13 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -529,13 +525,7 @@ func newImgAPI(t *testing.T, roles ...string) *imgAPI {
 	}
 	svc := notes.NewService(db, audit.NewSink(), nil, blob,
 		notes.ImageOptions{MaxUploadBytes: 4096, TempDir: t.TempDir()}, discardLogger())
-	handler := httpx.NewRouter(httpx.Deps{
-		Logger:    discardLogger(),
-		DB:        db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u", Type: "user", Roles: roles}}),
-		MountAPI:  func(r chi.Router) { notes.NewHandler(svc).Mount(r) },
-	})
+	handler := testsupport.Router(t, db, notes.NewHandler(svc).Mount, roles...)
 	return &imgAPI{t: t, svc: svc, blob: blob, handler: handler}
 }
 

@@ -21,12 +21,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
@@ -95,13 +92,7 @@ func newStorageHouseholdWith(t *testing.T, sink *fakeSink, members ...member) *s
 	handlers := map[string]http.Handler{}
 	for _, m := range members {
 		actor := reqctx.Actor{UserID: m.id, Type: "user", Label: m.name, Roles: m.roles}
-		handlers[m.id] = httpx.NewRouter(httpx.Deps{
-			Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-			DB:        db,
-			Site:      "home",
-			SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &actor}),
-			MountAPI:  func(r chi.Router) { h.Mount(r) },
-		})
+		handlers[m.id] = testsupport.RouterAs(t, db, actor, h.Mount)
 	}
 	hh := &household{t: t, db: db, svc: svc, handlers: handlers, notify: notify, pushes: pushes}
 	return &storageHousehold{household: hh, blob: blob, sink: sink}

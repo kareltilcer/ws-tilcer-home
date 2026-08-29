@@ -85,6 +85,56 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   )
 })
 
+/** Field is a labelled form row: the label text above its control, wrapped in a
+ *  <label> so tapping the text focuses the control.
+ *
+ *  ⚠ IT LIVES HERE BECAUSE IT EXISTED FIVE TIMES, byte-identical, once in each
+ *  electricity dialog — and a sixth copy was the obvious thing to write for the
+ *  next dialog.
+ *
+ *  ⚠ THE OTHER LABELS THAT LOOK LIKE THIS ARE NOT THIS ONE. Twelve sites, in
+ *  three groups, and each group breaks a different way:
+ *
+ *    - `EventForm` and `ColumnMenu` declare a `Field` of their OWN that renders
+ *      a <div> at a different type scale.
+ *    - `AdministracePage` (×5), `Composer` (×2) and `ScheduleBuilder`'s time
+ *      field space the label at `mb-1`, so adopting this moves it by 2px.
+ *    - `ConditionsBuilder`, `AudiencePicker` and `ScheduleBuilder`'s day picker
+ *      are bare <div>s, and garden's `PlanTab` season picker is an inline-flex
+ *      <label> whose span has neither `block` nor a margin. Wrapping a builder
+ *      full of <select>s in this <label> changes what a tap focuses.
+ *
+ *  Every one of those is a visual change wearing a refactor's clothes. Worth
+ *  doing one day, but as a design decision. */
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[12.5px] font-semibold text-muted">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+/** FormError is the inline refusal a dialog shows under its fields — the one
+ *  the server wrote, not a toast. `role="alert"` is the load-bearing part: the
+ *  message appears while focus is still in the form, so a screen reader has to
+ *  announce it without being sent there.
+ *
+ *  ⚠ IT LIVES HERE BECAUSE IT EXISTED FIVE TIMES, byte-identical, once in each
+ *  electricity dialog.
+ *
+ *  ⚠ `LoginScreen`'s two alerts are NOT this component. They are <div>s at a
+ *  different radius, carry `mb-4`, and one of them is `warn`-coloured with a
+ *  link inside rather than a sentence. Folding them in here would change how
+ *  the login screen looks, which is not what sharing a box is for. */
+export function FormError({ children }: { children: React.ReactNode }) {
+  return (
+    <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-pretty">
+      {children}
+    </p>
+  )
+}
+
 export function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold', className)}>

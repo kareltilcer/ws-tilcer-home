@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { AlertCircle, Plus, Wallet } from 'lucide-react'
 import { qk } from '@/api/keys'
 import * as api from '@/api/endpoints'
-import { ApiError } from '@/api/client'
+import { ApiError, apiErrorMessage } from '@/api/client'
 import type { FinanceMonth, FinanceRates } from '@/api/types'
 import { useAuth } from '@/app/auth'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
@@ -101,7 +101,7 @@ export function FinancePage() {
         setFormError(cs.finance.monthExists)
         return
       }
-      setFormError(err instanceof ApiError && err.detail ? err.detail : cs.finance.saveError)
+      setFormError(apiErrorMessage(err, cs.finance.saveError))
     },
   })
 

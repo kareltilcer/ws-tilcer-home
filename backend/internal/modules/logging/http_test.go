@@ -2,8 +2,6 @@ package logging_test
 
 import (
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -28,26 +24,20 @@ func logRouter(t *testing.T, roles ...string) http.Handler {
 		audit.Event{Module: "events", Action: "event.create", EntityType: "event", EntityID: "e1", Summary: "vytvořena událost"})
 
 	logs := logging.NewHTTPHandler(logging.NewStore(db))
-	return httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u", Type: "user", Roles: roles}}),
-		MountAPI: func(api chi.Router) {
-			api.Route("/logs", func(r chi.Router) {
-				r.Use(httpx.RequireAdmin)
-				logs.Mount(r)
-			})
-		},
-	})
+	// The admin gate is mounted HERE rather than inside logging.Mount, exactly as
+	// main.go does it — so this test exercises the real gate, not a stand-in.
+	return testsupport.Router(t, db, func(api chi.Router) {
+		api.Route("/logs", func(r chi.Router) {
+			r.Use(httpx.RequireAdmin)
+			logs.Mount(r)
+		})
+	}, roles...)
 }
 
+// req is Send with no body — every route in this module is a GET.
 func req(t *testing.T, h http.Handler, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(method, path, nil)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, r)
-	return rr
+	return testsupport.Send(t, h, method, path, "")
 }
 
 func TestLogHTTP_RoleGating(t *testing.T) {

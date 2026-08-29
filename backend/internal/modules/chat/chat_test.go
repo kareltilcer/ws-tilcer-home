@@ -21,16 +21,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
@@ -159,13 +155,7 @@ func newHousehold(t *testing.T, members ...member) *household {
 	handlers := map[string]http.Handler{}
 	for _, m := range members {
 		actor := reqctx.Actor{UserID: m.id, Type: "user", Label: m.name, Roles: m.roles}
-		handlers[m.id] = httpx.NewRouter(httpx.Deps{
-			Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-			DB:        db,
-			Site:      "home",
-			SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &actor}),
-			MountAPI:  func(r chi.Router) { h.Mount(r) },
-		})
+		handlers[m.id] = testsupport.RouterAs(t, db, actor, h.Mount)
 	}
 	return &household{t: t, db: db, svc: svc, handlers: handlers, notify: notify, pushes: pushes}
 }
@@ -181,16 +171,7 @@ func (hh *household) as(m member, method, path, body string) *httptest.ResponseR
 	if !ok {
 		hh.t.Fatalf("member %s was not registered with newHousehold", m.id)
 	}
-	var r *http.Request
-	if body == "" {
-		r = httptest.NewRequest(method, path, nil)
-	} else {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-	}
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, r)
-	return rr
+	return testsupport.Send(hh.t, handler, method, path, body)
 }
 
 // group creates a conversation owned by `owner` containing `others`.

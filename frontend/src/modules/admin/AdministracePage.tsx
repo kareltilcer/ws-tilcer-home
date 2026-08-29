@@ -36,7 +36,7 @@ import type {
   NotificationSchedule,
   SendResult,
 } from '@/api/types'
-import { ApiError } from '@/api/client'
+import { ApiError, apiErrorMessage } from '@/api/client'
 import { Button, Input } from '@/components/ui/ui'
 import { ScreenHeader } from '@/components/common/states'
 import { useOnline } from '@/platform/pwa/offline'
@@ -989,8 +989,7 @@ function StatusChip({ status, error }: { status: DeliveryStatus; error: string |
 // ---- helpers ----
 
 function errMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.detail || cs.admin.saveError
-  return cs.admin.saveError
+  return apiErrorMessage(e, cs.admin.saveError)
 }
 
 // A trigger is identified by MODULE + KEY, never by the key alone: action keys

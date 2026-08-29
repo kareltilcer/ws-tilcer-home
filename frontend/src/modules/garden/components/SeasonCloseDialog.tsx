@@ -4,11 +4,11 @@ import { toast } from 'sonner'
 import { Lock } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
-import { ApiError } from '@/api/client'
 import { Button, Input } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { cn } from '@/lib/utils'
 import { closeSeason } from '../api/endpoints'
+import { toastGardenError } from '../api/hooks'
 import type { GardenPlanting, GardenSeason, GardenSeasonCloseInput } from '../api/types'
 
 // UZAVŘÍT SEZÓNU — a once-a-year ritual worth doing (D120).
@@ -109,7 +109,7 @@ export function SeasonCloseDialog({
       onOpenChange(false)
       toast.success(cs.garden.uzavritSezonu)
     },
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const set = (id: string, patch: Partial<Outcome>) =>

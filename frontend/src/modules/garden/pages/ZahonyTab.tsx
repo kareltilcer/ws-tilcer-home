@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { ChevronDown, ChevronUp, History, Info, Plus, Trash2 } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { useAuth } from '@/app/auth'
 import { useOnline } from '@/platform/pwa/offline'
 import { cs } from '@/i18n/cs'
-import { ApiError } from '@/api/client'
 import { Button, Input, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { bedHistory, createBed, deleteBed, getEnums, listBeds, moveBed, updateBed } from '../api/endpoints'
+import { toastGardenError } from '../api/hooks'
 import type { GardenBed, GardenBedInput } from '../api/types'
 
 // ZÁHONY — WHERE THE ORDER MEANS SOMETHING.
@@ -41,16 +40,14 @@ export function ZahonyTab() {
   const enums = useQuery({ queryKey: qk.gardenEnums, queryFn: getEnums, staleTime: Infinity })
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: qk.gardenAll })
-  const onErr = (e: unknown) =>
-    toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle)
 
   const move = useMutation({
     mutationFn: ({ id, afterId, beforeId }: { id: string; afterId?: string; beforeId?: string }) =>
       moveBed(id, { after_id: afterId, before_id: beforeId }),
     onSuccess: invalidate,
-    onError: onErr,
+    onError: toastGardenError,
   })
-  const remove = useMutation({ mutationFn: deleteBed, onSuccess: invalidate, onError: onErr })
+  const remove = useMutation({ mutationFn: deleteBed, onSuccess: invalidate, onError: toastGardenError })
 
   const items = beds.data?.items ?? []
   const byId = new Map(items.map((b) => [b.id, b]))
@@ -236,8 +233,7 @@ function BedForm({
       setDraft({})
       onClose()
     },
-    onError: (e) =>
-      toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const set = (patch: GardenBedInput) => setDraft((d) => ({ ...d, ...patch }))

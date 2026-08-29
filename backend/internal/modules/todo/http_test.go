@@ -1,19 +1,11 @@
 package todo_test
 
 import (
-	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -21,27 +13,15 @@ func router(t *testing.T, roles ...string) http.Handler {
 	t.Helper()
 	db := testsupport.NewDB(t)
 	h := todo.NewHandler(todo.NewService(db, audit.NewSink(), nil))
-	return httpx.NewRouter(httpx.Deps{
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		DB:        db,
-		Site:      "home",
-		SessionMW: auth.NewSessionAuth(auth.Config{BypassActor: &reqctx.Actor{UserID: "u", Type: "user", Roles: roles}}),
-		MountAPI:  func(api chi.Router) { h.Mount(api) },
-	})
+	return testsupport.Router(t, db, h.Mount, roles...)
 }
 
+// send keeps todo's status-code-only shape: every assertion in this file is
+// about the code, and threading a recorder through them to read `.Code` at each
+// one would be noise.
 func send(t *testing.T, h http.Handler, method, path, body string) int {
 	t.Helper()
-	var r *http.Request
-	if body != "" {
-		r = httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-	} else {
-		r = httptest.NewRequest(method, path, nil)
-	}
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, r)
-	return rr.Code
+	return testsupport.Send(t, h, method, path, body).Code
 }
 
 func TestTodoHTTP_RoleGating(t *testing.T) {

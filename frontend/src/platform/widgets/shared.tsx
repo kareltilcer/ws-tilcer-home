@@ -53,6 +53,41 @@ export function WidgetRow({
   )
 }
 
+// PinScope is the three-way scope the two pin providers return: a row pinned to
+// the household, to the caller personally, or to both.
+export type PinScope = 'household' | 'personal' | 'both'
+
+// PinScopeBadge is the chip on the right of a pinned row.
+//
+// ⚠ THREE DISTINCT SCOPES, NOT TWO. Collapsing `household` into the "both" badge
+// discards the distinction the backend went to the trouble of computing — a row
+// the household pinned is not a row you also pinned. Only `personal` is tinted
+// differently, because it is the one whose pin nobody else can see.
+//
+// It takes its labels rather than reading `cs` itself: the badge is the same
+// chip in Pripnuté poznámky and Pripnuté dokumenty, where the words come from
+// `cs.notes.*` and `cs.documents.*` respectively. That difference is the only
+// thing the two copies of this had.
+export function PinScopeBadge({
+  scope,
+  labels,
+}: {
+  scope: PinScope
+  labels: { personal: string; household: string; both: string }
+}) {
+  const personal = scope === 'personal'
+  return (
+    <span
+      className={cn(
+        'inline-flex h-5 flex-none items-center rounded-full px-2 text-[10.5px] font-bold',
+        personal ? 'bg-s3 text-muted' : 'bg-accent-soft text-accent',
+      )}
+    >
+      {personal ? labels.personal : scope === 'household' ? labels.household : labels.both}
+    </span>
+  )
+}
+
 // WidgetEmpty is a widget's calm "nothing here" body (per-widget, distinct from
 // the whole-dashboard empty state).
 export function WidgetEmpty({ text }: { text: string }) {

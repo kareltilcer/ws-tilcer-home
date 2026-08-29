@@ -3,6 +3,7 @@ import { cs } from '@/i18n/cs'
 import { Input } from '@/components/ui/ui'
 import { cn } from '@/lib/utils'
 import type { GardenAnchor, GardenSeason, GardenWindow } from '../api/types'
+import { addDays, isoWeekMonday, toISO } from '../isoWeek'
 import { fmtWindow } from './labels'
 
 // THE TIMING-WINDOW CONTROL — the weirdest input in Home, and the one that
@@ -146,32 +147,4 @@ export function resolveWindow(win: GardenWindow | null, season: GardenSeason | u
   const base = new Date(anchorISO + 'T00:00:00Z')
   if (Number.isNaN(base.getTime())) return null
   return fmtWindow(toISO(addDays(base, win.from)), toISO(addDays(base, win.to)))
-}
-
-/** isoWeekMonday returns the Monday of an ISO week, clamping a missing week 53
- *  to week 52 — the same deviation the backend makes, for the same reason: the
- *  alternative silently lands in January of the following year. */
-function isoWeekMonday(year: number, week: number): Date {
-  const weeks = weeksInISOYear(year)
-  const w = Math.min(Math.max(week, 1), weeks)
-  // 4 January is in ISO week 1 of every year, by definition.
-  const jan4 = new Date(Date.UTC(year, 0, 4))
-  const offset = (jan4.getUTCDay() + 6) % 7 // Monday = 0
-  return addDays(jan4, -offset + (w - 1) * 7)
-}
-
-function weeksInISOYear(year: number): number {
-  const jan4 = new Date(Date.UTC(year, 0, 4))
-  const offset = (jan4.getUTCDay() + 6) % 7
-  const week53 = addDays(jan4, -offset + 52 * 7)
-  // Week 53 exists iff its Thursday is still in this year.
-  return addDays(week53, 3).getUTCFullYear() === year ? 53 : 52
-}
-
-function addDays(d: Date, n: number): Date {
-  return new Date(d.getTime() + n * 86400000)
-}
-
-function toISO(d: Date): string {
-  return d.toISOString().slice(0, 10)
 }

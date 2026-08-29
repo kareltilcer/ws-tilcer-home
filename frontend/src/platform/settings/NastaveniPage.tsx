@@ -19,7 +19,7 @@ import { useTheme } from '@/theme/theme'
 import { usePushDevice, usePushPreferences } from '@/platform/push/usePush'
 import { useInstallPrompt, useOnline } from '@/platform/pwa/offline'
 import { sendPushTest } from '@/api/endpoints'
-import { ApiError } from '@/api/client'
+import { apiErrorMessage } from '@/api/client'
 import type { PushCategories, PushTestResult } from '@/api/types'
 
 export function NastaveniPage() {
@@ -39,7 +39,7 @@ export function NastaveniPage() {
       if (res.sent > 0) toast.success(cs.settings.selfTestSent)
       else toast.error(cs.settings.selfTestFailed)
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.detail || cs.settings.selfTestFailed : cs.settings.selfTestFailed),
+    onError: (e) => toast.error(apiErrorMessage(e, cs.settings.selfTestFailed)),
   })
 
   const prefs = prefsQuery.data

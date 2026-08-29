@@ -8,7 +8,7 @@ import {
 import { toast } from 'sonner'
 import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
-import { ApiError } from '@/api/client'
+import { apiErrorMessage } from '@/api/client'
 import { subscribeToFrames, type LiveFrame } from '@/api/ws'
 import { clientId } from '@/api/clientId'
 import { useOnline } from '@/platform/pwa/offline'
@@ -254,14 +254,14 @@ export function useChatSearch(q: string, conversationID?: string) {
  * arrived or did not. Every other module in Home already does this
  * (`toast.error(cs.…saveFailed)` in electricity, garden, finance).
  *
- * The server's own detail wins when there is one, because it names WHICH rule
- * refused — `Konverzace nebyla nalezena.`, `Poslední člen nemůže konverzaci
- * opustit — smažte ji místo toho.` — and those sentences were written to be read.
- * The fallback is what a network failure leaves behind.
+ * Which message to show is `apiErrorMessage`'s decision — the server's own
+ * detail wins when there is one, because it names WHICH rule refused
+ * (`Konverzace nebyla nalezena.`, `Poslední člen nemůže konverzaci opustit —
+ * smažte ji místo toho.`) and those sentences were written to be read. What
+ * this adds is the toast and the per-mutation fallback.
  */
 function failed(fallback: string) {
-  return (e: unknown) =>
-    toast.error(e instanceof ApiError ? (e.detail ?? fallback) : fallback)
+  return (e: unknown) => toast.error(apiErrorMessage(e, fallback))
 }
 
 export function useSendMessage(conversationID: string) {
