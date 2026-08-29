@@ -56,7 +56,7 @@ func (h *Handler) Mount(r chi.Router) {
 // ---- rules ----
 
 func (h *Handler) listRules(w http.ResponseWriter, r *http.Request) {
-	page, err := h.svc.ListRules(r.Context(), boolQuery(r, "enabled"), limitOf(r), r.URL.Query().Get("cursor"))
+	page, err := h.svc.ListRules(r.Context(), boolQuery(r, "enabled"), httpx.Limit(r, defaultLimit, maxLimit), r.URL.Query().Get("cursor"))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -121,7 +121,7 @@ func (h *Handler) testRule(w http.ResponseWriter, r *http.Request) {
 // ---- schedules ----
 
 func (h *Handler) listSchedules(w http.ResponseWriter, r *http.Request) {
-	page, err := h.svc.ListSchedules(r.Context(), boolQuery(r, "enabled"), limitOf(r), r.URL.Query().Get("cursor"))
+	page, err := h.svc.ListSchedules(r.Context(), boolQuery(r, "enabled"), httpx.Limit(r, defaultLimit, maxLimit), r.URL.Query().Get("cursor"))
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -217,7 +217,7 @@ func (h *Handler) deliveries(w http.ResponseWriter, r *http.Request) {
 		UserID: q.Get("user"),
 		From:   q.Get("from"),
 		To:     q.Get("to"),
-		Limit:  limitOf(r),
+		Limit:  httpx.Limit(r, defaultLimit, maxLimit),
 		Cursor: q.Get("cursor"),
 	})
 	if err != nil {
@@ -228,17 +228,6 @@ func (h *Handler) deliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- helpers ----
-
-func limitOf(r *http.Request) int {
-	n, err := strconv.Atoi(r.URL.Query().Get("limit"))
-	if err != nil || n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
 
 // boolQuery returns nil when the parameter is absent, so "enabled=false" is
 // distinguishable from "no filter".
@@ -343,7 +332,7 @@ func (h *Handler) privateItems(w http.ResponseWriter, r *http.Request) {
 		OwnerUserID: r.URL.Query().Get("owner_user_id"),
 		Module:      r.URL.Query().Get("module"),
 		Sort:        r.URL.Query().Get("sort"),
-		Limit:       limitOf(r),
+		Limit:       httpx.Limit(r, defaultLimit, maxLimit),
 		Cursor:      r.URL.Query().Get("cursor"),
 	}
 	// ⚠ THE ALLOW-LIST COMES FROM THE CATALOG, never from a literal here. Which

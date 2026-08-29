@@ -163,3 +163,86 @@ func TestAccessLogCarriesRequestID(t *testing.T) {
 		t.Errorf("access log missing status:\n%s", buf.String())
 	}
 }
+
+// TestLimit pins the CLAMPING semantics — the property that distinguishes this
+// helper from electricity's limitOf, which falls back to its default on an
+// out-of-range value instead. Both spellings existed when the helper was
+// extracted; only this one is shared, and the difference is behaviour, not style.
+func TestLimit(t *testing.T) {
+	cases := []struct {
+		query string
+		want  int
+	}{
+		{"", 50},           // absent → default
+		{"?limit=", 50},    // present but empty → default
+		{"?limit=abc", 50}, // unparseable → default
+		{"?limit=0", 50},   // non-positive → default
+		{"?limit=-3", 50},
+		{"?limit=1", 1},
+		{"?limit=200", 200},
+		{"?limit=201", 200}, // above the ceiling → CLAMPED, not defaulted
+		{"?limit=99999", 200},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "/x"+c.query, nil)
+		if got := httpx.Limit(r, 50, 200); got != c.want {
+			t.Errorf("Limit(%q) = %d, want %d", c.query, got, c.want)
+		}
+	}
+}
+
+// TestDecodePatch pins the four properties the two modules' own versions had and
+// the shared one had to keep. The middle two are the ones a "simplification"
+// would drop: DisallowUnknownFields has to be re-applied on the typed pass
+// because a custom UnmarshalJSON switches it off, and the trailing-content check
+// existed only because electricity's version went through DecodeJSON.
+func TestDecodePatch(t *testing.T) {
+	type body struct {
+		Note  *string `json:"note"`
+		Count *int    `json:"count"`
+	}
+
+	// Omitted and explicitly null both decode to nil — the key set is the only
+	// thing that tells them apart, which is the whole reason this exists.
+	r := httptest.NewRequest(http.MethodPatch, "/x", strings.NewReader(`{"note":null}`))
+	var b body
+	present, err := httpx.DecodePatch(r, &b)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if b.Note != nil || b.Count != nil {
+		t.Errorf("both fields should decode to nil, got note=%v count=%v", b.Note, b.Count)
+	}
+	if !present["note"] {
+		t.Error(`"note" was explicitly null and must be present`)
+	}
+	if present["count"] {
+		t.Error(`"count" was omitted and must not be present`)
+	}
+
+	// A typo'd field is a 422, not a silently ignored key.
+	r = httptest.NewRequest(http.MethodPatch, "/x", strings.NewReader(`{"note_typo":"x"}`))
+	if _, err := httpx.DecodePatch(r, &body{}); err == nil {
+		t.Error("an unknown field must be refused")
+	} else if ae := new(httpx.APIError); !errors.As(err, &ae) || ae.Status != http.StatusUnprocessableEntity {
+		t.Errorf("unknown field = %v, want a 422 APIError", err)
+	}
+
+	// Trailing content after the first value is a 422 too.
+	r = httptest.NewRequest(http.MethodPatch, "/x", strings.NewReader(`{"note":"a"}{"note":"b"}`))
+	if _, err := httpx.DecodePatch(r, &body{}); err == nil {
+		t.Error("trailing content must be refused")
+	} else if ae := new(httpx.APIError); !errors.As(err, &ae) || ae.Status != http.StatusUnprocessableEntity {
+		t.Errorf("trailing content = %v, want a 422 APIError", err)
+	}
+
+	// PatchKeys is the same thing over bytes, for a caller inside UnmarshalJSON —
+	// and it returns the error RAW, for the caller that attaches its own message.
+	present, err = httpx.PatchKeys([]byte(`{"count":3}`), &b)
+	if err != nil {
+		t.Fatalf("PatchKeys: %v", err)
+	}
+	if b.Count == nil || *b.Count != 3 || present["note"] || !present["count"] {
+		t.Errorf("PatchKeys = %v, count=%v", present, b.Count)
+	}
+}

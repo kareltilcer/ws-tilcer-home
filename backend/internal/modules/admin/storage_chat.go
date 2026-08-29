@@ -228,8 +228,11 @@ func (s *Service) SetThresholds(ctx context.Context, in StorageThresholdsUpdate)
 		// that changed nothing — the same reason UpdateDocument's all-nil patch
 		// leaves updated_at alone.
 		if len(changes) > 0 {
-			if _, err := s.sink.Record(ctx, tx, audit.Event{
-				Module:     audit.ModuleChat,
+			// ⚠ RECORDED AS CHAT, not as admin — the one cross-module event in the
+			// codebase. The threshold belongs to chat's storage, so the row belongs in
+			// chat's log rather than in the log of whoever opened the clean-up page.
+			// Spelled out here because the service's sink is bound to `admin`.
+			if err := s.sink.For(audit.ModuleChat).Record(ctx, tx, audit.Event{
 				Action:     "threshold.update",
 				EntityType: "storage_threshold",
 				EntityID:   "chat",

@@ -186,16 +186,7 @@ func (s *Store) ListForUser(ctx context.Context, userID string) ([]Subscription,
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Subscription
-	for rows.Next() {
-		sub, err := scanSubscription(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sub)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanSubscription)
 }
 
 // EligibleSubscriptions resolves recipients to the endpoints that may actually
@@ -231,16 +222,7 @@ func (s *Store) EligibleSubscriptions(ctx context.Context, userIDs []string, cat
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Subscription
-	for rows.Next() {
-		sub, err := scanSubscription(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sub)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanSubscription)
 }
 
 // categoryColumn maps a category onto its mute column. The mapping is explicit
@@ -533,9 +515,7 @@ func (s *Store) subscribedUserIDs(ctx context.Context) ([]string, error) {
 
 // ---- helpers ----
 
-type scanner interface{ Scan(dest ...any) error }
-
-func scanSubscription(row scanner) (Subscription, error) {
+func scanSubscription(row appdb.Scanner) (Subscription, error) {
 	var (
 		sub         Subscription
 		ua, failing sql.NullString

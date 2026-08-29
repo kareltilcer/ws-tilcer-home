@@ -27,7 +27,7 @@ type Notifier func(ctx context.Context, typ string, payload any)
 type Service struct {
 	db     *sql.DB
 	store  *Store
-	sink   audit.Sink
+	sink   audit.ModuleSink
 	notify Notifier
 }
 
@@ -35,7 +35,7 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
 	if notify == nil {
 		notify = func(context.Context, string, any) {}
 	}
-	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify}
+	return &Service{db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleFinance), notify: notify}
 }
 
 // Store exposes the read store to this module's widget, metric and list
@@ -65,15 +65,13 @@ func monthTaken(err error) error {
 // error is returned unchanged so the transaction rolls back: an action that
 // succeeds unlogged is the bug the spine exists to prevent.
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityID, summary string, changes []audit.Change) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleFinance,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: "finance_month",
 		EntityID:   entityID,
 		Summary:    summary,
 		Changes:    changes,
 	})
-	return err
 }
 
 // ---- Validation (PRD FR-F2 / FR-F4; every failure is a 422 with one Czech message) ----

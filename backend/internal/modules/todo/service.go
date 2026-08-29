@@ -24,7 +24,7 @@ type Notifier func(ctx context.Context, typ string, payload any)
 type Service struct {
 	db     *sql.DB
 	store  *Store
-	sink   audit.Sink
+	sink   audit.ModuleSink
 	notify Notifier
 }
 
@@ -33,7 +33,7 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier) *Service {
 	if notify == nil {
 		notify = func(context.Context, string, any) {}
 	}
-	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify}
+	return &Service{db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleTodo), notify: notify}
 }
 
 // Store exposes the underlying read store (used by the dashboard module).
@@ -393,8 +393,7 @@ func (s *Service) DeleteColumn(ctx context.Context, id string, cascade bool) err
 // ---- record helper ----
 
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, entityID, summary string, changes []audit.Change, meta map[string]any) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleTodo,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: entityType,
 		EntityID:   entityID,
@@ -402,7 +401,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 		Meta:       meta,
 		Changes:    changes,
 	})
-	return err
 }
 
 func boolPtr(b bool) *bool { return &b }

@@ -47,7 +47,7 @@ type Options struct {
 type Service struct {
 	db     *sql.DB
 	store  *Store
-	sink   audit.Sink
+	sink   audit.ModuleSink
 	notify Notifier
 	blob   blobstore.BlobStore
 	opts   Options
@@ -72,7 +72,7 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, blob blobstore.Blo
 	return &Service{
 		db:     db,
 		store:  NewStore(db),
-		sink:   sink,
+		sink:   audit.For(sink, audit.ModuleDocuments),
 		notify: notify,
 		blob:   blob,
 		opts:   opts,
@@ -137,8 +137,7 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 	if sc.Private {
 		owner = sc.OwnerID
 	}
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleDocuments,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: entityType,
 		EntityID:   entityID,
@@ -150,7 +149,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 		Visibility: sc.Visibility(),
 		OwnerID:    owner,
 	})
-	return err
 }
 
 // metaByAdmin stamps `by_admin` when an admin purges a PRIVATE item that is not

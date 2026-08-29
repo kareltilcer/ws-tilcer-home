@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
 // Store is the read side of the audit spine (the log browser, FR-L3–L6). It is
@@ -488,15 +489,7 @@ func (e *InvalidError) Error() string { return fmt.Sprintf("invalid %s: %v", e.P
 
 func errInvalid(param string, err error) error { return &InvalidError{Param: param, Err: err} }
 
-func clampLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
+func clampLimit(n int) int { return appdb.ClampLimit(n, defaultLimit, maxLimit) }
 
 func dimensionExpr(dim string) (string, bool) {
 	switch dim {
@@ -673,11 +666,7 @@ func (s *Store) changesFor(ctx context.Context, ids []string) (map[string][]Audi
 	return out, rows.Err()
 }
 
-type scannable interface {
-	Scan(dest ...any) error
-}
-
-func scanEvent(row scannable) (AuditEvent, error) {
+func scanEvent(row appdb.Scanner) (AuditEvent, error) {
 	var (
 		e                                             AuditEvent
 		actorUserID, actorLabel, entityType, entityID sql.NullString
@@ -707,15 +696,11 @@ func scanEvent(row scannable) (AuditEvent, error) {
 }
 
 func scanEvents(rows *sql.Rows) ([]AuditEvent, error) {
-	out := []AuditEvent{}
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
+	out, err := appdb.Collect(rows, scanEvent)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // orEmptyChanges keeps a nil slice out of the response: the API declares

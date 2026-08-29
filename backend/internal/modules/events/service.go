@@ -24,7 +24,7 @@ type Notifier func(ctx context.Context, typ string, payload any)
 type Service struct {
 	db              *sql.DB
 	store           *Store
-	sink            audit.Sink
+	sink            audit.ModuleSink
 	notify          Notifier
 	maxOccurrences  int
 	maxWindowMonths int
@@ -36,15 +36,14 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, maxOccurrences, ma
 	if notify == nil {
 		notify = func(context.Context, string, any) {}
 	}
-	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify, maxOccurrences: maxOccurrences, maxWindowMonths: maxWindowMonths}
+	return &Service{db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleEvents), notify: notify, maxOccurrences: maxOccurrences, maxWindowMonths: maxWindowMonths}
 }
 
 // Store exposes the read store (used by the dashboard module).
 func (s *Service) Store() *Store { return s.store }
 
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityID, summary string, changes []audit.Change, meta map[string]any) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleEvents,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: "event",
 		EntityID:   entityID,
@@ -52,7 +51,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityID, summ
 		Meta:       meta,
 		Changes:    changes,
 	})
-	return err
 }
 
 // ---- Reads ----

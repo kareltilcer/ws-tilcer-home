@@ -72,6 +72,46 @@ type Sink interface {
 	Record(ctx context.Context, tx *sql.Tx, e Event) (eventID string, err error)
 }
 
+// ModuleSink is a Sink with one module's identifier bound to it, so a caller
+// records `audit.Event{Action: …}` rather than restating which module it is on
+// every event.
+//
+// ⚠ IT IS NOT A WIDER Sink, and that is deliberate. Every service already held
+// a `record` wrapper whose whole body was "stamp my Module constant, discard the
+// event id, return the error" — eight of them, plus seventeen handlers stamping
+// it inline. Binding the constant once at construction is what those wrappers
+// wanted. Putting `For` on the Sink INTERFACE would have been the other way to
+// spell it, and this package's doc comment is why not: the interface is narrow
+// on purpose, so a second implementation (an HTTP client to a standalone logging
+// service) can be dropped in without touching module code, and a method every
+// implementer must supply to hand back a struct they do not own is not narrow.
+//
+// ⚠ Record returns only the error. Every one of the twenty-six call sites this
+// replaced discarded the event id; a caller that needs it uses the Sink.
+type ModuleSink struct {
+	sink   Sink
+	module string
+}
+
+// For binds module to sink. The module is one of the Module* constants — never a
+// literal, so a typo is a compile error rather than a row that quietly falls out
+// of the log browser's filter.
+func For(sink Sink, module string) ModuleSink { return ModuleSink{sink: sink, module: module} }
+
+// For re-binds to another module, for the caller that records on a module's
+// behalf rather than its own. There is exactly one — `admin`'s clean-up page
+// writes `chat.threshold.update`, because the event belongs in chat's log and
+// not in the log of whoever happened to open the page. Written out at the call
+// site, so a cross-module event is a visible decision.
+func (m ModuleSink) For(module string) ModuleSink { return ModuleSink{sink: m.sink, module: module} }
+
+// Record writes one event with the bound module stamped on it, inside tx.
+func (m ModuleSink) Record(ctx context.Context, tx *sql.Tx, e Event) error {
+	e.Module = m.module
+	_, err := m.sink.Record(ctx, tx, e)
+	return err
+}
+
 // Event is one domain audit record. Actor and request context (who/where) are
 // NOT fields here: they are read from the request context by the sink, so a
 // handler cannot forge them.

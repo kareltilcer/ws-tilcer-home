@@ -62,7 +62,7 @@ func deref(p *string) string {
 // scan positions stay untouched.
 const folderCols = `id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon, visibility, owner_id`
 
-func scanFolder(r interface{ Scan(...any) error }) (DocFolder, error) {
+func scanFolder(r appdb.Scanner) (DocFolder, error) {
 	var f DocFolder
 	var parent, createdBy, icon, owner sql.NullString
 	var archived int
@@ -306,16 +306,7 @@ func (s *Store) DocumentsInFolders(ctx context.Context, q DBTX, folderIDs []stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []storedDocument
-	for rows.Next() {
-		d, err := scanStoredDocument(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanStoredDocument)
 }
 
 // ---- Documents ----
@@ -334,12 +325,12 @@ type storedDocument struct {
 	ThumbnailKey *string
 }
 
-func scanDocument(r interface{ Scan(...any) error }) (Document, error) {
+func scanDocument(r appdb.Scanner) (Document, error) {
 	d, err := scanStoredDocument(r)
 	return d.Document, err
 }
 
-func scanStoredDocument(r interface{ Scan(...any) error }) (storedDocument, error) {
+func scanStoredDocument(r appdb.Scanner) (storedDocument, error) {
 	var sd storedDocument
 	var folder, description, createdBy, previewKey, thumbKey, owner sql.NullString
 	var archived int
@@ -638,16 +629,11 @@ func (s *Store) SearchDocuments(ctx context.Context, query string, folderID *str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []DocumentSummary{}
-	for rows.Next() {
-		sm, err := scanDocumentSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
+	out, err := appdb.Collect(rows, scanDocumentSummary)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ListDocuments returns a page of documents ordered newest-updated first, keyset-
@@ -681,16 +667,11 @@ func (s *Store) ListDocuments(ctx context.Context, folderID *string, includeArch
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []DocumentSummary{}
-	for rows.Next() {
-		sm, err := scanDocumentSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
+	out, err := appdb.Collect(rows, scanDocumentSummary)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ---- Tree data ----
@@ -701,7 +682,7 @@ const summaryCols = `id, folder_id, title, slug, content_type, byte_size, previe
 const summaryColsPrefixed = `d.id, d.folder_id, d.title, d.slug, d.content_type, d.byte_size, d.preview_kind,
 	d.preview_status, d.thumbnail_key, d.position, d.archived, d.updated_at, d.visibility, d.owner_id`
 
-func scanDocumentSummary(r interface{ Scan(...any) error }) (DocumentSummary, error) {
+func scanDocumentSummary(r appdb.Scanner) (DocumentSummary, error) {
 	var sm DocumentSummary
 	var folder, thumbKey, owner sql.NullString
 	var archived int
@@ -760,16 +741,7 @@ func (s *Store) AllFoldersForViewer(ctx context.Context, includeArchived bool, v
 }
 
 func scanFolders(rows *sql.Rows) ([]DocFolder, error) {
-	defer rows.Close()
-	var out []DocFolder
-	for rows.Next() {
-		f, err := scanFolder(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanFolder)
 }
 
 // AllDocumentSummaries returns every document as a lightweight summary, ordered.
@@ -785,16 +757,7 @@ func (s *Store) AllDocumentSummaries(ctx context.Context, includeArchived bool, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []DocumentSummary
-	for rows.Next() {
-		sm, err := scanDocumentSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanDocumentSummary)
 }
 
 // DocumentSummariesInFolder returns the document summaries directly under a folder
@@ -818,16 +781,11 @@ func (s *Store) DocumentSummariesInFolder(ctx context.Context, q DBTX, folderID 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []DocumentSummary{}
-	for rows.Next() {
-		sm, err := scanDocumentSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
+	out, err := appdb.Collect(rows, scanDocumentSummary)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ChildFolders returns the child folders of parentID — or of the root of one
@@ -846,16 +804,11 @@ func (s *Store) ChildFolders(ctx context.Context, q DBTX, parentID *string, incl
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []DocFolder{}
-	for rows.Next() {
-		f, err := scanFolder(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
+	out, err := appdb.Collect(rows, scanFolder)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ---- Preview state ----

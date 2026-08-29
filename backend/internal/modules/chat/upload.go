@@ -437,15 +437,13 @@ func (s *Service) commitMessage(ctx context.Context, conversationID, body string
 // so an attachment event filed under `chat_conversation` would put a file's history
 // on a room's timeline and make neither of them findable by its own id.
 func (s *Service) recordAttachment(ctx context.Context, tx *sql.Tx, action, attachmentID, summary string, changes []audit.Change) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleChat,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: "chat_attachment",
 		EntityID:   attachmentID,
 		Summary:    summary,
 		Changes:    changes,
 	})
-	return err
 }
 
 // purgeObjects best-effort deletes keys that should not have survived. Failures are

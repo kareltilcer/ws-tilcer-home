@@ -64,7 +64,7 @@ func deref(p *string) string {
 // scan positions stay untouched.
 const folderCols = `id, parent_id, name, slug, position, archived, created_by, created_at, updated_at, icon, visibility, owner_id`
 
-func scanFolder(r interface{ Scan(...any) error }) (Folder, error) {
+func scanFolder(r appdb.Scanner) (Folder, error) {
 	var f Folder
 	var parent, createdBy, icon, owner sql.NullString
 	var archived int
@@ -308,23 +308,14 @@ func (s *Store) NotesInFolders(ctx context.Context, q DBTX, folderIDs []string, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Note
-	for rows.Next() {
-		n, err := scanNote(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanNote)
 }
 
 // ---- Notes ----
 
 const noteCols = `id, folder_id, title, slug, body_md, position, archived, created_by, created_at, updated_at, visibility, owner_id`
 
-func scanNote(r interface{ Scan(...any) error }) (Note, error) {
+func scanNote(r appdb.Scanner) (Note, error) {
 	var n Note
 	var folder, body, createdBy, owner sql.NullString
 	var archived int
@@ -591,23 +582,18 @@ func (s *Store) SearchNotes(ctx context.Context, query string, folderID *string,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []NoteSummary{}
-	for rows.Next() {
-		sm, err := scanNoteSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
+	out, err := appdb.Collect(rows, scanNoteSummary)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ---- Tree data ----
 
 const noteSummaryCols = `id, folder_id, title, slug, position, archived, updated_at, visibility, owner_id`
 
-func scanNoteSummary(r interface{ Scan(...any) error }) (NoteSummary, error) {
+func scanNoteSummary(r appdb.Scanner) (NoteSummary, error) {
 	var sm NoteSummary
 	var folder, owner sql.NullString
 	var archived int
@@ -667,16 +653,7 @@ func (s *Store) AllFoldersForViewer(ctx context.Context, includeArchived bool, v
 }
 
 func scanFolders(rows *sql.Rows) ([]Folder, error) {
-	defer rows.Close()
-	var out []Folder
-	for rows.Next() {
-		f, err := scanFolder(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanFolder)
 }
 
 // AllNoteSummaries returns every note in one root scope as a lightweight summary
@@ -691,16 +668,7 @@ func (s *Store) AllNoteSummaries(ctx context.Context, includeArchived bool, sc S
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []NoteSummary
-	for rows.Next() {
-		sm, err := scanNoteSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanNoteSummary)
 }
 
 // NoteSummariesInFolder returns the note summaries directly under a folder — or
@@ -735,16 +703,11 @@ func (s *Store) NoteSummariesInFolder(ctx context.Context, q DBTX, folderID *str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []NoteSummary{}
-	for rows.Next() {
-		sm, err := scanNoteSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
+	out, err := appdb.Collect(rows, scanNoteSummary)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ScopedNoteSummaries returns every live note in one root scope, ordered — what
@@ -762,16 +725,11 @@ func (s *Store) ScopedNoteSummaries(ctx context.Context, q DBTX, includeArchived
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []NoteSummary{}
-	for rows.Next() {
-		sm, err := scanNoteSummary(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sm)
+	out, err := appdb.Collect(rows, scanNoteSummary)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ChildFolders returns the child folders of parentID — or of the root of one scope
@@ -791,16 +749,11 @@ func (s *Store) ChildFolders(ctx context.Context, q DBTX, parentID *string, incl
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Folder{}
-	for rows.Next() {
-		f, err := scanFolder(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
+	out, err := appdb.Collect(rows, scanFolder)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return appdb.OrEmpty(out), nil
 }
 
 // ---- Pins ----
@@ -1037,7 +990,7 @@ const noteImageCols = `id, note_id, content_type, byte_size, checksum, created_b
 // GetNoteImageForViewer, where `notes` is also in scope and `id` would be ambiguous.
 const noteImageColsPrefixed = `i.id, i.note_id, i.content_type, i.byte_size, i.checksum, i.created_by, i.created_at`
 
-func scanNoteImage(r interface{ Scan(...any) error }) (noteImage, error) {
+func scanNoteImage(r appdb.Scanner) (noteImage, error) {
 	var im noteImage
 	var createdBy sql.NullString
 	if err := r.Scan(&im.ID, &im.NoteID, &im.ContentType, &im.ByteSize, &im.Checksum, &createdBy, &im.CreatedAt); err != nil {
@@ -1167,16 +1120,7 @@ func (s *Store) NoteImagesForNote(ctx context.Context, q DBTX, noteID string) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []noteImage
-	for rows.Next() {
-		im, err := scanNoteImage(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, im)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanNoteImage)
 }
 
 // DeleteNoteImages removes the given image rows. Object deletion is a separate,

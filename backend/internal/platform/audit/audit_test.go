@@ -205,3 +205,70 @@ func TestRecord_MetaAndFTS(t *testing.T) {
 		t.Errorf("after delete FTS match for kotlík = %d, want 0", got)
 	}
 }
+
+// TestModuleSink_BindsAndRebinds pins the two properties every service now
+// depends on: the bound module reaches the row without the caller naming it, and
+// For() on a bound sink retargets ONE event without disturbing the binding it
+// came from.
+//
+// The re-binding is not hypothetical — `admin`'s storage thresholds are recorded
+// as chat.threshold.update from a service whose sink is bound to admin, which is
+// the only cross-module event in the codebase.
+func TestModuleSink_BindsAndRebinds(t *testing.T) {
+	db := testsupport.NewDB(t)
+	adminSink := audit.For(audit.NewSink(), audit.ModuleAdmin)
+	ctx := testsupport.CtxUser("u1", "admin")
+
+	if err := appdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+		if err := adminSink.Record(ctx, tx, audit.Event{
+			Action: "rule.create", EntityType: "notification_rule", EntityID: "r1",
+			Summary: "vytvořeno pravidlo",
+		}); err != nil {
+			return err
+		}
+		return adminSink.For(audit.ModuleChat).Record(ctx, tx, audit.Event{
+			Action: "threshold.update", EntityType: "storage_threshold", EntityID: "chat",
+			Summary: "změněn limit",
+		})
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	rows, err := db.Query(`SELECT module, action FROM audit_events ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	got, err := appdb.Collect(rows, func(s appdb.Scanner) (string, error) {
+		var module, action string
+		if err := s.Scan(&module, &action); err != nil {
+			return "", err
+		}
+		return module + "." + action, nil
+	})
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	want := []string{"admin.rule.create", "chat.threshold.update"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+
+	// The original binding is untouched by the re-bind above — For returns a new
+	// value rather than mutating the receiver.
+	if err := appdb.WithTx(ctx, db, func(tx *sql.Tx) error {
+		return adminSink.Record(ctx, tx, audit.Event{
+			Action: "rule.delete", EntityType: "notification_rule", EntityID: "r1",
+			Summary: "smazáno pravidlo",
+		})
+	}); err != nil {
+		t.Fatalf("record after rebind: %v", err)
+	}
+	var module string
+	if err := db.QueryRow(
+		`SELECT module FROM audit_events ORDER BY id DESC LIMIT 1`).Scan(&module); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if module != audit.ModuleAdmin {
+		t.Errorf("module after a re-bind elsewhere = %q, want %q", module, audit.ModuleAdmin)
+	}
+}

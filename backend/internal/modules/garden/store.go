@@ -36,18 +36,8 @@ const (
 	maxLimit     = 200
 )
 
-// NormalizeLimit clamps a caller-supplied page size.
-func NormalizeLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
-
-type scanner interface{ Scan(dest ...any) error }
+// NormalizeLimit clamps a caller-supplied page size to the house 50/200.
+func NormalizeLimit(n int) int { return appdb.ClampLimit(n, defaultLimit, maxLimit) }
 
 var errNotFound = errors.New("garden: not found")
 
@@ -72,7 +62,7 @@ const plantIdentCols = `id, name_cs, family, plant_type, hardiness,
 	source, source_model, source_at, verified_by, verified_at,
 	created_by, created_at, updated_at`
 
-func scanPlant(sc scanner) (Plant, error) {
+func scanPlant(sc appdb.Scanner) (Plant, error) {
 	var p Plant
 	var core coreRow
 	var sourceModel, sourceAt, verifiedBy, verifiedAt, createdBy sql.NullString
@@ -137,17 +127,8 @@ func (s *Store) ListPlants(ctx context.Context, f PlantFilter, limit int, cursor
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []Plant
-	for rows.Next() {
-		p, err := scanPlant(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanPlant)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, func(p Plant) string { return p.ID })
@@ -278,7 +259,7 @@ func (s *Store) PlantingsUsingVariety(ctx context.Context, db DBTX, varietyID st
 const varietyIdentCols = `id, plant_id, name, supplier, description_md, is_favourite, retired,
 	source, source_model, source_at, verified_by, verified_at, created_at, updated_at`
 
-func scanVariety(sc scanner) (Variety, error) {
+func scanVariety(sc appdb.Scanner) (Variety, error) {
 	var v Variety
 	var core coreRow
 	var supplier, descr, sourceModel, sourceAt, verifiedBy, verifiedAt sql.NullString
@@ -317,16 +298,8 @@ func (s *Store) ListVarieties(ctx context.Context, plantID string, limit int, cu
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Variety
-	for rows.Next() {
-		v, err := scanVariety(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, v)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanVariety)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, func(v Variety) string { return v.ID })
@@ -380,7 +353,7 @@ func (s *Store) SoftDeleteVariety(ctx context.Context, tx DBTX, id, at string) e
 const bedCols = `id, name, code, type, length_cm, width_cm, area_m2,
 	sun_exposure, zone, soil_notes_md, is_active, position, created_at, updated_at`
 
-func scanBed(sc scanner) (Bed, error) {
+func scanBed(sc appdb.Scanner) (Bed, error) {
 	var b Bed
 	var length, width sql.NullFloat64
 	var sun, zone, notes sql.NullString
@@ -412,16 +385,7 @@ func (s *Store) ListBeds(ctx context.Context, db DBTX, includeInactive bool) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Bed
-	for rows.Next() {
-		b, err := scanBed(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanBed)
 }
 
 func (s *Store) GetBed(ctx context.Context, db DBTX, id string) (Bed, error) {
@@ -581,7 +545,7 @@ func (s *Store) allBedHistory(ctx context.Context, db DBTX) (map[string][]BedSea
 const seasonCols = `id, year, status, last_frost_on, first_frost_on,
 	last_frost_actual_on, first_frost_actual_on, notes_md, closed_at, closed_by, created_at, updated_at`
 
-func scanSeason(sc scanner) (Season, error) {
+func scanSeason(sc appdb.Scanner) (Season, error) {
 	var s Season
 	var lf, ff, lfa, ffa, notes, closedAt, closedBy sql.NullString
 	if err := sc.Scan(&s.ID, &s.Year, &s.Status, &lf, &ff, &lfa, &ffa, &notes,
@@ -620,16 +584,7 @@ func (s *Store) ListSeasons(ctx context.Context) ([]Season, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Season
-	for rows.Next() {
-		se, err := scanSeason(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, se)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanSeason)
 }
 
 // ClosedSeasonCount is what decides whether C3 and C8 can run at all (D120).
@@ -681,7 +636,7 @@ const plantingFrom = `FROM garden_plantings p
 	JOIN garden_plants pl ON pl.id = p.plant_id
 	LEFT JOIN garden_varieties v ON v.id = p.variety_id`
 
-func scanPlanting(sc scanner) (Planting, error) {
+func scanPlanting(sc appdb.Scanner) (Planting, error) {
 	var p Planting
 	var seasonID, bedID, locationLabel, varietyID sql.NullString
 	var areaM2 sql.NullFloat64
@@ -765,16 +720,8 @@ func (s *Store) ListPlantings(ctx context.Context, db DBTX, f PlantingFilter, li
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Planting
-	for rows.Next() {
-		p, err := scanPlanting(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanPlanting)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, func(p Planting) string { return p.ID })
@@ -898,7 +845,7 @@ const taskFrom = `FROM garden_tasks t
 	LEFT JOIN garden_plants pl ON pl.id = p.plant_id
 	LEFT JOIN garden_varieties v ON v.id = p.variety_id`
 
-func scanTask(sc scanner) (Task, error) {
+func scanTask(sc appdb.Scanner) (Task, error) {
 	var t Task
 	var seasonID, plantingID, bedID, dueHint, completedBy, completedAt, genKey, notes sql.NullString
 	var bedCode, plantName, varietyName sql.NullString
@@ -996,16 +943,8 @@ func (s *Store) ListTasks(ctx context.Context, db DBTX, f TaskFilter, limit int,
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Task
-	for rows.Next() {
-		t, err := scanTask(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanTask)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, encodeTaskCursor)
@@ -1057,16 +996,7 @@ func (s *Store) TasksForPlanting(ctx context.Context, db DBTX, plantingID string
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Task
-	for rows.Next() {
-		t, err := scanTask(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanTask)
 }
 
 func (s *Store) InsertTask(ctx context.Context, tx DBTX, t Task, createdBy, at string) error {
@@ -1149,7 +1079,7 @@ func (s *Store) CountTasks(ctx context.Context, f TaskFilter) (int, error) {
 const harvestCols = `h.id, h.planting_id, h.harvested_on, h.quantity, h.unit,
 	h.destination, h.quality, h.note, h.created_by, h.created_at`
 
-func scanHarvest(sc scanner) (Harvest, error) {
+func scanHarvest(sc appdb.Scanner) (Harvest, error) {
 	var h Harvest
 	var dest, quality, note, createdBy, bedCode sql.NullString
 	if err := sc.Scan(&h.ID, &h.PlantingID, &h.HarvestedOn, &h.Quantity, &h.Unit,
@@ -1196,16 +1126,8 @@ func (s *Store) ListHarvests(ctx context.Context, plantingID string, year *int, 
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Harvest
-	for rows.Next() {
-		h, err := scanHarvest(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, h)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanHarvest)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, func(h Harvest) string { return h.ID })
@@ -1292,7 +1214,7 @@ const storageCols = `id, harvest_id, planting_id, product_name, method, location
 	quantity_initial, quantity_remaining, unit, stored_on, best_before, status, note,
 	created_at, updated_at`
 
-func scanStorage(sc scanner) (StorageItem, error) {
+func scanStorage(sc appdb.Scanner) (StorageItem, error) {
 	var it StorageItem
 	var harvestID, plantingID, location, bestBefore, note sql.NullString
 	if err := sc.Scan(&it.ID, &harvestID, &plantingID, &it.ProductName, &it.Method, &location,
@@ -1323,16 +1245,8 @@ func (s *Store) ListStorage(ctx context.Context, status string, limit int, curso
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []StorageItem
-	for rows.Next() {
-		it, err := scanStorage(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, it)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanStorage)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, func(it StorageItem) string { return it.ID })
@@ -1379,7 +1293,7 @@ func (s *Store) SoftDeleteStorage(ctx context.Context, tx DBTX, id, at string) e
 const ruleCols = `id, scope, a_ref, b_ref, verdict, severity, min_years_gap,
 	reason_cs, source, is_builtin, is_disabled`
 
-func scanRule(sc scanner) (Rule, error) {
+func scanRule(sc appdb.Scanner) (Rule, error) {
 	var r Rule
 	var gap sql.NullInt64
 	var reason, source sql.NullString
@@ -1418,16 +1332,8 @@ func (s *Store) ListRules(ctx context.Context, db DBTX, scope string, includeDis
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Rule
-	for rows.Next() {
-		r, err := scanRule(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanRule)
+	if err != nil {
 		return nil, nil, err
 	}
 	items, next := page(out, limit, func(r Rule) string { return r.ID })
@@ -1482,16 +1388,8 @@ func (s *Store) rulesForMatching(ctx context.Context, db DBTX) ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var raw []Rule
-	for rows.Next() {
-		r, err := scanRule(rows)
-		if err != nil {
-			return nil, err
-		}
-		raw = append(raw, r)
-	}
-	if err := rows.Err(); err != nil {
+	raw, err := appdb.Collect(rows, scanRule)
+	if err != nil {
 		return nil, err
 	}
 

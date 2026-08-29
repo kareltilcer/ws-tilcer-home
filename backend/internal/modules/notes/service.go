@@ -31,7 +31,7 @@ type Notifier func(ctx context.Context, typ string, payload any)
 type Service struct {
 	db      *sql.DB
 	store   *Store
-	sink    audit.Sink
+	sink    audit.ModuleSink
 	notify  Notifier
 	blob    blobstore.BlobStore // object storage for inline images; nil disables image upload
 	imgOpts ImageOptions
@@ -77,7 +77,7 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, blob blobstore.Blo
 		imgOpts.MaxUploadBytes = defaultImageMaxBytes
 	}
 	return &Service{
-		db: db, store: NewStore(db), sink: sink, notify: notify, blob: blob,
+		db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleNotes), notify: notify, blob: blob,
 		imgOpts: imgOpts, logger: logger, unrefSince: map[string]time.Time{},
 	}
 }
@@ -135,8 +135,7 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 	if sc.Private {
 		owner = sc.OwnerID
 	}
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleNotes,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: entityType,
 		EntityID:   entityID,
@@ -148,7 +147,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 		Visibility: sc.Visibility(),
 		OwnerID:    owner,
 	})
-	return err
 }
 
 func metaVia(base map[string]any, via string) map[string]any {

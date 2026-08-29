@@ -26,8 +26,6 @@ const tsFormat = "2006-01-02T15:04:05.000Z07:00"
 
 func nowUTC() string { return appdb.NowUTC(tsFormat) }
 
-type scanner interface{ Scan(dest ...any) error }
-
 func nullStr(p *string) any {
 	if p == nil {
 		return nil
@@ -82,7 +80,7 @@ func nullDate(p *dates.Date) any {
 
 const readingCols = `id, read_on, vt_dkwh, nt_dkwh, note, created_by, created_at, updated_at`
 
-func scanReading(s scanner) (Reading, error) {
+func scanReading(s appdb.Scanner) (Reading, error) {
 	var r Reading
 	var readOn string
 	var note, createdBy sql.NullString
@@ -120,17 +118,8 @@ func (s *Store) ListReadings(ctx context.Context, limit int, cursor string) ([]R
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-
-	var out []Reading
-	for rows.Next() {
-		r, err := scanReading(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanReading)
+	if err != nil {
 		return nil, nil, err
 	}
 	var next *string
@@ -221,7 +210,7 @@ func (s *Store) UpdateReading(ctx context.Context, tx *sql.Tx, r Reading) error 
 const tariffCols = `id, effective_from, price_vt_haler, price_nt_haler, monthly_fee_haler,
 	note, created_by, created_at, updated_at`
 
-func scanTariff(s scanner) (Tariff, error) {
+func scanTariff(s appdb.Scanner) (Tariff, error) {
 	var t Tariff
 	var from string
 	var note, createdBy sql.NullString
@@ -251,16 +240,8 @@ func (s *Store) ListTariffs(ctx context.Context, limit int, cursor string) ([]Ta
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	var out []Tariff
-	for rows.Next() {
-		t, err := scanTariff(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanTariff)
+	if err != nil {
 		return nil, nil, err
 	}
 	var next *string
@@ -284,16 +265,7 @@ func (s *Store) AllTariffs(ctx context.Context, q DBTX) ([]Tariff, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Tariff
-	for rows.Next() {
-		t, err := scanTariff(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanTariff)
 }
 
 func (s *Store) GetTariff(ctx context.Context, q DBTX, id string) (Tariff, bool, error) {
@@ -370,7 +342,7 @@ func (s *Store) UpdateTariff(ctx context.Context, tx *sql.Tx, t Tariff) error {
 
 const advanceCols = `id, effective_from, amount_haler, due_day, note, created_by, created_at, updated_at`
 
-func scanAdvance(s scanner) (Advance, error) {
+func scanAdvance(s appdb.Scanner) (Advance, error) {
 	var a Advance
 	var from string
 	var note, createdBy sql.NullString
@@ -400,16 +372,8 @@ func (s *Store) ListAdvances(ctx context.Context, limit int, cursor string) ([]A
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	var out []Advance
-	for rows.Next() {
-		a, err := scanAdvance(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, a)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanAdvance)
+	if err != nil {
 		return nil, nil, err
 	}
 	var next *string
@@ -430,16 +394,7 @@ func (s *Store) AllAdvances(ctx context.Context, q DBTX) ([]Advance, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Advance
-	for rows.Next() {
-		a, err := scanAdvance(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanAdvance)
 }
 
 func (s *Store) GetAdvance(ctx context.Context, q DBTX, id string) (Advance, bool, error) {
@@ -485,7 +440,7 @@ func (s *Store) UpdateAdvance(ctx context.Context, tx *sql.Tx, a Advance) error 
 
 const paymentCols = `id, month, amount_haler, paid_on, note, created_by, created_at, updated_at`
 
-func scanPayment(s scanner) (Payment, error) {
+func scanPayment(s appdb.Scanner) (Payment, error) {
 	var p Payment
 	var month string
 	var paidOn, note, createdBy sql.NullString
@@ -515,16 +470,8 @@ func (s *Store) ListPayments(ctx context.Context, limit int, cursor string) ([]P
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	var out []Payment
-	for rows.Next() {
-		p, err := scanPayment(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanPayment)
+	if err != nil {
 		return nil, nil, err
 	}
 	var next *string
@@ -574,16 +521,7 @@ func (s *Store) PaymentsBetween(ctx context.Context, q DBTX, from, to Month) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Payment
-	for rows.Next() {
-		p, err := scanPayment(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanPayment)
 }
 
 func (s *Store) InsertPayment(ctx context.Context, tx *sql.Tx, p Payment) error {
@@ -610,7 +548,7 @@ const periodCols = `id, starts_on, ends_on, ends_on_confirmed,
 	invoiced_total_haler, invoiced_balance_haler, invoiced_vt_dkwh, invoiced_nt_dkwh,
 	invoiced_at, note, created_by, created_at, updated_at`
 
-func scanPeriod(s scanner) (Period, error) {
+func scanPeriod(s appdb.Scanner) (Period, error) {
 	var p Period
 	var startsOn, endsOn string
 	var confirmed int
@@ -649,16 +587,8 @@ func (s *Store) ListPeriods(ctx context.Context, limit int, cursor string) ([]Pe
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	var out []Period
-	for rows.Next() {
-		p, err := scanPeriod(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanPeriod)
+	if err != nil {
 		return nil, nil, err
 	}
 	var next *string
@@ -680,16 +610,7 @@ func (s *Store) AllPeriods(ctx context.Context) ([]Period, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Period
-	for rows.Next() {
-		p, err := scanPeriod(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanPeriod)
 }
 
 func (s *Store) GetPeriod(ctx context.Context, q DBTX, id string) (Period, bool, error) {
@@ -772,16 +693,7 @@ func (s *Store) PeriodsNeedingTariff(ctx context.Context, q DBTX, excludeTariffI
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Period
-	for rows.Next() {
-		p, err := scanPeriod(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanPeriod)
 }
 
 func (s *Store) InsertPeriod(ctx context.Context, tx *sql.Tx, p Period) error {
@@ -868,15 +780,7 @@ func (s *Store) Snapshot(ctx context.Context, periodID string, today dates.Date)
 	if err != nil {
 		return Snapshot{}, false, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		r, err := scanReading(rows)
-		if err != nil {
-			return Snapshot{}, false, err
-		}
-		snap.Readings = append(snap.Readings, r)
-	}
-	if err := rows.Err(); err != nil {
+	if snap.Readings, err = appdb.Collect(rows, scanReading); err != nil {
 		return Snapshot{}, false, err
 	}
 

@@ -32,7 +32,7 @@ type Notifier func(ctx context.Context, typ string, payload any)
 type Service struct {
 	db     *sql.DB
 	store  *Store
-	sink   audit.Sink
+	sink   audit.ModuleSink
 	notify Notifier
 	loc    *time.Location
 }
@@ -47,7 +47,7 @@ func NewService(db *sql.DB, sink audit.Sink, notify Notifier, loc *time.Location
 	if loc == nil {
 		loc = time.UTC
 	}
-	return &Service{db: db, store: NewStore(db), sink: sink, notify: notify, loc: loc}
+	return &Service{db: db, store: NewStore(db), sink: audit.For(sink, audit.ModuleElectricity), notify: notify, loc: loc}
 }
 
 func (s *Service) Store() *Store { return s.store }
@@ -65,15 +65,13 @@ func (s *Service) Today() dates.Date { return dates.Today(s.loc) }
 // fires after commit — and mixing them produces a compiler error unhelpful
 // enough that the tempting "fix" is to reach for the wrong one.
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, entityID, summary string, changes []audit.Change) error {
-	_, err := s.sink.Record(ctx, tx, audit.Event{
-		Module:     audit.ModuleElectricity,
+	return s.sink.Record(ctx, tx, audit.Event{
 		Action:     action,
 		EntityType: entityType,
 		EntityID:   entityID,
 		Summary:    summary,
 		Changes:    changes,
 	})
-	return err
 }
 
 // ---------------------------------------------------------------------------

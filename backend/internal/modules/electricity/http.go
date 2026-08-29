@@ -1,8 +1,6 @@
 package electricity
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -68,6 +66,15 @@ func (h *Handler) Mount(r chi.Router) {
 
 const defaultLimit = 100
 
+// limitOf reads ?limit for v8's list endpoints.
+//
+// ⚠ IT IS DELIBERATELY NOT httpx.Limit, and the difference is not the numbers.
+// The shared helper CLAMPS an out-of-range value to the ceiling; this one falls
+// back to the DEFAULT, so `?limit=900` returns 100 rows rather than 500 —
+// chat/store.go calls that "a known defect and not a precedent to copy", and it
+// is right. Adopting httpx.Limit here would fix it, and a fixed defect is a
+// behaviour change a client could see, which belongs to this module's own
+// release rather than to a refactor that promised none.
 func limitOf(r *http.Request) int {
 	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if n <= 0 || n > 500 {
@@ -148,9 +155,9 @@ type readingBody struct {
 	Note   *string `json:"note"`
 }
 
-func (b readingBody) toInput(raw map[string]json.RawMessage) (ReadingInput, error) {
+func (b readingBody) toInput(present httpx.Present) (ReadingInput, error) {
 	in := ReadingInput{VTDkwh: b.VTDkwh, NTDkwh: b.NTDkwh, Note: b.Note}
-	_, in.NoteSet = raw["note"]
+	in.NoteSet = present["note"]
 	if err := assignDate(b.ReadOn, "read_on", &in.ReadOn); err != nil {
 		return in, err
 	}
@@ -165,10 +172,10 @@ type tariffBody struct {
 	Note            *string `json:"note"`
 }
 
-func (b tariffBody) toInput(raw map[string]json.RawMessage) (TariffInput, error) {
+func (b tariffBody) toInput(present httpx.Present) (TariffInput, error) {
 	in := TariffInput{PriceVTHaler: b.PriceVTHaler, PriceNTHaler: b.PriceNTHaler,
 		MonthlyFeeHaler: b.MonthlyFeeHaler, Note: b.Note}
-	_, in.NoteSet = raw["note"]
+	in.NoteSet = present["note"]
 	if err := assignDate(b.EffectiveFrom, "effective_from", &in.EffectiveFrom); err != nil {
 		return in, err
 	}
@@ -182,9 +189,9 @@ type advanceBody struct {
 	Note          *string `json:"note"`
 }
 
-func (b advanceBody) toInput(raw map[string]json.RawMessage) (AdvanceInput, error) {
+func (b advanceBody) toInput(present httpx.Present) (AdvanceInput, error) {
 	in := AdvanceInput{AmountHaler: b.AmountHaler, DueDay: b.DueDay, Note: b.Note}
-	_, in.NoteSet = raw["note"]
+	in.NoteSet = present["note"]
 	if err := assignDate(b.EffectiveFrom, "effective_from", &in.EffectiveFrom); err != nil {
 		return in, err
 	}
@@ -198,10 +205,10 @@ type paymentBody struct {
 	Note        *string `json:"note"`
 }
 
-func (b paymentBody) toInput(raw map[string]json.RawMessage) (PaymentInput, error) {
+func (b paymentBody) toInput(present httpx.Present) (PaymentInput, error) {
 	in := PaymentInput{AmountHaler: b.AmountHaler, Note: b.Note}
-	_, in.NoteSet = raw["note"]
-	_, in.PaidOnSet = raw["paid_on"]
+	in.NoteSet = present["note"]
+	in.PaidOnSet = present["paid_on"]
 	if b.Month != nil {
 		m, err := ParseMonth(*b.Month)
 		if err != nil {
@@ -227,7 +234,7 @@ type periodBody struct {
 	Note                 *string `json:"note"`
 }
 
-func (b periodBody) toInput(raw map[string]json.RawMessage) (PeriodInput, error) {
+func (b periodBody) toInput(present httpx.Present) (PeriodInput, error) {
 	in := PeriodInput{
 		EndsOnConfirmed:      b.EndsOnConfirmed,
 		InvoicedTotalHaler:   b.InvoicedTotalHaler,
@@ -237,13 +244,13 @@ func (b periodBody) toInput(raw map[string]json.RawMessage) (PeriodInput, error)
 		InvoicedAt:           b.InvoicedAt,
 		Note:                 b.Note,
 	}
-	_, in.NoteSet = raw["note"]
-	_, in.InvoicedTotalSet = raw["invoiced_total_haler"]
-	_, in.InvoicedBalanceSet = raw["invoiced_balance_haler"]
-	_, in.InvoicedVTSet = raw["invoiced_vt_dkwh"]
-	_, in.InvoicedNTSet = raw["invoiced_nt_dkwh"]
-	_, in.InvoicedAtSet = raw["invoiced_at"]
-	_, in.EndsOnSet = raw["ends_on"]
+	in.NoteSet = present["note"]
+	in.InvoicedTotalSet = present["invoiced_total_haler"]
+	in.InvoicedBalanceSet = present["invoiced_balance_haler"]
+	in.InvoicedVTSet = present["invoiced_vt_dkwh"]
+	in.InvoicedNTSet = present["invoiced_nt_dkwh"]
+	in.InvoicedAtSet = present["invoiced_at"]
+	in.EndsOnSet = present["ends_on"]
 	if b.InvoicedAt != nil {
 		if _, err := parseDate(*b.InvoicedAt, "invoiced_at"); err != nil {
 			return in, err
@@ -258,27 +265,19 @@ func (b periodBody) toInput(raw map[string]json.RawMessage) (PeriodInput, error)
 	return in, nil
 }
 
-// decode reads the body twice: once into the typed struct, once into a raw map
-// so a PATCH can tell "field omitted" from "field set to null". Without that a
+// The body is read twice — once into the typed struct, once as a key set — so a
+// PATCH can tell "field omitted" from "field set to null". Without that a
 // mistyped vyúčtování could never be cleared back to null.
-func decode[T any](r *http.Request, body *T) (map[string]json.RawMessage, error) {
-	var raw map[string]json.RawMessage
-	if err := httpx.DecodeJSON(r, &raw); err != nil {
-		return nil, httpx.ErrUnprocessable(err.Error())
-	}
-	buf, err := json.Marshal(raw)
-	if err != nil {
-		return nil, httpx.ErrUnprocessable(err.Error())
-	}
-	// The map swallowed every key as "known"; re-apply the unknown-field rejection
-	// on the typed pass so a typo'd field is a 422 like everywhere else.
-	dec := json.NewDecoder(bytes.NewReader(buf))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(body); err != nil {
-		return nil, httpx.ErrUnprocessable(err.Error())
-	}
-	return raw, nil
-}
+//
+// That is httpx.DecodePatch now. This module had its own `decode[T]` doing it
+// from the request while `garden` did the same thing from raw bytes inside each
+// input type's UnmarshalJSON; the shared helper is both shapes, and the ⚠ this
+// module's version carried — re-apply DisallowUnknownFields on the typed pass, so
+// a typo'd field is a 422 like everywhere else — is that helper's doc now.
+//
+// The `*Set` booleans on the service inputs stay: presence reaches the service
+// as compile-checked fields rather than as string lookups into a map the service
+// layer would have to import an HTTP package to name.
 
 // ---------------------------------------------------------------------------
 // Readings
@@ -304,12 +303,12 @@ func (h *Handler) listReadings(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createReading(w http.ResponseWriter, r *http.Request) {
 	var b readingBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -320,12 +319,12 @@ func (h *Handler) createReading(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateReading(w http.ResponseWriter, r *http.Request) {
 	var b readingBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -407,12 +406,12 @@ func (h *Handler) tariffDTOWithEnd(r *http.Request, t Tariff) tariffDTO {
 
 func (h *Handler) createTariff(w http.ResponseWriter, r *http.Request) {
 	var b tariffBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -427,12 +426,12 @@ func (h *Handler) createTariff(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateTariff(w http.ResponseWriter, r *http.Request) {
 	var b tariffBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -485,12 +484,12 @@ func (h *Handler) listAdvances(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createAdvance(w http.ResponseWriter, r *http.Request) {
 	var b advanceBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -501,12 +500,12 @@ func (h *Handler) createAdvance(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateAdvance(w http.ResponseWriter, r *http.Request) {
 	var b advanceBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -547,12 +546,12 @@ func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createPayment(w http.ResponseWriter, r *http.Request) {
 	var b paymentBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -563,12 +562,12 @@ func (h *Handler) createPayment(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updatePayment(w http.ResponseWriter, r *http.Request) {
 	var b paymentBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -613,12 +612,12 @@ func (h *Handler) listPeriods(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createPeriod(w http.ResponseWriter, r *http.Request) {
 	var b periodBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
@@ -629,12 +628,12 @@ func (h *Handler) createPeriod(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updatePeriod(w http.ResponseWriter, r *http.Request) {
 	var b periodBody
-	raw, err := decode(r, &b)
+	present, err := httpx.DecodePatch(r, &b)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
 	}
-	in, err := b.toInput(raw)
+	in, err := b.toInput(present)
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
