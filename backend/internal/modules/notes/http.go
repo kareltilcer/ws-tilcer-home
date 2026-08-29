@@ -282,5 +282,3 @@ func decodePublish(r *http.Request) (PublishRequest, error) {
 	}
 	return in, nil
 }
-
-// ---- response helpers ----

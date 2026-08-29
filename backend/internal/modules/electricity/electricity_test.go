@@ -471,8 +471,10 @@ func TestTariffUpdateCarriesFieldLevelDiffs(t *testing.T) {
 	}
 }
 
-// auditCount narrows to THIS module as well as the action — electricity shares
-// its test database with the seeded rows of every other module.
+// auditCount narrows to THIS module as well as the action, which is what the copy
+// it replaced did. The narrowing is belt-and-braces rather than load-bearing:
+// testsupport.NewDB migrates an empty temp file per test and seeds nothing, so no
+// other module writes into this database today.
 func auditCount(t *testing.T, db *sql.DB, action string) int {
 	return testsupport.CountAudit(t, db, "electricity", action)
 }

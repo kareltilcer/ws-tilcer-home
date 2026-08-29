@@ -193,6 +193,7 @@ func (s *Service) RemoveAttachment(ctx context.Context, attachmentID string) err
 // almost certainly a mistake — D222 is explicit that a reader posts, replies,
 // edits, creates rooms and manages membership.
 //
-// The check itself is reqctx.CanWrite, shared with the eight other modules that
-// ask it; the named wrapper stays so the warning above has something to sit on.
+// The check itself is reqctx.CanWrite, shared with `documents` and `notes` — the
+// only other two modules that ask this question at all. The named wrapper stays
+// so the warning above has something to sit on.
 func writeAllowedCtx(ctx context.Context) bool { return reqctx.CanWrite(ctx) }

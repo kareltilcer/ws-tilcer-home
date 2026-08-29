@@ -1012,9 +1012,9 @@ forced, so the counts in this document stay honest:
 - **Item 2** — kept as `type DBTX = appdb.DBTX` per module rather than migrating
   ~250 signatures. It is an ALIAS, so the seven really are one type; `documents`'
   WithTx deadlock warning is now the shared declaration's doc.
-- **Item 4** — `ap` was **178** call sites across six modules, not 102; `eqp` and
-  `diff` were four copies each, at 58 sites. `audit.Ptr` was adopted, and
-  `audit.EqualPtr` / `audit.Diff` added beside it.
+- **Item 4** — `ap` was **162** call sites across six modules, not 102; `eqp` and
+  `diff` were four copies each, at 58 sites. `audit.Ptr` was adopted — it already had
+  23 call sites of its own — and `audit.EqualPtr` / `audit.Diff` added beside it.
 - **Item 8** — the function is shared, the five formats deliberately are not, and
   `appdb.NowUTC`'s doc is where that is now written down with the format table.
 - **Item 9** — five `placeholders` and two `ftsQuery` forwarders deleted; `chat`'s

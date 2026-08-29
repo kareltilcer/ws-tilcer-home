@@ -108,7 +108,7 @@ type Change struct {
 // Ptr is a small helper for building Change values from string literals.
 //
 // ⚠ IT WAS ALREADY HERE while six modules spelled it `ap` — `chat`, `documents`,
-// `events`, `finance`, `notes` and `todo`, 178 call sites between them. That is
+// `events`, `finance`, `notes` and `todo`, 162 call sites between them. That is
 // the failure platform/db/sql.go records, in its most literal form: an extraction
 // nobody adopts is a seventh copy with a doc comment claiming otherwise. All six
 // now call this one.

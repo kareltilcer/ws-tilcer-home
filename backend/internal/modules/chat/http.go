@@ -371,5 +371,3 @@ func hasBareFlag(rawQuery, name string) bool {
 	}
 	return false
 }
-
-// ---- rendering ----

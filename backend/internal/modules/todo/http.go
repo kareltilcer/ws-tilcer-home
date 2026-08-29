@@ -291,5 +291,3 @@ func (h *Handler) attachLabel(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) detachLabel(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, h.svc.DetachLabel(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "labelId")))
 }
-
-// ---- response helpers ----

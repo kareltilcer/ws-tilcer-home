@@ -446,5 +446,3 @@ func mimeTypeHeader(ct string) string {
 	}
 	return ct
 }
-
-// ---- response helpers ----
