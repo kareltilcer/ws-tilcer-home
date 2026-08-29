@@ -1,13 +1,8 @@
 import { useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Input } from '@/components/ui/ui'
 import { DEFAULT_FOLDER_ICON, FolderIconPicker, iconToStore } from '@/components/common/FolderIconPicker'
 import { cs } from '@/i18n/cs'
-import { count, PLURAL } from '@/i18n/plural'
-import { cn } from '@/lib/utils'
-
-export type MoveTarget = { id: string | null; name: string; depth: number; icon?: string }
 
 // CreateDialog — new note or folder in the current location.
 export function CreateDialog({
@@ -118,101 +113,6 @@ export function RenameDialog({
       />
       <div className="mt-3">
         <FolderIconPicker value={icon} onChange={setIcon} />
-      </div>
-    </ResponsiveModal>
-  )
-}
-
-// MoveDialog — a folder-target picker (reuses the "Přesunout do…" pattern).
-export function MoveDialog({
-  kind,
-  title,
-  targets,
-  pending,
-  onPick,
-  onClose,
-}: {
-  kind: 'note' | 'folder'
-  title: string
-  targets: MoveTarget[]
-  pending: boolean
-  onPick: (targetId: string | null) => void
-  onClose: () => void
-}) {
-  return (
-    <ResponsiveModal open onOpenChange={(o) => !o && onClose()} title={kind === 'folder' ? cs.notes.moveFolderInto : cs.notes.moveNoteInto}>
-      <p className="mb-2 truncate text-sm font-semibold text-fg">{title}</p>
-      <div className="space-y-0.5">
-        {targets.map((t) => (
-          <button
-            key={t.id ?? '__root__'}
-            type="button"
-            disabled={pending}
-            onClick={() => onPick(t.id)}
-            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2.5 text-left text-sm text-fg hover:bg-accent-soft disabled:opacity-50"
-            style={{ paddingLeft: 10 + t.depth * 14 }}
-          >
-            <span className="flex-none leading-none">{t.icon ? t.icon : <span className="text-subtle">▸</span>}</span>
-            <span className="min-w-0 flex-1 truncate font-semibold">{t.name}</span>
-          </button>
-        ))}
-      </div>
-    </ResponsiveModal>
-  )
-}
-
-// DeleteDialog — confirm; a non-empty folder shows the cascade warning before the
-// delete (like the events series-edit warning), in plain Czech.
-export function DeleteDialog({
-  kind,
-  title,
-  subfolders,
-  notes,
-  pending,
-  onConfirm,
-  onClose,
-}: {
-  kind: 'note' | 'folder'
-  title: string
-  subfolders: number
-  notes: number
-  pending: boolean
-  onConfirm: (cascade: boolean) => void
-  onClose: () => void
-}) {
-  const nonEmpty = kind === 'folder' && (subfolders > 0 || notes > 0)
-  const cascadeParts: string[] = []
-  if (subfolders > 0) cascadeParts.push(count(subfolders, PLURAL.folders))
-  if (notes > 0) cascadeParts.push(count(notes, PLURAL.notes))
-
-  return (
-    <ResponsiveModal
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={kind === 'folder' ? cs.notes.deleteFolderTitle(title) : cs.notes.deleteNoteTitle(title)}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            {cs.notes.cancel}
-          </Button>
-          <Button variant="danger" loading={pending} onClick={() => onConfirm(nonEmpty)}>
-            {cs.notes.confirmDelete}
-          </Button>
-        </>
-      }
-    >
-      <div className={cn('flex gap-3', nonEmpty && 'rounded-xl border border-warn/40 bg-warn/10 p-3')}>
-        {nonEmpty && <AlertTriangle size={18} className="mt-0.5 flex-none text-warn" />}
-        <p className="text-sm text-muted text-pretty">
-          {kind === 'note' && cs.notes.deleteNoteBody}
-          {kind === 'folder' && nonEmpty && (
-            <>
-              {cs.notes.deleteFolderCascade}
-              {cascadeParts.length > 0 && <span className="mt-1 block font-semibold text-fg">{cascadeParts.join(' · ')}</span>}
-            </>
-          )}
-          {kind === 'folder' && !nonEmpty && cs.notes.deleteFolderEmpty}
-        </p>
       </div>
     </ResponsiveModal>
   )

@@ -11,6 +11,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/recur"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
@@ -206,13 +207,13 @@ func (s *Service) DeleteEvent(ctx context.Context, id string, hard bool) error {
 				return err
 			}
 		} else {
-			if err := s.store.UpdateEvent(ctx, tx, id, EventUpdate{Archived: boolPtr(true)}); err != nil {
+			if err := s.store.UpdateEvent(ctx, tx, id, EventUpdate{Archived: optional.Of(true)}); err != nil {
 				return err
 			}
 			changes = []audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}
 		}
 		return s.record(ctx, tx, "event.delete", id,
-			fmt.Sprintf("Smazána událost „%s“", before.Title), changes, metaHard(hard))
+			fmt.Sprintf("Smazána událost „%s“", before.Title), changes, audit.HardMeta(hard))
 	})
 	if err != nil {
 		return err
@@ -400,13 +401,4 @@ func nonEmpty(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-func boolPtr(b bool) *bool { return &b }
-
-func metaHard(hard bool) map[string]any {
-	if hard {
-		return map[string]any{"hard": true}
-	}
-	return nil
 }

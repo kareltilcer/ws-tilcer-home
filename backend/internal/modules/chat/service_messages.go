@@ -9,6 +9,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
@@ -55,9 +56,9 @@ func (s *Service) Thread(ctx context.Context, conversationID, direction, cursor 
 	page := MessagePage{Items: items, HasMore: hasMore}
 	if hasMore && len(items) > 0 {
 		if direction == directionForward {
-			page.NextCursor = ptr(items[0].ID)
+			page.NextCursor = optional.Of(items[0].ID)
 		} else {
-			page.NextCursor = ptr(items[len(items)-1].ID)
+			page.NextCursor = optional.Of(items[len(items)-1].ID)
 		}
 	}
 	return page, nil
@@ -376,7 +377,7 @@ func (s *Service) EditMessage(ctx context.Context, messageID string, in MessageU
 			ID: messageID, ConversationID: sc.ConversationID, AuthorID: actor,
 			AuthorLabel: label(labels, actor), Body: body,
 			Attachments: []Attachment{}, CreatedAt: row.CreatedAt,
-			EditedAt: ptr(now), Deleted: false,
+			EditedAt: optional.Of(now), Deleted: false,
 		}
 		// ⚠ THE QUOTE IS RE-RENDERED, BECAUSE THE FRAME REPLACES THE WHOLE MESSAGE
 		// (v10 review). replaceMessage swaps the cached object outright, so a field

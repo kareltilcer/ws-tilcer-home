@@ -7,6 +7,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 )
 
 // prague is the zone every metric's "today" is evaluated in (HOME_TIMEZONE).
@@ -116,7 +117,7 @@ func TestTodoMetricsIgnoreArchived(t *testing.T) {
 	nowCol := f.column(t, b.ID, "Právě dělám", "now")
 	card := f.card(t, nowCol.ID, "Skrytý úkol")
 
-	if _, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Archived: boolPtr(true)}); err != nil {
+	if _, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Archived: optional.Of(true)}); err != nil {
 		t.Fatalf("archive card: %v", err)
 	}
 	if got, _ := p.Value(ctx, "u1", todo.MetricPravedelamCount, now); got != 0 {
@@ -148,5 +149,3 @@ func TestTodoMetricsUnknownKey(t *testing.T) {
 		t.Error("expected an error for an unknown metric key")
 	}
 }
-
-func boolPtr(b bool) *bool { return &b }

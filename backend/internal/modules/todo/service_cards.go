@@ -10,6 +10,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lexorank"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
@@ -183,13 +184,13 @@ func (s *Service) DeleteCard(ctx context.Context, id string, hard bool) error {
 				return err
 			}
 		} else {
-			if err := s.store.UpdateCard(ctx, tx, id, CardUpdate{Archived: boolPtr(true)}); err != nil {
+			if err := s.store.UpdateCard(ctx, tx, id, CardUpdate{Archived: optional.Of(true)}); err != nil {
 				return err
 			}
 			changes = []audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}
 		}
 		return s.record(ctx, tx, "card.delete", "card", id,
-			fmt.Sprintf("Smazána karta „%s“", before.Title), changes, metaHard(hard))
+			fmt.Sprintf("Smazána karta „%s“", before.Title), changes, audit.HardMeta(hard))
 	})
 	if err != nil {
 		return err

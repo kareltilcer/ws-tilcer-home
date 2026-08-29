@@ -287,6 +287,11 @@ func (j *MirrorJob) reconcile(ctx context.Context, present map[string]blobstore.
 // bucket" is a bug in the caller rather than 900 crashed uploads, so refuse, log, and
 // make a human decide. The cost of refusing wrongly is some wasted storage; the cost
 // of deleting wrongly is the documents.
+//
+// Mirrors NoteImageMirrorJob.safeToDelete in `notes`, deliberately (D40): the two
+// jobs are one behaviour in two implementations, so a change to this reasoning
+// belongs in both. It went out of step once already — the floor's second bound was
+// explained here and nowhere else.
 func (j *MirrorJob) safeToDelete(orphans, ours, claimed, claimedPresent int) bool {
 	if claimed == 0 {
 		j.logger.Error("documents: reconciliation REFUSED to delete — no live row claims any object at all, "+

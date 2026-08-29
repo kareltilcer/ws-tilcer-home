@@ -13,6 +13,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
@@ -221,7 +222,7 @@ func (s *Service) ListConversations(ctx context.Context, state, cursor string, l
 	page := ConversationPage{Items: items}
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]
-		page.NextCursor = ptr(encodeConversationCursor(last.UpdatedAt, last.ID))
+		page.NextCursor = optional.Of(encodeConversationCursor(last.UpdatedAt, last.ID))
 	}
 	return page, nil
 }
@@ -240,7 +241,7 @@ func (s *Service) purgeAfter(deletedAt *string) *string {
 	if err != nil {
 		return nil
 	}
-	return ptr(t.AddDate(0, 0, s.trashDays).UTC().Format(tsFormat))
+	return optional.Of(t.AddDate(0, 0, s.trashDays).UTC().Format(tsFormat))
 }
 
 // GetConversation is ONE query, and the store's own predicate is the access rule.

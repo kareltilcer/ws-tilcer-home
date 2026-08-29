@@ -32,16 +32,12 @@ import { routes } from '@/app/routes'
 import { parseScopedPath, resolvedKey, scopedRoute } from '@/lib/scope'
 import { PrivateMark, RootSwitcher } from '@/components/common/RootSwitcher'
 import { PublishDialog } from '@/components/common/PublishDialog'
-import { tail } from '@/lib/lexorank'
+import { tailOf } from '@/lib/lexorank'
+import { findNode, indexTree as indexFolderTree, subtreeCounts, type FolderTreeIndex, type MoveTarget } from '@/lib/foldertree'
 import { DocumentView } from './DocumentView'
-import {
-  CreateFolderDialog,
-  DeleteDialog,
-  EditDocumentDialog,
-  MoveDialog,
-  RenameFolderDialog,
-  type MoveTarget,
-} from './DocumentsDialogs'
+import { DeleteDialog, MoveDialog } from '@/components/common/TreeDialogs'
+import { CreateFolderDialog, EditDocumentDialog, RenameFolderDialog } from './DocumentsDialogs'
+import { deleteLabels, hardDeleteOption, moveLabels } from './treeDialogLabels'
 import { UploadPanel, useFileDrop, useUploadQueue } from './UploadQueue'
 import { kindMeta, statusChip } from './fileKind'
 
@@ -55,38 +51,9 @@ import { kindMeta, statusChip } from './fileKind'
 
 // ---- tree indexing ----
 
-interface DocIndex {
-  folderById: Map<string, DocFolder>
-  documentById: Map<string, DocumentSummary>
-  slugPathById: Map<string, string>
-  folderNamePathById: Map<string, string>
-  folderIdByDocumentId: Map<string, string | null>
-  childFolders: Map<string | null, DocFolderNode[]>
-  childDocuments: Map<string | null, DocumentSummary[]>
-  documentPositions: Map<string | null, string[]>
-  folderPositions: Map<string | null, string[]>
-  /** Ancestor chain per folder, for the move picker's descendant exclusion. */
-  ancestorsById: Map<string, string[]>
-  flatFolders: MoveTarget[]
-}
-
-/**
- * subtreeCounts totals a folder's WHOLE SUBTREE — every descendant document and
- * folder, at any depth. The Poznámky twin carries the full argument; short
- * version: the publish walks the entire subtree in one transaction and there is no
- * unpublish (D182), so a count of direct children reads smaller than what the
- * confirmation is about to do.
- */
-function subtreeCounts(idx: DocIndex, folderId: string): { items: number; folders: number } {
-  let items = (idx.childDocuments.get(folderId) ?? []).length
-  let folders = 0
-  for (const child of idx.childFolders.get(folderId) ?? []) {
-    const sub = subtreeCounts(idx, child.folder.id)
-    folders += 1 + sub.folders
-    items += sub.items
-  }
-  return { items, folders }
-}
+// The index and its two lookups are shared with Poznámky — see src/lib/foldertree.
+// What stays here is the naming: `items` in the shared index are documents.
+type DocIndex = FolderTreeIndex<DocFolder, DocFolderNode, DocumentSummary>
 
 /**
  * rootLabel names the root the user is standing in — carrier 4 of the five
@@ -103,69 +70,11 @@ function rootLabel(scope: Scope): string {
 }
 
 function indexTree(tree: DocumentsTree): DocIndex {
-  const folderById = new Map<string, DocFolder>()
-  const documentById = new Map<string, DocumentSummary>()
-  const slugPathById = new Map<string, string>()
-  const folderNamePathById = new Map<string, string>()
-  const folderIdByDocumentId = new Map<string, string | null>()
-  const childFolders = new Map<string | null, DocFolderNode[]>()
-  const childDocuments = new Map<string | null, DocumentSummary[]>()
-  const ancestorsById = new Map<string, string[]>()
-  const flatFolders: MoveTarget[] = [{ id: null, name: cs.documents.rootLocation, depth: 0 }]
-
-  const walk = (nodes: DocFolderNode[], parentPath: string, parentNamePath: string, ancestors: string[], depth: number) => {
-    for (const node of nodes) {
-      const f = node.folder
-      folderById.set(f.id, f)
-      const path = parentPath ? `${parentPath}/${f.slug}` : f.slug
-      const namePath = parentNamePath ? `${parentNamePath} / ${f.name}` : f.name
-      slugPathById.set(f.id, path)
-      folderNamePathById.set(f.id, namePath)
-      ancestorsById.set(f.id, ancestors)
-      childFolders.set(f.id, node.subfolders)
-      childDocuments.set(f.id, node.documents)
-      flatFolders.push({ id: f.id, name: f.name, depth, icon: f.icon || DEFAULT_FOLDER_ICON })
-      for (const d of node.documents) {
-        documentById.set(d.id, d)
-        slugPathById.set(d.id, path ? `${path}/${d.slug}` : d.slug)
-        folderIdByDocumentId.set(d.id, f.id)
-      }
-      walk(node.subfolders, path, namePath, [...ancestors, f.id], depth + 1)
-    }
-  }
-  walk(tree.roots, '', '', [], 1)
-  childFolders.set(null, tree.roots)
-  childDocuments.set(null, tree.root_documents)
-  for (const d of tree.root_documents) {
-    documentById.set(d.id, d)
-    slugPathById.set(d.id, d.slug)
-    folderIdByDocumentId.set(d.id, null)
-  }
-
-  const documentPositions = new Map<string | null, string[]>()
-  const folderPositions = new Map<string | null, string[]>()
-  for (const [k, v] of childDocuments) documentPositions.set(k, v.map((d) => d.position))
-  for (const [k, v] of childFolders) folderPositions.set(k, v.map((n) => n.folder.position))
-
-  return {
-    folderById,
-    documentById,
-    slugPathById,
-    folderNamePathById,
-    folderIdByDocumentId,
-    childFolders,
-    childDocuments,
-    documentPositions,
-    folderPositions,
-    ancestorsById,
-    flatFolders,
-  }
-}
-
-function tailOf(positions: string[]): string {
-  if (positions.length === 0) return tail('')
-  const max = positions.reduce((a, b) => (a > b ? a : b))
-  return tail(max)
+  return indexFolderTree(tree.roots, tree.root_documents, {
+    itemsOf: (n) => n.documents,
+    rootLabel: cs.documents.rootLocation,
+    defaultIcon: DEFAULT_FOLDER_ICON,
+  })
 }
 
 function folderCountLabel(node: DocFolderNode): string {
@@ -223,7 +132,7 @@ export function DokumentyPage() {
   }
 
   const openTitle = sel.documentId
-    ? idx?.documentById.get(sel.documentId)?.title
+    ? idx?.itemById.get(sel.documentId)?.title
     : sel.folderId
       ? idx?.folderById.get(sel.folderId)?.name
       : undefined
@@ -232,7 +141,7 @@ export function DokumentyPage() {
   // Where a new folder / upload should land. Opening a document clears sel.folderId,
   // so resolve the open document's own folder instead of dropping to the root.
   const currentFolderId = (): string | null =>
-    sel.documentId ? (idx?.folderIdByDocumentId.get(sel.documentId) ?? null) : sel.folderId
+    sel.documentId ? (idx?.folderIdByItemId.get(sel.documentId) ?? null) : sel.folderId
 
   const refresh = useCallback(() => {
     void qc.invalidateQueries({ queryKey: qk.documentsAll })
@@ -322,7 +231,7 @@ export function DokumentyPage() {
     // hop the selection describes the previous address, so "not in the tree" means
     // "not looked up yet". See the Poznámky twin.
     if (resolvedKey(scope, slugPath) !== lastPath.current) return
-    if (sel.documentId && !idx.folderIdByDocumentId.has(sel.documentId)) {
+    if (sel.documentId && !idx.folderIdByItemId.has(sel.documentId)) {
       go('folder', null)
       return
     }
@@ -392,7 +301,7 @@ export function DokumentyPage() {
       return move.kind === 'document'
         ? api.moveDocument(move.id, {
             folder_id: targetId,
-            position: tailOf(idx.documentPositions.get(targetId) ?? []),
+            position: tailOf(idx.itemPositions.get(targetId) ?? []),
           })
         : api.moveDocumentFolder(move.id, {
             parent_id: targetId,
@@ -619,9 +528,10 @@ export function DokumentyPage() {
       )}
       {move && (
         <MoveDialog
-          kind={move.kind}
+          isFolder={move.kind === 'folder'}
           title={move.title}
           targets={moveTargets()}
+          labels={moveLabels}
           pending={moveMut.isPending}
           onPick={(targetId) => moveMut.mutate({ targetId })}
           onClose={() => setMove(null)}
@@ -629,11 +539,12 @@ export function DokumentyPage() {
       )}
       {del && (
         <DeleteDialog
-          kind={del.kind}
+          isFolder={del.kind === 'folder'}
           title={del.title}
           subfolders={delNode?.subfolders.length ?? 0}
-          documents={delNode?.documents.length ?? 0}
-          canHardDelete={isAdmin}
+          items={delNode?.documents.length ?? 0}
+          labels={deleteLabels}
+          hardDelete={isAdmin ? hardDeleteOption : undefined}
           pending={deleteMut.isPending}
           onConfirm={(opts) => deleteMut.mutate(opts)}
           onClose={() => setDel(null)}
@@ -741,7 +652,7 @@ function DesktopView(p: ViewProps) {
             </span>
             {rootLabel(p.scope)}
           </button>
-          <TreeNodes nodes={p.idx.childFolders.get(null) ?? []} documents={p.idx.childDocuments.get(null) ?? []} depth={0} p={p} />
+          <TreeNodes nodes={p.idx.childFolders.get(null) ?? []} documents={p.idx.childItems.get(null) ?? []} depth={0} p={p} />
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
@@ -854,7 +765,7 @@ function Breadcrumb({ p }: { p: ViewProps }) {
   const openId = p.sel.documentId ?? p.sel.folderId
   const chain: { id: string | null; name: string }[] = [{ id: null, name: rootLabel(p.scope) }]
   if (openId) {
-    const folderId = p.sel.documentId ? (p.idx.folderIdByDocumentId.get(p.sel.documentId) ?? null) : p.sel.folderId
+    const folderId = p.sel.documentId ? (p.idx.folderIdByItemId.get(p.sel.documentId) ?? null) : p.sel.folderId
     if (folderId) {
       for (const ancestorId of [...(p.idx.ancestorsById.get(folderId) ?? []), folderId]) {
         const f = p.idx.folderById.get(ancestorId)
@@ -882,7 +793,7 @@ function Breadcrumb({ p }: { p: ViewProps }) {
 
 function FolderPane({ p, node }: { p: ViewProps; node: DocFolderNode | null }) {
   const folders = node ? node.subfolders : (p.idx.childFolders.get(null) ?? [])
-  const documents = node ? node.documents : (p.idx.childDocuments.get(null) ?? [])
+  const documents = node ? node.documents : (p.idx.childItems.get(null) ?? [])
   const isRoot = !node
   const empty = folders.length === 0 && documents.length === 0
 
@@ -963,7 +874,7 @@ function MobileView(p: ViewProps) {
       <div className="flex min-h-[70vh] flex-col">
         <button
           type="button"
-          onClick={() => p.go('folder', p.idx.folderIdByDocumentId.get(p.sel.documentId!) ?? null)}
+          onClick={() => p.go('folder', p.idx.folderIdByItemId.get(p.sel.documentId!) ?? null)}
           className="flex h-11 items-center gap-1.5 px-4 text-[13px] font-semibold text-muted"
         >
           <ChevronLeft size={16} aria-hidden /> {rootLabel(p.scope)}
@@ -982,7 +893,7 @@ function MobileView(p: ViewProps) {
   }
 
   const folders = node ? node.subfolders : (p.idx.childFolders.get(null) ?? [])
-  const documents = node ? node.documents : (p.idx.childDocuments.get(null) ?? [])
+  const documents = node ? node.documents : (p.idx.childItems.get(null) ?? [])
   const empty = folders.length === 0 && documents.length === 0
 
   return (
@@ -1326,17 +1237,4 @@ function EmptyState({
       </div>
     </div>
   )
-}
-
-// findNode locates a folder's tree node (its subfolders + documents) by id.
-function findNode(idx: DocIndex, folderId: string): DocFolderNode | null {
-  const search = (nodes: DocFolderNode[]): DocFolderNode | null => {
-    for (const n of nodes) {
-      if (n.folder.id === folderId) return n
-      const hit = search(n.subfolders)
-      if (hit) return hit
-    }
-    return null
-  }
-  return search(idx.childFolders.get(null) ?? [])
 }

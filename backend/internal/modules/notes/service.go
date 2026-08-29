@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -17,8 +16,10 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/foldericon"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slug"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/slugpath"
 )
 
 // Notifier publishes a websocket change after commit (mirrors the events module).
@@ -149,19 +150,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 	})
 }
 
-func metaVia(base map[string]any, via string) map[string]any {
-	if via != "" {
-		if base == nil {
-			base = map[string]any{}
-		}
-		base["via"] = via
-	}
-	if len(base) == 0 {
-		return nil
-	}
-	return base
-}
-
 // freeSlug returns base, or base-2/base-3/… until free among the siblings of one
 // parent IN ONE ROOT SCOPE, across BOTH tables (the cross-table check plus the two
 // sibling indexes together are the addressing invariant, D32).
@@ -184,7 +172,7 @@ func metaVia(base map[string]any, via string) map[string]any {
 // `soukrome-2`/`soukrome-3` sequence with no second rule. Mirrors documents.
 func (s *Service) freeSlug(ctx context.Context, tx DBTX, parentID *string, sc Scope, base, excludeFolderID, excludeNoteID string) (string, error) {
 	if base == "" {
-		base = shortID()
+		base = idgen.Short()
 	}
 	reserved := isReservedRootSlug(base, parentID, sc)
 	candidate := base
@@ -373,7 +361,7 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 		}
 		changed = true
 		return s.record(ctx, tx, "note.update", "note", id,
-			fmt.Sprintf("Upravena poznámka „%s“", out.Title), changes, metaVia(nil, via), sc)
+			fmt.Sprintf("Upravena poznámka „%s“", out.Title), changes, audit.WithVia(nil, via), sc)
 	})
 	if err != nil {
 		return nil, err
@@ -453,7 +441,7 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "note.move", "note", id,
-			fmt.Sprintf("Přesunuta poznámka „%s“", out.Title), changes, metaVia(nil, via), sc)
+			fmt.Sprintf("Přesunuta poznámka „%s“", out.Title), changes, audit.WithVia(nil, via), sc)
 	})
 	if err != nil {
 		return nil, err
@@ -564,7 +552,7 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 			// to name both parties.
 			return s.record(ctx, tx, "note.delete", "note", id,
 				fmt.Sprintf("Smazána poznámka „%s“", before.Title), nil,
-				metaByAdmin(ctx, metaHard(true), sc), sc)
+				metaByAdmin(ctx, audit.HardMeta(true), sc), sc)
 		}
 		// Soft delete is idempotent: archiving an already-archived note is a no-op —
 		// don't rewrite the row, don't emit a bogus false→true audit change, and
@@ -572,13 +560,13 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 		if before.Archived {
 			return nil
 		}
-		if err := s.store.UpdateNote(ctx, tx, id, notePatch{Archived: boolPtr(true)}); err != nil {
+		if err := s.store.UpdateNote(ctx, tx, id, notePatch{Archived: optional.Of(true)}); err != nil {
 			return err
 		}
 		changed = true
 		return s.record(ctx, tx, "note.delete", "note", id,
 			fmt.Sprintf("Smazána poznámka „%s“", before.Title),
-			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, metaHard(false), sc)
+			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, audit.HardMeta(false), sc)
 	})
 	if err != nil {
 		return err
@@ -918,7 +906,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			return err
 		}
 		for _, n := range childNotes {
-			if err := s.store.UpdateNote(ctx, tx, n.ID, notePatch{Archived: boolPtr(true)}); err != nil {
+			if err := s.store.UpdateNote(ctx, tx, n.ID, notePatch{Archived: optional.Of(true)}); err != nil {
 				return err
 			}
 			changed = true
@@ -1182,7 +1170,7 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 // names a different item in the shared tree and in each member's private one, so
 // the walk starts from the named root and never leaves it.
 func (s *Service) Resolve(ctx context.Context, path string, sc Scope) (*ResolveResult, error) {
-	segs := splitPath(path)
+	segs := slugpath.Split(path)
 	if len(segs) == 0 {
 		return nil, httpx.ErrNotFound("empty path")
 	}
@@ -1554,7 +1542,7 @@ func (s *Service) Pin(ctx context.Context, noteID, scopeStr, via string) (*PinSt
 		if inserted { // idempotent: only audit a real change
 			return s.record(ctx, tx, "note.pin", "note", noteID,
 				fmt.Sprintf("Připnuta poznámka „%s“ pro všechny", n.Title), nil,
-				metaVia(map[string]any{"scope": scopeHousehold}, via), scopeOfNote(n))
+				audit.WithVia(map[string]any{"scope": scopeHousehold}, via), scopeOfNote(n))
 		}
 		return nil
 	})
@@ -1602,7 +1590,7 @@ func (s *Service) Unpin(ctx context.Context, noteID, scopeStr, via string) (*Pin
 		if removed {
 			return s.record(ctx, tx, "note.unpin", "note", noteID,
 				fmt.Sprintf("Odepnuta poznámka „%s“ (pro všechny)", n.Title), nil,
-				metaVia(map[string]any{"scope": scopeHousehold}, via), scopeOfNote(n))
+				audit.WithVia(map[string]any{"scope": scopeHousehold}, via), scopeOfNote(n))
 		}
 		return nil
 	})
@@ -1697,15 +1685,6 @@ func (s *Service) ancestors(ctx context.Context, q DBTX, folderID *string) ([]Pa
 
 // ---- small helpers ----
 
-func boolPtr(b bool) *bool { return &b }
-
-func metaHard(hard bool) map[string]any {
-	if hard {
-		return map[string]any{"hard": true}
-	}
-	return nil
-}
-
 // metaByAdmin stamps `by_admin` when an admin purges a PRIVATE item that is not
 // theirs — v9's one asymmetry, and the only place in Home where somebody acts on
 // something they are not allowed to read (D181). Nothing else sets it: an admin
@@ -1733,14 +1712,6 @@ func parsePinScope(s string) (string, error) {
 	return "", httpx.ErrUnprocessable("scope must be household or personal")
 }
 
-func shortID() string {
-	id := strings.ReplaceAll(idgen.New(), "-", "")
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	return id
-}
-
 func orEmptyNotes(x []NoteSummary) []NoteSummary {
 	if x == nil {
 		return []NoteSummary{}
@@ -1757,25 +1728,6 @@ func slugPathFrom(segs []PathSegment, ownSlug string) string {
 		parts = append(parts, ownSlug)
 	}
 	return strings.Join(parts, "/")
-}
-
-func splitPath(p string) []string {
-	p = strings.Trim(strings.TrimSpace(p), "/")
-	if p == "" {
-		return nil
-	}
-	raw := strings.Split(p, "/")
-	out := make([]string, 0, len(raw))
-	for _, seg := range raw {
-		if seg == "" {
-			continue
-		}
-		if dec, err := url.PathUnescape(seg); err == nil {
-			seg = dec
-		}
-		out = append(out, seg)
-	}
-	return out
 }
 
 // ---- Inline-image helpers ----

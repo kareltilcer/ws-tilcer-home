@@ -26,6 +26,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
@@ -432,7 +433,7 @@ func TestPinnedCountMetricIsPerMember(t *testing.T) {
 func TestWebsocketPayloadsCarryNoTitles(t *testing.T) {
 	x := newHWithNotify(t)
 	n := x.privateNote(kajaCtx(), "Velmi tajný název", "tělo poznámky")
-	x.note(x.svc.UpdateNote(kajaCtx(), n.ID, notes.NoteUpdate{Title: strPtr("Ještě tajnější")}, ""))
+	x.note(x.svc.UpdateNote(kajaCtx(), n.ID, notes.NoteUpdate{Title: optional.Of("Ještě tajnější")}, ""))
 	f := x.folder(x.svc.CreateFolder(kajaCtx(), notes.FolderCreate{Name: "Tajná složka", Scope: "private"}))
 
 	if len(x.published) == 0 {
@@ -496,8 +497,6 @@ func widgetRows(t *testing.T, x *h, userID string) []notes.PinnedNote {
 	}
 	return w.Notes
 }
-
-func strPtr(s string) *string { return &s }
 
 func deref(p *string) string {
 	if p == nil {

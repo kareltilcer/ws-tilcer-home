@@ -8,6 +8,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 )
 
 func todoLists(f fixture) lists.Provider {
@@ -92,7 +93,7 @@ func TestTodoListsIgnoreArchived(t *testing.T) {
 	nowCol := f.column(t, b.ID, "Právě dělám", "now")
 	card := f.card(t, nowCol.ID, "Skrytý úkol")
 
-	if _, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Archived: boolPtr(true)}); err != nil {
+	if _, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Archived: optional.Of(true)}); err != nil {
 		t.Fatalf("archive card: %v", err)
 	}
 	items, err := p.Items(context.Background(), "u1", todo.ListPravedelamCount, now)

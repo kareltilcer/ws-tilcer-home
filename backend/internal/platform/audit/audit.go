@@ -177,6 +177,48 @@ func Diff(changes *[]Change, field string, old, newVal *string) {
 	}
 }
 
+// HardMeta is the `meta` a delete event carries: `{"hard": true}` for a purge,
+// and nothing at all for a soft delete.
+//
+// Nil rather than `{"hard": false}` is the point. The Log browser renders meta as
+// it finds it, so a false flag on every ordinary delete is a line of noise on the
+// majority of rows to mark the case that is NOT happening — and `hard` is read as
+// "was this irreversible", which absence answers just as well.
+//
+// ⚠ IT REPLACES FOUR BYTE-IDENTICAL COPIES of `metaHard`, in `documents`,
+// `events`, `notes` and `todo`.
+func HardMeta(hard bool) map[string]any {
+	if hard {
+		return map[string]any{"hard": true}
+	}
+	return nil
+}
+
+// WithVia stamps the `via` origin marker onto an event's meta when there is one,
+// and collapses an empty result back to nil.
+//
+// `via` is the ?via= query parameter the frontend sets when a mutation came from
+// somewhere other than the item's own screen — a dashboard widget, a pin — so the
+// log can say where a change was made from. It is absent far more often than it is
+// present, hence both halves: no marker when via is "", and no empty map when
+// there was nothing else in the meta either.
+//
+// ⚠ IT REPLACES TWO BYTE-IDENTICAL COPIES of `metaVia`, in `notes` and
+// `documents`. Callers that build a combined literal by hand
+// (`{"hard": true, "via": "cascade"}`) are a different shape and are left alone.
+func WithVia(base map[string]any, via string) map[string]any {
+	if via != "" {
+		if base == nil {
+			base = map[string]any{}
+		}
+		base["via"] = via
+	}
+	if len(base) == 0 {
+		return nil
+	}
+	return base
+}
+
 // Exists reports whether an event with this module/action/entity id was already
 // recorded. It lives HERE so audit_events stays this package's contract: a
 // module that needs write-once semantics (garden's one-warning-per-frost-night)

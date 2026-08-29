@@ -30,7 +30,10 @@ export function between(a: string, b: string): string {
 
 export const first = () => between('', '')
 export const head = (next: string) => between('', next)
-export const tail = (prev: string) => between(prev, '')
+// Not exported: tailOf below absorbed the last two callers outside this file, and
+// "the key after this one" is a question callers should be asking about a list of
+// siblings rather than about a single neighbour they picked themselves.
+const tail = (prev: string) => between(prev, '')
 
 /** comparePositions is a sort comparator over lexorank keys (ascending). */
 export const comparePositions = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
@@ -40,3 +43,15 @@ export const comparePositions = (a: string, b: string): number => (a < b ? -1 : 
  *  key separates them, so a caller must renumber rather than write one ambiguous
  *  row (between() would otherwise fall back to tail(a), placing the item after BOTH). */
 export const canInsertBetween = (a: string, b: string): boolean => a === '' || b === '' || a < b
+
+/** tailOf is the key that sorts after every one of `positions` — where a move or a
+ *  create lands when the caller means "at the end of these siblings". An empty list
+ *  is the empty parent, so it takes the first key.
+ *
+ *  It reduces rather than sorts: the list arrives in tree order, not rank order,
+ *  and only the maximum matters. */
+export function tailOf(positions: string[]): string {
+  if (positions.length === 0) return tail('')
+  const max = positions.reduce((a, b) => (a > b ? a : b))
+  return tail(max)
+}

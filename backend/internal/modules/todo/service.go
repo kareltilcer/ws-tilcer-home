@@ -10,6 +10,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
@@ -139,13 +140,13 @@ func (s *Service) DeleteBoard(ctx context.Context, id string, hard bool) error {
 				return err
 			}
 		} else {
-			if err := s.store.UpdateBoard(ctx, tx, id, BoardUpdate{Archived: boolPtr(true)}); err != nil {
+			if err := s.store.UpdateBoard(ctx, tx, id, BoardUpdate{Archived: optional.Of(true)}); err != nil {
 				return err
 			}
 			changes = []audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}
 		}
 		return s.record(ctx, tx, "board.delete", "board", id,
-			fmt.Sprintf("Smazána nástěnka „%s“", before.Name), changes, metaHard(hard))
+			fmt.Sprintf("Smazána nástěnka „%s“", before.Name), changes, audit.HardMeta(hard))
 	})
 	if err != nil {
 		return err
@@ -401,15 +402,6 @@ func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityType, en
 		Meta:       meta,
 		Changes:    changes,
 	})
-}
-
-func boolPtr(b bool) *bool { return &b }
-
-func metaHard(hard bool) map[string]any {
-	if hard {
-		return map[string]any{"hard": true}
-	}
-	return nil
 }
 
 func validKind(k string) bool { return k == KindNormal || k == KindNow || k == KindDone }
