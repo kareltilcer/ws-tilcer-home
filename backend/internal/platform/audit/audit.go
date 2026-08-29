@@ -1,4 +1,4 @@
-// Package audit is the in-process audit spine (PRD Â§Architecture, HANDOFF-1):
+// Package audit is the in-process audit spine (PRD §Architecture, HANDOFF-1):
 // every module records a domain event through it, INSIDE the same *sql.Tx as the
 // change it describes, so the change and its audit event commit or roll back
 // together. There is no code path that mutates without logging.
@@ -25,11 +25,11 @@ const (
 	ModuleAdmin     = "admin"
 	ModuleFinance   = "finance"
 	ModuleGarden    = "garden"
-	// ModuleElectricity is v8's ElektÅina. Every module passes the constant and
+	// ModuleElectricity is v8's Elektřina. Every module passes the constant and
 	// never a literal, so a typo in a module name is a compile error rather than
 	// a row that quietly falls out of the log browser's filter.
 	ModuleElectricity = "electricity"
-	// ModuleChat is v10's Chat. â  It writes NO event for a message â sending,
+	// ModuleChat is v10's Chat. ⚠ It writes NO event for a message — sending,
 	// editing and deleting one leave audit_events untouched (D231), which makes
 	// chat the first module in Home whose primary mutation is invisible in the
 	// Log. What it does write is structural: rooms and membership, plus
@@ -42,7 +42,7 @@ const (
 // AuditActions() (logging declares "prune", displayed as "logging.prune").
 //
 // They belong to no module, so the action catalog (FR-ADM4) merges this list in
-// explicitly â without it, a trigger rule could not fire on a login.
+// explicitly — without it, a trigger rule could not fire on a login.
 var PlatformActions = []string{
 	"login",
 	"logout",
@@ -67,18 +67,18 @@ const TSLayout = "2006-01-02T15:04:05.000000000Z07:00"
 // Sink records one audit event (and its field changes) using the caller's tx.
 type Sink interface {
 	// Record writes one event within tx and returns the new event id. A failure
-	// is returned unchanged so the caller's transaction rolls back â an action
+	// is returned unchanged so the caller's transaction rolls back — an action
 	// that succeeds unlogged is the one bug this package exists to prevent.
 	Record(ctx context.Context, tx *sql.Tx, e Event) (eventID string, err error)
 }
 
 // ModuleSink is a Sink with one module's identifier bound to it, so a caller
-// records `audit.Event{Action: â¦}` rather than restating which module it is on
+// records `audit.Event{Action: …}` rather than restating which module it is on
 // every event.
 //
-// â  IT IS NOT A WIDER Sink, and that is deliberate. Every service already held
+// ⚠ IT IS NOT A WIDER Sink, and that is deliberate. Every service already held
 // a `record` wrapper whose whole body was "stamp my Module constant, discard the
-// event id, return the error" â eight of them, plus seventeen handlers stamping
+// event id, return the error" — eight of them, plus seventeen handlers stamping
 // it inline. Binding the constant once at construction is what those wrappers
 // wanted. Putting `For` on the Sink INTERFACE would have been the other way to
 // spell it, and this package's doc comment is why not: the interface is narrow
@@ -86,20 +86,20 @@ type Sink interface {
 // service) can be dropped in without touching module code, and a method every
 // implementer must supply to hand back a struct they do not own is not narrow.
 //
-// â  Record returns only the error. Every one of the twenty-six call sites this
+// ⚠ Record returns only the error. Every one of the twenty-six call sites this
 // replaced discarded the event id; a caller that needs it uses the Sink.
 type ModuleSink struct {
 	sink   Sink
 	module string
 }
 
-// For binds module to sink. The module is one of the Module* constants â never a
+// For binds module to sink. The module is one of the Module* constants — never a
 // literal, so a typo is a compile error rather than a row that quietly falls out
 // of the log browser's filter.
 func For(sink Sink, module string) ModuleSink { return ModuleSink{sink: sink, module: module} }
 
 // For re-binds to another module, for the caller that records on a module's
-// behalf rather than its own. There is exactly one â `admin`'s clean-up page
+// behalf rather than its own. There is exactly one — `admin`'s clean-up page
 // writes `chat.threshold.update`, because the event belongs in chat's log and
 // not in the log of whoever happened to open the page. Written out at the call
 // site, so a cross-module event is a visible decision.
@@ -127,7 +127,7 @@ type Event struct {
 
 	// Visibility and OwnerID are the typed form of the v9 redaction marker.
 	// When Visibility is set, the sink stamps it into Meta under MetaVisibility
-	// (and OwnerID under MetaOwnerID) â the only keys the read paths recognise â
+	// (and OwnerID under MetaOwnerID) — the only keys the read paths recognise —
 	// so a module recording scoped items cannot misspell or forget the marker.
 	// An event written without it has NULL visibility and is NEVER redacted,
 	// which is why modules with private data must set these rather than compose
@@ -147,7 +147,7 @@ type Change struct {
 
 // Ptr is a small helper for building Change values from string literals.
 //
-// â  IT WAS ALREADY HERE while six modules spelled it `ap` â `chat`, `documents`,
+// ⚠ IT WAS ALREADY HERE while six modules spelled it `ap` — `chat`, `documents`,
 // `events`, `finance`, `notes` and `todo`, 162 call sites between them. That is
 // the failure platform/db/sql.go records, in its most literal form: an extraction
 // nobody adopts is a seventh copy with a doc comment claiming otherwise. All six
@@ -155,10 +155,10 @@ type Change struct {
 func Ptr(s string) *string { return &s }
 
 // EqualPtr reports whether two optional strings are equal, treating a nil and an
-// empty-string pointer as DIFFERENT â an absent value is not a blank one, which
+// empty-string pointer as DIFFERENT — an absent value is not a blank one, which
 // is the whole reason Change.Old/New are pointers.
 //
-// â  IT LIVES HERE BECAUSE IT EXISTED FOUR TIMES. `documents`, `events`, `notes`
+// ⚠ IT LIVES HERE BECAUSE IT EXISTED FOUR TIMES. `documents`, `events`, `notes`
 // and `todo` each carried a byte-identical `eqp`, and all four already import this
 // package to name the Change it exists to build. Same for Diff below.
 func EqualPtr(a, b *string) bool {
@@ -169,7 +169,7 @@ func EqualPtr(a, b *string) bool {
 }
 
 // Diff appends a Change to changes when old and newVal differ, and does nothing
-// when they match â so an untouched field never reaches the audit log, which is
+// when they match — so an untouched field never reaches the audit log, which is
 // what makes a diff readable as "what the writer actually altered".
 func Diff(changes *[]Change, field string, old, newVal *string) {
 	if !EqualPtr(old, newVal) {
@@ -222,7 +222,7 @@ func WithVia(base map[string]any, via string) map[string]any {
 // Exists reports whether an event with this module/action/entity id was already
 // recorded. It lives HERE so audit_events stays this package's contract: a
 // module that needs write-once semantics (garden's one-warning-per-frost-night)
-// asks the spine rather than querying the table itself â the same boundary
+// asks the spine rather than querying the table itself — the same boundary
 // Record enforces on the write side.
 func Exists(ctx context.Context, tx *sql.Tx, module, action, entityID string) (bool, error) {
 	var n int

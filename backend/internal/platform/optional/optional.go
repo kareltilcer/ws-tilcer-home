@@ -20,8 +20,9 @@ package optional
 // one most.
 //
 // `audit.Ptr` is deliberately NOT folded in here either. It is the string-only
-// spelling for building audit.Change values, it carries 103 call sites, and its
-// doc comment records why six modules converged on it after each spelling it `ap`.
-// Replacing it is a rename across every module in the repo and belongs in its own
-// commit rather than smuggled into this one.
+// spelling for building audit.Change values, it carries 172 call sites in
+// non-test code across EIGHT modules, and its doc comment records why six of them
+// converged on it after each spelling it `ap`. Replacing it is a rename across
+// every module in the repo and belongs in its own commit rather than smuggled
+// into this one.
 func Of[T any](v T) *T { return &v }

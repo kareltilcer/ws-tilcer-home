@@ -1425,11 +1425,16 @@ Four commits, one per item.
   and moving a wire type into platform is a structural change belonging to the
   decision that stands.
 
-  ⚠ `audit.Ptr` was NOT folded into `optional.Of`. Same idea, strings only, 103
-  call sites, and a doc comment recording why six modules converged on it after
-  each spelling it `ap`. Unifying them is a rename across every module and wants
-  its own commit; until then the repo has two spellings, and that is written down
-  in both.
+  ⚠ `audit.Ptr` was NOT folded into `optional.Of`. Same idea, strings only, **172
+  call sites in non-test code across eight modules**, and a doc comment recording
+  why six of them converged on it after each spelling it `ap`. Unifying them is a
+  rename across every module and wants its own commit; until then the repo has two
+  spellings, and that is written down in both.
+
+  > ⚠ The commit that landed this said **103**, which was wrong: the figure came
+  > from `grep -c`, which counts matching LINES, and `audit.Diff(&changes, "x",
+  > audit.Ptr(a), audit.Ptr(b))` is one line and two call sites. Corrected in the
+  > code and here at the review round.
 
 - **Item 20** — the comment half only, and the worked example had to be re-derived
   rather than copied.
@@ -1511,7 +1516,8 @@ change.
 
 ## Baseline after wave 5
 
-`go build ./...` clean · `go vet ./...` clean · `go test ./...` **29 packages ok** ·
+`go build ./...` clean · `go vet ./...` clean · `go test ./...` **31 packages ok**
+(was 29; `platform/optional` and `platform/slugpath` each brought their own tests) ·
 `tsc -b --noEmit` clean · `npm run lint` 0 errors / 25 warnings / knip clean ·
 `vitest run` **25 files, 194 tests pass** (was 23 / 169: 13 new cases for
 `lib/foldertree`, 12 for `components/common/TreeDialogs`).
@@ -1522,11 +1528,13 @@ CR-stripped copies, every Go file wave 5 touched is clean except
 `chat/v10_realtime_test.go`, which was already unformatted at `origin/main` and
 was left exactly as found.
 
-⚠ **`optional.Of` and `slugpath.Split` ship without tests of their own**, which is
-why the package count stays at 29. Both are covered transitively — `Split` by
-every resolver test in `notes` and `documents`, `Of` by every archive path in four
-modules — and both are code that was already there, moved. `go test ./...` proves
-the move; nothing proves the functions in isolation.
+The review round added the tests the extractions shipped without: `slugpath.Split`
+now pins the empty-segment, whitespace and percent-decoding rules — including the
+two that matter on the resolver path, a syntactically malformed escape kept RAW
+and a well-formed one decoded even when the result is not valid UTF-8;
+`optional.Of` pins that the pointer is to its own copy, so one patch cannot reach
+into another's field; and `audit.HardMeta` / `audit.WithVia` pin the nil-not-false
+and nil-not-empty answers the Log browser reads.
 
 ⚠ `go test -race` was not run anywhere in this wave: unavailable on this host
 (windows/arm64).
@@ -1542,9 +1550,9 @@ have flattened.
   `vitest run` must all still pass after each commit. The COUNTS drift as waves add
   tests, so the table names two fixed points rather than one moving number, and a
   wave is measured against the later one. For the record: 28 Go packages before wave
-  1, 29 after wave 4 added `platform/cursor`, still 29 after wave 5 (its two new
-  packages have no tests of their own); `vitest run` ran 21 files / 151 tests before
-  wave 1, 23 / 169 after wave 4, and 25 / 194 after wave 5.
+  1, 29 after wave 4 added `platform/cursor`, 31 after wave 5 added
+  `platform/optional` and `platform/slugpath`; `vitest run` ran 21 files / 151 tests
+  before wave 1, 23 / 169 after wave 4, and 25 / 194 after wave 5.
 - `internal/arch` must stay green — it is the thing that keeps a "share this helper"
   from becoming a cross-module import.
 - One concern per commit. Item 41 in particular must be a pure move with no other edits.

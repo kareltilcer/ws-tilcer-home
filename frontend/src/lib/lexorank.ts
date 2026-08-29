@@ -30,7 +30,10 @@ export function between(a: string, b: string): string {
 
 export const first = () => between('', '')
 export const head = (next: string) => between('', next)
-export const tail = (prev: string) => between(prev, '')
+// Not exported: tailOf below absorbed the last two callers outside this file, and
+// "the key after this one" is a question callers should be asking about a list of
+// siblings rather than about a single neighbour they picked themselves.
+const tail = (prev: string) => between(prev, '')
 
 /** comparePositions is a sort comparator over lexorank keys (ascending). */
 export const comparePositions = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)

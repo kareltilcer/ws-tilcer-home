@@ -9,6 +9,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -484,7 +485,7 @@ func TestCardMutations_CarryLinkCount(t *testing.T) {
 	if moved.LinkCount != 2 {
 		t.Errorf("MoveCard link_count = %d, want 2", moved.LinkCount)
 	}
-	updated, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Title: strPtr("Nový")})
+	updated, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Title: optional.Of("Nový")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +500,7 @@ func TestAudit_CardUpdateProducesDiff(t *testing.T) {
 	col := f.column(t, b.ID, "Zásobník", todo.KindNormal)
 	card := f.card(t, col.ID, "Původní")
 
-	if _, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Title: strPtr("Nový název")}); err != nil {
+	if _, err := f.svc.UpdateCard(f.ctx, card.ID, todo.CardUpdate{Title: optional.Of("Nový název")}); err != nil {
 		t.Fatal(err)
 	}
 	// The card.update event has a title diff old→new.
@@ -532,5 +533,3 @@ func assertPosition(t *testing.T, db *sql.DB, cardID, want string) {
 func auditCount(t *testing.T, db *sql.DB, action string) int {
 	return testsupport.CountAudit(t, db, "", action)
 }
-
-func strPtr(s string) *string { return &s }

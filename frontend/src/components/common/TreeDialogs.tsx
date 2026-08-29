@@ -94,7 +94,9 @@ export interface HardDeleteOption {
 }
 
 /**
- * DeleteDialog — every delete confirms first (D50).
+ * DeleteDialog — every delete confirms first (D50). A non-empty folder shows the
+ * cascade warning before the delete, the same shape as the events series-edit
+ * warning, in plain Czech.
  *
  * ⚠ `subfolders` and `items` are what the CALLER counted, and the two pages do not
  * count the same thing today: Poznámky reports the whole subtree, Dokumenty its
