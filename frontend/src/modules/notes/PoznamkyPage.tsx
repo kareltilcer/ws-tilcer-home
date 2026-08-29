@@ -23,7 +23,9 @@ import { PublishDialog } from '@/components/common/PublishDialog'
 import { tailOf } from '@/lib/lexorank'
 import { indexTree as indexFolderTree, subtreeCounts, type FolderTreeIndex } from '@/lib/foldertree'
 import { NoteView } from './NoteView'
-import { CreateDialog, DeleteDialog, MoveDialog, RenameDialog } from './NotesDialogs'
+import { DeleteDialog, MoveDialog } from '@/components/common/TreeDialogs'
+import { CreateDialog, RenameDialog } from './NotesDialogs'
+import { deleteLabels, moveLabels } from './treeDialogLabels'
 
 // ---- tree indexing ----
 
@@ -417,9 +419,10 @@ export function PoznamkyPage() {
       )}
       {move && (
         <MoveDialog
-          kind={move.kind}
+          isFolder={move.kind === 'folder'}
           title={move.title}
           targets={moveTargets}
+          labels={moveLabels}
           pending={moveMut.isPending}
           onPick={(targetId) => moveMut.mutate({ targetId })}
           onClose={() => setMove(null)}
@@ -427,12 +430,13 @@ export function PoznamkyPage() {
       )}
       {del && (
         <DeleteDialog
-          kind={del.kind}
+          isFolder={del.kind === 'folder'}
           title={del.title}
           subfolders={delCounts.folders}
-          notes={delCounts.items}
+          items={delCounts.items}
+          labels={deleteLabels}
           pending={deleteMut.isPending}
-          onConfirm={(cascade) => deleteMut.mutate(cascade)}
+          onConfirm={({ cascade }) => deleteMut.mutate(cascade)}
           onClose={() => setDel(null)}
         />
       )}

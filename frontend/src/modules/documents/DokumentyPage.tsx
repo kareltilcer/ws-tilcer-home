@@ -35,7 +35,9 @@ import { PublishDialog } from '@/components/common/PublishDialog'
 import { tailOf } from '@/lib/lexorank'
 import { findNode, indexTree as indexFolderTree, subtreeCounts, type FolderTreeIndex, type MoveTarget } from '@/lib/foldertree'
 import { DocumentView } from './DocumentView'
-import { CreateFolderDialog, DeleteDialog, EditDocumentDialog, MoveDialog, RenameFolderDialog } from './DocumentsDialogs'
+import { DeleteDialog, MoveDialog } from '@/components/common/TreeDialogs'
+import { CreateFolderDialog, EditDocumentDialog, RenameFolderDialog } from './DocumentsDialogs'
+import { deleteLabels, hardDeleteOption, moveLabels } from './treeDialogLabels'
 import { UploadPanel, useFileDrop, useUploadQueue } from './UploadQueue'
 import { kindMeta, statusChip } from './fileKind'
 
@@ -526,9 +528,10 @@ export function DokumentyPage() {
       )}
       {move && (
         <MoveDialog
-          kind={move.kind}
+          isFolder={move.kind === 'folder'}
           title={move.title}
           targets={moveTargets()}
+          labels={moveLabels}
           pending={moveMut.isPending}
           onPick={(targetId) => moveMut.mutate({ targetId })}
           onClose={() => setMove(null)}
@@ -536,11 +539,12 @@ export function DokumentyPage() {
       )}
       {del && (
         <DeleteDialog
-          kind={del.kind}
+          isFolder={del.kind === 'folder'}
           title={del.title}
           subfolders={delNode?.subfolders.length ?? 0}
-          documents={delNode?.documents.length ?? 0}
-          canHardDelete={isAdmin}
+          items={delNode?.documents.length ?? 0}
+          labels={deleteLabels}
+          hardDelete={isAdmin ? hardDeleteOption : undefined}
           pending={deleteMut.isPending}
           onConfirm={(opts) => deleteMut.mutate(opts)}
           onClose={() => setDel(null)}
