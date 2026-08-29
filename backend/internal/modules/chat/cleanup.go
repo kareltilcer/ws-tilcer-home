@@ -165,9 +165,9 @@ func (s *Service) RemoveAttachment(ctx context.Context, attachmentID string) err
 			fmt.Sprintf("Soubor „%s“ odstraněn při úklidu úložiště konverzace „%s“",
 				att.OriginalFilename, name),
 			[]audit.Change{
-				{Field: "state", Old: ap(stateLive), New: ap(stateRemoved)},
-				{Field: "byte_size", Old: ap(fmt.Sprint(att.ByteSize))},
-				{Field: "conversation", New: ap(name)},
+				{Field: "state", Old: audit.Ptr(stateLive), New: audit.Ptr(stateRemoved)},
+				{Field: "byte_size", Old: audit.Ptr(fmt.Sprint(att.ByteSize))},
+				{Field: "conversation", New: audit.Ptr(name)},
 			})
 	})
 	if err != nil {

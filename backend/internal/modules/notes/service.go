@@ -130,21 +130,6 @@ func writeAllowed(ctx context.Context) bool {
 	return false
 }
 
-func ap(s string) *string { return &s }
-
-func eqp(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func diff(changes *[]audit.Change, field string, old, newVal *string) {
-	if !eqp(old, newVal) {
-		*changes = append(*changes, audit.Change{Field: field, Old: old, New: newVal})
-	}
-}
-
 // record writes one audit event in the caller's transaction.
 //
 // ⚠ v9 made the Scope a REQUIRED parameter rather than something a caller can add
@@ -281,9 +266,9 @@ func (s *Service) CreateNote(ctx context.Context, in NoteCreate) (*NoteDetail, e
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "title", New: ap(title)}, {Field: "slug", New: ap(sl)}}
+		changes := []audit.Change{{Field: "title", New: audit.Ptr(title)}, {Field: "slug", New: audit.Ptr(sl)}}
 		if in.BodyMD != "" {
-			changes = append(changes, audit.Change{Field: "body_md", New: ap(in.BodyMD)})
+			changes = append(changes, audit.Change{Field: "body_md", New: audit.Ptr(in.BodyMD)})
 		}
 		return s.record(ctx, tx, "note.create", "note", out.ID,
 			fmt.Sprintf("Vytvořena poznámka „%s“", title), changes, nil, sc)
@@ -392,10 +377,10 @@ func (s *Service) UpdateNote(ctx context.Context, id string, in NoteUpdate, via 
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "title", ap(before.Title), ap(out.Title))
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "body_md", before.BodyMD, out.BodyMD) // full, untruncated (D36)
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "title", audit.Ptr(before.Title), audit.Ptr(out.Title))
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "body_md", before.BodyMD, out.BodyMD) // full, untruncated (D36)
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		// A no-op PATCH leaves no audit trail and doesn't broadcast. The patch above
 		// carries only genuinely-changed fields, so an empty diff means the store wrote
 		// nothing and updated_at didn't move — there's nothing to tell other clients.
@@ -467,7 +452,7 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 		// broadcast — mirroring UpdateNote's no-op gating. Otherwise a re-sent move
 		// would log a contentless note.move and make every other client refetch and
 		// raise a bogus "changed elsewhere" toast for a change that never happened.
-		if eqp(before.FolderID, in.FolderID) && before.Position == in.Position && before.Slug == sl {
+		if audit.EqualPtr(before.FolderID, in.FolderID) && before.Position == in.Position && before.Slug == sl {
 			out = before
 			return nil
 		}
@@ -479,9 +464,9 @@ func (s *Service) MoveNote(ctx context.Context, id string, in NoteMoveRequest, v
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "folder_id", before.FolderID, out.FolderID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "position", ap(before.Position), ap(out.Position))
+		audit.Diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "note.move", "note", id,
 			fmt.Sprintf("Přesunuta poznámka „%s“", out.Title), changes, metaVia(nil, via), sc)
@@ -609,7 +594,7 @@ func (s *Service) DeleteNote(ctx context.Context, id string, hard bool) error {
 		changed = true
 		return s.record(ctx, tx, "note.delete", "note", id,
 			fmt.Sprintf("Smazána poznámka „%s“", before.Title),
-			[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, metaHard(false), sc)
+			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, metaHard(false), sc)
 	})
 	if err != nil {
 		return err
@@ -653,9 +638,9 @@ func (s *Service) CreateFolder(ctx context.Context, in FolderCreate) (*FolderDet
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "name", New: ap(name)}, {Field: "slug", New: ap(sl)}}
+		changes := []audit.Change{{Field: "name", New: audit.Ptr(name)}, {Field: "slug", New: audit.Ptr(sl)}}
 		if icon != "" {
-			changes = append(changes, audit.Change{Field: "icon", New: ap(icon)})
+			changes = append(changes, audit.Change{Field: "icon", New: audit.Ptr(icon)})
 		}
 		return s.record(ctx, tx, "folder.create", "folder", out.ID,
 			fmt.Sprintf("Vytvořena složka „%s“", name), changes, nil, sc)
@@ -757,10 +742,10 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in FolderUpdate) 
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "name", ap(before.Name), ap(out.Name))
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "icon", ap(before.Icon), ap(out.Icon))
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "name", audit.Ptr(before.Name), audit.Ptr(out.Name))
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "icon", audit.Ptr(before.Icon), audit.Ptr(out.Icon))
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		// A no-op PATCH (nothing actually changed) leaves no audit trail and doesn't
 		// broadcast a change that other clients would needlessly refetch on.
 		if len(changes) == 0 {
@@ -827,7 +812,7 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 		// A move that re-sends the folder's current parent/position/slug changes
 		// nothing: skip the write, audit, and broadcast — mirroring UpdateFolder's
 		// no-op gating (see MoveNote for the spurious-broadcast rationale).
-		if eqp(before.ParentID, in.ParentID) && before.Position == in.Position && before.Slug == sl {
+		if audit.EqualPtr(before.ParentID, in.ParentID) && before.Position == in.Position && before.Slug == sl {
 			out = before
 			return nil
 		}
@@ -839,9 +824,9 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in FolderMoveReques
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "parent_id", before.ParentID, out.ParentID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "position", ap(before.Position), ap(out.Position))
+		audit.Diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "folder.move", "folder", id,
 			fmt.Sprintf("Přesunuta složka „%s“", out.Name), changes, nil, sc)
@@ -955,7 +940,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			changed = true
 			if err := s.record(ctx, tx, "note.delete", "note", n.ID,
 				fmt.Sprintf("Smazána poznámka „%s“ (kaskádou)", n.Title),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}},
+				[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}},
 				map[string]any{"via": "cascade"}, sc); err != nil {
 				return err
 			}
@@ -987,7 +972,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			}
 			if err := s.record(ctx, tx, "folder.delete", "folder", fID,
 				fmt.Sprintf("Smazána složka „%s“", meta.Name),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, m, sc); err != nil {
+				[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, m, sc); err != nil {
 				return err
 			}
 		}
@@ -1320,11 +1305,11 @@ func (s *Service) PublishNote(ctx context.Context, id string, in PublishRequest)
 			return err
 		}
 		changes := []audit.Change{
-			{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+			{Field: "visibility", Old: audit.Ptr(visibilityPrivate), New: audit.Ptr(visibilityShared)},
 			{Field: "owner_id", Old: before.OwnerID, New: nil},
 		}
-		diff(&changes, "folder_id", before.FolderID, out.FolderID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		audit.Diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
 		// Audited against the item's NEW scope (shared): the event describes a note
 		// the household can now see, so there is nothing left to redact — and
 		// redacting the one event that says "this became visible to everyone" would
@@ -1455,8 +1440,8 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 			}
 		}
 		changes := publishChanges(before.OwnerID)
-		diff(&changes, "parent_id", before.ParentID, out.ParentID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		audit.Diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
 		meta := publishMeta(owner, false)
 		meta["folders"] = len(folderIDs)
 		meta["notes"] = len(childNotes)
@@ -1476,7 +1461,7 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 // one shape rather than three.
 func publishChanges(oldOwner *string) []audit.Change {
 	return []audit.Change{
-		{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+		{Field: "visibility", Old: audit.Ptr(visibilityPrivate), New: audit.Ptr(visibilityShared)},
 		{Field: "owner_id", Old: oldOwner, New: nil},
 	}
 }

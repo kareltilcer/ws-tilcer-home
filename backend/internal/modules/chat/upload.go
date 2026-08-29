@@ -376,10 +376,10 @@ func (s *Service) commitMessage(ctx context.Context, conversationID, body string
 			if err := s.recordAttachment(ctx, tx, "attachment.uploaded", f.id,
 				fmt.Sprintf("Nahrán soubor „%s“ do konverzace „%s“", f.filename, convName),
 				[]audit.Change{
-					{Field: "original_filename", New: ap(f.filename)},
-					{Field: "content_type", New: ap(f.contentType)},
-					{Field: "byte_size", New: ap(fmt.Sprint(f.size))},
-					{Field: "conversation", New: ap(convName)},
+					{Field: "original_filename", New: audit.Ptr(f.filename)},
+					{Field: "content_type", New: audit.Ptr(f.contentType)},
+					{Field: "byte_size", New: audit.Ptr(fmt.Sprint(f.size))},
+					{Field: "conversation", New: audit.Ptr(convName)},
 				}); err != nil {
 				return err
 			}
@@ -499,5 +499,3 @@ func readHead(path string) ([]byte, error) {
 	}
 	return head[:n], nil
 }
-
-func ap(s string) *string { return &s }

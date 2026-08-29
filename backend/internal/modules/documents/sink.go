@@ -137,13 +137,13 @@ func (s *Service) AcceptBlob(ctx context.Context, req storage.AcceptRequest) (st
 			return insErr
 		}
 		changes := []audit.Change{
-			{Field: "title", New: ap(title)},
-			{Field: "slug", New: ap(sl)},
-			{Field: "original_filename", New: ap(req.Filename)},
-			{Field: "content_type", New: ap(req.ContentType)},
-			{Field: "byte_size", New: ap(fmt.Sprint(req.ByteSize))},
-			{Field: "checksum", New: ap(req.Checksum)},
-			{Field: "folder_id", New: ap(folderID)},
+			{Field: "title", New: audit.Ptr(title)},
+			{Field: "slug", New: audit.Ptr(sl)},
+			{Field: "original_filename", New: audit.Ptr(req.Filename)},
+			{Field: "content_type", New: audit.Ptr(req.ContentType)},
+			{Field: "byte_size", New: audit.Ptr(fmt.Sprint(req.ByteSize))},
+			{Field: "checksum", New: audit.Ptr(req.Checksum)},
+			{Field: "folder_id", New: audit.Ptr(folderID)},
 		}
 		// ⚠ `meta.via` is what makes a transferred document distinguishable from an
 		// uploaded one a year later — the same key v5's cross-module triggers use,

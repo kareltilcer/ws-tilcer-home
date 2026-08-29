@@ -134,21 +134,6 @@ func writeAllowed(ctx context.Context) bool {
 	return false
 }
 
-func ap(s string) *string { return &s }
-
-func eqp(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func diff(changes *[]audit.Change, field string, old, newVal *string) {
-	if !eqp(old, newVal) {
-		*changes = append(*changes, audit.Change{Field: field, Old: old, New: newVal})
-	}
-}
-
 // record writes one audit event in the caller's transaction.
 //
 // ⚠ v9 made the Scope a REQUIRED parameter rather than something a caller adds to
@@ -370,10 +355,10 @@ func (s *Service) UpdateDocument(ctx context.Context, id string, in DocumentUpda
 		// Metadata diffs only — the bytes are immutable, so there is nothing about the
 		// content to diff (D50).
 		var changes []audit.Change
-		diff(&changes, "title", ap(before.Title), ap(out.Title))
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "description", before.Description, out.Description)
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "title", audit.Ptr(before.Title), audit.Ptr(out.Title))
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "description", before.Description, out.Description)
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		if len(changes) == 0 {
 			return nil
 		}
@@ -437,7 +422,7 @@ func (s *Service) MoveDocument(ctx context.Context, id string, in DocumentMoveRe
 		}
 		// A move that re-sends the current folder/position/slug changes nothing: skip
 		// the write, the audit event, and the broadcast.
-		if eqp(before.FolderID, in.FolderID) && before.Position == in.Position && before.Slug == sl {
+		if audit.EqualPtr(before.FolderID, in.FolderID) && before.Position == in.Position && before.Slug == sl {
 			out = before
 			return nil
 		}
@@ -449,9 +434,9 @@ func (s *Service) MoveDocument(ctx context.Context, id string, in DocumentMoveRe
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "folder_id", before.FolderID, out.FolderID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "position", ap(before.Position), ap(out.Position))
+		audit.Diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "document.move", "document", id,
 			fmt.Sprintf("Přesunut dokument „%s“", out.Title), changes, metaVia(nil, via), sc)
@@ -531,7 +516,7 @@ func (s *Service) DeleteDocument(ctx context.Context, id string, hard bool) erro
 		changed = true
 		return s.record(ctx, tx, "document.delete", "document", id,
 			fmt.Sprintf("Smazán dokument „%s“", before.Title),
-			[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, metaHard(false), sc)
+			[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, metaHard(false), sc)
 	})
 	if err != nil {
 		return err
@@ -601,9 +586,9 @@ func (s *Service) CreateFolder(ctx context.Context, in DocFolderCreate) (*DocFol
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "name", New: ap(name)}, {Field: "slug", New: ap(sl)}}
+		changes := []audit.Change{{Field: "name", New: audit.Ptr(name)}, {Field: "slug", New: audit.Ptr(sl)}}
 		if icon != "" {
-			changes = append(changes, audit.Change{Field: "icon", New: ap(icon)})
+			changes = append(changes, audit.Change{Field: "icon", New: audit.Ptr(icon)})
 		}
 		return s.record(ctx, tx, "document_folder.create", "document_folder", out.ID,
 			fmt.Sprintf("Vytvořena složka dokumentů „%s“", name), changes, nil, sc)
@@ -704,10 +689,10 @@ func (s *Service) UpdateFolder(ctx context.Context, id string, in DocFolderUpdat
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "name", ap(before.Name), ap(out.Name))
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "icon", ap(before.Icon), ap(out.Icon))
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "name", audit.Ptr(before.Name), audit.Ptr(out.Name))
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "icon", audit.Ptr(before.Icon), audit.Ptr(out.Icon))
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		if len(changes) == 0 {
 			return nil
 		}
@@ -769,7 +754,7 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in DocFolderMoveReq
 		if err != nil {
 			return err
 		}
-		if eqp(before.ParentID, in.ParentID) && before.Position == in.Position && before.Slug == sl {
+		if audit.EqualPtr(before.ParentID, in.ParentID) && before.Position == in.Position && before.Slug == sl {
 			out = before
 			return nil
 		}
@@ -783,9 +768,9 @@ func (s *Service) MoveFolder(ctx context.Context, id string, in DocFolderMoveReq
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "parent_id", before.ParentID, out.ParentID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
-		diff(&changes, "position", ap(before.Position), ap(out.Position))
+		audit.Diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
+		audit.Diff(&changes, "position", audit.Ptr(before.Position), audit.Ptr(out.Position))
 		changed = true
 		return s.record(ctx, tx, "document_folder.move", "document_folder", id,
 			fmt.Sprintf("Přesunuta složka dokumentů „%s“", out.Name), changes, nil, sc)
@@ -951,7 +936,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			changed = true
 			if err := s.record(ctx, tx, "document.delete", "document", d.ID,
 				fmt.Sprintf("Smazán dokument „%s“ (kaskádou)", d.Title),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}},
+				[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}},
 				map[string]any{"via": "cascade"}, sc); err != nil {
 				return err
 			}
@@ -979,7 +964,7 @@ func (s *Service) DeleteFolder(ctx context.Context, id string, cascade, hard boo
 			}
 			if err := s.record(ctx, tx, "document_folder.delete", "document_folder", fID,
 				fmt.Sprintf("Smazána složka dokumentů „%s“", meta.Name),
-				[]audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}, m, sc); err != nil {
+				[]audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}, m, sc); err != nil {
 				return err
 			}
 		}
@@ -1325,11 +1310,11 @@ func (s *Service) PublishDocument(ctx context.Context, id string, in PublishRequ
 			return err
 		}
 		changes := []audit.Change{
-			{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+			{Field: "visibility", Old: audit.Ptr(visibilityPrivate), New: audit.Ptr(visibilityShared)},
 			{Field: "owner_id", Old: before.OwnerID, New: nil},
 		}
-		diff(&changes, "folder_id", before.FolderID, out.FolderID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		audit.Diff(&changes, "folder_id", before.FolderID, out.FolderID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
 		// Audited against the item's NEW scope (shared): the event describes a
 		// document the household can now see, so there is nothing left to redact —
 		// and redacting the one event that says "this became visible to everyone"
@@ -1449,8 +1434,8 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 			}
 		}
 		changes := publishChanges(before.OwnerID)
-		diff(&changes, "parent_id", before.ParentID, out.ParentID)
-		diff(&changes, "slug", ap(before.Slug), ap(out.Slug))
+		audit.Diff(&changes, "parent_id", before.ParentID, out.ParentID)
+		audit.Diff(&changes, "slug", audit.Ptr(before.Slug), audit.Ptr(out.Slug))
 		meta := publishMeta(owner, false)
 		meta["folders"] = len(folderIDs)
 		meta["documents"] = len(childDocs)
@@ -1469,7 +1454,7 @@ func (s *Service) PublishFolder(ctx context.Context, id string, in PublishReques
 // by the document, the folder and the whole cascade so the log has one shape.
 func publishChanges(oldOwner *string) []audit.Change {
 	return []audit.Change{
-		{Field: "visibility", Old: ap(visibilityPrivate), New: ap(visibilityShared)},
+		{Field: "visibility", Old: audit.Ptr(visibilityPrivate), New: audit.Ptr(visibilityShared)},
 		{Field: "owner_id", Old: oldOwner, New: nil},
 	}
 }

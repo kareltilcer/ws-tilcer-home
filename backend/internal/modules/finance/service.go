@@ -49,8 +49,6 @@ func actorID(ctx context.Context) string {
 	return ""
 }
 
-func ap(v string) *string { return &v }
-
 func itoa(v int) string { return strconv.Itoa(v) }
 
 // monthTaken maps a UNIQUE constraint failure onto the SAME 409 the in-tx
@@ -377,12 +375,12 @@ func rowDiff(before, after *Month) []audit.Change {
 		switch {
 		case hasOld && hasNew:
 			if o != n {
-				changes = append(changes, field(name, ap(o), ap(n)))
+				changes = append(changes, field(name, audit.Ptr(o), audit.Ptr(n)))
 			}
 		case hasNew:
-			changes = append(changes, field(name, nil, ap(n)))
+			changes = append(changes, field(name, nil, audit.Ptr(n)))
 		case hasOld:
-			changes = append(changes, field(name, ap(o), nil))
+			changes = append(changes, field(name, audit.Ptr(o), nil))
 		}
 	}
 	return changes

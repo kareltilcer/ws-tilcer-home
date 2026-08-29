@@ -48,7 +48,7 @@ func (s *Service) CreateCard(ctx context.Context, columnID string, in CardCreate
 		}
 		return s.record(ctx, tx, "card.create", "card", out.ID,
 			fmt.Sprintf("Vytvořena karta „%s“", out.Title),
-			[]audit.Change{{Field: "title", New: ap(out.Title)}}, nil)
+			[]audit.Change{{Field: "title", New: audit.Ptr(out.Title)}}, nil)
 	})
 	if err != nil {
 		return nil, err
@@ -78,9 +78,9 @@ func (s *Service) UpdateCard(ctx context.Context, id string, in CardUpdate) (*Ca
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "title", ap(before.Title), ap(out.Title))
-		diff(&changes, "notes", before.Notes, out.Notes)
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "title", audit.Ptr(before.Title), audit.Ptr(out.Title))
+		audit.Diff(&changes, "notes", before.Notes, out.Notes)
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		return s.record(ctx, tx, "card.update", "card", id,
 			fmt.Sprintf("Upravena karta „%s“", out.Title), changes, nil)
 	})
@@ -151,8 +151,8 @@ func (s *Service) MoveCard(ctx context.Context, id string, in CardMoveRequest, v
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "column_id", ap(before.ColumnID), ap(out.ColumnID))
-		diff(&changes, "done_at", before.DoneAt, out.DoneAt)
+		audit.Diff(&changes, "column_id", audit.Ptr(before.ColumnID), audit.Ptr(out.ColumnID))
+		audit.Diff(&changes, "done_at", before.DoneAt, out.DoneAt)
 		var meta map[string]any
 		if via != "" {
 			meta = map[string]any{"via": via}
@@ -185,7 +185,7 @@ func (s *Service) DeleteCard(ctx context.Context, id string, hard bool) error {
 			if err := s.store.UpdateCard(ctx, tx, id, CardUpdate{Archived: boolPtr(true)}); err != nil {
 				return err
 			}
-			changes = []audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}
+			changes = []audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}
 		}
 		return s.record(ctx, tx, "card.delete", "card", id,
 			fmt.Sprintf("Smazána karta „%s“", before.Title), changes, metaHard(hard))
@@ -297,7 +297,7 @@ func (s *Service) CreateChecklistItem(ctx context.Context, cardID string, in Che
 		}
 		return s.record(ctx, tx, "checklist_item.create", "checklist_item", out.ID,
 			fmt.Sprintf("Přidán bod checklistu „%s“", out.Text),
-			[]audit.Change{{Field: "text", New: ap(out.Text)}}, map[string]any{"card_id": cardID})
+			[]audit.Change{{Field: "text", New: audit.Ptr(out.Text)}}, map[string]any{"card_id": cardID})
 	})
 	if err != nil {
 		return nil, err
@@ -327,8 +327,8 @@ func (s *Service) UpdateChecklistItem(ctx context.Context, id string, in Checkli
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "text", ap(before.Text), ap(out.Text))
-		diff(&changes, "done", ap(fmt.Sprint(before.Done)), ap(fmt.Sprint(out.Done)))
+		audit.Diff(&changes, "text", audit.Ptr(before.Text), audit.Ptr(out.Text))
+		audit.Diff(&changes, "done", audit.Ptr(fmt.Sprint(before.Done)), audit.Ptr(fmt.Sprint(out.Done)))
 		return s.record(ctx, tx, "checklist_item.update", "checklist_item", id,
 			fmt.Sprintf("Upraven bod checklistu „%s“", out.Text), changes, map[string]any{"card_id": out.CardID})
 	})
@@ -398,7 +398,7 @@ func (s *Service) CreateLabel(ctx context.Context, boardID string, in LabelCreat
 		}
 		return s.record(ctx, tx, "label.create", "label", out.ID,
 			fmt.Sprintf("Vytvořen štítek „%s“", out.Name),
-			[]audit.Change{{Field: "name", New: ap(out.Name)}, {Field: "color", New: ap(out.Color)}}, nil)
+			[]audit.Change{{Field: "name", New: audit.Ptr(out.Name)}, {Field: "color", New: audit.Ptr(out.Color)}}, nil)
 	})
 	if err != nil {
 		return nil, err
@@ -431,8 +431,8 @@ func (s *Service) UpdateLabel(ctx context.Context, id string, in LabelCreate) (*
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "name", ap(before.Name), ap(out.Name))
-		diff(&changes, "color", ap(before.Color), ap(out.Color))
+		audit.Diff(&changes, "name", audit.Ptr(before.Name), audit.Ptr(out.Name))
+		audit.Diff(&changes, "color", audit.Ptr(before.Color), audit.Ptr(out.Color))
 		return s.record(ctx, tx, "label.update", "label", id,
 			fmt.Sprintf("Upraven štítek „%s“", out.Name), changes, nil)
 	})

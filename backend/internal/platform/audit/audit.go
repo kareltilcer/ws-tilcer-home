@@ -106,7 +106,36 @@ type Change struct {
 }
 
 // Ptr is a small helper for building Change values from string literals.
+//
+// ⚠ IT WAS ALREADY HERE while six modules spelled it `ap` — `chat`, `documents`,
+// `events`, `finance`, `notes` and `todo`, 178 call sites between them. That is
+// the failure platform/db/sql.go records, in its most literal form: an extraction
+// nobody adopts is a seventh copy with a doc comment claiming otherwise. All six
+// now call this one.
 func Ptr(s string) *string { return &s }
+
+// EqualPtr reports whether two optional strings are equal, treating a nil and an
+// empty-string pointer as DIFFERENT — an absent value is not a blank one, which
+// is the whole reason Change.Old/New are pointers.
+//
+// ⚠ IT LIVES HERE BECAUSE IT EXISTED FOUR TIMES. `documents`, `events`, `notes`
+// and `todo` each carried a byte-identical `eqp`, and all four already import this
+// package to name the Change it exists to build. Same for Diff below.
+func EqualPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// Diff appends a Change to changes when old and newVal differ, and does nothing
+// when they match — so an untouched field never reaches the audit log, which is
+// what makes a diff readable as "what the writer actually altered".
+func Diff(changes *[]Change, field string, old, newVal *string) {
+	if !EqualPtr(old, newVal) {
+		*changes = append(*changes, Change{Field: field, Old: old, New: newVal})
+	}
+}
 
 // Exists reports whether an event with this module/action/entity id was already
 // recorded. It lives HERE so audit_events stays this package's contract: a

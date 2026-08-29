@@ -152,9 +152,9 @@ func (s *Service) MoveAttachment(ctx context.Context, attachmentID, folderID str
 		return s.recordAttachment(ctx, tx, "attachment.moved", attachmentID,
 			fmt.Sprintf("Soubor „%s“ přesunut z konverzace „%s“ do Dokumentů", att.OriginalFilename, name),
 			[]audit.Change{
-				{Field: "state", Old: ap(stateLive), New: ap(stateMoved)},
-				{Field: "document_id", New: ap(result.DocumentID)},
-				{Field: "conversation", New: ap(name)},
+				{Field: "state", Old: audit.Ptr(stateLive), New: audit.Ptr(stateMoved)},
+				{Field: "document_id", New: audit.Ptr(result.DocumentID)},
+				{Field: "conversation", New: audit.Ptr(name)},
 			})
 	})
 	if err != nil {

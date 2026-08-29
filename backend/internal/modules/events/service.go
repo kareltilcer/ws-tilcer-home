@@ -49,21 +49,6 @@ func actorID(ctx context.Context) string {
 	return ""
 }
 
-func ap(s string) *string { return &s }
-
-func eqp(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func diff(changes *[]audit.Change, field string, old, newVal *string) {
-	if !eqp(old, newVal) {
-		*changes = append(*changes, audit.Change{Field: field, Old: old, New: newVal})
-	}
-}
-
 func (s *Service) record(ctx context.Context, tx *sql.Tx, action, entityID, summary string, changes []audit.Change, meta map[string]any) error {
 	_, err := s.sink.Record(ctx, tx, audit.Event{
 		Module:     audit.ModuleEvents,
@@ -137,7 +122,7 @@ func (s *Service) CreateEvent(ctx context.Context, in EventCreate) (*Event, erro
 		if err != nil {
 			return err
 		}
-		changes := []audit.Change{{Field: "title", New: ap(out.Title)}, {Field: "starts_on", New: ap(out.StartsOn)}}
+		changes := []audit.Change{{Field: "title", New: audit.Ptr(out.Title)}, {Field: "starts_on", New: audit.Ptr(out.StartsOn)}}
 		if out.RRule != nil {
 			changes = append(changes, audit.Change{Field: "rrule", New: out.RRule})
 		}
@@ -198,13 +183,13 @@ func (s *Service) UpdateEvent(ctx context.Context, id string, in EventUpdate) (*
 			return err
 		}
 		var changes []audit.Change
-		diff(&changes, "title", ap(before.Title), ap(out.Title))
-		diff(&changes, "description", before.Description, out.Description)
-		diff(&changes, "starts_on", ap(before.StartsOn), ap(out.StartsOn))
-		diff(&changes, "rrule", before.RRule, out.RRule)
-		diff(&changes, "reminder_enabled", ap(fmt.Sprint(before.ReminderEnabled)), ap(fmt.Sprint(out.ReminderEnabled)))
-		diff(&changes, "reminder_lead", before.ReminderLead, out.ReminderLead)
-		diff(&changes, "archived", ap(fmt.Sprint(before.Archived)), ap(fmt.Sprint(out.Archived)))
+		audit.Diff(&changes, "title", audit.Ptr(before.Title), audit.Ptr(out.Title))
+		audit.Diff(&changes, "description", before.Description, out.Description)
+		audit.Diff(&changes, "starts_on", audit.Ptr(before.StartsOn), audit.Ptr(out.StartsOn))
+		audit.Diff(&changes, "rrule", before.RRule, out.RRule)
+		audit.Diff(&changes, "reminder_enabled", audit.Ptr(fmt.Sprint(before.ReminderEnabled)), audit.Ptr(fmt.Sprint(out.ReminderEnabled)))
+		audit.Diff(&changes, "reminder_lead", before.ReminderLead, out.ReminderLead)
+		audit.Diff(&changes, "archived", audit.Ptr(fmt.Sprint(before.Archived)), audit.Ptr(fmt.Sprint(out.Archived)))
 		return s.record(ctx, tx, "event.update", id,
 			fmt.Sprintf("Upravena událost „%s“ (celá série)", out.Title), changes, nil)
 	})
@@ -233,7 +218,7 @@ func (s *Service) DeleteEvent(ctx context.Context, id string, hard bool) error {
 			if err := s.store.UpdateEvent(ctx, tx, id, EventUpdate{Archived: boolPtr(true)}); err != nil {
 				return err
 			}
-			changes = []audit.Change{{Field: "archived", Old: ap("false"), New: ap("true")}}
+			changes = []audit.Change{{Field: "archived", Old: audit.Ptr("false"), New: audit.Ptr("true")}}
 		}
 		return s.record(ctx, tx, "event.delete", id,
 			fmt.Sprintf("Smazána událost „%s“", before.Title), changes, metaHard(hard))
