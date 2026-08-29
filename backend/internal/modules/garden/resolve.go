@@ -112,17 +112,6 @@ func mergeCorePatch(base PlantCore, over *PlantCore, present presentFields) Plan
 	return out
 }
 
-// coreFieldNames lists PlantCore's fields. Exported for the resolve test, which
-// asserts that a fixture setting EVERY field really does override every field —
-// the guard that catches a new column added without a test that covers it.
-func coreFieldNames() []string {
-	out := make([]string, 0, coreType.NumField())
-	for i := 0; i < coreType.NumField(); i++ {
-		out = append(out, coreType.Field(i).Name)
-	}
-	return out
-}
-
 // ---- derived values that belong with resolution, not with their callers ----
 
 // Density returns the effective planting density in plants per m²: the explicit

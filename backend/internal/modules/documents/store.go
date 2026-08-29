@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"strings"
-	"time"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
@@ -27,10 +26,6 @@ func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 const tsFormat = "2006-01-02T15:04:05.000000Z07:00"
 
 func nowUTC() string { return appdb.NowUTC(tsFormat) }
-
-// ParseTS parses a stored timestamp (used by the reconciliation pass to compare a
-// row's age against the orphan grace window).
-func ParseTS(s string) (time.Time, error) { return time.Parse(tsFormat, s) }
 
 func ptr(ns sql.NullString) *string {
 	if !ns.Valid {

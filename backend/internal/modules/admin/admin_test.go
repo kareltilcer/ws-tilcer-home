@@ -221,8 +221,7 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-func adminCtx() context.Context  { return testsupport.CtxUser("u-admin", "admin") }
-func editorCtx() context.Context { return testsupport.CtxUser("u-editor", "editor") }
+func adminCtx() context.Context { return testsupport.CtxUser("u-admin", "admin") }
 
 // member registers a household member (a session row) and optionally a device.
 func (f *fixture) member(userID, name string, roles []string, withDevice bool) {

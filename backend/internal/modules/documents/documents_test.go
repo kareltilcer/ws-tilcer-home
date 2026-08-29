@@ -116,7 +116,6 @@ func (x *h) upload(ctx context.Context, filename string, body []byte, folderID *
 func editorCtx() context.Context { return testsupport.CtxUser("u-editor", "editor") }
 func readerCtx() context.Context { return testsupport.CtxUser("u-reader", "reader") }
 func adminCtx() context.Context  { return testsupport.CtxUser("u-admin", "admin") }
-func otherCtx() context.Context  { return testsupport.CtxUser("u-other", "editor") }
 
 func status(t *testing.T, err error) int {
 	t.Helper()

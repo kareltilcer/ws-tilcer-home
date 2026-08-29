@@ -375,12 +375,6 @@ var byName = func() map[string]EnumDef {
 	return m
 }()
 
-// Enum returns one enum's definition.
-func Enum(name string) (EnumDef, bool) {
-	d, ok := byName[name]
-	return d, ok
-}
-
 // Enums returns the whole registry, for GET /api/garden/enums and for the
 // generated prompt schema. Sorted by name so the response is stable across
 // restarts (the pickers' own order is preserved WITHIN each enum).

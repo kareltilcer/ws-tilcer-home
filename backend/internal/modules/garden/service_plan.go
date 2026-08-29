@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -1408,20 +1407,4 @@ func plantingChanges(before *Planting, after Planting) []audit.Change {
 	}
 	diffPlain(&changes, "status", b.Status, after.Status)
 	return changes
-}
-
-// sortTasksForDisplay orders a task list the way every surface shows it:
-// overdue first, then by window start. Kept here so the widget, the calendar and
-// the print sheet cannot disagree.
-func sortTasksForDisplay(tasks []Task, today dates.Date) {
-	sort.SliceStable(tasks, func(i, j int) bool {
-		oi, oj := tasks[i].Overdue, tasks[j].Overdue
-		if oi != oj {
-			return oi
-		}
-		if tasks[i].WindowFrom != tasks[j].WindowFrom {
-			return tasks[i].WindowFrom < tasks[j].WindowFrom
-		}
-		return tasks[i].Position < tasks[j].Position
-	})
 }

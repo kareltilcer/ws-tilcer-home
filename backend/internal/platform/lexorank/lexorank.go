@@ -93,6 +93,12 @@ func NKeys(n int) []string {
 // Rebalance returns len(keys) fresh, evenly-spaced, short keys preserving order.
 // It is the deliberate renormalisation escape hatch; callers rewrite the affected
 // rows in one explicit operation, not on the hot path.
+//
+// ⚠ NOTHING CALLS IT YET, and that is the design working rather than dead code:
+// keys lengthen instead of colliding, so no board has needed renormalising. It is
+// kept as a stand-by API — the package doc above names it as the one sanctioned
+// multi-row write — so a future first caller has the correct implementation
+// rather than an ad-hoc renumber. Deleting it is a decision, not a tidy-up.
 func Rebalance(keys []string) []string { return NKeys(len(keys)) }
 
 // encodeFixed renders v as a width-digit base-62 string (most significant first).

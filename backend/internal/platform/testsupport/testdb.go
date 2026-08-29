@@ -3,7 +3,6 @@
 package testsupport
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -30,16 +29,6 @@ func NewDB(t *testing.T) *sql.DB {
 	}
 	if err := appdb.Migrate(sqldb, migFS); err != nil {
 		t.Fatalf("migrate test db: %v", err)
-	}
-	return sqldb
-}
-
-// NewSeededDB returns a migrated temp-file database with the default board seeded.
-func NewSeededDB(t *testing.T) *sql.DB {
-	t.Helper()
-	sqldb := NewDB(t)
-	if _, err := appdb.SeedIfEmpty(context.Background(), sqldb); err != nil {
-		t.Fatalf("seed test db: %v", err)
 	}
 	return sqldb
 }
