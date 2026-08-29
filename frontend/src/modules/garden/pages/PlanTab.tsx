@@ -37,6 +37,7 @@ import { CropPicker } from '../components/CropPicker'
 import { OccupancyStrip } from '../components/OccupancyStrip'
 import { PlantingDialog } from '../components/PlantingDialog'
 import { SeasonCloseDialog } from '../components/SeasonCloseDialog'
+import { toastGardenError } from '../api/hooks'
 import { currentYear } from '../GardenPage'
 
 // PLÁN — the planner, and the module's centre of gravity.
@@ -97,7 +98,7 @@ export function PlanTab() {
   const addPlanting = useMutation({
     mutationFn: createPlanting,
     onSuccess: invalidatePlan,
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const byBed = useMemo(() => {
@@ -447,8 +448,6 @@ function SeasonDialog({
     void qc.invalidateQueries({ queryKey: qk.gardenAll })
     void qc.invalidateQueries({ queryKey: qk.dashboard })
   }
-  const onErr = (e: unknown) =>
-    toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle)
 
   const save = useMutation({
     // An EMPTIED box is omitted rather than sent. PATCH /seasons/{year} reads a
@@ -465,7 +464,7 @@ function SeasonDialog({
       invalidate()
       onOpenChange(false)
     },
-    onError: onErr,
+    onError: toastGardenError,
   })
 
   const reopen = useMutation({
@@ -474,7 +473,7 @@ function SeasonDialog({
       invalidate()
       onOpenChange(false)
     },
-    onError: onErr,
+    onError: toastGardenError,
   })
 
   const missing = !season.last_frost_on || !season.first_frost_on
@@ -592,7 +591,7 @@ function CopySeasonDialog({
   const dryRun = useMutation({
     mutationFn: () => createSeason(body(), true) as Promise<GardenSeasonPreview>,
     onSuccess: setPreview,
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const apply = useMutation({
@@ -603,7 +602,7 @@ function CopySeasonDialog({
       setPreview(null)
       navigate(`${routes.zahrada}/plan/${targetYear}`)
     },
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const before = preview?.check_before

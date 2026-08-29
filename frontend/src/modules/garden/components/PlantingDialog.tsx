@@ -5,10 +5,10 @@ import { ArrowRight, Trash2 } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
 
-import { ApiError } from '@/api/client'
 import { Button, Input, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { deletePlanting, getPlanting, shiftTasks, updatePlanting } from '../api/endpoints'
+import { toastGardenError } from '../api/hooks'
 import type { GardenPlanting, GardenPlantingInput } from '../api/types'
 import { fmtDayYear } from './labels'
 
@@ -72,7 +72,7 @@ export function PlantingDialog({
       invalidate()
       setDraft({})
     },
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const shift = useMutation({
@@ -81,7 +81,7 @@ export function PlantingDialog({
       invalidate()
       toast.success(cs.garden.shiftTasksDone(res.items.length))
     },
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const remove = useMutation({
@@ -90,7 +90,7 @@ export function PlantingDialog({
       invalidate()
       onClose()
     },
-    onError: (e) => toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle),
+    onError: toastGardenError,
   })
 
   const p = planting.data

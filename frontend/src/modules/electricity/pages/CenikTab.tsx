@@ -73,6 +73,12 @@ export function CenikTab({ periodId }: { periodId: string }) {
     onError: (e: unknown) => {
       // The 409 explains WHICH period would be stranded, so it is worth showing
       // in full rather than replacing with a generic failure.
+      //
+      // ⚠ NOT `apiErrorMessage(e, …)`, which every other site in the app now
+      // uses. These two fall back to `e.message` — the bare error CODE — when an
+      // ApiError carries no detail, where the helper falls back to the Czech
+      // sentence. Swapping it in would stop showing `conflict` to a user, which
+      // is a visible change and so not this refactor's to make.
       toast.error(e instanceof ApiError ? (e.detail ?? e.message) : cs.electricity.form.saveFailed)
     },
   })
@@ -90,6 +96,8 @@ export function CenikTab({ periodId }: { periodId: string }) {
     mutationFn: (id: string) => deletePeriod(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.electricityAll }),
     onError: (e: unknown) => {
+      // The same `e.message` fallback as removeTariff above, and the same reason
+      // it is not `apiErrorMessage`.
       toast.error(e instanceof ApiError ? (e.detail ?? e.message) : cs.electricity.form.saveFailed)
     },
   })

@@ -47,6 +47,30 @@ export class ApiError extends Error {
   }
 }
 
+/** apiErrorMessage turns an API failure into the Czech sentence the server
+ *  already wrote, falling back to `fallback` when there is none.
+ *
+ *  THE SERVER'S OWN DETAIL WINS WHEN THERE IS ONE, because it names WHICH rule
+ *  refused — the backend's 422s name the field and say what a valid value looks
+ *  like, and its 409s name the conversation or the month rather than saying
+ *  "conflict". Those sentences were written to be read. The fallback is what a
+ *  network failure leaves behind.
+ *
+ *  ⚠ IT LIVES HERE, BESIDE ApiError, BECAUSE THE TERNARY WAS WRITTEN OUT
+ *  LONGHAND ~20 TIMES and had already drifted into three spellings — `?? f`,
+ *  `|| f`, and `e.detail ? e.detail : f`. They agree only because `detail` is
+ *  `omitempty` on the wire (httpx.APIError), so an empty-string detail never
+ *  reaches the client and `??` and `||` cannot differ. The truthy test is the
+ *  one kept: it is the spelling that stays right if that ever changes, because
+ *  an empty toast is never the intended message.
+ *
+ *  A caller that needs MORE than a sentence — a 409 with its own copy, a 404
+ *  that renders an empty state — still branches on `status` or `code` first.
+ *  This is the last line of such a handler, not a replacement for it. */
+export function apiErrorMessage(e: unknown, fallback: string): string {
+  return e instanceof ApiError && e.detail ? e.detail : fallback
+}
+
 export interface RequestOptions {
   method?: string
   body?: unknown

@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { Check, Printer, SkipForward, Undo2 } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { useAuth } from '@/app/auth'
@@ -8,10 +7,10 @@ import { useOnline } from '@/platform/pwa/offline'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { todayISO } from '@/i18n/format'
-import { ApiError } from '@/api/client'
 import { Button, Spinner } from '@/components/ui/ui'
 import { cn } from '@/lib/utils'
 import { completeTask, listBeds, listTasks, reopenTask, updateTask } from '../api/endpoints'
+import { toastGardenError } from '../api/hooks'
 import type { GardenSeason, GardenTask } from '../api/types'
 import { fmtWindow } from '../components/labels'
 
@@ -81,15 +80,13 @@ export function KalendarTab({ season }: { season: GardenSeason | undefined }) {
     void qc.invalidateQueries({ queryKey: qk.gardenAll })
     void qc.invalidateQueries({ queryKey: qk.dashboard })
   }
-  const onErr = (e: unknown) =>
-    toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle)
 
-  const complete = useMutation({ mutationFn: (id: string) => completeTask(id), onSuccess: invalidate, onError: onErr })
-  const reopen = useMutation({ mutationFn: (id: string) => reopenTask(id), onSuccess: invalidate, onError: onErr })
+  const complete = useMutation({ mutationFn: (id: string) => completeTask(id), onSuccess: invalidate, onError: toastGardenError })
+  const reopen = useMutation({ mutationFn: (id: string) => reopenTask(id), onSuccess: invalidate, onError: toastGardenError })
   const skip = useMutation({
     mutationFn: (id: string) => updateTask(id, { status: 'skipped' }),
     onSuccess: invalidate,
-    onError: onErr,
+    onError: toastGardenError,
   })
 
   const groups = useMemo(

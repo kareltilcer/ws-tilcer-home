@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { Download, Plus, Search, Sparkles } from 'lucide-react'
 import { qk } from '@/api/keys'
 import { useAuth } from '@/app/auth'
@@ -8,9 +7,9 @@ import { useOnline } from '@/platform/pwa/offline'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { compareCz, todayISO } from '@/i18n/format'
-import { ApiError } from '@/api/client'
 import { Button, Input, Spinner } from '@/components/ui/ui'
 import { exportKnowledgeBase, getEnums, listPlants, listSeasons } from '../api/endpoints'
+import { toastGardenError } from '../api/hooks'
 import type { GardenEnums, GardenPlant } from '../api/types'
 import { FamilyChip, UnverifiedBadge, describeWindow } from '../components/labels'
 import { PlantForm } from '../components/PlantForm'
@@ -171,7 +170,7 @@ async function downloadExport(): Promise<void> {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    toast.error(e instanceof ApiError ? (e.detail ?? cs.common.errorTitle) : cs.common.errorTitle)
+    toastGardenError(e)
   }
 }
 
