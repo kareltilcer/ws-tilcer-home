@@ -3,7 +3,6 @@ package logging
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/cursor"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
@@ -616,17 +616,16 @@ func bucketKey(ts, bucket string) string {
 	return t.Format("2006-01-02T15:04:05Z")
 }
 
-func encodeCursor(ts, id string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(ts + "\x00" + id))
-}
+// The browse cursor is the `(ts, id)` the ORDER BY pages on. `ts` alone is not
+// unique — a burst of events shares a millisecond — so both columns travel.
+func encodeCursor(ts, id string) string { return cursor.Encode(ts, id) }
 
+// decodeCursor keeps returning an ERROR rather than the shared package's ok
+// flag: every caller here turns a bad cursor into errInvalid("cursor", …), a
+// 422, and that is the whole of logging's answer to one.
 func decodeCursor(cur string) (ts, id string, err error) {
-	raw, err := base64.RawURLEncoding.DecodeString(cur)
-	if err != nil {
-		return "", "", err
-	}
-	parts := strings.SplitN(string(raw), "\x00", 2)
-	if len(parts) != 2 {
+	parts, ok := cursor.Decode(cur, 2)
+	if !ok {
 		return "", "", fmt.Errorf("malformed cursor")
 	}
 	return parts[0], parts[1], nil

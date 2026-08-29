@@ -1,13 +1,31 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.12.1
+  version: 0.12.2
   description: >-
-    API for the `home` household-management service. **0.12.1 IS v10 AS BUILT.**
-    0.12.0 was the v10 spec; this reconciles it against the shipped code after PR 3
-    (attachments, the two thresholds, the clean-up page and the move to Dokumenty).
+    API for the `home` household-management service. **0.12.2 IS v10 AS BUILT, PLUS ONE
+    WIRE CHANGE.** 0.12.0 was the v10 spec; 0.12.1 reconciled it against the shipped code
+    after PR 3 (attachments, the two thresholds, the clean-up page and the move to
+    Dokumenty).
 
-    **What 0.12.1 corrects, and it is one thing plus three additions.**
+    **What 0.12.2 changes: the composite list cursors are now one encoding.** Four
+    collections paged on a sort tuple rather than on an id, and each had written its own
+    token format — two of them in plain text a client could read. They now share
+    `platform/cursor`, an unpadded base64url token described by the new `OpaqueCursor`
+    parameter. `/api/garden/tasks` is unaffected on the wire (that was already its
+    format); `/api/logs`, `/api/logs/entity/{type}/{entityId}`, `/api/documents` and
+    `/api/chat/conversations` all emit a different `next_cursor` than they did at 0.12.1.
+
+    A cursor is short-lived and every client echoes it back verbatim, so the only
+    visible effect is for a client paging ACROSS the deploy: the token it holds was
+    minted by the old encoding and no longer decodes. Each collection answers that the
+    way it always has — `/api/logs*` and `/api/garden/tasks` with a 422,
+    `/api/documents` by restarting at page one, `/api/chat/conversations` with a 422 —
+    which is one bad page, not a broken client. The house `Cursor` parameter continues
+    to describe the UUIDv7 cursor the id-ordered collections use; it had also been
+    carrying `/api/documents` and `/api/logs*`, which it never accurately described.
+
+    **What 0.12.1 corrected, and it is one thing plus three additions.**
 
     ⚠ **The threshold audit action is `chat.threshold.update`, NOT
     `chat.settings.updated`** (D263). The design bundle is later than the PRD and wins on
@@ -1338,7 +1356,7 @@ paths:
           in: query
           schema: { type: boolean, default: false }
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/OpaqueCursor"
       responses:
         "200":
           description: OK
@@ -1855,7 +1873,7 @@ paths:
         - { name: level, in: query, schema: { type: string, enum: [info, warn, error] } }
         - { name: q, in: query, description: Free-text over summary + meta, schema: { type: string } }
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/OpaqueCursor"
       responses:
         "200":
           description: Paged events (each with a change count)
@@ -1897,7 +1915,7 @@ paths:
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/OpaqueCursor"
       responses:
         "200":
           description: Paged timeline (oldest-first), each event with its changes
@@ -3204,7 +3222,7 @@ paths:
         previous page returned.
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/OpaqueCursor"
         - { name: from, in: query, description: "Overlap bound, with `to`: matches work whose window touches the range.", schema: { type: string, format: date } }
         - { name: to, in: query, schema: { type: string, format: date } }
         - { name: to_end, in: query, description: "The OVERDUE bound — matches only work whose WHOLE window has passed (`window_to <= to_end`). It is the opposite of the `from`/`to` overlap, which excludes exactly the rows this returns, so missed work needs its own query. This is what `garden.tasks_overdue` selects on.", schema: { type: string, format: date } }
@@ -5398,20 +5416,39 @@ components:
       in: query
       description: UUIDv7 keyset cursor from the previous page.
       schema: { type: string }
+    OpaqueCursor:
+      name: cursor
+      in: query
+      description: >-
+        Opaque keyset cursor from the previous page's `next_cursor` — **echo it back
+        verbatim**. Not the bare UUIDv7 the house `Cursor` describes.
+
+        These collections do NOT sort by id, so a cursor has to name the last row by
+        the WHOLE sort tuple — `(ts, id)` for the log, `(updated_at, id)` for
+        documents, `(window_from, position, id)` for garden tasks. The tuple is packed
+        into one unpadded base64url token; its layout is the ORDER BY's business and
+        is deliberately not specified here, because a cursor a client can parse is a
+        cursor a client will eventually build by hand.
+
+        A token this endpoint did not mint is not a page. What that means is per
+        collection and is stated on each: `/api/logs*` and `/api/garden/tasks` answer
+        422, `/api/documents` restarts at page one, on the reasoning that a stale
+        bookmark should show the first page rather than an error.
+      schema: { type: string }
     ConversationCursor:
       name: cursor
       in: query
       description: >-
         Opaque keyset cursor from the previous page's `next_cursor` — **echo it back
-        verbatim** (v10).
+        verbatim** (v10). Same encoding as `OpaqueCursor`; it keeps a parameter of its
+        own for the refusal rule below.
 
-        ⚠ It is NOT the bare UUIDv7 the house `Cursor` describes, which is why this
-        listing has a parameter of its own. The ORDER BY is `(updated_at, id)`
-        descending and `updated_at` alone is not unique — a send bumps it, and two
-        rooms bumped in the same millisecond would page over each other or skip one
-        — so the cursor carries BOTH columns as `<updated_at>|<id>`. A client that
-        passes the last row's id on its own gets 422 *Neplatný kurzor.*, since that
-        is the one shape the endpoint cannot decode.
+        ⚠ It is NOT the bare UUIDv7 the house `Cursor` describes. The ORDER BY is
+        `(updated_at, id)` descending and `updated_at` alone is not unique — a send
+        bumps it, and two rooms bumped in the same millisecond would page over each
+        other or skip one — so the cursor carries BOTH columns. A client that passes
+        the last row's id on its own gets 422 *Neplatný kurzor.*, since that is the
+        one shape the endpoint cannot decode.
       schema: { type: string }
     Scope:
       name: scope
