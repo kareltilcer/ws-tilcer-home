@@ -232,7 +232,7 @@ func (s *Store) FolderMetaByIDs(ctx context.Context, q DBTX, ids []string) (map[
 		return out, nil
 	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, name, archived FROM document_folders WHERE id IN (`+placeholders(len(ids))+`)`, toArgs(ids)...)
+		`SELECT id, name, archived FROM document_folders WHERE id IN (`+appdb.Placeholders(len(ids))+`)`, toArgs(ids)...)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +264,7 @@ func (s *Store) DescendantFolderIDs(ctx context.Context, q DBTX, rootID string, 
 	visited := map[string]bool{rootID: true}
 	for len(frontier) > 0 {
 		rows, err := q.QueryContext(ctx,
-			`SELECT id FROM document_folders WHERE parent_id IN (`+placeholders(len(frontier))+`)`+filter,
+			`SELECT id FROM document_folders WHERE parent_id IN (`+appdb.Placeholders(len(frontier))+`)`+filter,
 			toArgs(frontier)...)
 		if err != nil {
 			return nil, err
@@ -306,7 +306,7 @@ func (s *Store) DocumentsInFolders(ctx context.Context, q DBTX, folderIDs []stri
 		filter = ""
 	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT `+documentCols+` FROM documents WHERE folder_id IN (`+placeholders(len(folderIDs))+`)`+filter,
+		`SELECT `+documentCols+` FROM documents WHERE folder_id IN (`+appdb.Placeholders(len(folderIDs))+`)`+filter,
 		toArgs(folderIDs)...)
 	if err != nil {
 		return nil, err
@@ -537,7 +537,7 @@ func (s *Store) PublishDescendants(ctx context.Context, tx DBTX, folderIDs []str
 	if len(folderIDs) == 0 {
 		return nil
 	}
-	ph := placeholders(len(folderIDs))
+	ph := appdb.Placeholders(len(folderIDs))
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE document_folders SET visibility = 'shared', owner_id = NULL, updated_at = ? WHERE id IN (`+ph+`)`,
@@ -1181,11 +1181,6 @@ func (s *Store) CountPinnedFor(ctx context.Context, userID string) (int, error) 
 }
 
 // ---- small SQL helpers ----
-
-// placeholders is appdb.Placeholders — one implementation, five call sites (v10
-// review). It was copied into this module, `notes`, `garden`, `todo` and
-// `platform/push` before platform/db grew the shared one.
-func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func toArgs(ids []string) []any {
 	args := make([]any, len(ids))

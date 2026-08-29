@@ -1162,7 +1162,7 @@ func (s *Service) List(ctx context.Context, q string, folderID *string, includeA
 	var err error
 	switch {
 	case q != "":
-		match := ftsQuery(q)
+		match := appdb.FTSQuery(q)
 		if match == "" {
 			// A punctuation-only query has no searchable tokens. Return an empty result
 			// rather than run `notes_fts MATCH ''`, whose empty-phrase match behavior is
@@ -1793,17 +1793,6 @@ func splitPath(p string) []string {
 	}
 	return out
 }
-
-// ftsQuery turns a free-text query into a safe FTS5 prefix MATCH. Each whitespace
-// token becomes a quoted prefix term so punctuation can't break the FTS syntax.
-// Returns "" when the query has no searchable tokens (e.g. punctuation-only) — the
-// caller must treat that as "matches nothing" and skip the MATCH entirely.
-//
-// ⚠ IT IS appdb.FTSQuery AND NOT A COPY OF IT (v10 review). This module,
-// `documents` and v10's `chat` carried three byte-identical spellings of it; the
-// next FTS5 metacharacter somebody discovers has to reach every search box in the
-// house, and under three spellings it reaches one.
-func ftsQuery(q string) string { return appdb.FTSQuery(q) }
 
 // ---- Inline-image helpers ----
 

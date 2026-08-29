@@ -217,7 +217,7 @@ func (s *Store) EligibleSubscriptions(ctx context.Context, userIDs []string, cat
 	             s.created_at, s.last_seen_at, s.failing_since
 	        FROM push_subscriptions s
 	        LEFT JOIN notification_preferences p ON p.user_id = s.user_id
-	       WHERE s.user_id IN (` + placeholders(len(userIDs)) + `)`
+	       WHERE s.user_id IN (` + appdb.Placeholders(len(userIDs)) + `)`
 	if !bypassMutes {
 		q += ` AND COALESCE(p.enabled, 1) = 1 AND COALESCE(p.` + catColumn + `, 1) = 1`
 	}
@@ -564,11 +564,6 @@ func parseTS(s string) time.Time {
 	}
 	return t
 }
-
-// placeholders is appdb.Placeholders — one implementation, five call sites (v10
-// review). It was copied into this package, `notes`, `documents`, `garden` and
-// `todo` before platform/db grew the shared one.
-func placeholders(n int) string { return appdb.Placeholders(n) }
 
 func b2i(b bool) int {
 	if b {

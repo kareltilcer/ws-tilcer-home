@@ -153,7 +153,7 @@ func (s *Store) attachVarietyCounts(ctx context.Context, plants []Plant) error {
 		ids = append(ids, p.ID)
 	}
 	q := `SELECT plant_id, COUNT(*) FROM garden_varieties
-	      WHERE deleted_at IS NULL AND plant_id IN (` + placeholders(len(ids)) + `)
+	      WHERE deleted_at IS NULL AND plant_id IN (` + appdb.Placeholders(len(ids)) + `)
 	      GROUP BY plant_id`
 	rows, err := s.db.QueryContext(ctx, q, ids...)
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *Store) InsertPlant(ctx context.Context, tx DBTX, p Plant) error {
 	args = append(args, coreValues(p.PlantCore)...)
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_plants (`+plantIdentCols+`, search_blob, `+coreColumns+`)
-		 VALUES (`+placeholders(14+coreColumnCount)+`)`, args...)
+		 VALUES (`+appdb.Placeholders(14+coreColumnCount)+`)`, args...)
 	return err
 }
 
@@ -340,7 +340,7 @@ func (s *Store) InsertVariety(ctx context.Context, tx DBTX, v Variety, createdBy
 	args = append(args, coreValues(v.PlantCore)...)
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_varieties (`+varietyIdentCols+`, created_by, `+coreColumns+`)
-		 VALUES (`+placeholders(15+coreColumnCount)+`)`, args...)
+		 VALUES (`+appdb.Placeholders(15+coreColumnCount)+`)`, args...)
 	return err
 }
 
@@ -427,7 +427,7 @@ func (s *Store) GetBed(ctx context.Context, db DBTX, id string) (Bed, error) {
 
 func (s *Store) InsertBed(ctx context.Context, tx DBTX, b Bed, createdBy string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO garden_beds (`+bedCols+`, created_by) VALUES (`+placeholders(15)+`)`,
+		`INSERT INTO garden_beds (`+bedCols+`, created_by) VALUES (`+appdb.Placeholders(15)+`)`,
 		b.ID, b.Name, b.Code, b.Type, b.LengthCM, b.WidthCM, b.AreaM2,
 		b.SunExposure, b.Zone, b.SoilNotesMD, b2i(b.IsActive), b.Position,
 		b.CreatedAt, b.UpdatedAt, createdBy)
@@ -635,7 +635,7 @@ func (s *Store) ClosedSeasonCount(ctx context.Context, db DBTX) (int, error) {
 
 func (s *Store) InsertSeason(ctx context.Context, tx DBTX, se Season, createdBy string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO garden_seasons (`+seasonCols+`, created_by) VALUES (`+placeholders(13)+`)`,
+		`INSERT INTO garden_seasons (`+seasonCols+`, created_by) VALUES (`+appdb.Placeholders(13)+`)`,
 		se.ID, se.Year, se.Status, se.LastFrostOn, se.FirstFrostOn,
 		se.LastFrostActualOn, se.FirstFrostActualOn, se.NotesMD, se.ClosedAt, se.ClosedBy,
 		se.CreatedAt, se.UpdatedAt, createdBy)
@@ -791,7 +791,7 @@ func (s *Store) InsertPlanting(ctx context.Context, tx DBTX, p Planting, created
 		    area_m2, plant_count, rows, sow_indoor_on, sow_direct_on, transplant_on, harvest_from, harvest_to,
 		    manual_dates, sowed_on, transplanted_on, first_harvest_on, cleared_on, status, fail_reason,
 		    planted_on, rootstock, removed_on, notes_md, created_by, created_at, updated_at)
-		 VALUES (`+placeholders(28)+`)`,
+		 VALUES (`+appdb.Placeholders(28)+`)`,
 		p.ID, p.SeasonID, p.BedID, p.LocationLabel, p.PlantID, p.VarietyID,
 		p.AreaM2, p.PlantCount, p.Rows, p.SowIndoorOn, p.SowDirectOn, p.TransplantOn, p.HarvestFrom, p.HarvestTo,
 		encodeStrings(p.ManualDates), p.SowedOn, p.TransplantedOn, p.FirstHarvestOn, p.ClearedOn,
@@ -854,7 +854,7 @@ func (s *Store) YieldsFor(ctx context.Context, db DBTX, plantingIDs []string) (m
 	args := toAny(plantingIDs)
 	rows, err := db.QueryContext(ctx,
 		`SELECT planting_id, unit, SUM(quantity) FROM garden_harvests
-		 WHERE deleted_at IS NULL AND planting_id IN (`+placeholders(len(args))+`)
+		 WHERE deleted_at IS NULL AND planting_id IN (`+appdb.Placeholders(len(args))+`)
 		 GROUP BY planting_id, unit`, args...)
 	if err != nil {
 		return nil, err
@@ -1068,7 +1068,7 @@ func (s *Store) InsertTask(ctx context.Context, tx DBTX, t Task, createdBy, at s
 		    window_from, window_to, due_hint, status, completed_by, completed_at,
 		    is_generated, is_edited, generation_key, suppressed, notes_md, position,
 		    created_by, created_at, updated_at)
-		 VALUES (`+placeholders(21)+`)`,
+		 VALUES (`+appdb.Placeholders(21)+`)`,
 		t.ID, t.Kind, t.SeasonID, t.PlantingID, t.BedID, t.TitleCS,
 		t.WindowFrom, t.WindowTo, t.DueHint, t.Status, t.CompletedBy, t.CompletedAt,
 		b2i(t.IsGenerated), b2i(t.IsEdited), t.GenerationKey, b2i(t.Suppressed), t.NotesMD, t.Position,
@@ -1229,7 +1229,7 @@ func (s *Store) InsertHarvest(ctx context.Context, tx DBTX, h Harvest, createdBy
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_harvests (id, planting_id, harvested_on, quantity, unit,
 		    destination, quality, note, created_by, created_at, updated_at)
-		 VALUES (`+placeholders(11)+`)`,
+		 VALUES (`+appdb.Placeholders(11)+`)`,
 		h.ID, h.PlantingID, h.HarvestedOn, h.Quantity, h.Unit,
 		h.Destination, h.Quality, h.Note, createdBy, at, at)
 	return err
@@ -1350,7 +1350,7 @@ func (s *Store) GetStorage(ctx context.Context, db DBTX, id string) (StorageItem
 
 func (s *Store) InsertStorage(ctx context.Context, tx DBTX, it StorageItem, createdBy, at string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO garden_storage_items (`+storageCols+`, created_by) VALUES (`+placeholders(16)+`)`,
+		`INSERT INTO garden_storage_items (`+storageCols+`, created_by) VALUES (`+appdb.Placeholders(16)+`)`,
 		it.ID, it.HarvestID, it.PlantingID, it.ProductName, it.Method, it.Location,
 		it.QuantityInitial, it.QuantityRemaining, it.Unit, it.StoredOn, it.BestBefore,
 		it.Status, it.Note, at, at, createdBy)
@@ -1448,7 +1448,7 @@ func (s *Store) GetRule(ctx context.Context, db DBTX, id string) (Rule, error) {
 func (s *Store) InsertRule(ctx context.Context, tx DBTX, r Rule, createdBy, at string) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO garden_rules (`+ruleCols+`, created_by, created_at, updated_at)
-		 VALUES (`+placeholders(14)+`)`,
+		 VALUES (`+appdb.Placeholders(14)+`)`,
 		r.ID, r.Scope, r.ARef, r.BRef, r.Verdict, r.Severity, r.MinYearsGap,
 		r.ReasonCS, r.Source, b2i(r.IsBuiltin), b2i(r.IsDisabled), createdBy, at, at)
 	return err
@@ -1899,7 +1899,7 @@ func (s *Store) plantsByID(ctx context.Context, db DBTX, ids []string) (map[stri
 	args := toAny(ids)
 	rows, err := db.QueryContext(ctx,
 		`SELECT `+plantIdentCols+`, `+coreColumns+` FROM garden_plants
-		 WHERE id IN (`+placeholders(len(args))+`)`, args...)
+		 WHERE id IN (`+appdb.Placeholders(len(args))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1922,7 +1922,7 @@ func (s *Store) varietiesByID(ctx context.Context, db DBTX, ids []string) (map[s
 	args := toAny(ids)
 	rows, err := db.QueryContext(ctx,
 		`SELECT `+varietyIdentCols+`, `+coreColumns+` FROM garden_varieties
-		 WHERE id IN (`+placeholders(len(args))+`)`, args...)
+		 WHERE id IN (`+appdb.Placeholders(len(args))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
