@@ -1269,6 +1269,15 @@ so wave 4 is items 7, 33, 41 and 42.
   and keep it beside their own call. All four malformed-input behaviours are
   unchanged: `garden` 422, `logging` an error, `chat` 422, `documents` page one.
 
+  > ⚠ Unchanged at the STATUS level, and `logging`'s 422 BODY did move. Its
+  > `InvalidError` is rendered to the client verbatim, and a malformed-base64
+  > cursor used to surface Go's own text — `invalid cursor: illegal base64 data
+  > at input byte 3` — where it now reads `invalid cursor: malformed cursor`,
+  > the message the arity failure always gave. The split failure and the decode
+  > failure are one case now, so they say one thing. No client reads that
+  > string and the spec does not specify it, but it is observable and it was
+  > not called out when the commit landed.
+
   > ⚠ The spec was WRONG for two of these before the change and is now right.
   > `/api/documents` and `/api/logs*` referenced the house `Cursor` parameter,
   > described as "UUIDv7 keyset cursor" — which neither has ever been. They and
@@ -1301,7 +1310,8 @@ so wave 4 is items 7, 33, 41 and 42.
   > **Decision: do both 41 and 42.**
 
   A pure move, as the item asks: **46 files, 15 insertions, 15 deletions**, of
-  which `git diff -M` renders 44 as renames with an empty diff. Not one relative
+  which `git diff -M` renders 42 as renames — 41 with an empty diff, the 42nd
+  being `NastenkaPage.tsx`, which is a rename carrying two changed imports. Not one relative
   import changed — `routes/<x>/` and `modules/<x>/` sit at the same depth, so
   `../../components/ui/ui` resolves identically from either.
 
