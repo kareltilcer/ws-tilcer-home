@@ -99,7 +99,7 @@ const attachmentColumns = `a.id, a.message_id, a.conversation_id, a.kind, a.orig
 	a.width, a.height, a.state, a.document_id, a.document_path, a.uploaded_by,
 	a.created_at, a.cleaned_by, a.cleaned_at`
 
-func scanAttachment(rows interface{ Scan(...any) error }) (attachmentRow, error) {
+func scanAttachment(rows appdb.Scanner) (attachmentRow, error) {
 	var a attachmentRow
 	err := rows.Scan(&a.ID, &a.MessageID, &a.ConversationID, &a.Kind, &a.OriginalFilename,
 		&a.ContentType, &a.ByteSize, &a.Checksum, &a.StorageKey, &a.ThumbnailKey,

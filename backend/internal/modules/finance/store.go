@@ -32,10 +32,8 @@ const monthCols = `id, month, income_kaja, income_andy,
 	rate_personal, rate_operational, rate_fun, rate_nofun,
 	created_by, created_at, updated_at`
 
-type scanner interface{ Scan(dest ...any) error }
-
 // scanMonth reads one row's inputs and composes the derived split onto it.
-func scanMonth(s scanner) (Month, error) {
+func scanMonth(s appdb.Scanner) (Month, error) {
 	var m Month
 	var createdBy sql.NullString
 	err := s.Scan(&m.ID, &m.Month, &m.IncomeKaja, &m.IncomeAndy,
@@ -69,17 +67,8 @@ func (s *Store) List(ctx context.Context, limit int, cursor string) ([]Month, *s
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-
-	var out []Month
-	for rows.Next() {
-		m, err := scanMonth(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, m)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanMonth)
+	if err != nil {
 		return nil, nil, err
 	}
 

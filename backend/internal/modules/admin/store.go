@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/scheduler"
@@ -58,17 +59,8 @@ func (s *Store) ListRules(ctx context.Context, enabledOnly *bool, limit int, cur
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []Rule
-	for rows.Next() {
-		r, err := scanRule(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanRule)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -89,16 +81,7 @@ func (s *Store) EnabledRules(ctx context.Context) ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Rule
-	for rows.Next() {
-		r, err := scanRule(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanRule)
 }
 
 // GetRule returns one rule, or nil when it does not exist.
@@ -165,7 +148,7 @@ func (s *Store) DeleteRule(ctx context.Context, tx *sql.Tx, id string) error {
 	return err
 }
 
-func scanRule(row scanner) (Rule, error) {
+func scanRule(row appdb.Scanner) (Rule, error) {
 	var (
 		r             Rule
 		enabled, excl int
@@ -214,17 +197,8 @@ func (s *Store) ListSchedules(ctx context.Context, enabledOnly *bool, limit int,
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []Schedule
-	for rows.Next() {
-		sc, err := scanSchedule(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, sc)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanSchedule)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -341,7 +315,7 @@ func (s *Store) MarkFired(ctx context.Context, scheduleID, localDate string, at 
 	return err
 }
 
-func scanSchedule(row scanner) (Schedule, error) {
+func scanSchedule(row appdb.Scanner) (Schedule, error) {
 	var (
 		sc                     Schedule
 		enabled                int
@@ -528,8 +502,6 @@ func isDateOnly(v string) bool {
 	_, err := time.Parse("2006-01-02", v)
 	return err == nil
 }
-
-type scanner interface{ Scan(dest ...any) error }
 
 // marshalConditions renders a conditions block for storage: nil stays NULL, so
 // "no conditions" is one representation, not two.

@@ -45,7 +45,7 @@ func nullable(s string) any {
 const eventCols = `id, title, description, starts_on, rrule, timezone, reminder_enabled,
 	reminder_lead, archived, created_by, created_at, updated_at`
 
-func scanEvent(r interface{ Scan(...any) error }) (Event, error) {
+func scanEvent(r appdb.Scanner) (Event, error) {
 	var e Event
 	var desc, rrule, lead, createdBy sql.NullString
 	var reminder, archived int
@@ -106,16 +106,8 @@ func (s *Store) ListSeries(ctx context.Context, includeArchived bool, limit int,
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	var out []Event
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, e)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := appdb.Collect(rows, scanEvent)
+	if err != nil {
 		return nil, nil, err
 	}
 	var next *string
@@ -138,16 +130,7 @@ func (s *Store) ListForWindow(ctx context.Context, includeArchived bool) ([]Even
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Event
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanEvent)
 }
 
 func (s *Store) InsertEvent(ctx context.Context, tx DBTX, e Event, createdBy string) (*Event, error) {

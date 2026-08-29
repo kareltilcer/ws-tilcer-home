@@ -49,16 +49,7 @@ func (s *Store) ListBoards(ctx context.Context) ([]Board, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Board
-	for rows.Next() {
-		b, err := scanBoard(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanBoard)
 }
 
 func (s *Store) GetBoard(ctx context.Context, q DBTX, id string) (*Board, error) {
@@ -134,16 +125,7 @@ func (s *Store) ListColumns(ctx context.Context, q DBTX, boardID string) ([]Colu
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Column
-	for rows.Next() {
-		c, err := scanColumn(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanColumn)
 }
 
 func (s *Store) GetColumn(ctx context.Context, q DBTX, id string) (*Column, error) {
@@ -225,16 +207,7 @@ func (s *Store) ColumnCards(ctx context.Context, q DBTX, columnID string) ([]Car
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Card
-	for rows.Next() {
-		c, err := scanCard(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return appdb.Collect(rows, scanCard)
 }
 
 func (s *Store) DeleteColumn(ctx context.Context, tx DBTX, id string) error {
@@ -671,9 +644,7 @@ func (s *Store) cardLabels(ctx context.Context, q DBTX, cardID string) ([]Label,
 
 // ---- Scanners ----
 
-type rowScanner interface{ Scan(dest ...any) error }
-
-func scanBoard(r rowScanner) (Board, error) {
+func scanBoard(r appdb.Scanner) (Board, error) {
 	var b Board
 	var desc, createdBy sql.NullString
 	var archived int
@@ -686,7 +657,7 @@ func scanBoard(r rowScanner) (Board, error) {
 	return b, nil
 }
 
-func scanColumn(r rowScanner) (Column, error) {
+func scanColumn(r appdb.Scanner) (Column, error) {
 	var c Column
 	if err := r.Scan(&c.ID, &c.BoardID, &c.Name, &c.Priority, &c.Position, &c.Kind, &c.CreatedAt); err != nil {
 		return Column{}, err
@@ -694,7 +665,7 @@ func scanColumn(r rowScanner) (Column, error) {
 	return c, nil
 }
 
-func scanCard(r rowScanner) (Card, error) {
+func scanCard(r appdb.Scanner) (Card, error) {
 	var c Card
 	var notes, doneAt, createdBy sql.NullString
 	var archived int
