@@ -108,6 +108,26 @@ export function Field({ label, children }: { label: string; children: React.Reac
   )
 }
 
+/** FormError is the inline refusal a dialog shows under its fields — the one
+ *  the server wrote, not a toast. `role="alert"` is the load-bearing part: the
+ *  message appears while focus is still in the form, so a screen reader has to
+ *  announce it without being sent there.
+ *
+ *  ⚠ IT LIVES HERE BECAUSE IT EXISTED FIVE TIMES, byte-identical, once in each
+ *  electricity dialog.
+ *
+ *  ⚠ `LoginScreen`'s two alerts are NOT this component. They are <div>s at a
+ *  different radius, carry `mb-4`, and one of them is `warn`-coloured with a
+ *  link inside rather than a sentence. Folding them in here would change how
+ *  the login screen looks, which is not what sharing a box is for. */
+export function FormError({ children }: { children: React.ReactNode }) {
+  return (
+    <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-pretty">
+      {children}
+    </p>
+  )
+}
+
 export function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold', className)}>

@@ -5,7 +5,7 @@ import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
 import { todayISO } from '@/i18n/format'
 import { ApiError } from '@/api/client'
-import { Button, Field, Input, Textarea } from '@/components/ui/ui'
+import { Button, Field, FormError, Input, Textarea } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { createReading, updateReading } from '../api/endpoints'
 import type { ElReading } from '../api/types'
@@ -179,9 +179,7 @@ export function ReadingDialog({
         </Field>
 
         {error && (
-          <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-pretty">
-            {error}
-          </p>
+          <FormError>{error}</FormError>
         )}
       </div>
     </ResponsiveModal>
