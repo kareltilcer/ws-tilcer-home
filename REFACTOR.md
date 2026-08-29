@@ -634,9 +634,20 @@ reference, its own declaration. `push.Disabled` is never constructed anywhere, a
 
 **Effort:** trivial · **Risk:** none, except `Rebalance` (a judgement call)
 
-> ⚠ Nothing committed keeps these from coming back: `deadcode` is not wired into CI,
-> `knip` is not even a devDependency (`npm run lint` is `oxlint`), so items 26, 29 and
-> 30 are a one-time sweep unless a check is added. Decide which, and say so here.
+> ✅ **DECIDED (wave 1): guards on both sides.** There is no CI in this repo, so both
+> checks hang off the gates the project already runs.
+>
+> - **Backend:** `internal/arch/deadcode_test.go` runs `go tool deadcode -test ./...`
+>   (a pinned `tool` directive in go.mod) and fails on anything outside `allowedDead`,
+>   a map whose VALUE is the reason each entry stays. One entry: `lexorank.Rebalance`.
+>   ~8s; `-short` skips it.
+> - **Frontend:** `npm run lint` is `oxlint && knip`, configured by `knip.jsonc`. It
+>   gates unused FILES, unused DEPENDENCIES, unlisted/unresolved imports and missing
+>   binaries — the categories items 27/28 cleared. `exports` and `types` are excluded
+>   on purpose: those are items 29 and 30, still open, and gating on 95 findings today
+>   would mean a permanently red check. `npx knip --include exports,types` prints them.
+>
+> So item 26 is now enforced; items 29 and 30 are still a manual sweep when they come.
 
 ---
 
@@ -978,12 +989,59 @@ Sequenced so each step is independently shippable and reviewable.
 
 | Wave | Items | Why here |
 |---|---|---|
-| **1 — free wins** | 1, 2, 4, 8, 9, 10, 12, 23, 24, 26, 27, 28, 45, 46, plus `actorID`/`writeAllowed` from 15 | Mechanical, zero-risk, no design decisions. Clears noise before the real work. Items 23 and 24 need the type caveats noted on each. |
+| **1 — free wins** ✅ **LANDED** | 1, 2, 4, 8, 9, 10, 12, 23, 24, 26, 27, 28, 45, 46, plus `actorID`/`writeAllowed` from 15 | Mechanical, zero-risk, no design decisions. Clears noise before the real work. Shipped on `refactor/wave-1` as one commit per item — see §Wave 1, as landed. |
 | **2 — frontend hygiene** | 31, 32, 34, 36, 39, 44 | Small, self-contained, each one commit. Item 34 first: it is the pattern most likely to be copied wrong next. |
 | **3 — platform seams** | 3, 6, 22, 25, then 5, 11 | Bigger, still behaviour-neutral. Item 3 (`appdb.Collect`) is the largest single line-count win in the repo, but read its signature caveat before starting. Items **5** and **11** carry the two ⚠ that survived the review pass — take only the safe half of 5, and pin garden's importer path before touching 11. |
 | **4 — decide, then act** | 7, 33, 41, 42, 43 | Each needs a call from Karel first — wire format (7), skip semantics (33), directory layout (41/42), scope (43). |
 | **5 — the twin** | 14, 15, 13+16, 17, 21, 37, 38, 19, 18, 20 | Only after **§Part 2's recorded decision is explicitly revisited.** Ordered by ascending risk: `scope.go` proves the pattern, `DeleteFolder` and the mirror jobs come last. Item 13 rides with 16 — see its note. |
 | **not in this pass** | 30, 40 | Item 30 is low value; item 40 is a UX change, not a refactor. |
+
+---
+
+# Wave 1, as landed (`refactor/wave-1`)
+
+Every item above was shipped as its own commit. Corrections the implementation
+forced, so the counts in this document stay honest:
+
+- **Item 1** — the 16 deleted copies fed **178** call sites. `httpx.Respond` /
+  `httpx.NoContent`; `garden`'s `noContent` spelling dropped, as the item asked.
+- **Item 2** — kept as `type DBTX = appdb.DBTX` per module rather than migrating
+  ~250 signatures. It is an ALIAS, so the seven really are one type; `documents`'
+  WithTx deadlock warning is now the shared declaration's doc.
+- **Item 4** — `ap` was **178** call sites across six modules, not 102; `eqp` and
+  `diff` were four copies each, at 58 sites. `audit.Ptr` was adopted, and
+  `audit.EqualPtr` / `audit.Diff` added beside it.
+- **Item 8** — the function is shared, the five formats deliberately are not, and
+  `appdb.NowUTC`'s doc is where that is now written down with the format table.
+- **Item 9** — five `placeholders` and two `ftsQuery` forwarders deleted; `chat`'s
+  `ftsQuery` alias KEPT, as its recorded decision asks. `garden`'s own `ftsQuery`
+  is not `appdb.FTSQuery` and was left alone.
+- **Item 12** — six sites, and `invoiced_at` was confirmed as the seventh that
+  must not be folded in; `assignDate`'s doc says why.
+- **Item 15 (partial)** — `actorID` was byte-identical in nine modules, 133 call
+  sites, now `reqctx.ActorID`. `writeAllowed` → `reqctx.CanWrite`; `chat`'s
+  `writeAllowedCtx` wrapper kept because its comment is load-bearing.
+- **Item 23** — the `[]any` conversion the caveat predicted was needed;
+  `contributingModules` + `contributingAny`.
+- **Item 26** — eleven symbols deleted, `lexorank.Rebalance` kept with a comment
+  saying nothing calls it (Karel's call), and both guards added (see above).
+- **Item 45** — `auditCount` had **five** shapes, not four (`admin` carries a
+  fixture method). `testsupport.CountAudit(t, db, module, action)` takes both as
+  optional; each module keeps a one-line wrapper. `countRows` was 32 call sites.
+
+Baseline after wave 1: `go build ./...` clean · `go vet ./...` clean ·
+`go test ./...` 28 packages ok (the new deadcode test joins the existing
+`internal/arch` package, so the count is unchanged) ·
+`tsc -b --noEmit` clean · `npm run lint` 0 errors / 25 warnings / knip clean ·
+`vitest run` 21 files, 151 tests pass.
+
+⚠ **`gofmt -l` is not clean on this repo and was not made clean.** Several files
+carry pre-existing deviations at `origin/main` (struct-field alignment in
+`garden/enums.go`, `garden/service_plan.go`, `garden/corecols.go`, `push/push.go`;
+a trailing blank line in `garden/store.go`, `chat/move.go`; comment-list
+indentation in `documents/sink.go`). Wave 1 kept every file it touched no worse
+than it found it, and re-formatted only where a deletion moved an alignment
+column. A repo-wide `gofmt -w` is its own commit, and belongs to whoever wants it.
 
 ## Guard rails for every wave
 
