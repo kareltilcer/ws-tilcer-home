@@ -1471,7 +1471,14 @@ export const cs = {
      * name and a line saying what a conversation in it is.
      */
     listHeading: 'Chat',
-    listSubtitle: 'Konverzace, které čtou lidé v nich',
+    /*
+     * ⚠ THE PANE'S SUBTITLE IS GONE (design v10.1). "Konverzace, které čtou lidé v
+     * nich" explained the access model on a line every member read once and then
+     * scrolled past forever — and once each row carries a preview of its last
+     * message, that line is competing with the thing the list is actually for.
+     * The model still explains itself where it bites: the floor line, the members
+     * panel, and the `celá domácnost` mark on Všichni's own row.
+     */
     /**
      * ⚠ Všichni's marker on its own row. It is the one conversation whose
      * membership IS the household, so the row says so rather than making a member
@@ -1544,23 +1551,56 @@ export const cs = {
     send: 'Odeslat',
     cancelEdit: 'Zrušit úpravy',
     replyingTo: 'Odpovídáte na',
-    /**
-     * ⚠ The three ways in, and both caps, stated where the files are attached
-     * rather than discovered by being refused. The per-file limit is the server's
-     * (`max_upload_mb`), which is Dokumenty's on purpose (D228) — the sentence says
-     * why, because that shared number is what makes every attachment movable.
+    /*
+     * ⚠ THE COMPOSER'S THREE-WAYS-IN SENTENCE IS GONE (design v10.1). It named the
+     * two caps and the reason they are Dokumenty's, permanently, under every
+     * composer in the app — a paragraph of documentation sitting where the member
+     * types, read once and then in the way for good.
      *
-     * ⚠ AND BOTH CAPS ARE PARAMETERS. `maxFiles` arrives already declined, from the
-     * module's own `MAX_FILES` — the numeral used to be typed into this sentence and
-     * into the two below, so raising D224's ten would have changed what the composer
-     * keeps while three strings went on promising ten.
+     * ⚠ NEITHER CAP STOPPED BEING STATED. `composerFileCount` says the ten on the
+     * staged rows, and an over-cap file is still refused BEFORE it is uploaded —
+     * `filesRejected` names the MB and `filesOverCount` names the ten, beside the
+     * file each one is about, which is where a limit is worth reading. What was
+     * removed is the standing explanation, not the refusal.
      */
-    composerHint: (limitMB: number, maxFiles: string) =>
-      `Přetažením, vložením ze schránky nebo výběrem. Nejvýš ${maxFiles} na zprávu, každý do ${limitMB} MB — stejný limit jako v Dokumentech, aby se každá příloha dala přesunout.`,
     composerFileCount: (files: string, maxFiles: number) =>
       `${files} · nejvýš ${maxFiles} na zprávu`,
     /** The staged row's own refusal marker, beside the file it names. */
     fileRefused: 'Odmítnuto',
+
+    // ---- reactions (v10.1, D265) ----
+    /**
+     * The ☺ button's accessible name — and the long press's, which opens the same
+     * bar. ⚠ Every gesture in the thread has a control saying this out loud
+     * somewhere, because a gesture is an accelerator and never the only way in.
+     */
+    reactionAdd: 'Přidat reakci',
+    /** The picker bar's own label, so the seven buttons are announced as a group. */
+    reactionPickerLabel: 'Reakce na zprávu',
+    /** The bar's dismissal, on the phone where tapping outside is not obvious. */
+    reactionPickerClose: 'Zavřít reakce',
+
+    // ---- the conversation row's preview line (v10.1, D266) ----
+    /**
+     * ⚠ THE ROW SAYS WHO, BECAUSE A ROOM HAS MORE THAN ONE PERSON IN IT. In Všichni
+     * a preview with no name is a sentence from nobody; the design's mock reads
+     * "Marie: Klíče jsou pod květináčem." and this is that colon.
+     */
+    previewFrom: (who: string, what: string) => `${who}: ${what}`,
+    /**
+     * A room where the caller can see no message at all — which is TWO situations
+     * wearing one line: nobody has written here, and everything written is below
+     * this member's floor. The wording covers both honestly; "zatím" is true of the
+     * empty room and true of the member who has only just been added.
+     */
+    previewNone: 'Zatím žádné zprávy',
+    /*
+     * ⚠ A FILES-ONLY MESSAGE PREVIEWS AS A COUNT, and the count comes from
+     * `PLURAL.files` rather than from a string here — the D20 rule that a number's
+     * noun has to decline. There is deliberately no filename on the row: a filename
+     * is a piece of an attachment's content, on a surface that is scanned rather
+     * than read, and "3 soubory" is the whole of what the eye needs.
+     */
 
     // ---- members ----
     /**

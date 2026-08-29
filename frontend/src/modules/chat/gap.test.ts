@@ -24,6 +24,7 @@ function msg(id: string, body = 'text'): ChatMessage {
     author_label: 'Andy',
     body,
     attachments: [],
+    reactions: [],
     created_at: '2026-08-27T10:00:00.000Z',
     edited_at: null,
     deleted: false,

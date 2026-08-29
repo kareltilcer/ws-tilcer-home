@@ -1,16 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Route, Routes, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { WifiOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { routes, type ShellLayout } from '@/app/routes'
+import { useAuth } from '@/app/auth'
 import { useOnline } from '@/platform/pwa/offline'
 import { ConversationList } from './ConversationList'
 import { ThreadView } from './ThreadView'
 import { MembersPanel } from './MembersPanel'
 import { StorageWarning } from './StorageWarning'
 import { UklidPage } from './UklidPage'
-import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
+import { pickConversationToOpen, readLastOpened, rememberLastOpened } from './lastOpened'
+import { useChatLiveSync, useConversations, useLeaveWhenGone } from './api/hooks'
 
 /**
  * Chat — the eleventh module, and the first one the household does not read in full.
@@ -55,6 +57,7 @@ function ChatLayout() {
   const { id } = useParams<{ id: string }>()
   const [membersOpen, setMembersOpen] = useState(false)
   const navigate = useNavigate()
+  useOpenSomething(id)
   // ⚠ The room this tab has open can be taken away by somebody else — trashed or
   // purged — and `gone` is the frame that says so. Leaving the route is the point of
   // that flag; dropping the thread cache and staying put left the member on a
@@ -150,6 +153,52 @@ function ChatLayout() {
       )}
     </div>
   )
+}
+
+/**
+ * The desktop never lands on an empty pane again (v10.1, D269).
+ *
+ * ⚠ IT REMEMBERS, AND IT ONLY ACTS AT ≥1024. At that width the list and the thread
+ * are both on screen (D262), so `/chat` was a permanent half-page telling the member
+ * to click something — every time they opened the module, including the ones where
+ * they were coming back to the room they had left five minutes ago. Below 1024 the
+ * list IS the screen and there is nothing empty to fill; redirecting there would
+ * make the conversation list unreachable, because the thread's back arrow goes to
+ * `/chat` and would bounce straight back into the thread.
+ *
+ * ⚠ THE MEDIA QUERY IS READ, NOT SUBSCRIBED TO. A member who drags a window from
+ * 900 px to 1300 px has a conversation list on screen and is looking at it; yanking
+ * them into a room because the viewport crossed a threshold is the app taking a
+ * decision they did not make. The check happens when the list arrives and when the
+ * route changes, which are the two moments a member has actually asked for
+ * something.
+ *
+ * ⚠ AND THE NAVIGATION IS A REPLACE. A push would put the empty `/chat` in the
+ * history, so browser-back from the thread would land on it and be redirected
+ * forward again — the trap, rebuilt one width up.
+ */
+function useOpenSomething(openID: string | undefined): void {
+  const navigate = useNavigate()
+  const { identity } = useAuth()
+  const me = identity?.userId ?? ''
+  const active = useConversations('active')
+  const rooms = active.data?.items
+
+  // Remembering is the half that runs on every width: a phone member's last room is
+  // what the desktop will open tomorrow, and the two share the record.
+  useEffect(() => {
+    if (openID) rememberLastOpened(me, openID)
+  }, [me, openID])
+
+  useEffect(() => {
+    if (openID || !rooms) return
+    if (!window.matchMedia?.('(min-width: 1024px)').matches) return
+    const target = pickConversationToOpen(rooms, readLastOpened(me))
+    // ⚠ A MEMBER IN NO CONVERSATION GETS THE EMPTY STATE, which says what the module
+    // is. `pickConversationToOpen` answers '' for that rather than guessing, and
+    // this is where that answer is respected.
+    if (target) navigate(`${routes.chat}/${target}`, { replace: true })
+  }, [openID, rooms, me, navigate])
 }
 
 /**

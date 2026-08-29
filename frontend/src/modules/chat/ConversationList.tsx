@@ -57,11 +57,16 @@ export function ConversationList({ activeID }: { activeID?: string }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-none px-3 pb-2.5 pt-3 lg:px-3.5">
         <div className="mb-2.5 flex items-center gap-2.5">
+          {/* ⚠ THE HEADING STANDS ALONE NOW (design v10.1). The line under it
+              explained the access model to somebody who had not asked, on the pane
+              that is meant to be scanned — and every row below now carries a
+              preview, which is what a member is actually looking for. The model
+              still explains itself where it bites: the floor line, the members
+              panel, and `celá domácnost` on Všichni's own row. */}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[17px] font-extrabold tracking-tight">
               {cs.chat.listHeading}
             </h2>
-            <p className="truncate text-[11.5px] text-muted">{cs.chat.listSubtitle}</p>
           </div>
           {/* The design's one accent affordance in this pane: 34 px at the desk,
               44 px under a thumb. */}
@@ -141,10 +146,24 @@ export function ConversationList({ activeID }: { activeID?: string }) {
               </div>
             )}
 
-            {/* The koš, as its own section (D253). A trashed conversation has left
-                every other surface entirely, so this is the only place it appears at
-                all — which is why the section header is always here to be opened,
-                rather than appearing only once something is in it. */}
+            {/* The koš, as its own section (D253) — AND ONLY WHEN THERE IS ONE
+                (v10.1, D267).
+
+                ⚠ IT USED TO BE PERMANENT, on the argument that a trashed room
+                appears nowhere else and so the section must always be findable. The
+                argument holds for a koš with something in it and inverts for an
+                empty one: a household that has never deleted a conversation was
+                shown a *Koš* heading for the whole life of the app, which is a
+                standing offer to open a drawer that is always empty. The design
+                draws the section behind `hasTrash` and the PRD's route table says
+                "plus a Koš section when it has anything in it"; the build was the
+                odd one out.
+
+                ⚠ AND KNOWING THAT COSTS NOTHING. `trashed_count` rides the ACTIVE
+                listing — the request this pane always makes — so the section's rows
+                are still fetched only when it is opened, which is the whole reason
+                that query is lazy. */}
+            {(active.data?.trashed_count ?? 0) > 0 && (
             <div className="mt-3 px-1">
               <button
                 type="button"
@@ -198,6 +217,7 @@ export function ConversationList({ activeID }: { activeID?: string }) {
                 </div>
               )}
             </div>
+            )}
           </>
         )}
       </div>
@@ -295,9 +315,13 @@ function ConversationRow({
           </span>
         </span>
 
-        <span className="mt-0.5 block truncate text-[11.5px] text-muted">
-          {count(conversation.member_count, PLURAL.members)}
-        </span>
+        {/* ⚠ THE PREVIEW TOOK THE MEMBER COUNT'S LINE (design v10.1, D266), and
+            that is a trade rather than an addition. The row has one line to spend
+            here and "5 členů" is a fact about a room that changes twice a year,
+            while what a member is scanning this column for is whether anything was
+            said and by whom. The count still exists where it is consulted — the
+            thread header and the members panel. */}
+        <ConversationPreviewLine conversation={conversation} />
 
         <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
           {/* ⚠ *nezměřeno* rather than a zero it did not measure (D193/D161): the
@@ -347,6 +371,45 @@ function ConversationRow({
         </span>
       )}
     </Link>
+  )
+}
+
+/**
+ * The row's preview of the last message the CALLER may read (v10.1, D266).
+ *
+ * ⚠ THE SERVER SENDS FLAGS AND THIS FILE SENDS CZECH. `excerpt` is empty on a
+ * tombstone and on a files-only message, and the sentence for each lives in cs.ts
+ * with every other Czech string in the app — a preview line is not the place to
+ * start a second copy deck inside a Go file.
+ *
+ * ⚠ AND `null` IS A STATE WITH ITS OWN LINE, NOT A BLANK. It covers two situations
+ * that read the same from here — nobody has written in this room, and everything
+ * written is below this member's floor — and a row that simply lost its second line
+ * for one of them would look like a rendering bug rather than a fact.
+ */
+function ConversationPreviewLine({ conversation }: { conversation: Conversation }) {
+  const last = conversation.last_message
+  if (!last) {
+    return (
+      <span className="mt-0.5 block truncate text-[11.5px] italic text-subtle">
+        {cs.chat.previewNone}
+      </span>
+    )
+  }
+  // A tombstone previews as the tombstone (D223): the delete blanked the body in
+  // place and the thread says the same words two panes over.
+  const what = last.deleted
+    ? cs.chat.word.deleted
+    : last.excerpt || count(last.attachment_count, PLURAL.files)
+  return (
+    <span
+      className={cn(
+        'mt-0.5 block truncate text-[11.5px] text-muted',
+        last.deleted && 'italic text-att-removed',
+      )}
+    >
+      {cs.chat.previewFrom(last.author_label, what)}
+    </span>
   )
 }
 

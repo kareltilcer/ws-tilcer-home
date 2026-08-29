@@ -11,6 +11,7 @@ import { cs } from '@/i18n/cs'
 import { apiErrorMessage } from '@/api/client'
 import { subscribeToFrames, type LiveFrame } from '@/api/ws'
 import { clientId } from '@/api/clientId'
+import { useAuth } from '@/app/auth'
 import { useOnline } from '@/platform/pwa/offline'
 import * as api from './endpoints'
 import type {
@@ -21,6 +22,8 @@ import type {
   ConversationEvent,
   ConversationPage,
   MessagePage,
+  Reaction,
+  ReactionActor,
 } from './types'
 
 // Chat's data layer.
@@ -94,6 +97,9 @@ export function useLoadMoreConversations(state?: 'active' | 'trash') {
         return {
           items: [...old.items, ...more.items.filter((c) => !seen.has(c.id))],
           next_cursor: more.next_cursor,
+          // The newer answer wins: the koš describes the caller, not this page, and
+          // the later request is the fresher reading of it.
+          trashed_count: more.trashed_count,
         }
       })
     },
@@ -307,6 +313,100 @@ export function useDeleteMessage(conversationID: string) {
       void qc.invalidateQueries({ queryKey: qk.chatConversations() })
     },
   })
+}
+
+/**
+ * useSetReaction is the chip, the double tap and the long-press bar (D265).
+ *
+ * ⚠ IT IS OPTIMISTIC, AND IT ROLLS BACK — the state the design's matrix names for
+ * this screen ("reakce se vrátí zpět"). A reaction is the cheapest thing in the
+ * module to send and the most obviously physical: a finger lands on a chip and the
+ * chip has to answer in that frame, not after a round trip to a droplet. So the
+ * cached message is patched before the request and restored if the request refuses.
+ *
+ * ⚠ THE ROLLBACK RESTORES THE MESSAGE THIS TAB HELD, NOT "THE OPPOSITE OF WHAT WE
+ * DID". Undoing by re-applying the inverse would erase a reaction that arrived over
+ * /ws while the request was in flight — the frames that carry OTHER people's chips
+ * land on the same object. Snapshotting is the only version of undo that cannot
+ * destroy somebody else's mark.
+ *
+ * ⚠ AND IT PATCHES RATHER THAN INVALIDATES ON SUCCESS. The response IS the message,
+ * exactly as it is for an edit; refetching a two-hundred-message thread because
+ * somebody tapped a heart is the shape `invalidateLists` was written to stop.
+ */
+export function useSetReaction(conversationID: string) {
+  const qc = useQueryClient()
+  const { identity } = useAuth()
+  return useMutation({
+    mutationFn: (input: { messageID: string; emoji: string; reacted: boolean }) =>
+      api.setReaction(input.messageID, input.emoji, input.reacted),
+    onMutate: (input) => {
+      const before = qc.getQueryData<MessagePage>(qk.chatMessages(conversationID))
+      const held = before?.items.find((m) => m.id === input.messageID)
+      if (held) {
+        replaceMessage(
+          qc,
+          conversationID,
+          applyReaction(held, input.emoji, input.reacted, {
+            user_id: identity.userId,
+            label: identity.label,
+          }),
+        )
+      }
+      // Returned so onError can put back exactly what was on screen. Undefined when
+      // the thread is not cached — a reaction from a surface that is not the open
+      // thread has nothing to roll back and nothing to restore.
+      return { held }
+    },
+    onError: (e, _input, context) => {
+      if (context?.held) replaceMessage(qc, conversationID, context.held)
+      toast.error(apiErrorMessage(e, cs.chat.actionFailed))
+    },
+    onSuccess: (msg) => replaceMessage(qc, conversationID, msg),
+  })
+}
+
+/**
+ * applyReaction is the optimistic patch, and the same arithmetic the server does.
+ *
+ * ⚠ IT IS PURE AND IT IS EXPORTED SO IT CAN BE TESTED. An optimistic update that is
+ * wrong is worse than none: it puts a chip on screen that the next frame takes away,
+ * which reads as the app losing the tap it just acknowledged.
+ */
+export function applyReaction(
+  message: ChatMessage,
+  emoji: string,
+  reacted: boolean,
+  me: ReactionActor,
+): ChatMessage {
+  const existing = message.reactions.find((r) => r.emoji === emoji)
+  const without = message.reactions.filter((r) => r.emoji !== emoji)
+  if (!reacted) {
+    const left = (existing?.by ?? []).filter((a) => a.user_id !== me.user_id)
+    // An emoji nobody is left holding is a chip that stops existing, rather than a
+    // chip reading zero.
+    return { ...message, reactions: left.length ? withReaction(message, emoji, left) : without }
+  }
+  // Idempotent, for the reason the route is: a double tap that fired twice must not
+  // put the member under the same chip twice.
+  if (existing?.by.some((a) => a.user_id === me.user_id)) return message
+  return { ...message, reactions: withReaction(message, emoji, [...(existing?.by ?? []), me]) }
+}
+
+/**
+ * withReaction rebuilds the chip list with one emoji's actors replaced, KEEPING THE
+ * SERVER'S ORDER.
+ *
+ * The chips are ordered by the palette server-side so two members see one order and
+ * nothing jumps under a reader's finger. A new chip is appended here rather than
+ * sorted into place: the response that lands a moment later carries the right order
+ * anyway, and re-deriving the palette's ordering in the optimistic path would be a
+ * second spelling of it that can disagree.
+ */
+function withReaction(message: ChatMessage, emoji: string, by: ReactionActor[]): Reaction[] {
+  const at = message.reactions.findIndex((r) => r.emoji === emoji)
+  if (at < 0) return [...message.reactions, { emoji, by }]
+  return message.reactions.map((r, i) => (i === at ? { emoji, by } : r))
 }
 
 /**
