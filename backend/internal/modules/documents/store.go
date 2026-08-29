@@ -12,18 +12,10 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 )
 
-// DBTX is satisfied by *sql.DB and *sql.Tx. Reads outside a mutation use the
-// store's *sql.DB; everything inside a mutation takes the explicit tx so the audit
-// write commits atomically with the change.
-//
-// IMPORTANT: inside a WithTx callback every read must go through the tx. The pool
-// is capped at one connection (platform/db), so a pooled read from inside a
-// transaction deadlocks against its own write lock.
-type DBTX interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+// DBTX is appdb.DBTX under this module's own name — an ALIAS, not a copy, so
+// the two are one Go type. The WithTx read rule that governs it, and the note
+// on why it lives in platform/db, are on that declaration.
+type DBTX = appdb.DBTX
 
 type Store struct{ db *sql.DB }
 
