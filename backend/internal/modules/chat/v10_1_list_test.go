@@ -151,6 +151,60 @@ func TestConversationPreviewIsNullForARoomWithNothingInIt(t *testing.T) {
 	}
 }
 
+// TestConversationPreviewSkipsALeadingBlankLine.
+//
+// ⚠ `excerpt` CUTS AT THE FIRST NEWLINE, and validateBody trims only the right-hand
+// end — so a body somebody began with a Shift+Enter excerpted to "". The row reads an
+// empty excerpt as "this message is files only" and printed *0 souborů* under a
+// message carrying none. After the trim an empty excerpt means an empty BODY, which a
+// message can only have when it has files, so the client's fallback is true again.
+func TestConversationPreviewSkipsALeadingBlankLine(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	c := hh.group(kaja, "Rodiče", andy)
+	hh.send(kaja, c.ID, "\n\nKlíče jsou pod květináčem.")
+
+	got := row(t, hh.listAs(andy, ""), c.ID)
+	if got.LastMessage == nil {
+		t.Fatalf("the row carries no preview at all")
+	}
+	if got.LastMessage.Excerpt != "Klíče jsou pod květináčem." {
+		t.Errorf("excerpt = %q, want the first line that actually says something — an empty one "+
+			"is the row's signal for a files-only message, and this message has no files",
+			got.LastMessage.Excerpt)
+	}
+}
+
+// TestATrashedRoomHasNoPreview is memberScope's own koš term, on the one read that
+// did not carry it.
+//
+// ⚠ A CONVERSATION IN THE KOŠ HAS LEFT EVERY READ OF ITS MESSAGES (D253) — the thread,
+// search, unread, the reply quote and the attachment listing all refuse it, because
+// `c.deleted_at IS NULL` is stated once in memberScope and nothing else has to
+// remember. The preview query joined chat_members and not chat_conversations, so the
+// koš listing was the one surface handing back a body from a trashed room. Nothing
+// rendered it, which is exactly why it needs a test rather than an eye.
+func TestATrashedRoomHasNoPreview(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	c := hh.group(kaja, "Rodiče", andy)
+	hh.send(kaja, c.ID, "TAJEMSTVÍ V KOŠI")
+
+	if err := hh.svc.DeleteConversation(hh.ctx(kaja), c.ID, false); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+	got := row(t, hh.listAs(kaja, "trash"), c.ID)
+	if got.LastMessage != nil {
+		t.Fatalf("a trashed room previews %+v — the koš listing is the one read of a message "+
+			"that did not carry memberScope's `deleted_at IS NULL`", got.LastMessage)
+	}
+	// And it comes back when the room does.
+	if _, err := hh.svc.RestoreConversation(hh.ctx(kaja), c.ID); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if after := row(t, hh.listAs(kaja, ""), c.ID); after.LastMessage == nil {
+		t.Errorf("a restored room has no preview — the koš term bound more than the koš")
+	}
+}
+
 // TestTrashedCountIsTheCallersKošAndNobodyElses is D267's whole risk in one test.
 func TestTrashedCountIsTheCallersKošAndNobodyElses(t *testing.T) {
 	hh := newHousehold(t, kaja, andy, boss)

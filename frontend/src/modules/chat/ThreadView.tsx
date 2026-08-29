@@ -994,6 +994,14 @@ function LiveBubble({
           mine
             ? 'rounded-[14px] rounded-br-[5px] border-bub-mine-edge bg-bub-mine'
             : 'rounded-[14px] rounded-bl-[5px] border-bub-theirs-edge bg-bub-theirs',
+          // ⚠ THE ARMED SWIPE SAYS SO, AND LAST SO IT WINS THE MERGE (v10.1 review).
+          // SWIPE_COMMIT decides when releasing will reply and the rubber band says
+          // further travel changes nothing — neither was drawn, so the member had 24 px
+          // of meaningless extra drag and no way to tell a committed swipe from an
+          // aborted one before lifting a finger that cannot be un-lifted. The accent
+          // edge is the cue a pressed chip already uses, on the border the bubble
+          // already has.
+          gestures.swipeArmed && 'border-accent',
         )}
       >
         {/* ⚠ `--bub-label` IS `--muted`, NOT `--subtle`: measured on `--s2` in the

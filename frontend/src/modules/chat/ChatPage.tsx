@@ -189,6 +189,21 @@ function ChatLayout() {
  * ⚠ AND THE NAVIGATION IS A REPLACE. A push would put the empty `/chat` in the
  * history, so browser-back from the thread would land on it and be redirected
  * forward again — the trap, rebuilt one width up.
+ *
+ * ⚠ AND IT WAITS FOR A LIST THAT IS NOT MID-REFETCH (v10.1 review). D269's whole
+ * safety net is *a remembered room that is no longer in the list is ignored rather
+ * than followed into a 404* — and that guard reads the cache, which is at its most
+ * out of date exactly when it matters. Every route into `/chat` from a room that has
+ * GONE arrives one tick after `invalidateLists`: the delete dialog's own
+ * `navigate('/chat')`, and `useLeaveWhenGone` when somebody else trashes the room
+ * this tab has open. TanStack marks the listing stale and keeps its rows until the
+ * refetch lands, so `pickConversationToOpen` still found the dead room in `items`,
+ * still preferred it as the remembered one, and redirected the member straight back
+ * into "Konverzace nebyla nalezena." — the screen both of those exits exist to
+ * prevent. Skipping while `isFetching` costs the empty pane for one round trip and
+ * then opens the right room; `isFetching` is in the dependency list because a
+ * refetch that returns identical rows keeps the same `items` reference, and without
+ * it that case would never re-run and would open nothing at all.
  */
 function useOpenSomething(openID: string | undefined): void {
   const navigate = useNavigate()
@@ -196,6 +211,7 @@ function useOpenSomething(openID: string | undefined): void {
   const me = identity?.userId ?? ''
   const active = useConversations('active')
   const rooms = active.data?.items
+  const fetching = active.isFetching
 
   // Remembering is the half that runs on every width: a phone member's last room is
   // what the desktop will open tomorrow, and the two share the record.
@@ -204,14 +220,14 @@ function useOpenSomething(openID: string | undefined): void {
   }, [me, openID])
 
   useEffect(() => {
-    if (openID || !rooms) return
+    if (openID || !rooms || fetching) return
     if (!window.matchMedia?.('(min-width: 1024px)').matches) return
     const target = pickConversationToOpen(rooms, readLastOpened(me))
     // ⚠ A MEMBER IN NO CONVERSATION GETS THE EMPTY STATE, which says what the module
     // is. `pickConversationToOpen` answers '' for that rather than guessing, and
     // this is where that answer is respected.
     if (target) navigate(`${routes.chat}/${target}`, { replace: true })
-  }, [openID, rooms, me, navigate])
+  }, [openID, rooms, fetching, me, navigate])
 }
 
 /**

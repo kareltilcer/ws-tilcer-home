@@ -205,3 +205,73 @@ describe('swipe to reply', () => {
     expect(actions.onDoubleTap).not.toHaveBeenCalled()
   })
 })
+
+// ⚠ THE BUBBLE CONTAINS BUTTONS AND POINTER EVENTS BUBBLE. The chips, the ☺, the
+// seven emoji in the picker and *Odpovědět* all sit inside the element carrying these
+// handlers, so without a guard every tap on one of them was also fed to this state
+// machine — and any two inside the double-tap window put a ❤️ on the message.
+describe('presses that begin on a control', () => {
+  /** A touch whose target is a real button, the way the DOM delivers one. */
+  function onButton({ x, y }: Point) {
+    const button = document.createElement('button')
+    return {
+      pointerType: 'touch',
+      clientX: x,
+      clientY: y,
+      target: button,
+    } as unknown as React.PointerEvent
+  }
+
+  it('does not pair two taps on the ☺ into a heart', () => {
+    const { actions, view } = setup()
+    // Open the reaction bar, then close it again — two taps on the same button.
+    act(() => view.result.current.handlers.onPointerDown(onButton({ x: 60, y: 100 })))
+    act(() => view.result.current.handlers.onPointerUp(onButton({ x: 60, y: 100 })))
+    act(() => view.result.current.handlers.onPointerDown(onButton({ x: 60, y: 100 })))
+    act(() => view.result.current.handlers.onPointerUp(onButton({ x: 60, y: 100 })))
+    expect(actions.onDoubleTap).not.toHaveBeenCalled()
+  })
+
+  it('does not open the reaction bar when a chip is held', () => {
+    const { actions, view } = setup()
+    act(() => view.result.current.handlers.onPointerDown(onButton({ x: 60, y: 100 })))
+    act(() => vi.advanceTimersByTime(GESTURE.LONG_PRESS_MS + 50))
+    expect(actions.onLongPress).not.toHaveBeenCalled()
+  })
+
+  it('does not reply when a drag starts on a button', () => {
+    const { actions, view } = setup()
+    act(() => view.result.current.handlers.onPointerDown(onButton({ x: 40, y: 100 })))
+    act(() =>
+      view.result.current.handlers.onPointerMove(touch({ x: 40 + GESTURE.SWIPE_COMMIT + 20, y: 100 })),
+    )
+    act(() =>
+      view.result.current.handlers.onPointerUp(touch({ x: 40 + GESTURE.SWIPE_COMMIT + 20, y: 100 })),
+    )
+    expect(actions.onSwipeReply).not.toHaveBeenCalled()
+    expect(view.result.current.swipeX).toBe(0)
+  })
+
+  // ⚠ AND A CONTROL'S RELEASE LEAVES NO MARKER BEHIND, or the next real tap on the
+  // bubble pairs with it and hearts the message anyway.
+  it('leaves no tap marker for a following real tap to pair with', () => {
+    const { actions, view } = setup()
+    act(() => view.result.current.handlers.onPointerDown(onButton({ x: 60, y: 100 })))
+    act(() => view.result.current.handlers.onPointerUp(onButton({ x: 60, y: 100 })))
+    gesture(view, { x: 100, y: 100 }, [])
+    expect(actions.onDoubleTap).not.toHaveBeenCalled()
+  })
+})
+
+// ⚠ A PRESS THAT IS STILL HELD WHEN THE THREAD GOES left a 500 ms timeout pointing at
+// a component that no longer exists — the room trashed by somebody else, a gap check
+// re-rendering the page, the member tapping back.
+describe('unmounting mid-press', () => {
+  it('does not fire the long press after the bubble is gone', () => {
+    const { actions, view } = setup()
+    act(() => view.result.current.handlers.onPointerDown(touch({ x: 60, y: 100 })))
+    view.unmount()
+    act(() => vi.advanceTimersByTime(GESTURE.LONG_PRESS_MS + 50))
+    expect(actions.onLongPress).not.toHaveBeenCalled()
+  })
+})

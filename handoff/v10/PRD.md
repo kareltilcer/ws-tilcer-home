@@ -3016,7 +3016,7 @@ No change to Mode B, the session, CSRF or the role model. What changes is that *
 
 Every **structural** mutation records an audit event through the spine in the same transaction. **Message mutations record none** (D231) — stated here once, as the exception, and asserted by test rather than left to be noticed.
 
-### V10-4a. The twenty-three surfaces — the leak table
+### V10-4a. The twenty-three surfaces — the leak table (**twenty-five as built**; rows 24–25 are v10.1's)
 
 This is the requirement, not a summary of it. Each row is a place where membership can be read around.
 
@@ -3047,8 +3047,12 @@ This is the requirement, not a summary of it. Each row is a place where membersh
 | 21 | `chat_deleted_keys` | ✅ keys are `chat/{uuid}/original` — no names, no filenames, nothing to read. |
 | 22 | Membership revoked mid-session | **Accepted, bounded.** The hub resolves membership at publish time so nothing new arrives; the next HTTP request 404s. No socket is force-closed and an open tab keeps rendering what it already fetched. |
 | 23 | Message ids are UUIDv7 | **Accepted** — a leaked id carries its own timestamp, the same property every id in Home has had since v1. |
+| 24 | **The row's preview line** (v10.1, D266) | `Conversation.last_message` is the newest message the **caller** may read, bounded by the floor **and** by the koš, in SQL. ⚠ It is the worst leak in the module to get wrong, because **nobody has to click**: `MAX(id)` over the conversation is a body a member added yesterday may not read, printed on the row they see before they open anything. `null` covers both absences. ⚠ **And the koš term is the one it lost first** — the query joined `chat_members` and not `chat_conversations`, so the trash listing handed back the last message of a room that has left every other read (row 18), invisible only because the trashed row draws no preview. |
+| 25 | **Reactions** (v10.1, D265) | Every read of a reaction is keyed on message ids `Thread` or `MessageByID` has already resolved through `memberScope`, so it inherits the floor rather than restating it — the `AttachmentsForMessages` shape. `PUT …/reactions` takes the same two steps every by-id route takes and refuses with **404**, never 403. ⚠ **The `/ws` audience is `MemberIDsAbove`**: the frame carries the whole message, body included, so publishing to the full membership would push an old message's text to exactly the people the floor keeps it from (row 7's rule, on a new verb). The reactors carry a display name and never an email or a role (row 19). |
 
-**Twenty-one rows deny. Rows 8, 12, 14 and 16 are accepted disclosures**, each with the reason recorded and the alternative named.
+**Twenty-three rows deny. Rows 8, 12, 14 and 16 are accepted disclosures**, each with the reason recorded and the alternative named.
+
+> ⚠ **Twenty-three was a floor and v10.1 proved it.** Rows 24 and 25 are the two surfaces chat's second pass added, and row 24's koš half is a rule that was already written down — in row 18, one table over — and still went missing from the one query that needed it. A surface added after the table is a surface with no row to check itself against, which is how it happens.
 
 ### Chat module (`chat`) — new in v10
 
@@ -3417,7 +3421,7 @@ Plural forms: *1 zpráva · 2 zprávy · 5 zpráv*; *1 konverzace · 2 konverzac
 
 ## V10-8. Non-Functional Requirements (v10)
 
-- **Security is half the version, and §V10-4a is the test plan.** Each of the twenty-three rows gets at least one test written from the **attacker's side** — a second member who is not in the conversation, a member below their floor, and an admin who is neither — asserting 404 (not 403), an empty result, or an absent delivery.
+- **Security is half the version, and §V10-4a is the test plan.** Each of the twenty-three rows — twenty-five as built, since v10.1 added the row preview and reactions — gets at least one test written from the **attacker's side** — a second member who is not in the conversation, a member below their floor, and an admin who is neither — asserting 404 (not 403), an empty result, or an absent delivery.
 - **The floor is a SQL predicate, asserted as one.** A test fetches a thread as a member added midway and asserts not only the visible rows but the **cursor, the `has_more` flag and the total** — the three places a post-filter leaks what it filtered.
 - **404, not 403, everywhere** — on GET **and** HEAD for `/raw` and `/thumbnail`, because a HEAD-only oracle is still an oracle.
 - **The 304 ordering has its own test** (leak row 5): a non-member's conditional request with a valid ETag returns **404**, not 304. ⚠ This is a bug v9 shipped and caught in `documents`; the same shape recurs here and the test is what makes the repetition cheap.
@@ -3812,6 +3816,15 @@ Migration **`12003`**, the third file in block 12. ⚠ **A column on `chat_messa
 **The list pane's minimum width became the preview sentence's.** `<aside>` is a grid item, a grid item defaults to `min-width: auto` which resolves to its **min-content** width, and a `truncate` line is `white-space: nowrap`. So the moment the row's second line stopped being *5 členů* and became a real sentence, the pane's minimum width became that sentence's: **415 px inside a 375 px grid**, clipped by the grid's `overflow-hidden` with no scrollbar to say so — the ＋ button lost its right half and every row's timestamp read *21* instead of *21:45*. The truncation could not have helped: `text-overflow` shortens text to the width it is **given**, and the pane was being given the width of the untruncated text. `min-w-0` on the aside is the fix, and it is the width twin of the `min-h-0` note that has been in `ChatPage.tsx` since v10 — `<main>` has carried it since then and the aside never did.
 
 ⚠ **Found by opening the page at 375 px.** `tsc -b`, `oxlint`, `knip`, `vitest`, `vite build`, `go build`, `go vet` and `go test ./...` were all green while it was happening — which is the third release running that this sentence has had to be written (§V10-12 and §V10-13 each say it about a different set).
+
+**And an `xhigh` review round found four more, three of them where two correct pieces met.**
+
+- **`/chat` redirected straight back into the room the member had just left.** D269's safety net is *a remembered room that is no longer in the list is ignored* — and it reads the list cache, which is at its most out of date exactly when it matters. Every route into `/chat` from a room that has GONE arrives one tick after `invalidateLists`: the delete dialog's own `navigate('/chat')`, and `useLeaveWhenGone` when somebody else trashes the open room. The rows were still there, so the dead room was still the remembered one, and the member landed on **"Konverzace nebyla nalezena."** — the screen both of those exits exist to prevent. `useOpenSomething` now waits for a listing that is not mid-refetch.
+- **The koš listing previewed its rooms' last messages.** `LastMessages` joined `chat_members` and not `chat_conversations`, so it carried the floor and not the koš — and row 18's rule, *a trashed conversation is invisible to every read*, had one read it did not reach. Nothing rendered it, because `TrashedRow` draws no preview; it was a body on the wire for a room that has left every other surface. The term is now in the query, and §V10-4a has the two rows it was missing.
+- **The preview query was O(messages), not O(rooms).** `WHERE x.id = (SELECT MAX(y.id) …)` is a correlated scalar subquery SQLite re-evaluates per candidate row: `EXPLAIN QUERY PLAN` drove the outer loop from `idx_chat_messages_conv (conversation_id=? AND id>?)`, so a page of fifty rooms walked every message in all fifty and seeked once per row — on the request the list remakes after every send, every read-marker advance and every window focus, against a pool capped at one connection. Each room's newest id is now resolved once, from `chat_members`, and the row looked up by primary key.
+- **Two taps on the ☺ put a ❤️ on the message.** The gesture handlers sit on the bubble and the bubble contains buttons; pointer events bubble, so every tap on a chip, on the ☺, on an emoji in the picker and on *Odpovědět* was fed to the double-tap machine, and any two inside 300 ms paired. A press that begins on a control is now that control's. ⚠ **Both halves were right on their own** — D268's tap window and D265's chip row — which is the shape of every defect in this list: none of them is a mistake inside one piece of code.
+
+Also in the round: a body begun with a Shift+Enter excerpted to `""` and the row read that as *files only*, printing **0 souborů** under a message with none (`LastMessages` trims the leading blank lines now; an empty excerpt again means an empty body, which only a files-only message may have); the long-press timeout outlived its bubble; `swipeArmed` was computed, exported and unit-tested with nothing drawing it, so a committed swipe looked exactly like an aborted one; and `trashOpen` survived the koš emptying underneath it, leaving the lazy `?state=trash` query refetching for a section nobody could see.
 
 ### Outstanding
 

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 /**
  * The three touch gestures on a bubble (v10.1, D268).
@@ -50,6 +50,24 @@ const SWIPE_COMMIT = 64
  * armed and further travel changes nothing.
  */
 const SWIPE_MAX = 88
+/**
+ * The controls a bubble carries, which a gesture must never fire from.
+ *
+ * ⚠ THE HANDLERS SIT ON THE BUBBLE AND THE BUBBLE CONTAINS BUTTONS (v10.1 review).
+ * Pointer events bubble, so every tap on a chip, on the ☺, on an emoji in the picker
+ * and on *Odpovědět* was also fed to this state machine — and any two of them inside
+ * 300 ms paired into a double tap. Opening the reaction bar and closing it again put
+ * a ❤️ on the message; two taps on a 👍 chip did the same. A press that starts on a
+ * control belongs to that control, so the test is made once, at pointer down: a
+ * finger that starts on a button and slides onto the bubble is still that button's
+ * press and not a swipe.
+ */
+const CONTROLS = 'button, a, input, textarea, select, [role="button"]'
+
+/** Whether this pointer sequence began on something that already does its own job. */
+function onAControl(e: React.PointerEvent): boolean {
+  return e.target instanceof Element && e.target.closest(CONTROLS) !== null
+}
 
 export interface MessageGestureHandlers {
   onPointerDown: (e: React.PointerEvent) => void
@@ -115,9 +133,15 @@ export function useMessageGestures(actions: MessageGestureActions): MessageGestu
     setSwipeX(0)
   }, [cancelTimer])
 
+  // ⚠ THE TIMER OUTLIVES THE BUBBLE OTHERWISE. A press that is still being held when
+  // the thread goes — the room trashed by somebody else, a gap check re-rendering the
+  // page, the member tapping back — left a 500 ms timeout pointing at a component
+  // that no longer exists, which then opened a reaction bar on it.
+  useEffect(() => cancelTimer, [cancelTimer])
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (e.pointerType !== 'touch') return
+      if (e.pointerType !== 'touch' || onAControl(e)) return
       longFired.current = false
       swipe.current = { x: e.clientX, y: e.clientY, active: true, panning: false }
       setSwipeX(0)
@@ -172,6 +196,9 @@ export function useMessageGestures(actions: MessageGestureActions): MessageGestu
     (e: React.PointerEvent) => {
       if (e.pointerType !== 'touch') return
       cancelTimer()
+      // The release of a press that began on a control is that control's, and it must
+      // not leave a tap marker behind for the next real tap to pair with.
+      if (!swipe.current.active) return
       const dx = e.clientX - swipe.current.x
       const dy = e.clientY - swipe.current.y
       const wasPanning = swipe.current.panning

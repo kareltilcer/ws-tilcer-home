@@ -47,7 +47,16 @@ export function ConversationList({ activeID }: { activeID?: string }) {
   // justified by counting requests. The design draws the section open; the header
   // is the disclosure, so the section is still always there to be found.
   const [trashOpen, setTrashOpen] = useState(false)
-  const trashed = useConversations('trash', trashOpen)
+  // ⚠ AND THE SECTION IS DRAWN ONLY WHEN THERE IS ONE (v10.1, D267). `trashed_count`
+  // rides the ACTIVE listing, so knowing costs no request.
+  const hasTrash = (active.data?.trashed_count ?? 0) > 0
+  // ⚠ `hasTrash &&` IS WHAT KEEPS THE LAZINESS (v10.1 review). Restoring the last
+  // trashed room while the section is open takes the section off the screen and left
+  // `trashOpen` true underneath it — so the query nobody could see went on refetching
+  // through every create, rename, delete, restore, remove-member and membership
+  // frame, which is exactly the per-invalidation second request that gating it on the
+  // disclosure was written to remove.
+  const trashed = useConversations('trash', trashOpen && hasTrash)
   const moreActive = useLoadMoreConversations('active')
   const moreTrashed = useLoadMoreConversations('trash')
 
@@ -163,60 +172,60 @@ export function ConversationList({ activeID }: { activeID?: string }) {
                 listing — the request this pane always makes — so the section's rows
                 are still fetched only when it is opened, which is the whole reason
                 that query is lazy. */}
-            {(active.data?.trashed_count ?? 0) > 0 && (
-            <div className="mt-3 px-1">
-              <button
-                type="button"
-                onClick={() => setTrashOpen((v) => !v)}
-                aria-expanded={trashOpen}
-                className="flex w-full items-center gap-2 py-1.5 text-left"
-              >
-                {trashOpen ? (
-                  <ChevronDown size={12} aria-hidden className="flex-none text-subtle" />
-                ) : (
-                  <ChevronRight size={12} aria-hidden className="flex-none text-subtle" />
+            {hasTrash && (
+              <div className="mt-3 px-1">
+                <button
+                  type="button"
+                  onClick={() => setTrashOpen((v) => !v)}
+                  aria-expanded={trashOpen}
+                  className="flex w-full items-center gap-2 py-1.5 text-left"
+                >
+                  {trashOpen ? (
+                    <ChevronDown size={12} aria-hidden className="flex-none text-subtle" />
+                  ) : (
+                    <ChevronRight size={12} aria-hidden className="flex-none text-subtle" />
+                  )}
+                  <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-subtle">
+                    {cs.chat.trashSectionTitle}
+                  </span>
+                  <span className="h-px flex-1 bg-border" />
+                </button>
+                {trashOpen && (
+                  <div className="flex flex-col gap-2 pb-1 pt-1.5">
+                    {trashed.isPending && (
+                      <div className="grid place-items-center py-4 text-muted">
+                        <Spinner />
+                      </div>
+                    )}
+                    {trashed.data?.items.length === 0 && (
+                      <p className="px-1 py-1 text-xs text-muted">{cs.chat.trashEmpty}</p>
+                    )}
+                    {trashed.data?.items.map((c) => (
+                      <TrashedRow key={c.id} conversation={c} />
+                    ))}
+                    {trashed.data?.next_cursor && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="w-full"
+                        loading={moreTrashed.isPending}
+                        onClick={() => moreTrashed.mutate()}
+                      >
+                        {cs.chat.loadMore}
+                      </Button>
+                    )}
+                    {/* ⚠ THE RELATIONSHIP, NOT JUST THE COUNTDOWN (D254). Its bytes go
+                        on counting toward both thresholds until something really
+                        purges them, which is honest and looks wrong — so the section
+                        says why, and names the verb that ends it. */}
+                    {!!trashed.data?.items.length && (
+                      <p className="px-1 text-[10.5px] leading-relaxed text-subtle text-pretty">
+                        {cs.chat.trashNote}
+                      </p>
+                    )}
+                  </div>
                 )}
-                <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-subtle">
-                  {cs.chat.trashSectionTitle}
-                </span>
-                <span className="h-px flex-1 bg-border" />
-              </button>
-              {trashOpen && (
-                <div className="flex flex-col gap-2 pb-1 pt-1.5">
-                  {trashed.isPending && (
-                    <div className="grid place-items-center py-4 text-muted">
-                      <Spinner />
-                    </div>
-                  )}
-                  {trashed.data?.items.length === 0 && (
-                    <p className="px-1 py-1 text-xs text-muted">{cs.chat.trashEmpty}</p>
-                  )}
-                  {trashed.data?.items.map((c) => (
-                    <TrashedRow key={c.id} conversation={c} />
-                  ))}
-                  {trashed.data?.next_cursor && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="w-full"
-                      loading={moreTrashed.isPending}
-                      onClick={() => moreTrashed.mutate()}
-                    >
-                      {cs.chat.loadMore}
-                    </Button>
-                  )}
-                  {/* ⚠ THE RELATIONSHIP, NOT JUST THE COUNTDOWN (D254). Its bytes go
-                      on counting toward both thresholds until something really
-                      purges them, which is honest and looks wrong — so the section
-                      says why, and names the verb that ends it. */}
-                  {!!trashed.data?.items.length && (
-                    <p className="px-1 text-[10.5px] leading-relaxed text-subtle text-pretty">
-                      {cs.chat.trashNote}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
+              </div>
             )}
           </>
         )}
@@ -398,6 +407,14 @@ function ConversationPreviewLine({ conversation }: { conversation: Conversation 
   }
   // A tombstone previews as the tombstone (D223): the delete blanked the body in
   // place and the thread says the same words two panes over.
+  //
+  // ⚠ AN EMPTY EXCERPT MEANS A FILES-ONLY MESSAGE, AND THE SERVER IS WHAT MAKES THAT
+  // TRUE (v10.1 review). `excerpt` cuts at the first newline, so a body somebody began
+  // with a Shift+Enter arrived empty and this line read it as "no text, so count the
+  // files" — printing *0 souborů* under a message with none. `LastMessages` now trims
+  // the leading blank lines, and a body that survives `validateBody` always has
+  // something in it, so an empty excerpt here can only be an empty BODY — which a
+  // message is only allowed when it carries files.
   const what = last.deleted
     ? cs.chat.word.deleted
     : last.excerpt || count(last.attachment_count, PLURAL.files)
