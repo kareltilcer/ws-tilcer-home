@@ -12,8 +12,8 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { Spinner } from '@/components/ui/ui'
 import { CardDetail } from '@/components/common/CardDetail'
 import { EventDetail } from '@/components/common/EventDetail'
-import { NoteOverlay } from '@/routes/poznamky/NoteOverlay'
-import { DocumentOverlay } from '@/routes/dokumenty/DocumentOverlay'
+import { NoteOverlay } from '@/modules/notes/NoteOverlay'
+import { DocumentOverlay } from '@/modules/documents/DocumentOverlay'
 import { widgetRegistry } from '@/platform/widgets/registry'
 
 const catalogKey = ['dashboard', 'catalog'] as const

@@ -4,7 +4,7 @@ import { PrivateMark } from '@/components/common/RootSwitcher'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { fmtBytes } from '@/i18n/format'
-import { kindMeta, statusChip } from '@/routes/dokumenty/fileKind'
+import { kindMeta, statusChip } from '@/modules/documents/fileKind'
 
 // PripnuteDokumentyWidget renders the documents.pripnute payload: household pins ∪
 // the caller's personal pins, de-duplicated (FR-DOC11). A row opens the document in
