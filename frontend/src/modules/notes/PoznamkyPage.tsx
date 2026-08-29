@@ -20,74 +20,23 @@ import { routes } from '@/app/routes'
 import { parseScopedPath, resolvedKey, scopedRoute } from '@/lib/scope'
 import { PrivateMark, RootSwitcher } from '@/components/common/RootSwitcher'
 import { PublishDialog } from '@/components/common/PublishDialog'
-import { tail } from '@/lib/lexorank'
+import { tailOf } from '@/lib/lexorank'
+import { indexTree as indexFolderTree, subtreeCounts, type FolderTreeIndex } from '@/lib/foldertree'
 import { NoteView } from './NoteView'
-import { CreateDialog, DeleteDialog, MoveDialog, RenameDialog, type MoveTarget } from './NotesDialogs'
+import { CreateDialog, DeleteDialog, MoveDialog, RenameDialog } from './NotesDialogs'
 
 // ---- tree indexing ----
 
-interface TreeIndex {
-  folderById: Map<string, Folder>
-  noteById: Map<string, NoteSummary> // note id → summary (for the open note's tab title)
-  slugPathById: Map<string, string>
-  folderNamePathById: Map<string, string> // folder id → human name path ("Práce / Projekty")
-  folderIdByNoteId: Map<string, string | null> // note id → containing folder id (null = root)
-  childFolders: Map<string | null, FolderNode[]>
-  childNotes: Map<string | null, NoteSummary[]>
-  notePositions: Map<string | null, string[]>
-  folderPositions: Map<string | null, string[]>
-  flatFolders: MoveTarget[] // for the move picker, root first
-}
+// The index and its two lookups are shared with Dokumenty — see src/lib/foldertree.
+// What stays here is the naming: `items` in the shared index are notes.
+type TreeIndex = FolderTreeIndex<Folder, FolderNode, NoteSummary>
 
 function indexTree(tree: NotesTree): TreeIndex {
-  const folderById = new Map<string, Folder>()
-  const noteById = new Map<string, NoteSummary>()
-  const slugPathById = new Map<string, string>()
-  const folderNamePathById = new Map<string, string>()
-  const folderIdByNoteId = new Map<string, string | null>()
-  const childFolders = new Map<string | null, FolderNode[]>()
-  const childNotes = new Map<string | null, NoteSummary[]>()
-  const flatFolders: MoveTarget[] = [{ id: null, name: cs.notes.root, depth: 0 }]
-
-  const walk = (nodes: FolderNode[], parentPath: string, parentNamePath: string, depth: number) => {
-    for (const node of nodes) {
-      const f = node.folder
-      folderById.set(f.id, f)
-      const path = parentPath ? `${parentPath}/${f.slug}` : f.slug
-      const namePath = parentNamePath ? `${parentNamePath} / ${f.name}` : f.name
-      slugPathById.set(f.id, path)
-      folderNamePathById.set(f.id, namePath)
-      childFolders.set(f.id, node.subfolders)
-      childNotes.set(f.id, node.notes)
-      flatFolders.push({ id: f.id, name: f.name, depth, icon: f.icon || DEFAULT_FOLDER_ICON })
-      for (const nt of node.notes) {
-        noteById.set(nt.id, nt)
-        slugPathById.set(nt.id, path ? `${path}/${nt.slug}` : nt.slug)
-        folderIdByNoteId.set(nt.id, f.id)
-      }
-      walk(node.subfolders, path, namePath, depth + 1)
-    }
-  }
-  walk(tree.roots, '', '', 1)
-  childFolders.set(null, tree.roots)
-  childNotes.set(null, tree.root_notes)
-  for (const nt of tree.root_notes) {
-    noteById.set(nt.id, nt)
-    slugPathById.set(nt.id, nt.slug)
-    folderIdByNoteId.set(nt.id, null)
-  }
-
-  const notePositions = new Map<string | null, string[]>()
-  const folderPositions = new Map<string | null, string[]>()
-  for (const [k, v] of childNotes) notePositions.set(k, v.map((n) => n.position))
-  for (const [k, v] of childFolders) folderPositions.set(k, v.map((n) => n.folder.position))
-  return { folderById, noteById, slugPathById, folderNamePathById, folderIdByNoteId, childFolders, childNotes, notePositions, folderPositions, flatFolders }
-}
-
-function tailOf(positions: string[]): string {
-  if (positions.length === 0) return tail('')
-  const max = positions.reduce((a, b) => (a > b ? a : b))
-  return tail(max)
+  return indexFolderTree(tree.roots, tree.root_notes, {
+    itemsOf: (n) => n.notes,
+    rootLabel: cs.notes.root,
+    defaultIcon: DEFAULT_FOLDER_ICON,
+  })
 }
 
 function folderCountLabel(node: FolderNode): string {
@@ -160,7 +109,7 @@ export function PoznamkyPage() {
   // Tab title reflects the open note/folder ("<name> · Poznámky · home"); falls
   // back to just the module while the tree loads or at the root.
   const openTitle = sel.noteId
-    ? idx?.noteById.get(sel.noteId)?.title
+    ? idx?.itemById.get(sel.noteId)?.title
     : sel.folderId
       ? idx?.folderById.get(sel.folderId)?.name
       : undefined
@@ -170,7 +119,7 @@ export function PoznamkyPage() {
   // "New note" while viewing a note would otherwise create at the root — resolve
   // the note's own containing folder instead so it lands next to what's on screen.
   const createParentId = (): string | null =>
-    sel.noteId ? idx?.folderIdByNoteId.get(sel.noteId) ?? null : sel.folderId
+    sel.noteId ? idx?.folderIdByItemId.get(sel.noteId) ?? null : sel.folderId
 
   // Search is scoped to THE TREE YOU ARE STANDING IN (D184) — searching the shared
   // root never reaches a private note, and searching a private root never reaches
@@ -273,7 +222,7 @@ export function PoznamkyPage() {
     // and racing the resolve here dumped the user at the root instead of opening
     // what they navigated to. lastPath catches up in the deep-link effect above.
     if (resolvedKey(scope, slugPath) !== lastPath.current) return
-    if (sel.noteId && !idx.folderIdByNoteId.has(sel.noteId)) {
+    if (sel.noteId && !idx.folderIdByItemId.has(sel.noteId)) {
       go('folder', null)
       return
     }
@@ -323,7 +272,7 @@ export function PoznamkyPage() {
     mutationFn: ({ targetId }: { targetId: string | null }) => {
       if (!move || !idx) throw new Error('no move')
       return move.kind === 'note'
-        ? api.moveNote(move.id, { folder_id: targetId, position: tailOf(idx.notePositions.get(targetId) ?? []) })
+        ? api.moveNote(move.id, { folder_id: targetId, position: tailOf(idx.itemPositions.get(targetId) ?? []) })
         : api.moveFolder(move.id, { parent_id: targetId, position: tailOf(idx.folderPositions.get(targetId) ?? []) })
     },
     onSuccess: () => {
@@ -412,18 +361,16 @@ export function PoznamkyPage() {
 
   const rootEmpty = tree.data!.roots.length === 0 && tree.data!.root_notes.length === 0
 
-  // Re-resolve the folder's live node (not the snapshot captured at open time)
-  // and count its whole subtree, so the confirm dialog reports the true cascade.
-  const delNode = del?.kind === 'folder' ? findNode(idx, del.id) : null
-  const delCounts = subtreeCounts(delNode)
+  // Counted from the LIVE index, not from a node captured when the dialog opened:
+  // a background refetch reshapes the tree, and a stale node understates the
+  // cascade. The whole subtree, for the reason subtreeCounts records.
+  const delCounts = subtreeCounts(idx, del?.kind === 'folder' ? del.id : null)
 
   // Move targets: a note may go anywhere; a folder may not move into itself or any
   // of its descendants (the backend cycle guard rejects those, so don't offer them).
   const moveTargets = (() => {
     if (!move || move.kind !== 'folder') return idx.flatFolders
-    const node = findNode(idx, move.id)
-    const blocked = new Set(node ? flatten(node).map((n) => n.folder.id) : [move.id])
-    return idx.flatFolders.filter((t) => t.id === null || !blocked.has(t.id))
+    return idx.flatFolders.filter((t) => t.id !== move.id && !(t.id && (idx.ancestorsById.get(t.id) ?? []).includes(move.id)))
   })()
 
   // ⚠ THE WHOLE SUBTREE, not the direct children — the same count the delete
@@ -432,7 +379,7 @@ export function PoznamkyPage() {
   // a folder holding no notes directly but one subfolder of forty read as "0
   // položek v 1 podsložkách": the confirmation understating exactly what the count
   // exists to state.
-  const publishCounts = publish?.kind === 'folder' ? subtreeCounts(findNode(idx, publish.id)) : null
+  const publishCounts = publish?.kind === 'folder' ? subtreeCounts(idx, publish.id) : null
 
   const dialogs = (
     <>
@@ -440,7 +387,7 @@ export function PoznamkyPage() {
         <PublishDialog
           kind={publish.kind === 'folder' ? 'folder' : 'note'}
           title={publish.title}
-          itemCount={publishCounts?.notes}
+          itemCount={publishCounts?.items}
           folderCount={publishCounts?.folders}
           pending={publishMut.isPending}
           onConfirm={() => publishMut.mutate()}
@@ -483,7 +430,7 @@ export function PoznamkyPage() {
           kind={del.kind}
           title={del.title}
           subfolders={delCounts.folders}
-          notes={delCounts.notes}
+          notes={delCounts.items}
           pending={deleteMut.isPending}
           onConfirm={(cascade) => deleteMut.mutate(cascade)}
           onClose={() => setDel(null)}
@@ -642,7 +589,7 @@ function DesktopView(p: ViewProps) {
             {/* Carrier 4: the ROOT SEGMENT of the breadcrumb names the tree. */}
             {rootLabel(p.scope)}
           </button>
-          <TreeNodes nodes={p.idx.childFolders.get(null) ?? []} rootNotes={p.idx.childNotes.get(null) ?? []} depth={0} expanded={expanded} toggle={toggle} sel={p.sel} go={p.go} />
+          <TreeNodes nodes={p.idx.childFolders.get(null) ?? []} rootNotes={p.idx.childItems.get(null) ?? []} depth={0} expanded={expanded} toggle={toggle} sel={p.sel} go={p.go} />
         </div>
 
         {/* pane */}
@@ -736,7 +683,7 @@ function FolderPane(p: ViewProps) {
   const searching = p.searchQ.trim().length > 0
   const folder = p.sel.folderId ? p.idx.folderById.get(p.sel.folderId) ?? null : null
   const childFolders = p.idx.childFolders.get(p.sel.folderId) ?? []
-  const childNotes = p.idx.childNotes.get(p.sel.folderId) ?? []
+  const childNotes = p.idx.childItems.get(p.sel.folderId) ?? []
   const empty = childFolders.length === 0 && childNotes.length === 0
 
   if (p.rootEmpty && !searching) return <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} scope={p.scope} />
@@ -783,36 +730,6 @@ function FolderPane(p: ViewProps) {
       </div>
     </div>
   )
-}
-
-function flatten(node: FolderNode): FolderNode[] {
-  return [node, ...node.subfolders.flatMap(flatten)]
-}
-
-// Re-resolve a folder's live tree node by id. The delete dialog must not trust a
-// snapshot captured at open time — a background refetch can reshape the tree and
-// leave a stale/absent node, which would understate the deletion scope.
-function findNode(idx: TreeIndex, folderId: string): FolderNode | null {
-  for (const root of idx.childFolders.get(null) ?? []) {
-    for (const n of flatten(root)) {
-      if (n.folder.id === folderId) return n
-    }
-  }
-  return null
-}
-
-// Count a folder's entire subtree (descendant folders + notes), not just its
-// direct children, so cascade=true is sent whenever anything would be deleted.
-function subtreeCounts(node: FolderNode | null): { folders: number; notes: number } {
-  if (!node) return { folders: 0, notes: 0 }
-  let folders = node.subfolders.length
-  let notes = node.notes.length
-  for (const sub of node.subfolders) {
-    const c = subtreeCounts(sub)
-    folders += c.folders
-    notes += c.notes
-  }
-  return { folders, notes }
 }
 
 function SearchResults({ p }: { p: ViewProps }) {
@@ -906,13 +823,13 @@ function MobileView(p: ViewProps) {
   const searching = p.searchQ.trim().length > 0
   const folder = p.sel.folderId ? p.idx.folderById.get(p.sel.folderId) ?? null : null
   const childFolders = p.idx.childFolders.get(p.sel.folderId) ?? []
-  const childNotes = p.idx.childNotes.get(p.sel.folderId) ?? []
+  const childNotes = p.idx.childItems.get(p.sel.folderId) ?? []
   const empty = childFolders.length === 0 && childNotes.length === 0
 
   if (p.sel.noteId) {
     // Opening a note clears sel.folderId, so derive the note's own containing folder
     // to send Back there (not to root); the "Poznámky" chip still jumps to root.
-    const noteFolder = p.idx.folderIdByNoteId.get(p.sel.noteId) ?? null
+    const noteFolder = p.idx.folderIdByItemId.get(p.sel.noteId) ?? null
     return (
       <>
         <div className="flex flex-none items-center gap-2 border-b border-border px-2 pb-2.5 pt-1">

@@ -6,8 +6,7 @@ import { DEFAULT_FOLDER_ICON, FolderIconPicker, iconToStore } from '@/components
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { cn } from '@/lib/utils'
-
-export type MoveTarget = { id: string | null; name: string; depth: number; icon?: string }
+import type { MoveTarget } from '@/lib/foldertree'
 
 // CreateDialog — new note or folder in the current location.
 export function CreateDialog({

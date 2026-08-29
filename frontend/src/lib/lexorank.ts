@@ -40,3 +40,15 @@ export const comparePositions = (a: string, b: string): number => (a < b ? -1 : 
  *  key separates them, so a caller must renumber rather than write one ambiguous
  *  row (between() would otherwise fall back to tail(a), placing the item after BOTH). */
 export const canInsertBetween = (a: string, b: string): boolean => a === '' || b === '' || a < b
+
+/** tailOf is the key that sorts after every one of `positions` — where a move or a
+ *  create lands when the caller means "at the end of these siblings". An empty list
+ *  is the empty parent, so it takes the first key.
+ *
+ *  It reduces rather than sorts: the list arrives in tree order, not rank order,
+ *  and only the maximum matters. */
+export function tailOf(positions: string[]): string {
+  if (positions.length === 0) return tail('')
+  const max = positions.reduce((a, b) => (a > b ? a : b))
+  return tail(max)
+}
