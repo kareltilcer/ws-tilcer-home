@@ -1,5 +1,5 @@
 import type { PripnutePoznamkyWidget as PripnuteData } from '@/api/types'
-import { WidgetEmpty, type WidgetComponentProps } from '@/platform/widgets/shared'
+import { PinScopeBadge, WidgetEmpty, type WidgetComponentProps } from '@/platform/widgets/shared'
 import { PrivateMark } from '@/components/common/RootSwitcher'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
@@ -15,10 +15,6 @@ export function PripnuteWidget({ data, onOpenNote }: WidgetComponentProps) {
     <ul className="space-y-2">
       {notes.map((p) => {
         const personal = p.scope === 'personal'
-        // Three distinct scopes: personal-only, household-only, and both. Collapsing
-        // household into the "both" badge discards the backend's scope distinction.
-        const badge =
-          p.scope === 'personal' ? cs.notes.badgePersonal : p.scope === 'household' ? cs.notes.badgeHousehold : cs.notes.badgeBoth
         return (
           <li key={p.note_id}>
             <button
@@ -38,14 +34,14 @@ export function PripnuteWidget({ data, onOpenNote }: WidgetComponentProps) {
                 </span>
                 {p.excerpt && <span className="mt-0.5 block truncate text-[12px] text-muted">{p.excerpt}</span>}
               </span>
-              <span
-                className={cn(
-                  'inline-flex h-5 flex-none items-center rounded-full px-2 text-[10.5px] font-bold',
-                  personal ? 'bg-s3 text-muted' : 'bg-accent-soft text-accent',
-                )}
-              >
-                {badge}
-              </span>
+              <PinScopeBadge
+                scope={p.scope}
+                labels={{
+                  personal: cs.notes.badgePersonal,
+                  household: cs.notes.badgeHousehold,
+                  both: cs.notes.badgeBoth,
+                }}
+              />
             </button>
           </li>
         )

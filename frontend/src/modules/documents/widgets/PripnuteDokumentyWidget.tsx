@@ -1,5 +1,5 @@
 import type { PripnuteDokumentyWidget as PripnuteData } from '@/api/types'
-import { WidgetEmpty, type WidgetComponentProps } from '@/platform/widgets/shared'
+import { PinScopeBadge, WidgetEmpty, type WidgetComponentProps } from '@/platform/widgets/shared'
 import { PrivateMark } from '@/components/common/RootSwitcher'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
@@ -19,15 +19,6 @@ export function PripnuteDokumentyWidget({ data, onOpenDocument }: WidgetComponen
       {documents.map((p) => {
         const meta = kindMeta(p.content_type)
         const chip = statusChip(p.content_type, p.preview_kind, p.preview_status)
-        const personal = p.scope === 'personal'
-        // Three distinct scopes: personal-only, household-only, and both. Collapsing
-        // household into "both" would discard the backend's scope distinction.
-        const badge =
-          p.scope === 'personal'
-            ? cs.documents.badgePersonal
-            : p.scope === 'household'
-              ? cs.documents.badgeHousehold
-              : cs.documents.badgeBoth
         return (
           <li key={p.document_id}>
             <button
@@ -69,14 +60,14 @@ export function PripnuteDokumentyWidget({ data, onOpenDocument }: WidgetComponen
                   )}
                 </span>
               </span>
-              <span
-                className={cn(
-                  'inline-flex h-5 flex-none items-center rounded-full px-2 text-[10.5px] font-bold',
-                  personal ? 'bg-s3 text-muted' : 'bg-accent-soft text-accent',
-                )}
-              >
-                {badge}
-              </span>
+              <PinScopeBadge
+                scope={p.scope}
+                labels={{
+                  personal: cs.documents.badgePersonal,
+                  household: cs.documents.badgeHousehold,
+                  both: cs.documents.badgeBoth,
+                }}
+              />
             </button>
           </li>
         )
