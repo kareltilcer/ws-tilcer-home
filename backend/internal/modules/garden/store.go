@@ -51,6 +51,21 @@ type scanner interface{ Scan(dest ...any) error }
 
 var errNotFound = errors.New("garden: not found")
 
+// softDelete stamps deleted_at (and updated_at) on one live row. It is the whole
+// of every SoftDeleteX below: eight tables, one statement, and `AND deleted_at IS
+// NULL` on all of them so a second delete is a no-op rather than a fresh
+// timestamp on an already-dead row.
+//
+// The table name is interpolated, which is safe here and only here: every caller
+// passes a compile-time constant from the eight wrappers, none of it reaches a
+// request. The wrappers stay — they are the module's vocabulary and the service
+// calls them by name, so a reader still sees which table a delete touches.
+func (s *Store) softDelete(ctx context.Context, tx DBTX, table, id, at string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE `+table+` SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
+	return err
+}
+
 // ============================== plants ==============================
 
 const plantIdentCols = `id, name_cs, family, plant_type, hardiness,
@@ -235,9 +250,7 @@ func (s *Store) UpdatePlant(ctx context.Context, tx DBTX, p Plant) error {
 }
 
 func (s *Store) SoftDeletePlant(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_plants SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_plants", id, at)
 }
 
 // PlantingsUsingPlant counts live plantings of a crop, so a delete that would
@@ -359,9 +372,7 @@ func (s *Store) UpdateVariety(ctx context.Context, tx DBTX, v Variety, at string
 }
 
 func (s *Store) SoftDeleteVariety(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_varieties SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_varieties", id, at)
 }
 
 // ================================ beds ================================
@@ -445,9 +456,7 @@ func (s *Store) UpdateBed(ctx context.Context, tx DBTX, b Bed) error {
 }
 
 func (s *Store) SoftDeleteBed(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_beds SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_beds", id, at)
 }
 
 // BedHasOpenPlantings reports whether a bed holds plantings in a season that is
@@ -818,9 +827,7 @@ func (s *Store) UpdatePlanting(ctx context.Context, tx DBTX, p Planting) error {
 }
 
 func (s *Store) SoftDeletePlanting(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_plantings SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_plantings", id, at)
 }
 
 // YieldFor sums a planting's harvests in the crop's own unit.
@@ -1109,9 +1116,7 @@ func (s *Store) SuppressTask(ctx context.Context, tx DBTX, id, at string) error 
 }
 
 func (s *Store) SoftDeleteTask(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_tasks SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_tasks", id, at)
 }
 
 // CountTasks powers the two task metrics without loading rows.
@@ -1245,9 +1250,7 @@ func (s *Store) UpdateHarvest(ctx context.Context, tx DBTX, h Harvest, at string
 }
 
 func (s *Store) SoftDeleteHarvest(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_harvests SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_harvests", id, at)
 }
 
 // SeasonHarvestKg sums a season's harvest IN KG ONLY. Rows in ks/l/svazek are
@@ -1368,9 +1371,7 @@ func (s *Store) UpdateStorage(ctx context.Context, tx DBTX, it StorageItem, at s
 }
 
 func (s *Store) SoftDeleteStorage(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_storage_items SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_storage_items", id, at)
 }
 
 // ================================ rules ================================
@@ -1464,9 +1465,7 @@ func (s *Store) UpdateRule(ctx context.Context, tx DBTX, r Rule, at string) erro
 }
 
 func (s *Store) SoftDeleteRule(ctx context.Context, tx DBTX, id, at string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE garden_rules SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, at, at, id)
-	return err
+	return s.softDelete(ctx, tx, "garden_rules", id, at)
 }
 
 // rulesForMatching loads the ENABLED rules with built-in plant pairs resolved
