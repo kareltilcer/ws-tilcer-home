@@ -995,7 +995,7 @@ Sequenced so each step is independently shippable and reviewable.
 |---|---|---|
 | **1 — free wins** ✅ **LANDED** | 1, 2, 4, 8, 9, 10, 12, 23, 24, 26, 27, 28, 45, 46, plus `actorID`/`writeAllowed` from 15 | Mechanical, zero-risk, no design decisions. Clears noise before the real work. Shipped on `refactor/wave-1` as one commit per item — see §Wave 1, as landed. |
 | **2 — frontend hygiene** ✅ **LANDED** | 31, 32, 34, 36, 39, 44 | Small, self-contained, each one commit. Item 34 went first: it is the pattern most likely to be copied wrong next. Shipped on `refactor/wave-2` — see §Wave 2, as landed. |
-| **3 — platform seams** | 3, 6, 22, 25, then 5, 11 | Bigger, still behaviour-neutral. Item 3 (`appdb.Collect`) is the largest single line-count win in the repo, but read its signature caveat before starting. Items **5** and **11** carry the two ⚠ that survived the review pass — take only the safe half of 5, and pin garden's importer path before touching 11. |
+| **3 — platform seams** ✅ **LANDED** | 3, 6, 22, 25, then 5, 11 | Bigger, still behaviour-neutral. Item 3 (`appdb.Collect`) is the largest single line-count win in the repo, but read its signature caveat before starting. Items **5** and **11** carry the two ⚠ that survived the review pass — take only the safe half of 5, and pin garden's importer path before touching 11. Shipped on `refactor/wave-3` — see §Wave 3, as landed. |
 | **4 — decide, then act** | 7, 33, 41, 42, 43 | Each needs a call from Karel first — wire format (7), skip semantics (33), directory layout (41/42), scope (43). |
 | **5 — the twin** | 14, 15, 13+16, 17, 21, 37, 38, 19, 18, 20 | Only after **§Part 2's recorded decision is explicitly revisited.** Ordered by ascending risk: `scope.go` proves the pattern, `DeleteFolder` and the mirror jobs come last. Item 13 rides with 16 — see its note. |
 | **not in this pass** | 30, 40 | Item 30 is low value; item 40 is a UX change, not a refactor. |
@@ -1126,6 +1126,118 @@ stripped, which was checked rather than assumed.
 ⚠ None of the five frontend components extracted here has a rendering test. The
 extractions are byte-identical markup, so what is unverified is the wiring, not
 the markup — `tsc` and the existing suite cover the rest.
+
+# Wave 3, as landed (`refactor/wave-3`)
+
+Six commits, one per item, in the order the wave table gives. Corrections the
+implementation forced, so the counts in this document stay honest:
+
+- **Item 3** — `appdb.Collect(rows, scanX)` at **49 sites in ten files**, 397
+  lines removed. The loop count in this document was wrong twice over: there are
+  **127** row loops, not 118, of which **50** are plain appends and not "about
+  66". The fiftieth is `chat`'s attachments-by-message, which builds a map.
+
+  The signature caveat was right and WIDER than stated: nine files declared the
+  scanner interface, not five — the five module-local `scanner` types plus
+  `todo`'s `rowScanner`, `logging`'s `scannable`, and four inline literals
+  (`chat`, `documents`, `events`, `notes`). All **40** signatures moved to
+  `appdb.Scanner` and the seven type declarations are gone.
+
+  > ⚠ A caveat this document did NOT have, and it is wire-visible. Nine of the
+  > 50 loops declared `out := []T{}` and not `var out []T` — an empty page that
+  > serialises as `[]` and not `null`. Collect keeps the nil-when-empty default
+  > the other forty-one had; those nine say `appdb.OrEmpty` out loud, and
+  > `TestCollect_EmptyIsNil` pins both directions. Anyone re-doing this work
+  > must check the declaration, not just the loop.
+
+  Collect CLOSES rows, which is what removes the caller's `defer`. That matters
+  more than it reads: the pool is capped at one connection, so a leaked
+  `*sql.Rows` deadlocks the next query rather than merely leaking, and the test
+  fails on a context deadline with the close removed.
+
+- **Item 6** — `httpx.Limit(r, def, max)` + `appdb.ClampLimit(n, def, max)`.
+  `admin`'s `limitOf` is deleted outright; `chat`, `garden` and `logging` keep
+  their named wrappers as one-liners. `electricity` deliberately adopts NEITHER,
+  and its `limitOf` now says why: the difference is not the 100/500 numbers but
+  that it falls back to the default where the shared helper clamps. Fixing that
+  is a visible change and belongs to v8's own release.
+
+- **Item 22** — `run()` went from **611 lines to 74**: seven steps, seven
+  functions, four small structs (`authParts`, `pushParts`, `appModules`,
+  `shutdownDeps`). Three checks stand behind "no wiring changed", because
+  `cmd/home` has no test package: the boot logs of a binary built from
+  `origin/main` and one built from this branch are line-for-line identical; 286
+  requests (every path in openapi.yaml, GET and POST) return the same status
+  from both, with a zero-line diff; and an AST call-sequence comparison finds
+  all 147 calls of the original in order, plus exactly the six the split adds.
+
+  > ⚠ The graceful-shutdown BRANCH ran nowhere. `kill -TERM` on this host
+  > terminates the process rather than delivering a signal Go sees, so neither
+  > binary logged "shutting down". Its statements are a verbatim move and the
+  > call-sequence check covers their order — but nothing executed them.
+
+- **Item 25** — `electricity.Summarize` 157 → **11** lines (five named stages
+  over a `summarizer` holding the derived inputs), `documents.serveContent`
+  134 → **69**. The split made one thing better rather than only shorter: the
+  nudge line's last-reading pair was written out in both arms of an if/else
+  under a ⚠ saying the two must not disagree, and is now one function both arms
+  call. The item's other five functions are left, with reasons in the commit.
+
+- **Item 5** — `audit.For(sink, module)` returning a `ModuleSink`, adopted at
+  **27** Record sites: eight `record` wrappers plus admin's nine inline sites,
+  push's five, auth's two, and one each in garden's weather job, chat's upload
+  and logging's prune.
+
+  > ⚠ Two deviations. It is a FREE FUNCTION, not `Sink.For` as this document
+  > proposed: the package doc says the Sink interface is narrow on purpose so a
+  > second implementation can drop in, and a method every implementer must
+  > supply is not narrow. And it does NOT remove "the four-call-convention
+  > inconsistency" the item claims — it cannot, because the wrappers' differing
+  > tails are the `Scope` parameter this document's own ⚠ says to keep. What it
+  > removes is the boilerplate inside them.
+  >
+  > ⚠ There is exactly ONE cross-module record in the codebase, which this
+  > document did not know about: `admin`'s clean-up page writes
+  > `chat.threshold.update`. `ModuleSink.For(module)` re-binds for it, spelled
+  > out at that call site. The first sweep bound it to `admin` and
+  > `TestThresholdUpdateIsAuditedAsChat` caught it.
+
+- **Item 11** — `httpx.PatchKeys(b, dst)` and `httpx.DecodePatch(r, dst)`: one
+  mechanism in the two shapes its callers need, which is why it is a PAIR and
+  not the single `DecodePatch` the item proposed. `garden` calls it from inside
+  UnmarshalJSON, where the request is gone and raw bytes are all there is;
+  `electricity` calls it from the handler.
+
+  Both of the item's ⚠ were about things that turned out safe, and both are now
+  recorded in the code. Garden's `present` is untouched, still nil for an input
+  built in Go. And the 422-versus-500 risk is not real: garden's raw error is
+  wrapped as a Czech 422 by its own handler-level `decode` one level up, so both
+  sides always produced a 422 — from different places.
+
+  > ⚠ The `*Set` booleans are KEPT, against the item's text. They live on the
+  > SERVICE inputs, so converting them to `present["note"]` would push an HTTP
+  > package into the service layer and trade twelve compile-checked fields for
+  > twelve string lookups. The duplication was the decoder, not the carrier.
+  >
+  > ⚠ A property was nearly lost: electricity's version rejected trailing
+  > content (it went through `httpx.DecodeJSON`) and garden's had no need to.
+  > A helper built from garden's shape alone would have turned
+  > `{"a":1}{"a":2}` from a 422 into a 200 on five endpoints. `PatchKeys` does
+  > the check and `TestDecodePatch` asserts it.
+
+Baseline after wave 3: `go build ./...` clean · `go vet ./...` clean ·
+`go test ./...` 28 packages ok · `tsc -b --noEmit` clean ·
+`npm run lint` 0 errors / 25 warnings / knip clean ·
+`vitest run` 22 files, 161 tests pass (unchanged — wave 3 is backend-only).
+
+Net: 39 files, +1389 / −1100.
+
+⚠ `gofmt -l` is still not clean repo-wide, for the reason wave 1 recorded: this
+is a CRLF worktree with LF blobs, so gofmt lists every Go file regardless of
+content. Every file wave 3 touched is gofmt-clean once the carriage returns are
+stripped, which was checked rather than assumed; the two that still list —
+`chat/attachments.go`'s alignment and `garden/store.go`'s trailing blank line —
+are byte-identical deviations already present at `origin/main`.
 
 ## Guard rails for every wave
 
