@@ -1,10 +1,8 @@
 package garden
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -162,28 +160,22 @@ func (s *Service) GetPlant(ctx context.Context, id string) (Plant, error) {
 // knowledge-base field but never CLEAR one — and a rotation_break_years or
 // hardening_days entered by mistake drives check C3 and the harden-off task with
 // no way back short of deleting the crop.
-type presentFields map[string]bool
+type presentFields = httpx.Present
 
 // decodePatch unmarshals a body into dst while recording its top-level keys.
 //
-// It re-applies DisallowUnknownFields itself: a custom UnmarshalJSON is handed
-// the raw value and would otherwise switch off the unknown-field rejection
-// httpx.DecodeJSON asked for one level up.
+// It is httpx.PatchKeys under the module's own name, which is the half `garden`
+// contributed to that helper: this is called from inside each input type's
+// UnmarshalJSON, where the request is long gone and raw bytes are all there is.
+// `electricity` needed the same mechanism one level up, from the handler, and the
+// two could not share until it lived in both shapes.
+//
+// The error is returned RAW rather than wrapped: this runs inside
+// encoding/json, so it travels back out through httpx.DecodeJSON to the module's
+// own `decode`, which is where the Czech 422 message is attached. Wrapping here
+// would produce the message twice.
 func decodePatch(b []byte, dst any) (presentFields, error) {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return nil, err
-	}
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(b, &keys); err != nil {
-		return nil, err
-	}
-	present := make(presentFields, len(keys))
-	for k := range keys {
-		present[k] = true
-	}
-	return present, nil
+	return httpx.PatchKeys(b, dst)
 }
 
 // PlantInput is the create/update body. Pointers distinguish "omitted" from

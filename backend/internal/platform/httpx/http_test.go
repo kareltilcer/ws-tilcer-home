@@ -190,3 +190,59 @@ func TestLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodePatch pins the four properties the two modules' own versions had and
+// the shared one had to keep. The middle two are the ones a "simplification"
+// would drop: DisallowUnknownFields has to be re-applied on the typed pass
+// because a custom UnmarshalJSON switches it off, and the trailing-content check
+// existed only because electricity's version went through DecodeJSON.
+func TestDecodePatch(t *testing.T) {
+	type body struct {
+		Note  *string `json:"note"`
+		Count *int    `json:"count"`
+	}
+
+	// Omitted and explicitly null both decode to nil — the key set is the only
+	// thing that tells them apart, which is the whole reason this exists.
+	r := httptest.NewRequest(http.MethodPatch, "/x", strings.NewReader(`{"note":null}`))
+	var b body
+	present, err := httpx.DecodePatch(r, &b)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if b.Note != nil || b.Count != nil {
+		t.Errorf("both fields should decode to nil, got note=%v count=%v", b.Note, b.Count)
+	}
+	if !present["note"] {
+		t.Error(`"note" was explicitly null and must be present`)
+	}
+	if present["count"] {
+		t.Error(`"count" was omitted and must not be present`)
+	}
+
+	// A typo'd field is a 422, not a silently ignored key.
+	r = httptest.NewRequest(http.MethodPatch, "/x", strings.NewReader(`{"note_typo":"x"}`))
+	if _, err := httpx.DecodePatch(r, &body{}); err == nil {
+		t.Error("an unknown field must be refused")
+	} else if ae := new(httpx.APIError); !errors.As(err, &ae) || ae.Status != http.StatusUnprocessableEntity {
+		t.Errorf("unknown field = %v, want a 422 APIError", err)
+	}
+
+	// Trailing content after the first value is a 422 too.
+	r = httptest.NewRequest(http.MethodPatch, "/x", strings.NewReader(`{"note":"a"}{"note":"b"}`))
+	if _, err := httpx.DecodePatch(r, &body{}); err == nil {
+		t.Error("trailing content must be refused")
+	} else if ae := new(httpx.APIError); !errors.As(err, &ae) || ae.Status != http.StatusUnprocessableEntity {
+		t.Errorf("trailing content = %v, want a 422 APIError", err)
+	}
+
+	// PatchKeys is the same thing over bytes, for a caller inside UnmarshalJSON —
+	// and it returns the error RAW, for the caller that attaches its own message.
+	present, err = httpx.PatchKeys([]byte(`{"count":3}`), &b)
+	if err != nil {
+		t.Fatalf("PatchKeys: %v", err)
+	}
+	if b.Count == nil || *b.Count != 3 || present["note"] || !present["count"] {
+		t.Errorf("PatchKeys = %v, count=%v", present, b.Count)
+	}
+}
