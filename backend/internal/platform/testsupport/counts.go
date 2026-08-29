@@ -33,6 +33,12 @@ func CountRows(t *testing.T, db *sql.DB, table string) int {
 // required. Each module keeps its own one-line `auditCount` wrapper so its call
 // sites still read in its own terms, and so the filter it means stays written
 // down in one place per module rather than repeated at every assertion.
+//
+// ⚠ PASS LITERALS, NOT VARIABLES. The copies used `WHERE action = ?`, where an
+// empty action matched nothing and returned 0; here it drops the clause and
+// returns EVERY event. An assertion fed an accidentally-empty action (a renamed
+// constant, an unset struct field) used to fail loudly and would now pass against
+// a database full of unrelated events. Every current call site passes a literal.
 func CountAudit(t *testing.T, db *sql.DB, module, action string) int {
 	t.Helper()
 	q := `SELECT COUNT(*) FROM audit_events WHERE 1 = 1`

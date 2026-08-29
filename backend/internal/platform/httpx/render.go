@@ -48,9 +48,9 @@ func DecodeJSON(r *http.Request, dst any) error {
 // `electricity`, `events`, `finance`, `garden`, `notes` and `todo` each carried a
 // byte-identical copy of this pair beside the two functions it calls, which are
 // already in this package — so every module was one hop from the shared spelling
-// and took the copy instead. All sixteen call sites were migrated rather than left
-// beside it: an extraction nobody adopts is a ninth copy with a doc comment
-// claiming otherwise (the platform/db precedent).
+// and took the copy instead. Sixteen copies fed 178 call sites, and all 178 were
+// migrated rather than left beside it: an extraction nobody adopts is a ninth copy
+// with a doc comment claiming otherwise (the platform/db precedent).
 func Respond(w http.ResponseWriter, status int, v any, err error) {
 	if err != nil {
 		WriteError(w, err)

@@ -640,6 +640,10 @@ reference, its own declaration. `push.Disabled` is never constructed anywhere, a
 > - **Backend:** `internal/arch/deadcode_test.go` runs `go tool deadcode -test ./...`
 >   (a pinned `tool` directive in go.mod) and fails on anything outside `allowedDead`,
 >   a map whose VALUE is the reason each entry stays. One entry: `lexorank.Rebalance`.
+>   It also fails on an `allowedDead` entry deadcode no longer reports, so the
+>   allowlist cannot rot into the stale comments the guard exists to catch. Keys are
+>   `<directory>.<Symbol>`, built by the test — deadcode names a method by its
+>   receiver alone (`Store.Foo`), which would otherwise exempt every module at once.
 >   ~8s; `-short` skips it.
 > - **Frontend:** `npm run lint` is `oxlint && knip`, configured by `knip.jsonc`. It
 >   gates unused FILES, unused DEPENDENCIES, unlisted/unresolved imports and missing
