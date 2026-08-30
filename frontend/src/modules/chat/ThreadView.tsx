@@ -1264,11 +1264,21 @@ export function ReactionPicker({
    * ⚠ AN OVERLAY BELOW THE FOLD IS A FEATURE THAT LOOKS BROKEN, and the fold is
    * exactly where the common case puts it: the thread is pinned to its newest message
    * and the newest message is the one most likely to be reacted to, so the bar opens
-   * under the last bubble with nothing below it on screen. Being absolute it adds no
-   * height to scroll past, and the scrim below means the member cannot scroll to it by
-   * hand either. `block: 'nearest'` moves the box by the minimum and does nothing at
-   * all when the bar already fits — and in a layout effect it is never painted in the
-   * wrong place first. The optional call is for jsdom, which has no such method.
+   * under the last bubble, past the end of the thread's own content. It DOES extend the
+   * scroll range when it hangs off the end — an absolute box still counts as scrollable
+   * overflow, measured at 599 → 643 px — but nothing scrolls to it: the stick-to-bottom
+   * effect above fires on a new message id and on nothing else, so the member presses
+   * and the screen does not move. `block: 'nearest'` moves the box by the minimum and
+   * does nothing at all when the bar already fits — 0 px mid-thread against 44 on the
+   * last message — and in a layout effect it is never painted in the wrong place first.
+   * The optional call is for jsdom, which has no such method.
+   *
+   * ⚠ IT IS NOT THAT THE SCRIM PINS THE THREAD, which an earlier draft of this comment
+   * claimed. The scrim is `fixed`, but it is a DOM descendant of the scroll box, so a
+   * wheel or a drag over it still pans the thread — measured, 39 → 35 px with the bar
+   * open — and the bar travels with its row because it is anchored inside the same box.
+   * The member can move the thread by hand; they simply have no reason to know they
+   * need to.
    *
    * ⚠ AND IT TAKES FOCUS, BECAUSE IT IS NO LONGER NEXT TO ITS TRIGGER (v10.1 review).
    * In the flow the bar sat immediately after the ☺, so Tab walked straight into the
