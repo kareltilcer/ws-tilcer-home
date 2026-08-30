@@ -1,4 +1,13 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -959,6 +968,8 @@ function LiveBubble({
   onReact: (emoji: string, reacted: boolean) => void
 }) {
   const [picking, setPicking] = useState(false)
+  /** The ☺ and the bar it opens are no longer siblings, so the link is written out. */
+  const pickerID = useId()
   const gestures = useMessageGestures({
     // ⚠ THE DOUBLE TAP TOGGLES rather than always adding. It is the one gesture with
     // no visible twin of its own — the chip IS the twin — so a second double tap
@@ -971,7 +982,29 @@ function LiveBubble({
   })
 
   return (
-    <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+    // ⚠ THE ROW IS THE PICKER'S ANCHOR, AND IT CANNOT BE THE BUBBLE (v10.1 fix). The
+    // palette used to be a strip in the flow INSIDE the bubble, so opening it resized
+    // the message: seven 44 px targets and a ✕ are ~380 px wide, and a bubble holding
+    // *ok* jumped to the thread's full width, grew a row taller than its own body, and
+    // pushed every message below it down. A control that reshapes what it is attached
+    // to is a layout change, not a picker.
+    //
+    // The bubble was the obvious anchor and is the wrong one twice over: it carries
+    // `translateX` for the swipe, and a transform makes an element the containing block
+    // for its absolute AND fixed descendants — so the bar would have been capped at the
+    // bubble's width, and the dismiss scrim would have covered the bubble instead of
+    // the viewport. The row spans the thread, is never transformed, and sits inside the
+    // scroll box, which is what lets the bar move with the message for free.
+    <div
+      className={cn(
+        'relative flex',
+        mine ? 'justify-end' : 'justify-start',
+        // ⚠ AND IT HAS TO BE LIFTED. Every bubble is transformed, so every bubble is a
+        // stacking context painted in DOM order — without a positive z-index here the
+        // bar is drawn UNDER each message that follows it.
+        picking && 'z-20',
+      )}
+    >
       <div
         // ⚠ `pan-y` RATHER THAN `none`. The browser keeps vertical panning on its
         // own thread, so the thread scrolls exactly as it did while a horizontal
@@ -1034,6 +1067,7 @@ function LiveBubble({
           message={message}
           me={me}
           picking={picking}
+          pickerID={pickerID}
           onPicking={setPicking}
           onReact={onReact}
         />
@@ -1069,12 +1103,24 @@ function LiveBubble({
           )}
         </div>
       </div>
+
+      {/* Outside the bubble on purpose — see the row's note above. */}
+      {picking && (
+        <ReactionPicker
+          id={pickerID}
+          message={message}
+          me={me}
+          mine={mine}
+          onPicking={setPicking}
+          onReact={onReact}
+        />
+      )}
     </div>
   )
 }
 
 /**
- * The chips, the ☺ and the picker bar (v10.1, D265).
+ * The chips and the ☺ (v10.1, D265). The bar the ☺ opens is `ReactionPicker` below.
  *
  * ⚠ THE ROW IS ALWAYS RENDERED, EVEN WITH NO CHIPS, and that is what makes the
  * feature discoverable at all. The ☺ is the visible twin of the long press — a
@@ -1085,12 +1131,15 @@ function ReactionRow({
   message,
   me,
   picking,
+  pickerID,
   onPicking,
   onReact,
 }: {
   message: ChatMessage
   me: string
   picking: boolean
+  /** The bar's `id`, for the ☺'s `aria-controls` — they are in different subtrees. */
+  pickerID: string
   onPicking: (open: boolean) => void
   onReact: (emoji: string, reacted: boolean) => void
 }) {
@@ -1139,6 +1188,8 @@ function ReactionRow({
           type="button"
           onClick={() => onPicking(!picking)}
           aria-expanded={picking}
+          // Only while it exists: a reference to an absent id is a broken one.
+          aria-controls={picking ? pickerID : undefined}
           aria-label={cs.chat.reactionAdd}
           title={cs.chat.reactionAdd}
           className={cn(
@@ -1152,46 +1203,114 @@ function ReactionRow({
         </button>
       </div>
 
-      {/* ⚠ A STRIP IN THE FLOW, NOT A FLOATING POPOVER. The design draws the phone's
-          palette as a bar under the message, and a popover anchored to a bubble
-          inside a scroll box has to be repositioned on every scroll frame — which
-          is the one thing a thread cannot afford while somebody is reading it.
-          Below the chips it simply moves with them. */}
-      {picking && (
-        <div
-          role="group"
-          aria-label={cs.chat.reactionPickerLabel}
-          className="om-scroll mt-1.5 flex gap-1 overflow-x-auto rounded-[12px] border border-border-strong bg-s1 p-1"
-        >
-          {REACTION_PALETTE.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              onClick={() => {
-                onReact(emoji, !hasReacted(message.reactions, emoji, me))
-                onPicking(false)
-              }}
-              aria-label={emoji}
-              // ⚠ 44 px UNDER A THUMB, 34 AT THE DESK — the design's two sizes. This
-              // bar is the gesture's landing place, so it is reached with the same
-              // finger that held the message down.
-              className="grid h-11 w-11 flex-none place-items-center rounded-[10px] text-[20px] leading-none hover:bg-s3 lg:h-[34px] lg:w-[34px] lg:rounded-[9px] lg:text-[17px]"
-            >
-              <span aria-hidden>{emoji}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => onPicking(false)}
-            aria-label={cs.chat.reactionPickerClose}
-            title={cs.chat.reactionPickerClose}
-            className="grid h-11 w-9 flex-none place-items-center rounded-[10px] text-muted hover:bg-s3 hover:text-fg lg:h-[34px] lg:w-8"
-          >
-            <X size={15} aria-hidden />
-          </button>
-        </div>
-      )}
     </div>
+  )
+}
+
+/**
+ * The palette bar — an OVERLAY hung off the row, not a strip inside the bubble.
+ *
+ * ⚠ THE STRIP IS WHAT THIS FIXES. In the flow it resized the message card the moment
+ * it opened, which the row's own note above spells out: the bar is ~380 px wide and a
+ * bubble is as wide as what somebody typed.
+ *
+ * ⚠ AND IT STILL DOES NOT REPOSITION ON SCROLL, which was the strip's whole argument.
+ * It is absolute against the row, and the row is inside the scroll box — so it travels
+ * with its message for nothing, with no listener and no measurement per frame. The one
+ * measurement is `scrollIntoView`, taken once when it opens.
+ */
+function ReactionPicker({
+  id,
+  message,
+  me,
+  mine,
+  onPicking,
+  onReact,
+}: {
+  id: string
+  message: ChatMessage
+  me: string
+  /** Which edge it hangs from — the same edge its bubble is already against. */
+  mine: boolean
+  onPicking: (open: boolean) => void
+  onReact: (emoji: string, reacted: boolean) => void
+}) {
+  const bar = useRef<HTMLDivElement>(null)
+
+  /**
+   * ⚠ AN OVERLAY BELOW THE FOLD IS A FEATURE THAT LOOKS BROKEN, and the fold is
+   * exactly where the common case puts it: the thread is pinned to its newest message
+   * and the newest message is the one most likely to be reacted to, so the bar opens
+   * under the last bubble with nothing below it on screen. Being absolute it adds no
+   * height to scroll past, and the scrim below means the member cannot scroll to it by
+   * hand either. `block: 'nearest'` moves the box by the minimum and does nothing at
+   * all when the bar already fits — and in a layout effect it is never painted in the
+   * wrong place first. The optional call is for jsdom, which has no such method.
+   */
+  useLayoutEffect(() => {
+    bar.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [])
+
+  return (
+    <>
+      {/* ⚠ A WAY OUT THAT IS NOT THE BAR — the conversation menu's scrim, on the
+          surface that needs it more: this one covers the messages under it, so without
+          a scrim a tap on the neighbour it hides does nothing at all. A pointer target
+          only, for the reason written out up there: announced, it is an invisible
+          full-viewport control called *Zrušit* between the ☺ and the first emoji, met
+          by exactly the people who cannot see what it is for. The keyboard keeps the
+          ✕, which is a labelled control and is inside the bar. */}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden
+        className="fixed inset-0 z-10 cursor-default"
+        onClick={() => onPicking(false)}
+      />
+      <div
+        ref={bar}
+        id={id}
+        role="group"
+        aria-label={cs.chat.reactionPickerLabel}
+        className={cn(
+          'om-scroll absolute top-full z-20 mt-1.5 flex w-max max-w-full gap-1 overflow-x-auto',
+          'rounded-[12px] border border-border-strong bg-s1 p-1 shadow-[var(--shadow)]',
+          // ⚠ `max-w-full` IS THE ROW'S WIDTH, WHICH IS THE THREAD'S. That is the
+          // second reason the anchor is the row: seven 44 px targets and a ✕ do not
+          // fit a phone either way, but they get the 351 px the thread has at 375
+          // rather than the 298 the bubble has, and the remainder scrolls inside the
+          // bar the way the design's does.
+          mine ? 'right-0' : 'left-0',
+        )}
+      >
+        {REACTION_PALETTE.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => {
+              onReact(emoji, !hasReacted(message.reactions, emoji, me))
+              onPicking(false)
+            }}
+            aria-label={emoji}
+            // ⚠ 44 px UNDER A THUMB, 34 AT THE DESK — the design's two sizes. This
+            // bar is the gesture's landing place, so it is reached with the same
+            // finger that held the message down.
+            className="grid h-11 w-11 flex-none place-items-center rounded-[10px] text-[20px] leading-none hover:bg-s3 lg:h-[34px] lg:w-[34px] lg:rounded-[9px] lg:text-[17px]"
+          >
+            <span aria-hidden>{emoji}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => onPicking(false)}
+          aria-label={cs.chat.reactionPickerClose}
+          title={cs.chat.reactionPickerClose}
+          className="grid h-11 w-9 flex-none place-items-center rounded-[10px] text-muted hover:bg-s3 hover:text-fg lg:h-[34px] lg:w-8"
+        >
+          <X size={15} aria-hidden />
+        </button>
+      </div>
+    </>
   )
 }
 
