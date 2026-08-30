@@ -32,6 +32,13 @@ type Session struct {
 	ExpiresAt        time.Time
 }
 
+// identity is what the session currently says its owner is — the identity auth
+// handed over at login, or the one the last successful re-mint replaced it with.
+// Every request authorised from this row acts under it.
+func (s Session) identity() Identity {
+	return Identity{UserID: s.UserID, Email: s.Email, DisplayName: s.DisplayName, Roles: s.Roles}
+}
+
 // SessionStore persists home sessions in the platform `sessions` table.
 type SessionStore struct{ db *sql.DB }
 
@@ -130,12 +137,32 @@ func (s *SessionStore) Touch(ctx context.Context, id string, lastSeen, expires t
 	return err
 }
 
-// RefreshRoles caches freshly-minted roles and stamps roles_refreshed_at.
-func (s *SessionStore) RefreshRoles(ctx context.Context, id string, roles []string, at time.Time) error {
-	b, _ := json.Marshal(roles)
+// RefreshIdentity caches a freshly-minted identity — roles, and the email and
+// display name that ride in the same token — and stamps roles_refreshed_at.
+//
+// ⚠ IT WRITES THE WHOLE IDENTITY BECAUSE THIS ROW IS THE ONLY RECORD HOME HAS OF
+// WHO A MEMBER IS. Home has no user table (auth owns identity), so `sessions` is
+// what push.Store.Members projects the household directory from — which is the
+// author label on every chat message, every members-panel row, the add-member
+// picker, the "Vybraným lidem" audience and the delivery log. Caching only the
+// roles left all of that frozen at login: a member who renamed themselves in auth
+// went on being shown under their old name to everybody until they next logged in,
+// which behind a 90-day sliding session is effectively never. The mint already
+// returns the whole identity — this used to fetch it every fifteen minutes and
+// throw everything but the roles away.
+//
+// ⚠ THE COLUMN IS STILL CALLED roles_refreshed_at, and it still means what it
+// says: it is the re-mint threshold's stamp, and the re-mint is what brings the
+// name along. Renaming it would be a migration over the one table every request
+// reads, for a word.
+//
+// ⚠ CLEARING IS THE CALLER'S DECISION AND IT IS NOT TAKEN HERE — see
+// mergeIdentity. What arrives is what should be stored.
+func (s *SessionStore) RefreshIdentity(ctx context.Context, sessionID string, id Identity, at time.Time) error {
+	b, _ := json.Marshal(id.Roles)
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET roles = ?, roles_refreshed_at = ? WHERE id = ?`,
-		string(b), at.UTC().Format(tsLayout), id)
+		`UPDATE sessions SET roles = ?, email = ?, display_name = ?, roles_refreshed_at = ? WHERE id = ?`,
+		string(b), id.Email, nullStr(id.DisplayName), at.UTC().Format(tsLayout), sessionID)
 	return err
 }
 

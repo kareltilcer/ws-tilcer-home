@@ -156,9 +156,7 @@ func (h *Handler) session(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.ErrUnauthorized("invalid or expired session"))
 		return
 	}
-	httpx.JSON(w, http.StatusOK, sessionUser{User: publicUser(Identity{
-		UserID: sess.UserID, Email: sess.Email, DisplayName: sess.DisplayName, Roles: sess.Roles,
-	})})
+	httpx.JSON(w, http.StatusOK, sessionUser{User: publicUser(sess.identity())})
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +181,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	actorCtx := reqctx.WithActor(r.Context(), reqctx.Actor{UserID: sess.UserID, Type: "user", Label: labelFor(sess), Roles: sess.Roles})
+	actorCtx := reqctx.WithActor(r.Context(), reqctx.Actor{UserID: sess.UserID, Type: "user", Label: labelForIdentity(sess.identity()), Roles: sess.Roles})
 	// The id of the session this logout actually revoked — this device's, and only
 	// this device's. It is what the socket hook is told below.
 	var revokedID string

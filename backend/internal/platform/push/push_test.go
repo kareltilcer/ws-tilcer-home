@@ -557,23 +557,35 @@ func TestDisabledChannelSendsNothing(t *testing.T) {
 
 // ---- audience resolution ----
 
-// seedSession writes the session row the member directory is projected from.
+// seedSession writes the session row the member directory is projected from, as
+// it looks for a session nothing has re-minted since it was created.
 func seedSession(t *testing.T, sqldb *sql.DB, userID, email, name string, roles []string, created time.Time) {
 	t.Helper()
+	seedRefreshedSession(t, sqldb, userID, email, name, roles, created, created)
+}
+
+// seedRefreshedSession writes one whose identity was last confirmed at
+// `refreshed` — what auth's re-mint stamps on `roles_refreshed_at` every time it
+// brings back a member's roles, email and display name.
+func seedRefreshedSession(t *testing.T, sqldb *sql.DB, userID, email, name string, roles []string, created, refreshed time.Time) {
+	t.Helper()
 	rolesJSON, _ := json.Marshal(roles)
+	// ⚠ The key carries the DATE as well as the clock time: `token_hash` is UNIQUE,
+	// and two sessions seeded a whole day apart collide on a time-of-day key.
+	key := created.Format("20060102-150405.000000000")
 	_, err := sqldb.Exec(
 		`INSERT INTO sessions (id, user_id, token_hash, email, display_name, roles, roles_refreshed_at,
 		                       created_at, last_seen_at, expires_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		"sess-"+userID+"-"+created.Format("150405.000000000"), userID, "hash-"+userID+created.Format("150405.000000000"),
-		email, name, string(rolesJSON), created.Format(time.RFC3339Nano),
+		"sess-"+userID+"-"+key, userID, "hash-"+userID+key,
+		email, name, string(rolesJSON), refreshed.Format(time.RFC3339Nano),
 		created.Format(time.RFC3339Nano), created.Format(time.RFC3339Nano), created.Add(24*time.Hour).Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 }
 
-func TestMembersProjectsTheNewestSessionPerUser(t *testing.T) {
+func TestMembersProjectsTheFreshestIdentityPerUser(t *testing.T) {
 	sqldb := testsupport.NewDB(t)
 	store := NewStore(sqldb)
 	base := time.Now().Add(-time.Hour)
@@ -595,7 +607,7 @@ func TestMembersProjectsTheNewestSessionPerUser(t *testing.T) {
 		byID[m.UserID] = m
 	}
 	if got := byID["u1"]; got.DisplayName != "Karel" || len(got.Roles) != 1 || got.Roles[0] != "admin" {
-		t.Errorf("u1 should carry the NEWEST session's identity and roles, got %+v", got)
+		t.Errorf("u1 should carry the most recently confirmed identity and roles, got %+v", got)
 	}
 	if byID["u1"].Subscriptions != 1 {
 		t.Errorf("u1 subscription count = %d, want 1", byID["u1"].Subscriptions)
@@ -604,6 +616,38 @@ func TestMembersProjectsTheNewestSessionPerUser(t *testing.T) {
 	// shows a blank row.
 	if byID["u2"].DisplayName != "eva@tilcer.cz" {
 		t.Errorf("u2 display name = %q, want the email fallback", byID["u2"].DisplayName)
+	}
+}
+
+// ⚠ THE NEWEST SESSION IS NOT THE FRESHEST IDENTITY, and picking by `created_at`
+// is what made a rename invisible to the household. Every re-mint writes the roles,
+// email and display name auth handed back and moves `roles_refreshed_at`; a device
+// signed into once and left in a drawer is never re-minted, so its row keeps the
+// name it was created with — and while it was the newest row, that stale name was
+// the one the directory published no matter how many times the member's other
+// sessions had been refreshed since.
+func TestMembersPrefersTheRefreshedSessionOverANewerDormantOne(t *testing.T) {
+	sqldb := testsupport.NewDB(t)
+	store := NewStore(sqldb)
+	base := time.Now().Add(-72 * time.Hour)
+
+	// The laptop: signed into first, used every day, re-minted an hour ago.
+	seedRefreshedSession(t, sqldb, "u1", "karel@tilcer.cz", "Karel Tilcer", []string{"admin"},
+		base, time.Now().Add(-time.Hour))
+	// The tablet: signed into a day later and never opened again.
+	seedRefreshedSession(t, sqldb, "u1", "karel@tilcer.cz", "Karel starý", []string{"editor"},
+		base.Add(24*time.Hour), base.Add(24*time.Hour))
+
+	members, err := store.Members(context.Background())
+	if err != nil {
+		t.Fatalf("members: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("got %d members, want 1 (one row per user): %+v", len(members), members)
+	}
+	if members[0].DisplayName != "Karel Tilcer" || members[0].Roles[0] != "admin" {
+		t.Errorf("directory shows %+v; want the identity auth confirmed most recently — the "+
+			"dormant tablet's row is newer and nothing will ever refresh it", members[0])
 	}
 }
 

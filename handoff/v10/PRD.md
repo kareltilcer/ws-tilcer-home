@@ -3521,6 +3521,14 @@ From the `design/v10_1` bundle plus four requests from Karel against the shipped
 
 ---
 
+### Taken for the identity refresh (D270, 2026-08-30)
+
+Reported by Karel against the shipped app: he renamed himself in auth and chat went on showing the old name.
+
+- **D270 — The re-mint refreshes the whole cached identity, not just the roles — and the directory is projected from the freshest session, not the newest.** Home has no user table (D79), so `sessions` is the only record it holds of who a member is, and `push.Store.Members` projects the household directory from it: the author label on every chat message, every members-panel row, the add-member picker, the *Vybraným lidem* audience and the delivery log. That row was written **once, at login.** The fifteen-minute re-mint has always fetched a whole `Identity` from `/internal/token/mint` and kept only `roles`, so a rename reached the household on that member's **next login and not before** — which behind a 90-day sliding session is effectively never. `RefreshRoles` becomes **`RefreshIdentity`** and writes `email` and `display_name` alongside the roles, and the request that re-mints **acts under the new label**, or the one request that learned the rename would stamp the audit trail with the name it had just replaced. ⚠ **An absent claim is read as "this token did not say", never as "the member cleared it".** Home cannot tell those apart from one token and the two mistakes are not the same size: reading silence as a clear would blank `display_name` on every session in the household within one refresh window if auth's mint ever stopped carrying `name` — and a blank name is exactly what the directory falls back *from*, so the household would be relabelled by raw user ids, silently, with no deploy of Home to blame it on. The other reading costs one member who **erases** their name in auth still being shown under it here until they log in again, which is what everybody had before this existed. ⚠ **And the directory picks by `roles_refreshed_at` rather than `created_at`**: the newest session is the last device to log *in*, which is not the last device to be *used*. A tablet signed into once and left in a drawer is a row nothing will ever re-mint, and while it was the newest it published its stale identity no matter how many times that member's laptop had been refreshed since.
+
+---
+
 ## V10-11. Acceptance Criteria (v10)
 
 **The model**

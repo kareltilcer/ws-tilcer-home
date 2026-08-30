@@ -168,7 +168,7 @@ func TestRevalidateSession_FailedRevokeKeepsTheSocket(t *testing.T) {
 
 	// Make the revoke UPDATE — and only that UPDATE — fail. `UPDATE OF revoked_at`
 	// fires for RevokeByID and not for the roles or last-seen writes, so Lookup and
-	// RefreshRoles keep working and the failure is exactly the one being modelled.
+	// RefreshIdentity keep working and the failure is exactly the one being modelled.
 	if _, err := h.db.Exec(`CREATE TRIGGER test_block_revoke BEFORE UPDATE OF revoked_at ON sessions
 		BEGIN SELECT RAISE(ABORT, 'revoke write failed'); END`); err != nil {
 		t.Fatalf("install trigger: %v", err)

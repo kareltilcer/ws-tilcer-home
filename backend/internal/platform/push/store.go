@@ -372,8 +372,19 @@ type Member struct {
 // user, with a count of their subscribed devices. It drives the "Vybraným lidem"
 // picker and labels the delivery log.
 func (s *Store) Members(ctx context.Context) ([]Member, error) {
-	// One row per user: the most recent session carries the freshest display name
-	// and roles (roles are re-minted into the session on the refresh threshold).
+	// One row per user: the session whose identity was CONFIRMED most recently,
+	// which is what `roles_refreshed_at` stamps — every re-mint writes the roles,
+	// the email and the display name auth handed back (auth.SessionStore
+	// .RefreshIdentity) and moves that stamp.
+	//
+	// ⚠ IT IS NOT THE NEWEST SESSION, AND THE DIFFERENCE IS A MEMBER WHO RENAMED
+	// THEMSELVES. `MAX(created_at)` picks the last device to log in, which is not
+	// the last device to be USED: a tablet signed into once in July and left in a
+	// drawer outranks the laptop its owner works on every day, and it is a row
+	// nothing will ever refresh — so the rename that the laptop's session picked up
+	// within fifteen minutes would have gone on being invisible to the whole
+	// household for as long as that tablet's row was the newest. Both columns are
+	// written at Create, so for anybody with one session this changes nothing.
 	// ⚠ UNORDERED ON PURPOSE — THE SORT IS IN GO, BELOW. SQLite's TRIM() strips the
 	// ASCII space and nothing else, so an ORDER BY built on it disagreed with the
 	// strings.TrimSpace the projection applies a few lines down: a display_name of
@@ -384,8 +395,8 @@ func (s *Store) Members(ctx context.Context) ([]Member, error) {
 		SELECT s.user_id, s.email, COALESCE(s.display_name, ''), s.roles,
 		       (SELECT COUNT(*) FROM push_subscriptions ps WHERE ps.user_id = s.user_id)
 		  FROM sessions s
-		  JOIN (SELECT user_id, MAX(created_at) AS newest FROM sessions GROUP BY user_id) latest
-		    ON latest.user_id = s.user_id AND latest.newest = s.created_at
+		  JOIN (SELECT user_id, MAX(roles_refreshed_at) AS freshest FROM sessions GROUP BY user_id) latest
+		    ON latest.user_id = s.user_id AND latest.freshest = s.roles_refreshed_at
 		 GROUP BY s.user_id`)
 	if err != nil {
 		return nil, err
