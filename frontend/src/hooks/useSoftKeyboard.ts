@@ -61,7 +61,14 @@ export interface ViewportFrame {
 export interface SoftKeyboard {
   /** True while a keyboard is covering the bottom of the layout viewport. */
   open: boolean
-  /** The height left on screen above it, in CSS pixels. 0 while closed. */
+  /**
+   * The strip left above it, IN THE PAGE'S OWN CSS PIXELS — which is what a CSS
+   * height has to be to fill that strip, and the reason this is `visual` and is
+   * deliberately NOT multiplied by `scale` the way the threshold below is. On a
+   * zoomed page the two part company: at 1.14 a 512 px strip of glass is 449 CSS
+   * pixels, and a box told to be 512 would overrun the strip by the zoom. 0 while
+   * closed.
+   */
   viewport: number
 }
 
@@ -117,6 +124,14 @@ export function readSoftKeyboard(frame: ViewportFrame): SoftKeyboard {
   // auto-zoom onto a focused field stops swallowing the keyboard behind it.
   const covered = frame.layout - frame.visual * frame.scale
   if (covered < KEYBOARD_MIN_PX) return CLOSED
+  // ⚠ A PINCH THAT ARRIVES WHILE A KEYBOARD IS ALREADY UP IS FOLLOWED, NOT FROZEN
+  // (review round 3). The reading stays open and `viewport` shrinks with the zoom, so
+  // the box goes on filling the glass — and the thread re-pins under it. Refusing to
+  // look above some scale does not remove that movement, it INVERTS it: the box grows
+  // back to the whole layout viewport in the same gesture, which is the larger jump
+  // of the two. And the boundary it would need — between Safari's auto-zoom, 16/14
+  // here and 16/13 on a `text-[13px]` field, and a gentle pinch — is exactly the
+  // number nobody can calibrate.
   return { open: true, viewport: frame.visual }
 }
 
@@ -129,6 +144,15 @@ export function readSoftKeyboard(frame: ViewportFrame): SoftKeyboard {
  * focus, with `document.activeElement` transiently on `<body>`. Listening for it
  * would report the keyboard gone and back for every move between two fields, and
  * the layout would flinch each time on a keyboard that never moved.
+ *
+ * ⚠ AND FOCUS MAY OPEN THIS BUT MAY NEVER CLOSE IT (review round 3) — the same
+ * reasoning, applied to the door the flinch was actually coming through. `focusin`
+ * fires for the composer's own send and attach buttons, neither of which refuses the
+ * default on mousedown, so both take the focus; answering "closed" there reports a
+ * keyboard gone on the word of a BUTTON rather than of the viewport, and the tab bar
+ * comes back and the chat box grows by the keyboard's height while the keyboard is
+ * still on screen. Since a keyboard that leaves always resizes, the resize is the
+ * only thing that needs to be believed about its going.
  */
 export function useSoftKeyboard(): SoftKeyboard {
   const [keyboard, setKeyboard] = useState<SoftKeyboard>(CLOSED)
@@ -139,27 +163,35 @@ export function useSoftKeyboard(): SoftKeyboard {
     // layout exactly as it was before this hook existed.
     if (!vv) return
 
-    const read = () => {
-      const next = readSoftKeyboard({
+    const measure = () =>
+      readSoftKeyboard({
         layout: window.innerHeight,
         visual: vv.height,
         scale: vv.scale,
         typing: isTypingTarget(document.activeElement),
       })
-      // ⚠ COMPARED BEFORE IT IS STORED. `resize` fires on every frame of the
-      // keyboard's slide-in, and a fresh object each time is a re-render of the
-      // whole shell each time — for the frames where the answer did not change.
+
+    // ⚠ COMPARED BEFORE IT IS STORED. `resize` fires on every frame of the
+    // keyboard's slide-in, and a fresh object each time is a re-render of the
+    // whole shell each time — for the frames where the answer did not change.
+    const store = (next: SoftKeyboard) =>
       setKeyboard((prev) =>
         prev.open === next.open && prev.viewport === next.viewport ? prev : next,
       )
+
+    const onResize = () => store(measure())
+    /** Focus may only ever OPEN this; the resize is what closes it (see above). */
+    const onFocusIn = () => {
+      const next = measure()
+      if (next.open) store(next)
     }
 
-    read()
-    vv.addEventListener('resize', read)
-    document.addEventListener('focusin', read)
+    store(measure())
+    vv.addEventListener('resize', onResize)
+    document.addEventListener('focusin', onFocusIn)
     return () => {
-      vv.removeEventListener('resize', read)
-      document.removeEventListener('focusin', read)
+      vv.removeEventListener('resize', onResize)
+      document.removeEventListener('focusin', onFocusIn)
     }
   }, [])
 

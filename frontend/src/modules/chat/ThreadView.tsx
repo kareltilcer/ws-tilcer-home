@@ -154,8 +154,17 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // ⚠ ONLY A SHRINK MOVES ANYTHING (review round 3). A box that GROWS keeps its own
+    // bottom: `scrollTop` was at its maximum, that maximum falls as `clientHeight`
+    // rises, and the browser clamps to it — so the keyboard leaving, or the composer
+    // handing a row back, needs nothing from here. It also takes the observer's FIRST
+    // delivery out of the picture, which reports the box's starting size and was
+    // re-doing the pin the effect above had just done on the same commit.
+    let height = el.clientHeight
     const observer = new ResizeObserver(() => {
-      if (atBottom.current) el.scrollTop = el.scrollHeight
+      const shrank = el.clientHeight < height
+      height = el.clientHeight
+      if (shrank && atBottom.current) el.scrollTop = el.scrollHeight
     })
     observer.observe(el)
     return () => observer.disconnect()

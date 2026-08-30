@@ -283,6 +283,13 @@
      thread rather than to a strip behind the keyboard. The values here are the
      no-keyboard case, and every width from 768 up ignores all three (`md:h-full`).
 
+     ⚠ WHICH IS ALSO WHERE THE KEYBOARD FIX STOPS, AND THAT IS A GAP RATHER THAN A
+     SETTLED CASE. From 768 up the box is `h-full` inside a shell that is
+     `md:h-screen` — the layout viewport, which a keyboard does not shrink — so a
+     TABLET's on-screen keyboard still covers the composer exactly as a phone's did
+     before this. Not a regression, and not fixed: the arithmetic above is a phone's,
+     measured at 375x812, and a tablet needs its own measurement before it gets one.
+
      ⚠ AND THAT IS WHY THERE IS NO --chat-chrome ADDING THE TWO UP. A custom
      property's var() references are substituted where the property is DECLARED, so
      a `--chat-chrome: calc(var(--chat-chrome-top) + var(--chat-chrome-bottom))`

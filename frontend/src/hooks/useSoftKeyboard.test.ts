@@ -92,15 +92,19 @@ describe('isTypingTarget', () => {
     file.type = 'file'
     // A wheel and a calendar cover the bottom of a phone exactly as a keyboard does,
     // and neither is somebody writing — which is the question this answers.
-    const date = document.createElement('input')
-    date.type = 'date'
-    const time = document.createElement('input')
-    time.type = 'time'
+    // All five of the family, because all five are in the app: `date` in an event
+    // and an electricity advance, `time` in a schedule, `month` in a payment.
+    const pickers = ['date', 'datetime-local', 'month', 'time', 'week'].map((type) => {
+      const el = document.createElement('input')
+      el.type = type
+      return el
+    })
 
     expect(isTypingTarget(checkbox)).toBe(false)
     expect(isTypingTarget(file)).toBe(false)
-    expect(isTypingTarget(date)).toBe(false)
-    expect(isTypingTarget(time)).toBe(false)
+    for (const picker of pickers) {
+      expect(isTypingTarget(picker), `${picker.type} opens a wheel, not a keyboard`).toBe(false)
+    }
     expect(isTypingTarget(document.createElement('button'))).toBe(false)
     expect(isTypingTarget(document.createElement('div'))).toBe(false)
     expect(isTypingTarget(null)).toBe(false)
@@ -209,6 +213,33 @@ describe('useSoftKeyboard', () => {
       textarea.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
     })
     expect(result.current).toEqual({ open: true, viewport: 512 })
+  })
+
+  // ⚠ THE COMPOSER'S OWN SEND AND ATTACH BUTTONS TAKE THE FOCUS — neither refuses the
+  // default on mousedown — so a focusin that answered "closed" would bring the tab bar
+  // back and grow the chat box by the keyboard's height while the keyboard is still
+  // on screen. The viewport is what reports a keyboard going, and it always does.
+  it('lets focus open it and never close it — only the resize closes it', () => {
+    textarea.focus()
+    const { result } = renderHook(() => useSoftKeyboard())
+    viewport.resize(512)
+    expect(result.current.open).toBe(true)
+
+    const button = document.createElement('button')
+    document.body.append(button)
+    act(() => {
+      button.focus()
+      button.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    })
+    expect(result.current, 'a button taking focus is not the keyboard leaving').toEqual({
+      open: true,
+      viewport: 512,
+    })
+
+    // The keyboard actually going is a resize, and that does close it.
+    viewport.resize(LAYOUT)
+    expect(result.current).toEqual({ open: false, viewport: 0 })
+    button.remove()
   })
 
   it('unsubscribes on unmount', () => {
