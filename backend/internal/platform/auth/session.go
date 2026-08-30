@@ -14,9 +14,23 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 )
 
-// tsLayout is the timestamp format for the sessions table (RFC3339 UTC). Session
-// timestamps are compared as parsed time.Time, not as strings, so any fixed
-// layout is fine.
+// tsLayout is the timestamp format for the sessions table (RFC3339 UTC).
+//
+// ⚠ ONE OF THESE COLUMNS IS COMPARED AS TEXT, IN SQL, and this comment used to
+// say the opposite. push.Store.Members resolves the household directory with
+// MAX(roles_refreshed_at) — SQLite's BINARY collation on the stored string, not a
+// parsed time — so the layout is no longer free to change. RFC3339Nano is not
+// fixed width: it TRIMS trailing zeros from the fraction, and within one second
+// 'Z' (0x5A) sorts above '.' and above every digit, so "…:07Z" beats "…:07.4Z"
+// and "…:07.1Z" beats "…:07.10004Z" — lexicographic order inverted against
+// chronological.
+//
+// It is left standing rather than migrated: every stamp here comes from
+// time.Now() at nanosecond resolution, so an inversion needs two of one member's
+// sessions re-minted inside the same second AND the earlier fraction to be a
+// decimal prefix of the later one, which is a ~1e-9 event against a directory
+// that self-corrects on the next refresh. What must not happen is a layout change
+// made on the belief that nothing reads these as text.
 const tsLayout = time.RFC3339Nano
 
 // Session is a live home session (Mode B). Only the SHA-256 hash of the cookie
@@ -30,6 +44,13 @@ type Session struct {
 	RolesRefreshedAt time.Time
 	LastSeenAt       time.Time
 	ExpiresAt        time.Time
+}
+
+// identity is what the session currently says its owner is — the identity auth
+// handed over at login, or the one the last successful re-mint replaced it with.
+// Every request authorised from this row acts under it.
+func (s Session) identity() Identity {
+	return Identity{UserID: s.UserID, Email: s.Email, DisplayName: s.DisplayName, Roles: s.Roles}
 }
 
 // SessionStore persists home sessions in the platform `sessions` table.
@@ -130,12 +151,32 @@ func (s *SessionStore) Touch(ctx context.Context, id string, lastSeen, expires t
 	return err
 }
 
-// RefreshRoles caches freshly-minted roles and stamps roles_refreshed_at.
-func (s *SessionStore) RefreshRoles(ctx context.Context, id string, roles []string, at time.Time) error {
-	b, _ := json.Marshal(roles)
+// RefreshIdentity caches a freshly-minted identity — roles, and the email and
+// display name that ride in the same token — and stamps roles_refreshed_at.
+//
+// ⚠ IT WRITES THE WHOLE IDENTITY BECAUSE THIS ROW IS THE ONLY RECORD HOME HAS OF
+// WHO A MEMBER IS. Home has no user table (auth owns identity), so `sessions` is
+// what push.Store.Members projects the household directory from — which is the
+// author label on every chat message, every members-panel row, the add-member
+// picker, the "Vybraným lidem" audience and the delivery log. Caching only the
+// roles left all of that frozen at login: a member who renamed themselves in auth
+// went on being shown under their old name to everybody until they next logged in,
+// which behind a 90-day sliding session is effectively never. The mint already
+// returns the whole identity — this used to fetch it every fifteen minutes and
+// throw everything but the roles away.
+//
+// ⚠ THE COLUMN IS STILL CALLED roles_refreshed_at, and it still means what it
+// says: it is the re-mint threshold's stamp, and the re-mint is what brings the
+// name along. Renaming it would be a migration over the one table every request
+// reads, for a word.
+//
+// ⚠ CLEARING IS THE CALLER'S DECISION AND IT IS NOT TAKEN HERE — see
+// mergeIdentity. What arrives is what should be stored.
+func (s *SessionStore) RefreshIdentity(ctx context.Context, sessionID string, id Identity, at time.Time) error {
+	b, _ := json.Marshal(id.Roles)
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET roles = ?, roles_refreshed_at = ? WHERE id = ?`,
-		string(b), at.UTC().Format(tsLayout), id)
+		`UPDATE sessions SET roles = ?, email = ?, display_name = ?, roles_refreshed_at = ? WHERE id = ?`,
+		string(b), id.Email, nullStr(id.DisplayName), at.UTC().Format(tsLayout), sessionID)
 	return err
 }
 

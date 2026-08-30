@@ -61,15 +61,23 @@ func (c Config) sessionRevoked(sessionID string) {
 	}
 }
 
-// refreshRoles re-mints sess's cached roles when they are past the threshold
+// refreshIdentity re-mints sess's cached identity when it is past the threshold
 // (FR-A2), and is the ONE place the fail-closed decision is taken — shared by the
 // request middleware and by RevalidateSession, so an open websocket and an HTTP
 // request cannot disagree about whether an account is still open.
 //
-// It returns ErrUserClosed once auth has closed the account, the cached roles
-// unchanged on a transient auth outage, and never an error the caller has to map.
-// `revoked` reports whether the session row was ACTUALLY revoked, which is a
-// different question from whether the account is closed — see RevalidateSession.
+// It returns the identity the caller should act under — the minted one, or the
+// session's cached one when nothing was minted — ErrUserClosed once auth has
+// closed the account, and never an error the caller has to map on a transient
+// auth outage. `revoked` reports whether the session row was ACTUALLY revoked,
+// which is a different question from whether the account is closed — see
+// RevalidateSession.
+//
+// ⚠ THE NAME AND THE EMAIL COME BACK WITH THE ROLES, and that is the point of it
+// rather than a detail: the mint returns a whole Identity, and this is the only
+// thing in Home that ever asks auth who a member is after they logged in. What
+// that is worth, and what is deliberately not done with it, is in
+// SessionStore.RefreshIdentity and mergeIdentity.
 //
 // ⚠ viaConnection says WHO IS ASKING, and it is not decoration: the two callers
 // need different cancellation and different announcement, and collapsing them
@@ -82,9 +90,9 @@ func (c Config) sessionRevoked(sessionID string) {
 //     the writes are detached (a tab closed mid-mint must not undo a decided
 //     revoke), and the announcement is left to the caller, which has an ordering
 //     constraint this frame cannot see. See RevalidateSession.
-func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, viaConnection bool) (roles []string, revoked bool, err error) {
+func (c Config) refreshIdentity(ctx context.Context, sess Session, now time.Time, viaConnection bool) (id Identity, revoked bool, err error) {
 	if c.Authr == nil || now.Sub(sess.RolesRefreshedAt) <= c.RoleRefresh {
-		return sess.Roles, false, nil
+		return sess.identity(), false, nil
 	}
 	// ⚠ COALESCED PER SESSION. The roles_refreshed_at stamp is what normally
 	// prevents a duplicate Mint, but it only works for callers who Lookup AFTER
@@ -94,7 +102,7 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 	// window, precisely for a member active enough to be using the app when the
 	// tick fires. The joiner shares the leader's outcome, which is the same
 	// answer its own call would have fetched.
-	id, mintErr := mints.do(sess.ID, func() (Identity, error) {
+	minted, mintErr := mints.do(sess.ID, func() (Identity, error) {
 		return c.Authr.Mint(ctx, sess.UserID)
 	})
 	switch {
@@ -119,7 +127,7 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 		if err := c.Sessions.RevokeByID(revokeCtx, sess.ID); err != nil {
 			c.logger().Error("session revoke FAILED for a closed user — the session is still live in the database",
 				"user", sess.UserID, "session", sess.ID, "err", err)
-			return nil, false, ErrUserClosed
+			return Identity{}, false, ErrUserClosed
 		}
 		// ⚠ AND IT DOES NOT FIRE FROM INSIDE A CONNECTION'S OWN RE-CHECK. The hook
 		// is ws.Hub.DisconnectSession, and the revalidation pump has to RETIRE its
@@ -133,19 +141,20 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 		if !viaConnection {
 			c.sessionRevoked(sess.ID)
 		}
-		return nil, true, ErrUserClosed
+		return Identity{}, true, ErrUserClosed
 	case mintErr == nil:
 		// ⚠ DETACHED FOR A CONNECTION, FOR THE SAME REASON THE REVOKE ABOVE IS.
 		// This write is what makes a mint that already succeeded STICK: it stamps
 		// roles_refreshed_at, and every other caller reads that stamp to decide not
 		// to mint again. From the websocket ctx is a connection's or a pump's, so a
 		// member closing the tab in the window between Mint returning and this
-		// UPDATE cancelled it, the error was discarded, and the fresh roles were
+		// UPDATE cancelled it, the error was discarded, and the fresh identity was
 		// thrown away — leaving the session to re-mint on the very next tick, which
 		// is precisely the repeated-Mint cost one-pump-per-session exists to avoid.
 		roleCtx, cancel := c.writeContext(ctx, viaConnection)
 		defer cancel()
-		if err := c.Sessions.RefreshRoles(roleCtx, sess.ID, id.Roles, now); err != nil {
+		fresh := mergeIdentity(sess, minted)
+		if err := c.Sessions.RefreshIdentity(roleCtx, sess.ID, fresh, now); err != nil {
 			// ⚠ THE MINT SUCCEEDED AND THE STAMP DID NOT, which is the one outcome
 			// this whole branch exists to protect and was also the only one with no
 			// trace. roles_refreshed_at is what every other caller reads to decide
@@ -156,18 +165,19 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 			// it looked identical to a healthy refresh from every angle.
 			//
 			// Warn rather than Error, and only when the CALLER is still there: the
-			// request goes through on fresh roles either way, and from a connection
-			// ctx a member closing their tab cancels this write for a reason that is
-			// not a store problem (the same guard the transient branch below uses).
+			// request goes through on the fresh identity either way, and from a
+			// connection ctx a member closing their tab cancels this write for a
+			// reason that is not a store problem (the same guard the transient branch
+			// below uses).
 			if ctx.Err() == nil {
-				c.logger().Warn("role stamp FAILED after a successful re-mint — this session will "+
+				c.logger().Warn("identity write FAILED after a successful re-mint — this session will "+
 					"re-mint on every tick and every request until it lands",
 					"user", sess.UserID, "session", sess.ID, "err", err)
 			}
 		}
-		return id.Roles, false, nil
+		return fresh, false, nil
 	default:
-		// Transient auth outage: keep cached roles, retry next request.
+		// Transient auth outage: keep the cached identity, retry next request.
 		//
 		// ⚠ Silent when the CALLER went away. From the websocket revalidation pump
 		// ctx is the connection's, so a member closing their tab mid-mint lands
@@ -177,8 +187,33 @@ func (c Config) refreshRoles(ctx context.Context, sess Session, now time.Time, v
 		if ctx.Err() == nil {
 			c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
 		}
-		return sess.Roles, false, nil
+		return sess.identity(), false, nil
 	}
+}
+
+// mergeIdentity is what a successful mint is allowed to change about a session:
+// the roles wholesale, and the email and display name only where the token
+// actually carried one.
+//
+// ⚠ AN EMPTY CLAIM IS READ AS "THIS TOKEN DID NOT SAY", NOT AS "THE MEMBER
+// CLEARED IT", and the asymmetry is deliberate. Home cannot tell those two apart
+// from one token, and the two mistakes are not the same size: treating an absent
+// claim as a clear would blank `display_name` on EVERY session in the household
+// within one refresh window if auth's mint token ever stops carrying `name` — and
+// blank names are exactly what the directory falls back from, so the whole
+// household would go back to being labelled by raw user ids, silently, with no
+// deploy of Home to blame it on. The cost of the other mistake is one member who
+// erased their name in auth still being shown under it in Home until they log in
+// again, which is precisely the behaviour everyone had before this existed.
+func mergeIdentity(sess Session, minted Identity) Identity {
+	out := sess.identity()
+	// The roles are replaced outright; the two identity fields fall back through
+	// firstNonEmpty, which is the same "empty means the token did not supply it"
+	// reading the login handler already applies to a client-sent email.
+	out.Roles = minted.Roles
+	out.Email = firstNonEmpty(minted.Email, sess.Email)
+	out.DisplayName = firstNonEmpty(minted.DisplayName, sess.DisplayName)
+	return out
 }
 
 // mintFlight coalesces concurrent re-mints of one session: the first caller in
@@ -218,8 +253,9 @@ func (f *mintFlight) do(key string, fetch func() (Identity, error)) (Identity, e
 	return c.id, c.err
 }
 
-// writeContext returns the context refreshRoles' two follow-up writes run on —
-// the fail-closed revoke, and the roles stamp that makes a successful mint stick.
+// writeContext returns the context refreshIdentity's two follow-up writes run on
+// — the fail-closed revoke, and the identity write that makes a successful mint
+// stick.
 //
 // Detached (and bounded) only for a websocket caller, whose context is a
 // connection's and can die for a reason that has nothing to do with the write.
@@ -233,9 +269,9 @@ func (c Config) writeContext(ctx context.Context, viaConnection bool) (context.C
 	return context.WithTimeout(context.WithoutCancel(ctx), detachedWriteTimeout)
 }
 
-// detachedWriteTimeout bounds the two writes refreshRoles runs on a context
-// detached from a CONNECTION's — the fail-closed revoke, and the roles stamp that
-// makes a successful mint stick. Long enough to outlast SQLite's busy timeout,
+// detachedWriteTimeout bounds the two writes refreshIdentity runs on a context
+// detached from a CONNECTION's — the fail-closed revoke, and the identity write
+// that makes a successful mint stick. Long enough to outlast SQLite's busy timeout,
 // short enough that a wedged store cannot pin a revalidation tick indefinitely.
 const detachedWriteTimeout = 10 * time.Second
 
@@ -287,7 +323,7 @@ const (
 // acting on it is the caller's. OnSessionRevoked is ws.Hub.DisconnectSession, and
 // the revalidation pump must retire its ticker BEFORE it disconnects, or a socket
 // arriving in between joins a pump about to be cancelled and never gets a
-// recurring check again. Firing the hook from inside refreshRoles put that
+// recurring check again. Firing the hook from inside refreshIdentity put that
 // disconnect two frames deep inside the check, where no retire could have
 // happened yet. So this returns the verdict and the pump does both, in order.
 // (A connect-time check that falls back to this function therefore revokes only
@@ -340,7 +376,7 @@ func (c Config) RevalidateSession(ctx context.Context, rawToken string) (userID 
 	case !ok:
 		return "", SessionGone
 	}
-	_, revoked, mintErr := c.refreshRoles(ctx, sess, now, true)
+	_, revoked, mintErr := c.refreshIdentity(ctx, sess, now, true)
 	switch {
 	case !errors.Is(mintErr, ErrUserClosed):
 		return sess.UserID, SessionLive
@@ -403,8 +439,8 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 			//
 			// viaConnection is false: the follow-up writes ride r.Context() and die
 			// with the request, and the revocation is announced from inside
-			// refreshRoles because no caller further up this path will do it.
-			roles, _, mintErr := cfg.refreshRoles(r.Context(), sess, now, false)
+			// refreshIdentity because no caller further up this path will do it.
+			id, _, mintErr := cfg.refreshIdentity(r.Context(), sess, now, false)
 			if errors.Is(mintErr, ErrUserClosed) {
 				// Fail closed: the user was disabled/deleted in auth (FR-A2).
 				clearAuthCookies(w, cfg.Secure)
@@ -427,11 +463,23 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 				}
 			}
 
+			// ⚠ THE ACTOR IS BUILT FROM THE REFRESHED IDENTITY, NOT FROM THE ROW THAT
+			// WAS LOOKED UP. On the request that re-mints, `sess` is the identity as
+			// it was BEFORE the mint — so labelling from it stamps the audit trail of
+			// the very request that learned the new name with the old one, and any
+			// later request would disagree with it for no reason a reader could see.
+			//
+			// ⚠ EVERY FIELD FROM `id`, INCLUDING THE ONE THAT CANNOT DIFFER.
+			// mergeIdentity seeds its result from sess.identity() and never takes the
+			// mint's subject, so id.UserID IS sess.UserID on every path that reaches
+			// here — but reading one field from the pre-mint row and two from the
+			// post-mint identity makes a reader go and prove that before they can
+			// trust the line above. One source, nothing to prove.
 			actor := reqctx.Actor{
-				UserID: sess.UserID,
+				UserID: id.UserID,
 				Type:   "user",
-				Label:  labelFor(sess),
-				Roles:  roles,
+				Label:  labelForIdentity(id),
+				Roles:  id.Roles,
 			}
 			next.ServeHTTP(w, r.WithContext(reqctx.WithActor(r.Context(), actor)))
 		})
@@ -518,13 +566,6 @@ func splitOrigin(o string) (scheme, host string, ok bool) {
 		return "", "", false
 	}
 	return o[:i], o[i+3:], true
-}
-
-func labelFor(s Session) string {
-	if s.DisplayName != "" {
-		return s.DisplayName
-	}
-	return s.Email
 }
 
 // setAuthCookies sets the session (HttpOnly) and csrf (JS-readable) cookies,

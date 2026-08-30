@@ -96,9 +96,15 @@ func truncateRunes(s string, max int) string {
 //
 // ⚠ IT IS A LOGIN HISTORY, not a user table — Home has none, auth owns identity.
 // So somebody who has never logged in simply is not here and cannot be added to a
-// conversation, and a display name changed in the auth service arrives on that
-// member's next login and not before. The picker's empty and stale states say so
-// rather than looking broken (D230).
+// conversation, and the picker's empty state says so rather than looking broken
+// (D230).
+//
+// ⚠ IT IS NOT FROZEN AT LOGIN, and this comment used to say it was. The
+// fifteen-minute re-mint writes the email and display name alongside the roles and
+// the projection picks each member's FRESHEST session, so a name changed in auth
+// reaches chat within one refresh window (D270). The one thing that still waits
+// for the next login is a name ERASED in auth: a mint carrying no name is read as
+// "this token did not say", never as a clear.
 //
 // Satisfied by *push.Store. It is an interface here so chat depends on the
 // projection rather than on the push store's other twenty methods.

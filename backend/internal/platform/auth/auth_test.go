@@ -94,6 +94,13 @@ func newHarness(t *testing.T) *harness {
 		MountAPI: func(api chi.Router) {
 			api.Get("/things", ok)
 			api.With(httpx.RequireWrite).Post("/things", ok)
+			// Echoes the actor the session middleware resolved, which has no other
+			// surface from outside the process — it is what the audit sink stamps on
+			// every write, and a re-mint is allowed to change it mid-session.
+			api.Get("/whoami", func(w http.ResponseWriter, r *http.Request) {
+				a, _ := reqctx.ActorFrom(r.Context())
+				_, _ = io.WriteString(w, a.Label)
+			})
 		},
 	})
 	return h
@@ -424,6 +431,141 @@ func TestSession_RoleRefreshFailClosed(t *testing.T) {
 	if want := revokedSessionIDs(t, h.db); len(want) != 1 || len(h.revoked) != 1 || h.revoked[0] != want[0] {
 		t.Errorf("fail-closed re-mint announced %v, want exactly the revoked session %v", h.revoked, want)
 	}
+}
+
+// ⚠ THE SESSION ROW IS THE ONLY RECORD HOME HAS OF WHO A MEMBER IS, and it used
+// to be written exactly once, at login. `push.Store.Members` projects the whole
+// household directory from it — the author label on every chat message, every
+// members-panel row, the add-member picker, the "Vybraným lidem" audience and the
+// delivery log — so somebody who renamed themselves in auth went on being shown to
+// everybody under the old name until they next logged in, which behind a 90-day
+// sliding session is effectively never. The re-mint that refreshes the roles has
+// always returned the whole identity; everything but the roles was thrown away.
+func TestSession_ReMintRefreshesTheCachedIdentity(t *testing.T) {
+	h := newHarness(t)
+	sess, _ := h.authed(t)
+
+	// Renamed (and re-addressed) in auth after the session was created.
+	h.fake.mintID = auth.Identity{
+		UserID: "u1", Email: "marie.nova@tilcer.cz", DisplayName: "Marie Nová", Roles: []string{"admin"},
+	}
+	h.clock = h.clock.Add(20 * time.Minute)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/whoami", nil)
+	req.AddCookie(sess)
+	rr := h.do(t, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("gated GET after the re-mint = %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	// ⚠ The request that LEARNED the new name also acts under it. Labelling the
+	// actor from the row that was looked up stamps the audit trail of the one
+	// request that fetched the rename with the name it replaced, and every request
+	// after it disagrees for no reason a reader of the log could see.
+	if got := rr.Body.String(); got != "Marie Nová" {
+		t.Errorf("actor label on the re-minting request = %q, want %q", got, "Marie Nová")
+	}
+
+	// And it landed in the row, which is what every other surface reads.
+	if email, name, _ := cachedIdentity(t, h.db); name != "Marie Nová" || email != "marie.nova@tilcer.cz" {
+		t.Errorf("session row = %q/%q, want the minted identity — the directory is projected "+
+			"from this row and nothing else refreshes it", email, name)
+	}
+
+	// The bootstrap probe is the frontend's own copy of the same row.
+	req = httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
+	req.AddCookie(sess)
+	rr = h.do(t, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("bootstrap = %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		User struct {
+			Email       string   `json:"email"`
+			DisplayName *string  `json:"display_name"`
+			Roles       []string `json:"roles"`
+		} `json:"user"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if body.User.DisplayName == nil || *body.User.DisplayName != "Marie Nová" || body.User.Email != "marie.nova@tilcer.cz" {
+		t.Errorf("bootstrap user = %+v, want the refreshed identity", body.User)
+	}
+	if len(body.User.Roles) != 1 || body.User.Roles[0] != "admin" {
+		t.Errorf("bootstrap roles = %v, want the minted [admin] — the roles half must not regress", body.User.Roles)
+	}
+}
+
+// ⚠ AN ABSENT CLAIM IS NOT A CLEARED FIELD, AND HOME CANNOT TELL THEM APART FROM
+// ONE TOKEN — so it treats the quiet one as "this token did not say". The two
+// mistakes are not the same size. Reading an absent `name` as a clear would blank
+// `display_name` on EVERY session in the household within one refresh window if
+// auth's mint token ever stopped carrying it, and a blank name is exactly what the
+// directory falls back FROM: the whole household would go back to being labelled
+// by raw user ids, silently, with no deploy of Home to blame it on. Reading it the
+// other way costs one member who erased their name in auth still being shown under
+// it here until they log in again — which is what everybody had before any of this.
+func TestSession_ReMintNeverClearsACachedField(t *testing.T) {
+	h := newHarness(t)
+	sess, _ := h.authed(t) // logged in as Marie / marie@tilcer.cz
+
+	// A token that carries the address and no name.
+	h.fake.mintID = auth.Identity{UserID: "u1", Email: "marie.nova@tilcer.cz", Roles: []string{"editor"}}
+	h.clock = h.clock.Add(20 * time.Minute)
+	req := httptest.NewRequest(http.MethodGet, "/api/whoami", nil)
+	req.AddCookie(sess)
+	if rr := h.do(t, req); rr.Body.String() != "Marie" {
+		t.Errorf("actor label = %q after a mint with no name, want the cached %q", rr.Body.String(), "Marie")
+	}
+	email, name, _ := cachedIdentity(t, h.db)
+	if name != "Marie" {
+		t.Errorf("display_name = %q after a mint that carried none, want the cached %q", name, "Marie")
+	}
+	if email != "marie.nova@tilcer.cz" {
+		t.Errorf("email = %q, want the minted one — a field the token DID carry still lands", email)
+	}
+
+	// And a token that carries neither leaves both exactly as they were.
+	h.fake.mintID = auth.Identity{UserID: "u1", Roles: []string{"reader"}}
+	h.clock = h.clock.Add(20 * time.Minute)
+	req = httptest.NewRequest(http.MethodGet, "/api/things", nil)
+	req.AddCookie(sess)
+	if rr := h.do(t, req); rr.Code != http.StatusOK {
+		t.Fatalf("gated GET = %d, want 200", rr.Code)
+	}
+	var roles string
+	if email, name, roles = cachedIdentity(t, h.db); email != "marie.nova@tilcer.cz" || name != "Marie" {
+		t.Errorf("cached identity = %q/%q after an identity-less mint, want it untouched", email, name)
+	}
+	// The roles half is unconditional either way, or a demotion in auth would be
+	// ignored by whichever token happened to omit an email.
+	if roles != `["reader"]` {
+		t.Errorf("roles = %s, want [\"reader\"] — the roles are replaced by every successful mint", roles)
+	}
+}
+
+// cachedIdentity reads the whole identity the session row currently holds — the
+// one every directory in the app is projected from, roles included.
+//
+// ⚠ IT PROVES THERE IS ONLY ONE ROW BEFORE IT READS ONE. The harness logs in
+// exactly once, so an unqualified read is THE session today and an ARBITRARY
+// session the day a test signs in twice — a second device, or a re-login after a
+// fail-closed revoke. Reading the wrong row would either pass on identity the
+// caller never wrote or fail pointing at the re-mint, and the query is the last
+// place anyone would look.
+func cachedIdentity(t *testing.T, db *sql.DB) (email, displayName, roles string) {
+	t.Helper()
+	var rows int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("harness holds %d session rows; this helper reads THE session and cannot "+
+			"tell which one the caller means", rows)
+	}
+	var dn sql.NullString
+	if err := db.QueryRow("SELECT email, display_name, roles FROM sessions").Scan(&email, &dn, &roles); err != nil {
+		t.Fatal(err)
+	}
+	return email, dn.String, roles
 }
 
 func TestCSRF_OnMutations(t *testing.T) {
