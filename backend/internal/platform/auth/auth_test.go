@@ -466,14 +466,9 @@ func TestSession_ReMintRefreshesTheCachedIdentity(t *testing.T) {
 	}
 
 	// And it landed in the row, which is what every other surface reads.
-	var email string
-	var dn sql.NullString
-	if err := h.db.QueryRow("SELECT email, display_name FROM sessions LIMIT 1").Scan(&email, &dn); err != nil {
-		t.Fatal(err)
-	}
-	if dn.String != "Marie Nová" || email != "marie.nova@tilcer.cz" {
+	if email, name, _ := cachedIdentity(t, h.db); name != "Marie Nová" || email != "marie.nova@tilcer.cz" {
 		t.Errorf("session row = %q/%q, want the minted identity — the directory is projected "+
-			"from this row and nothing else refreshes it", email, dn.String)
+			"from this row and nothing else refreshes it", email, name)
 	}
 
 	// The bootstrap probe is the frontend's own copy of the same row.
@@ -520,7 +515,7 @@ func TestSession_ReMintNeverClearsACachedField(t *testing.T) {
 	if rr := h.do(t, req); rr.Body.String() != "Marie" {
 		t.Errorf("actor label = %q after a mint with no name, want the cached %q", rr.Body.String(), "Marie")
 	}
-	email, name := cachedIdentity(t, h.db)
+	email, name, _ := cachedIdentity(t, h.db)
 	if name != "Marie" {
 		t.Errorf("display_name = %q after a mint that carried none, want the cached %q", name, "Marie")
 	}
@@ -536,29 +531,41 @@ func TestSession_ReMintNeverClearsACachedField(t *testing.T) {
 	if rr := h.do(t, req); rr.Code != http.StatusOK {
 		t.Fatalf("gated GET = %d, want 200", rr.Code)
 	}
-	if email, name = cachedIdentity(t, h.db); email != "marie.nova@tilcer.cz" || name != "Marie" {
+	var roles string
+	if email, name, roles = cachedIdentity(t, h.db); email != "marie.nova@tilcer.cz" || name != "Marie" {
 		t.Errorf("cached identity = %q/%q after an identity-less mint, want it untouched", email, name)
 	}
 	// The roles half is unconditional either way, or a demotion in auth would be
 	// ignored by whichever token happened to omit an email.
-	var roles string
-	if err := h.db.QueryRow("SELECT roles FROM sessions LIMIT 1").Scan(&roles); err != nil {
-		t.Fatal(err)
-	}
 	if roles != `["reader"]` {
 		t.Errorf("roles = %s, want [\"reader\"] — the roles are replaced by every successful mint", roles)
 	}
 }
 
-// cachedIdentity reads the identity the session row currently holds — the one
-// every directory in the app is projected from.
-func cachedIdentity(t *testing.T, db *sql.DB) (email, displayName string) {
+// cachedIdentity reads the whole identity the session row currently holds — the
+// one every directory in the app is projected from, roles included.
+//
+// ⚠ IT PROVES THERE IS ONLY ONE ROW BEFORE IT READS ONE. The harness logs in
+// exactly once, so an unqualified read is THE session today and an ARBITRARY
+// session the day a test signs in twice — a second device, or a re-login after a
+// fail-closed revoke. Reading the wrong row would either pass on identity the
+// caller never wrote or fail pointing at the re-mint, and the query is the last
+// place anyone would look.
+func cachedIdentity(t *testing.T, db *sql.DB) (email, displayName, roles string) {
 	t.Helper()
-	var dn sql.NullString
-	if err := db.QueryRow("SELECT email, display_name FROM sessions LIMIT 1").Scan(&email, &dn); err != nil {
+	var rows int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
-	return email, dn.String
+	if rows != 1 {
+		t.Fatalf("harness holds %d session rows; this helper reads THE session and cannot "+
+			"tell which one the caller means", rows)
+	}
+	var dn sql.NullString
+	if err := db.QueryRow("SELECT email, display_name, roles FROM sessions").Scan(&email, &dn, &roles); err != nil {
+		t.Fatal(err)
+	}
+	return email, dn.String, roles
 }
 
 func TestCSRF_OnMutations(t *testing.T) {

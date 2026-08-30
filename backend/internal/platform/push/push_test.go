@@ -557,6 +557,11 @@ func TestDisabledChannelSendsNothing(t *testing.T) {
 
 // ---- audience resolution ----
 
+// seedSessionTTL is the sliding window a seeded session is given: home's own
+// (HOME_SESSION_TTL_DAYS, 90 days), so a row seeded days into the past is still a
+// LIVE session rather than a lapsed one.
+const seedSessionTTL = 90 * 24 * time.Hour
+
 // seedSession writes the session row the member directory is projected from, as
 // it looks for a session nothing has re-minted since it was created.
 func seedSession(t *testing.T, sqldb *sql.DB, userID, email, name string, roles []string, created time.Time) {
@@ -567,6 +572,15 @@ func seedSession(t *testing.T, sqldb *sql.DB, userID, email, name string, roles 
 // seedRefreshedSession writes one whose identity was last confirmed at
 // `refreshed` — what auth's re-mint stamps on `roles_refreshed_at` every time it
 // brings back a member's roles, email and display name.
+//
+// ⚠ THE WINDOW IS THE PRODUCTION ONE, NOT A DAY. It used to be created+24h, which
+// made every row seeded more than a day back an ALREADY-EXPIRED session — a state
+// no live re-mint can produce, because Lookup rejects an expired row before it
+// ever reaches the refresh. Members filters on neither `revoked_at` nor
+// `expires_at`, so the fixtures passed anyway and said something the app cannot:
+// a laptop "re-minted an hour ago" whose window had shut two days earlier. The
+// day that filter is added, the freshest-vs-newest tests would fail for a reason
+// that has nothing to do with what they assert.
 func seedRefreshedSession(t *testing.T, sqldb *sql.DB, userID, email, name string, roles []string, created, refreshed time.Time) {
 	t.Helper()
 	rolesJSON, _ := json.Marshal(roles)
@@ -579,7 +593,8 @@ func seedRefreshedSession(t *testing.T, sqldb *sql.DB, userID, email, name strin
 		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		"sess-"+userID+"-"+key, userID, "hash-"+userID+key,
 		email, name, string(rolesJSON), refreshed.Format(time.RFC3339Nano),
-		created.Format(time.RFC3339Nano), created.Format(time.RFC3339Nano), created.Add(24*time.Hour).Format(time.RFC3339Nano))
+		created.Format(time.RFC3339Nano), created.Format(time.RFC3339Nano),
+		created.Add(seedSessionTTL).Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("seed session: %v", err)
 	}

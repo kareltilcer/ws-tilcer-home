@@ -469,8 +469,15 @@ func NewSessionAuth(cfg Config) func(http.Handler) http.Handler {
 			// it was BEFORE the mint — so labelling from it stamps the audit trail of
 			// the very request that learned the new name with the old one, and any
 			// later request would disagree with it for no reason a reader could see.
+			//
+			// ⚠ EVERY FIELD FROM `id`, INCLUDING THE ONE THAT CANNOT DIFFER.
+			// mergeIdentity seeds its result from sess.identity() and never takes the
+			// mint's subject, so id.UserID IS sess.UserID on every path that reaches
+			// here — but reading one field from the pre-mint row and two from the
+			// post-mint identity makes a reader go and prove that before they can
+			// trust the line above. One source, nothing to prove.
 			actor := reqctx.Actor{
-				UserID: sess.UserID,
+				UserID: id.UserID,
 				Type:   "user",
 				Label:  labelForIdentity(id),
 				Roles:  id.Roles,

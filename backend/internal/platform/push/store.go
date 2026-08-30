@@ -368,9 +368,13 @@ type Member struct {
 	Subscriptions int      `json:"subscriptions"`
 }
 
-// Members lists everyone home has ever seen a session for, newest identity per
+// Members lists everyone home has ever seen a session for, FRESHEST identity per
 // user, with a count of their subscribed devices. It drives the "Vybraným lidem"
 // picker and labels the delivery log.
+//
+// Freshest, not newest — the two stopped being the same thing when the re-mint
+// began writing the identity as well as the roles, and the ⚠ block in the body
+// says why the distinction is the whole point.
 func (s *Store) Members(ctx context.Context) ([]Member, error) {
 	// One row per user: the session whose identity was CONFIRMED most recently,
 	// which is what `roles_refreshed_at` stamps — every re-mint writes the roles,

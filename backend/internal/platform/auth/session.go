@@ -14,9 +14,23 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
 )
 
-// tsLayout is the timestamp format for the sessions table (RFC3339 UTC). Session
-// timestamps are compared as parsed time.Time, not as strings, so any fixed
-// layout is fine.
+// tsLayout is the timestamp format for the sessions table (RFC3339 UTC).
+//
+// ⚠ ONE OF THESE COLUMNS IS COMPARED AS TEXT, IN SQL, and this comment used to
+// say the opposite. push.Store.Members resolves the household directory with
+// MAX(roles_refreshed_at) — SQLite's BINARY collation on the stored string, not a
+// parsed time — so the layout is no longer free to change. RFC3339Nano is not
+// fixed width: it TRIMS trailing zeros from the fraction, and within one second
+// 'Z' (0x5A) sorts above '.' and above every digit, so "…:07Z" beats "…:07.4Z"
+// and "…:07.1Z" beats "…:07.10004Z" — lexicographic order inverted against
+// chronological.
+//
+// It is left standing rather than migrated: every stamp here comes from
+// time.Now() at nanosecond resolution, so an inversion needs two of one member's
+// sessions re-minted inside the same second AND the earlier fraction to be a
+// decimal prefix of the later one, which is a ~1e-9 event against a directory
+// that self-corrects on the next refresh. What must not happen is a layout change
+// made on the belief that nothing reads these as text.
 const tsLayout = time.RFC3339Nano
 
 // Session is a live home session (Mode B). Only the SHA-256 hash of the cookie

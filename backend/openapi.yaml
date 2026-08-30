@@ -1,11 +1,18 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.13.0
+  version: 0.13.1
   description: >-
     API for the `home` household-management service. **0.13.0 IS v10.1 — CHAT'S SECOND
     PASS.** 0.12.0 was the v10 spec, 0.12.1 reconciled it against the shipped code after
     PR 3, and 0.12.2 made four list cursors one encoding.
+
+    **0.13.1 changes no shape at all.** It reconciles one description against the shipped
+    code: the household directory said it cached each identity "at login", which stopped
+    being true when the fifteen-minute role re-mint started writing the email and the
+    display name too (D270). A reader of this spec would have concluded that a rename in
+    auth never reaches Home until that member logs in again — which is the behaviour the
+    change removed.
 
     **What 0.13.0 adds is one path and three fields, and none of it is breaking.**
 
@@ -7160,7 +7167,14 @@ components:
           description: >-
             The household directory, served here so the composer needs one round trip.
             Home has no user table — auth owns identity — so this is projected from the
-            session store, which caches each identity and its roles at login.
+            session store, which caches each identity and its roles at login and REPLACES
+            them on every role re-mint (D270): a member's name, address and roles are
+            re-read from auth about every fifteen minutes on a session in use. Each member
+            is shown from the session whose identity auth confirmed most recently, not from
+            the one they logged into most recently — a device signed into once and left in
+            a drawer is never re-minted, so its copy must not outrank the one being kept
+            current. A rename in auth therefore reaches the household within one refresh
+            window rather than at that member's next login.
           items: { $ref: "#/components/schemas/HouseholdMember" }
         tokens:
           type: object
