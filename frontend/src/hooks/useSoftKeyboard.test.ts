@@ -41,6 +41,24 @@ describe('readSoftKeyboard — a gap is only a keyboard under three conditions',
     expect(readSoftKeyboard(frame({ visual: 400, scale: 2 }))).toEqual({ open: false, viewport: 0 })
   })
 
+  it('reads a keyboard THROUGH a zoom rather than declining to look', () => {
+    // Safari zooms a page to ~16/14 the moment a `text-sm` field takes focus, which
+    // is every field in this app: the strip above a 300 px keyboard is 512 px of
+    // glass, and at that scale it covers 448 of the page's own CSS pixels.
+    expect(readSoftKeyboard(frame({ visual: 448, scale: 16 / 14 }))).toEqual({
+      open: true,
+      viewport: 448,
+    })
+  })
+
+  it('finds a keyboard under a pinch too, because the zoom is arithmetic and not a veto', () => {
+    // The same 300 px keyboard, pinched to 2×: 512 px of glass over 256 page pixels.
+    expect(readSoftKeyboard(frame({ visual: 256, scale: 2 }))).toEqual({
+      open: true,
+      viewport: 256,
+    })
+  })
+
   it('ignores a visual viewport larger than the layout one rather than reporting a negative', () => {
     expect(readSoftKeyboard(frame({ visual: LAYOUT + 40 })).open).toBe(false)
   })
@@ -72,9 +90,17 @@ describe('isTypingTarget', () => {
     checkbox.type = 'checkbox'
     const file = document.createElement('input')
     file.type = 'file'
+    // A wheel and a calendar cover the bottom of a phone exactly as a keyboard does,
+    // and neither is somebody writing — which is the question this answers.
+    const date = document.createElement('input')
+    date.type = 'date'
+    const time = document.createElement('input')
+    time.type = 'time'
 
     expect(isTypingTarget(checkbox)).toBe(false)
     expect(isTypingTarget(file)).toBe(false)
+    expect(isTypingTarget(date)).toBe(false)
+    expect(isTypingTarget(time)).toBe(false)
     expect(isTypingTarget(document.createElement('button'))).toBe(false)
     expect(isTypingTarget(document.createElement('div'))).toBe(false)
     expect(isTypingTarget(null)).toBe(false)
@@ -104,9 +130,25 @@ class FakeViewport {
   }
 }
 
+/**
+ * Puts a window property back the way jsdom had it — including "jsdom did not have
+ * one", which is the case for `visualViewport` and the reason this is not a plain
+ * reassignment.
+ */
+function restoreWindow(key: 'visualViewport' | 'innerHeight', was: PropertyDescriptor | undefined) {
+  if (was) Object.defineProperty(window, key, was)
+  else Reflect.deleteProperty(window, key)
+}
+
 describe('useSoftKeyboard', () => {
   let viewport: FakeViewport
   let textarea: HTMLTextAreaElement
+  // ⚠ BOTH GLOBALS ARE PUT BACK AFTERWARDS. The last test below deliberately leaves
+  // `window.visualViewport` undefined, and `innerHeight` is pinned to a phone's 812
+  // rather than jsdom's own 768 — a file that walks away from either hands whatever
+  // runs next a window it did not ask for and cannot see it was given.
+  const wasViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport')
+  const wasInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight')
 
   beforeEach(() => {
     viewport = new FakeViewport()
@@ -118,6 +160,8 @@ describe('useSoftKeyboard', () => {
 
   afterEach(() => {
     textarea.remove()
+    restoreWindow('visualViewport', wasViewport)
+    restoreWindow('innerHeight', wasInnerHeight)
   })
 
   it('starts closed and opens when the viewport shrinks under a focused field', () => {
