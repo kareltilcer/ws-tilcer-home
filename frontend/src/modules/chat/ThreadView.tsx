@@ -1,4 +1,13 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -959,6 +968,18 @@ function LiveBubble({
   onReact: (emoji: string, reacted: boolean) => void
 }) {
   const [picking, setPicking] = useState(false)
+  /** The ☺ and the bar it opens are no longer siblings, so the link is written out. */
+  const pickerID = useId()
+  /**
+   * ⚠ AND THE TRIGGER IS HANDED DOWN THE SAME WAY, for the same reason (v10.1
+   * review). Moving the bar out of the bubble put the whole footer between the ☺ and
+   * the palette it opens — press the ☺ on a keyboard and the next Tab stops are the
+   * message's own verbs, which on your own message means *Odpovědět*, *Upravit* and
+   * *Smazat zprávu* before a single emoji. The bar takes focus when it opens and
+   * gives it back to this button when it closes, which is what the DOM adjacency
+   * used to do for nothing.
+   */
+  const smile = useRef<HTMLButtonElement>(null)
   const gestures = useMessageGestures({
     // ⚠ THE DOUBLE TAP TOGGLES rather than always adding. It is the one gesture with
     // no visible twin of its own — the chip IS the twin — so a second double tap
@@ -971,7 +992,29 @@ function LiveBubble({
   })
 
   return (
-    <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+    // ⚠ THE ROW IS THE PICKER'S ANCHOR, AND IT CANNOT BE THE BUBBLE (v10.1 fix). The
+    // palette used to be a strip in the flow INSIDE the bubble, so opening it resized
+    // the message: seven 44 px targets and a ✕ are ~380 px wide, and a bubble holding
+    // *ok* jumped to the thread's full width, grew a row taller than its own body, and
+    // pushed every message below it down. A control that reshapes what it is attached
+    // to is a layout change, not a picker.
+    //
+    // The bubble was the obvious anchor and is the wrong one twice over: it carries
+    // `translateX` for the swipe, and a transform makes an element the containing block
+    // for its absolute AND fixed descendants — so the bar would have been capped at the
+    // bubble's width, and the dismiss scrim would have covered the bubble instead of
+    // the viewport. The row spans the thread, is never transformed, and sits inside the
+    // scroll box, which is what lets the bar move with the message for free.
+    <div
+      className={cn(
+        'relative flex',
+        mine ? 'justify-end' : 'justify-start',
+        // ⚠ AND IT HAS TO BE LIFTED. Every bubble is transformed, so every bubble is a
+        // stacking context painted in DOM order — without a positive z-index here the
+        // bar is drawn UNDER each message that follows it.
+        picking && 'z-20',
+      )}
+    >
       <div
         // ⚠ `pan-y` RATHER THAN `none`. The browser keeps vertical panning on its
         // own thread, so the thread scrolls exactly as it did while a horizontal
@@ -1034,6 +1077,8 @@ function LiveBubble({
           message={message}
           me={me}
           picking={picking}
+          pickerID={pickerID}
+          triggerRef={smile}
           onPicking={setPicking}
           onReact={onReact}
         />
@@ -1069,12 +1114,25 @@ function LiveBubble({
           )}
         </div>
       </div>
+
+      {/* Outside the bubble on purpose — see the row's note above. */}
+      {picking && (
+        <ReactionPicker
+          id={pickerID}
+          message={message}
+          me={me}
+          mine={mine}
+          trigger={smile}
+          onPicking={setPicking}
+          onReact={onReact}
+        />
+      )}
     </div>
   )
 }
 
 /**
- * The chips, the ☺ and the picker bar (v10.1, D265).
+ * The chips and the ☺ (v10.1, D265). The bar the ☺ opens is `ReactionPicker` below.
  *
  * ⚠ THE ROW IS ALWAYS RENDERED, EVEN WITH NO CHIPS, and that is what makes the
  * feature discoverable at all. The ☺ is the visible twin of the long press — a
@@ -1085,113 +1143,278 @@ function ReactionRow({
   message,
   me,
   picking,
+  pickerID,
+  triggerRef,
   onPicking,
   onReact,
 }: {
   message: ChatMessage
   me: string
   picking: boolean
+  /** The bar's `id`, for the ☺'s `aria-controls` — they are in different subtrees. */
+  pickerID: string
+  /** The ☺ itself, so the bar can hand focus back to it. Same subtree problem. */
+  triggerRef: React.RefObject<HTMLButtonElement | null>
   onPicking: (open: boolean) => void
   onReact: (emoji: string, reacted: boolean) => void
 }) {
   return (
-    <div className="mt-1.5">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {message.reactions.map((r) => {
-          const ours = isMine(r, me)
-          return (
-            <button
-              key={r.emoji}
-              type="button"
-              onClick={() => onReact(r.emoji, !ours)}
-              // ⚠ THE STATE IS NOT CARRIED BY THE ACCENT RING ALONE. `aria-pressed`
-              // says it to a screen reader and to anybody who cannot separate the
-              // two borders — the same rule the create dialog's member chips take.
-              aria-pressed={ours}
-              title={reactionLabel(r, me)}
-              // ⚠ AND THE ACCESSIBLE NAME IS WHO REACTED, not the numeral. Without
-              // it the button announces "❤️ 3" and the three people — the whole
-              // point of the chip — are unreachable.
-              aria-label={reactionLabel(r, me)}
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {message.reactions.map((r) => {
+        const ours = isMine(r, me)
+        return (
+          <button
+            key={r.emoji}
+            type="button"
+            onClick={() => onReact(r.emoji, !ours)}
+            // ⚠ THE STATE IS NOT CARRIED BY THE ACCENT RING ALONE. `aria-pressed`
+            // says it to a screen reader and to anybody who cannot separate the
+            // two borders — the same rule the create dialog's member chips take.
+            aria-pressed={ours}
+            title={reactionLabel(r, me)}
+            // ⚠ AND THE ACCESSIBLE NAME IS WHO REACTED, not the numeral. Without
+            // it the button announces "❤️ 3" and the three people — the whole
+            // point of the chip — are unreachable.
+            aria-label={reactionLabel(r, me)}
+            className={cn(
+              'flex min-h-8 items-center gap-1.5 rounded-full border px-2 text-[13px] leading-none lg:min-h-[26px] lg:text-[12.5px]',
+              ours
+                ? 'border-accent bg-accent-soft text-fg'
+                : 'border-border bg-s2 text-fg hover:bg-s3',
+            )}
+          >
+            <span aria-hidden>{r.emoji}</span>
+            {/* Mono tabular, so 3 and 40 do not shift the chips beside them — the
+                same reasoning the unread badge takes one pane over. */}
+            <span
+              aria-hidden
               className={cn(
-                'flex min-h-8 items-center gap-1.5 rounded-full border px-2 text-[13px] leading-none lg:min-h-[26px] lg:text-[12.5px]',
-                ours
-                  ? 'border-accent bg-accent-soft text-fg'
-                  : 'border-border bg-s2 text-fg hover:bg-s3',
+                'font-mono text-[10.5px] font-bold tabular-nums',
+                ours ? 'text-fg' : 'text-muted',
               )}
             >
-              <span aria-hidden>{r.emoji}</span>
-              {/* Mono tabular, so 3 and 40 do not shift the chips beside them — the
-                  same reasoning the unread badge takes one pane over. */}
-              <span
-                aria-hidden
-                className={cn(
-                  'font-mono text-[10.5px] font-bold tabular-nums',
-                  ours ? 'text-fg' : 'text-muted',
-                )}
-              >
-                {r.by.length}
-              </span>
-            </button>
-          )
-        })}
+              {r.by.length}
+            </span>
+          </button>
+        )
+      })}
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => onPicking(!picking)}
+        aria-expanded={picking}
+        // Only while it exists: a reference to an absent id is a broken one.
+        aria-controls={picking ? pickerID : undefined}
+        aria-label={cs.chat.reactionAdd}
+        title={cs.chat.reactionAdd}
+        className={cn(
+          'grid h-8 w-8 place-items-center rounded-full text-[13px] lg:h-[26px] lg:w-[26px] lg:text-[12px]',
+          picking
+            ? 'border border-accent bg-accent-soft text-fg'
+            : 'border border-dashed border-border-strong text-muted hover:text-fg',
+        )}
+      >
+        <Smile size={14} aria-hidden />
+      </button>
+    </div>
+  )
+}
+
+/**
+ * The palette bar — an OVERLAY hung off the row, not a strip inside the bubble.
+ *
+ * ⚠ THE STRIP IS WHAT THIS FIXES. In the flow it resized the message card the moment
+ * it opened, which the row's own note above spells out: the bar is ~380 px wide and a
+ * bubble is as wide as what somebody typed.
+ *
+ * ⚠ AND IT STILL DOES NOT REPOSITION ON SCROLL, which was the strip's whole argument.
+ * It is absolute against the row, and the row is inside the scroll box — so it travels
+ * with its message for nothing, with no listener and no measurement per frame. The one
+ * measurement is `scrollIntoView`, taken once when it opens.
+ *
+ * ⚠ EXPORTED FOR ITS TEST, AND IT IS THE ONE PIECE OF THIS WORTH TESTING (v10.1 review
+ * round 2). The rest of the fix is stacking contexts, containing blocks and
+ * `scrollIntoView`, none of which jsdom has a layout engine to see — but the focus
+ * contract is plain DOM, jsdom implements `activeElement` and `focus()`, and it is
+ * where the bug this round found actually was. Nothing else below `ThreadView` needs
+ * to be reachable: this component takes seven ordinary props and calls no query hook.
+ */
+export function ReactionPicker({
+  id,
+  message,
+  me,
+  mine,
+  trigger,
+  onPicking,
+  onReact,
+}: {
+  id: string
+  message: ChatMessage
+  me: string
+  /** Which edge it hangs from — the same edge its bubble is already against. */
+  mine: boolean
+  /** The ☺ that opened it, so focus has somewhere to go back to. */
+  trigger: React.RefObject<HTMLButtonElement | null>
+  onPicking: (open: boolean) => void
+  onReact: (emoji: string, reacted: boolean) => void
+}) {
+  const bar = useRef<HTMLDivElement>(null)
+
+  /**
+   * ⚠ AN OVERLAY BELOW THE FOLD IS A FEATURE THAT LOOKS BROKEN, and the fold is
+   * exactly where the common case puts it: the thread is pinned to its newest message
+   * and the newest message is the one most likely to be reacted to, so the bar opens
+   * under the last bubble, past the end of the thread's own content. It DOES extend the
+   * scroll range when it hangs off the end — an absolute box still counts as scrollable
+   * overflow, measured at 599 → 643 px — but nothing scrolls to it: the stick-to-bottom
+   * effect above fires on a new message id and on nothing else, so the member presses
+   * and the screen does not move. `block: 'nearest'` moves the box by the minimum and
+   * does nothing at all when the bar already fits — 0 px mid-thread against 44 on the
+   * last message — and in a layout effect it is never painted in the wrong place first.
+   * The optional call is for jsdom, which has no such method.
+   *
+   * ⚠ IT IS NOT THAT THE SCRIM PINS THE THREAD, which an earlier draft of this comment
+   * claimed. The scrim is `fixed`, but it is a DOM descendant of the scroll box, so a
+   * wheel or a drag over it still pans the thread — measured, 39 → 35 px with the bar
+   * open — and the bar travels with its row because it is anchored inside the same box.
+   * The member can move the thread by hand; they simply have no reason to know they
+   * need to.
+   *
+   * ⚠ AND IT TAKES FOCUS, BECAUSE IT IS NO LONGER NEXT TO ITS TRIGGER (v10.1 review).
+   * In the flow the bar sat immediately after the ☺, so Tab walked straight into the
+   * emoji; hung off the row it comes after the whole bubble, and on your own message
+   * the stops in between are *Odpovědět*, *Upravit* and *Smazat zprávu* — the member
+   * presses the ☺, tabs, and is offered the delete. `aria-controls` says the two are
+   * related but moves nobody. Taking focus on open and handing it back on close is
+   * what the dialogs in this app already do, and it repairs the older half of the
+   * same problem: picking an emoji used to drop focus on `<body>`.
+   *
+   * `preventScroll` because the scroll was already decided one line up, and the
+   * restore is skipped when the member has deliberately tabbed out of the bar — then
+   * the focus is theirs and not ours to move.
+   *
+   * ⚠ WHICH IS WHY THE SCRIM REFUSES THE FOCUS A PRESS WOULD GIVE IT (round 2). The
+   * scrim is this bar's SIBLING, so a scrim holding the focus is indistinguishable
+   * from here from a member who moved it — and dismissing by tapping outside, the
+   * commonest way out there is, took the exception and dropped focus on `<body>`. The
+   * refusal is one `preventDefault` on the element itself; see its note below.
+   *
+   * Both nodes are read on the way in and held: a cleanup that reaches through a ref
+   * is reading it after the commit that tore the tree down, and React never remounts
+   * the ☺ while the bar it opened is up.
+   */
+  useLayoutEffect(() => {
+    const el = bar.current
+    const back = trigger.current
+    el?.scrollIntoView?.({ block: 'nearest' })
+    el?.querySelector('button')?.focus({ preventScroll: true })
+    return () => {
+      const active = document.activeElement
+      if (!active || active === document.body || el?.contains(active)) {
+        back?.focus({ preventScroll: true })
+      }
+    }
+  }, [trigger])
+
+  /**
+   * ⚠ ESCAPE CLOSES IT, BECAUSE THE SCRIM MADE IT MODAL (v10.1 review round 2). The
+   * strip this replaced was an ordinary run of buttons in the flow: the page went on
+   * working around it, so leaving it open cost nothing and there was nothing to
+   * escape from. The overlay is the opposite — it takes the focus, and its scrim
+   * swallows every pointer event in the viewport — and a surface that stops the app
+   * has to answer the one key everybody presses at it. Without this the way out was
+   * Tab to the ✕ or Shift+Tab to the ☺, both of which have to be discovered.
+   *
+   * On `document` rather than on the bar, so it still answers after the member has
+   * tabbed out of the bar and left it open behind them — the one state where they
+   * are furthest from the ✕ and most likely to reach for the key.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onPicking(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onPicking])
+
+  return (
+    <>
+      {/* ⚠ A WAY OUT THAT IS NOT THE BAR — the conversation menu's scrim, on the
+          surface that needs it more: this one covers the messages under it, so without
+          a scrim a tap on the neighbour it hides does nothing at all. A pointer target
+          only, for the reason written out up there: announced, it is an invisible
+          full-viewport control called *Zrušit* between the ☺ and the first emoji, met
+          by exactly the people who cannot see what it is for. The keyboard keeps the
+          ✕, which is a labelled control and is inside the bar.
+
+          ⚠ AND IT MUST NOT TAKE THE FOCUS ON ITS WAY DOWN (v10.1 review round 2).
+          This is where the header's copy stops being a copy. A press focuses a
+          button, `tabIndex={-1}` or not, and the scrim is the bar's SIBLING — so
+          dismissing by tapping outside, which is the way out this scrim exists to
+          provide, made `document.activeElement` the scrim: not null, not `<body>`,
+          not inside the bar, so every arm of the restore above failed, the ☺ never
+          got its focus back, and unmounting the scrim dropped focus on `<body>`.
+          Measured: `activeElement` was BODY after a scrim click. It also meant a
+          press left real focus sitting on an `aria-hidden` node, which is the one
+          place a screen reader has been told there is nothing to read.
+
+          Refusing the default on mousedown answers both, and it is the whole of the
+          difference: focus stays on the emoji the bar took it to, the restore above
+          sees it inside the bar and hands it back, and the click still fires. The
+          header's scrim needs none of this — its menu never takes focus, so it has
+          none to lose. */}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden
+        className="fixed inset-0 z-10 cursor-default"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onPicking(false)}
+      />
+      <div
+        ref={bar}
+        id={id}
+        role="group"
+        aria-label={cs.chat.reactionPickerLabel}
+        className={cn(
+          'om-scroll absolute top-full z-20 mt-1.5 flex w-max max-w-full gap-1 overflow-x-auto',
+          'rounded-[12px] border border-border-strong bg-s1 p-1 shadow-[var(--shadow)]',
+          // ⚠ `max-w-full` IS THE ROW'S WIDTH, WHICH IS THE THREAD'S. That is the
+          // second reason the anchor is the row: seven 44 px targets and a ✕ do not
+          // fit a phone either way, but they get the 351 px the thread has at 375
+          // rather than the 298 the bubble has, and the remainder scrolls inside the
+          // bar the way the design's does.
+          mine ? 'right-0' : 'left-0',
+        )}
+      >
+        {REACTION_PALETTE.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => {
+              onReact(emoji, !hasReacted(message.reactions, emoji, me))
+              onPicking(false)
+            }}
+            aria-label={emoji}
+            // ⚠ 44 px UNDER A THUMB, 34 AT THE DESK — the design's two sizes. This
+            // bar is the gesture's landing place, so it is reached with the same
+            // finger that held the message down.
+            className="grid h-11 w-11 flex-none place-items-center rounded-[10px] text-[20px] leading-none hover:bg-s3 lg:h-[34px] lg:w-[34px] lg:rounded-[9px] lg:text-[17px]"
+          >
+            <span aria-hidden>{emoji}</span>
+          </button>
+        ))}
         <button
           type="button"
-          onClick={() => onPicking(!picking)}
-          aria-expanded={picking}
-          aria-label={cs.chat.reactionAdd}
-          title={cs.chat.reactionAdd}
-          className={cn(
-            'grid h-8 w-8 place-items-center rounded-full text-[13px] lg:h-[26px] lg:w-[26px] lg:text-[12px]',
-            picking
-              ? 'border border-accent bg-accent-soft text-fg'
-              : 'border border-dashed border-border-strong text-muted hover:text-fg',
-          )}
+          onClick={() => onPicking(false)}
+          aria-label={cs.chat.reactionPickerClose}
+          title={cs.chat.reactionPickerClose}
+          className="grid h-11 w-9 flex-none place-items-center rounded-[10px] text-muted hover:bg-s3 hover:text-fg lg:h-[34px] lg:w-8"
         >
-          <Smile size={14} aria-hidden />
+          <X size={15} aria-hidden />
         </button>
       </div>
-
-      {/* ⚠ A STRIP IN THE FLOW, NOT A FLOATING POPOVER. The design draws the phone's
-          palette as a bar under the message, and a popover anchored to a bubble
-          inside a scroll box has to be repositioned on every scroll frame — which
-          is the one thing a thread cannot afford while somebody is reading it.
-          Below the chips it simply moves with them. */}
-      {picking && (
-        <div
-          role="group"
-          aria-label={cs.chat.reactionPickerLabel}
-          className="om-scroll mt-1.5 flex gap-1 overflow-x-auto rounded-[12px] border border-border-strong bg-s1 p-1"
-        >
-          {REACTION_PALETTE.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              onClick={() => {
-                onReact(emoji, !hasReacted(message.reactions, emoji, me))
-                onPicking(false)
-              }}
-              aria-label={emoji}
-              // ⚠ 44 px UNDER A THUMB, 34 AT THE DESK — the design's two sizes. This
-              // bar is the gesture's landing place, so it is reached with the same
-              // finger that held the message down.
-              className="grid h-11 w-11 flex-none place-items-center rounded-[10px] text-[20px] leading-none hover:bg-s3 lg:h-[34px] lg:w-[34px] lg:rounded-[9px] lg:text-[17px]"
-            >
-              <span aria-hidden>{emoji}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => onPicking(false)}
-            aria-label={cs.chat.reactionPickerClose}
-            title={cs.chat.reactionPickerClose}
-            className="grid h-11 w-9 flex-none place-items-center rounded-[10px] text-muted hover:bg-s3 hover:text-fg lg:h-[34px] lg:w-8"
-          >
-            <X size={15} aria-hidden />
-          </button>
-        </div>
-      )}
-    </div>
+    </>
   )
 }
 
