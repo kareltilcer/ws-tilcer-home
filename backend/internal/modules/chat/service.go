@@ -219,12 +219,69 @@ func (s *Service) ListConversations(ctx context.Context, state, cursor string, l
 	} else {
 		s.logger.Warn("chat: could not read the conversation threshold for the list", "err", thErr)
 	}
+	// ⚠ NOT ON THE KOŠ LISTING (v10.1 review round 2). LastMessages carries
+	// memberScope's own `deleted_at IS NULL` term, so every row here is one it is
+	// guaranteed to answer nothing for — and running it anyway spent the whole
+	// directory projection plus the preview CTE, on a pool capped at a single
+	// connection, every time somebody opened the section.
+	if state != "trash" {
+		if err := s.attachPreviews(ctx, actor, items); err != nil {
+			return ConversationPage{}, err
+		}
+	}
 	page := ConversationPage{Items: items}
+	// ⚠ ON BOTH LISTINGS, because the sidebar hides an empty koš (D267) and the koš
+	// listing is fetched only when the section is opened — so the count has to ride
+	// the request the sidebar always makes, which is the ACTIVE one. Answering it on
+	// `?state=trash` as well costs one indexed count and keeps the field meaning one
+	// thing on every response rather than two.
+	trashed, err := s.store.TrashedCount(ctx, s.db, actor)
+	if err != nil {
+		return ConversationPage{}, err
+	}
+	page.TrashedCount = trashed
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]
 		page.NextCursor = optional.Of(encodeConversationCursor(last.UpdatedAt, last.ID))
 	}
 	return page, nil
+}
+
+// attachPreviews fills each row's `last_message` (v10.1, D266).
+//
+// ⚠ ONE QUERY FOR THE WHOLE PAGE, not one per room, and it is the same argument
+// renderMessages makes about quotes and attachments: fifty rooms is fifty places to
+// forget the floor, against a pool capped at a single connection.
+//
+// ⚠ A ROW WITH NO PREVIEW IS LEFT NULL RATHER THAN GIVEN AN EMPTY ONE. Null covers
+// two situations that look the same from here and read the same on the row — a room
+// nobody has written in, and a member whose floor sits above everything written so
+// far — and neither is "" (D226's shape: an empty answer is a shape, not a blank).
+func (s *Service) attachPreviews(ctx context.Context, actor string, items []Conversation) error {
+	if len(items) == 0 {
+		return nil
+	}
+	labels, err := s.labels(ctx)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(items))
+	for _, c := range items {
+		ids = append(ids, c.ID)
+	}
+	previews, err := s.store.LastMessages(ctx, s.db, actor, ids)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		p, ok := previews[items[i].ID]
+		if !ok {
+			continue
+		}
+		p.AuthorLabel = label(labels, p.AuthorID)
+		items[i].LastMessage = &p
+	}
+	return nil
 }
 
 // purgeAfter derives when the drain will destroy a trashed conversation's bytes.
@@ -255,8 +312,21 @@ func (s *Service) purgeAfter(deletedAt *string) *string {
 // this path used. scope.go's rule is unchanged: this is still one predicate, in
 // SQL, refusing non-member, trashed and unknown with the same answer.
 func (s *Service) GetConversation(ctx context.Context, id string) (Conversation, error) {
-	c, err := s.store.GetConversation(ctx, s.db, reqctx.ActorID(ctx), id)
-	return c, mapScopeErr(err)
+	actor := reqctx.ActorID(ctx)
+	c, err := s.store.GetConversation(ctx, s.db, actor, id)
+	if err != nil {
+		return Conversation{}, mapScopeErr(err)
+	}
+	// ⚠ THE SAME SHAPE THE LIST HANDS BACK, and that is not tidiness. The client
+	// holds this room under its own key and the list rows under another; a
+	// `Conversation` whose `last_message` is present on one and absent on the other
+	// is a row that loses its preview line the moment anything refetches the single
+	// room — which every send, rename and read-marker advance does.
+	single := []Conversation{c}
+	if err := s.attachPreviews(ctx, actor, single); err != nil {
+		return Conversation{}, err
+	}
+	return single[0], nil
 }
 
 // CreateConversation makes a group.
@@ -537,7 +607,17 @@ func (s *Service) RestoreConversation(ctx context.Context, id string) (*Conversa
 	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	// ⚠ AND IT CARRIES THE PREVIEW LIKE EVERY OTHER `Conversation` (v10.1 review
+	// round 2). This is the one response in the module built from the store's row
+	// directly rather than through Service.GetConversation, so it was the one that
+	// serialised `last_message: null` for a room full of messages — the exact
+	// disagreement between two Conversation-shaped answers that GetConversation's own
+	// note says must not exist.
+	restored := []Conversation{c}
+	if err := s.attachPreviews(ctx, actor, restored); err != nil {
+		return nil, err
+	}
+	return &restored[0], nil
 }
 
 // conversationForDestructiveVerb resolves a conversation for delete, purge and

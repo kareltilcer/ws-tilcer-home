@@ -47,7 +47,16 @@ export function ConversationList({ activeID }: { activeID?: string }) {
   // justified by counting requests. The design draws the section open; the header
   // is the disclosure, so the section is still always there to be found.
   const [trashOpen, setTrashOpen] = useState(false)
-  const trashed = useConversations('trash', trashOpen)
+  // ⚠ AND THE SECTION IS DRAWN ONLY WHEN THERE IS ONE (v10.1, D267). `trashed_count`
+  // rides the ACTIVE listing, so knowing costs no request.
+  const hasTrash = (active.data?.trashed_count ?? 0) > 0
+  // ⚠ `hasTrash &&` IS WHAT KEEPS THE LAZINESS (v10.1 review). Restoring the last
+  // trashed room while the section is open takes the section off the screen and left
+  // `trashOpen` true underneath it — so the query nobody could see went on refetching
+  // through every create, rename, delete, restore, remove-member and membership
+  // frame, which is exactly the per-invalidation second request that gating it on the
+  // disclosure was written to remove.
+  const trashed = useConversations('trash', trashOpen && hasTrash)
   const moreActive = useLoadMoreConversations('active')
   const moreTrashed = useLoadMoreConversations('trash')
 
@@ -57,11 +66,16 @@ export function ConversationList({ activeID }: { activeID?: string }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-none px-3 pb-2.5 pt-3 lg:px-3.5">
         <div className="mb-2.5 flex items-center gap-2.5">
+          {/* ⚠ THE HEADING STANDS ALONE NOW (design v10.1). The line under it
+              explained the access model to somebody who had not asked, on the pane
+              that is meant to be scanned — and every row below now carries a
+              preview, which is what a member is actually looking for. The model
+              still explains itself where it bites: the floor line, the members
+              panel, and `celá domácnost` on Všichni's own row. */}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-[17px] font-extrabold tracking-tight">
               {cs.chat.listHeading}
             </h2>
-            <p className="truncate text-[11.5px] text-muted">{cs.chat.listSubtitle}</p>
           </div>
           {/* The design's one accent affordance in this pane: 34 px at the desk,
               44 px under a thumb. */}
@@ -141,63 +155,78 @@ export function ConversationList({ activeID }: { activeID?: string }) {
               </div>
             )}
 
-            {/* The koš, as its own section (D253). A trashed conversation has left
-                every other surface entirely, so this is the only place it appears at
-                all — which is why the section header is always here to be opened,
-                rather than appearing only once something is in it. */}
-            <div className="mt-3 px-1">
-              <button
-                type="button"
-                onClick={() => setTrashOpen((v) => !v)}
-                aria-expanded={trashOpen}
-                className="flex w-full items-center gap-2 py-1.5 text-left"
-              >
-                {trashOpen ? (
-                  <ChevronDown size={12} aria-hidden className="flex-none text-subtle" />
-                ) : (
-                  <ChevronRight size={12} aria-hidden className="flex-none text-subtle" />
+            {/* The koš, as its own section (D253) — AND ONLY WHEN THERE IS ONE
+                (v10.1, D267).
+
+                ⚠ IT USED TO BE PERMANENT, on the argument that a trashed room
+                appears nowhere else and so the section must always be findable. The
+                argument holds for a koš with something in it and inverts for an
+                empty one: a household that has never deleted a conversation was
+                shown a *Koš* heading for the whole life of the app, which is a
+                standing offer to open a drawer that is always empty. The design
+                draws the section behind `hasTrash` and the PRD's route table says
+                "plus a Koš section when it has anything in it"; the build was the
+                odd one out.
+
+                ⚠ AND KNOWING THAT COSTS NOTHING. `trashed_count` rides the ACTIVE
+                listing — the request this pane always makes — so the section's rows
+                are still fetched only when it is opened, which is the whole reason
+                that query is lazy. */}
+            {hasTrash && (
+              <div className="mt-3 px-1">
+                <button
+                  type="button"
+                  onClick={() => setTrashOpen((v) => !v)}
+                  aria-expanded={trashOpen}
+                  className="flex w-full items-center gap-2 py-1.5 text-left"
+                >
+                  {trashOpen ? (
+                    <ChevronDown size={12} aria-hidden className="flex-none text-subtle" />
+                  ) : (
+                    <ChevronRight size={12} aria-hidden className="flex-none text-subtle" />
+                  )}
+                  <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-subtle">
+                    {cs.chat.trashSectionTitle}
+                  </span>
+                  <span className="h-px flex-1 bg-border" />
+                </button>
+                {trashOpen && (
+                  <div className="flex flex-col gap-2 pb-1 pt-1.5">
+                    {trashed.isPending && (
+                      <div className="grid place-items-center py-4 text-muted">
+                        <Spinner />
+                      </div>
+                    )}
+                    {trashed.data?.items.length === 0 && (
+                      <p className="px-1 py-1 text-xs text-muted">{cs.chat.trashEmpty}</p>
+                    )}
+                    {trashed.data?.items.map((c) => (
+                      <TrashedRow key={c.id} conversation={c} />
+                    ))}
+                    {trashed.data?.next_cursor && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="w-full"
+                        loading={moreTrashed.isPending}
+                        onClick={() => moreTrashed.mutate()}
+                      >
+                        {cs.chat.loadMore}
+                      </Button>
+                    )}
+                    {/* ⚠ THE RELATIONSHIP, NOT JUST THE COUNTDOWN (D254). Its bytes go
+                        on counting toward both thresholds until something really
+                        purges them, which is honest and looks wrong — so the section
+                        says why, and names the verb that ends it. */}
+                    {!!trashed.data?.items.length && (
+                      <p className="px-1 text-[10.5px] leading-relaxed text-subtle text-pretty">
+                        {cs.chat.trashNote}
+                      </p>
+                    )}
+                  </div>
                 )}
-                <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-subtle">
-                  {cs.chat.trashSectionTitle}
-                </span>
-                <span className="h-px flex-1 bg-border" />
-              </button>
-              {trashOpen && (
-                <div className="flex flex-col gap-2 pb-1 pt-1.5">
-                  {trashed.isPending && (
-                    <div className="grid place-items-center py-4 text-muted">
-                      <Spinner />
-                    </div>
-                  )}
-                  {trashed.data?.items.length === 0 && (
-                    <p className="px-1 py-1 text-xs text-muted">{cs.chat.trashEmpty}</p>
-                  )}
-                  {trashed.data?.items.map((c) => (
-                    <TrashedRow key={c.id} conversation={c} />
-                  ))}
-                  {trashed.data?.next_cursor && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="w-full"
-                      loading={moreTrashed.isPending}
-                      onClick={() => moreTrashed.mutate()}
-                    >
-                      {cs.chat.loadMore}
-                    </Button>
-                  )}
-                  {/* ⚠ THE RELATIONSHIP, NOT JUST THE COUNTDOWN (D254). Its bytes go
-                      on counting toward both thresholds until something really
-                      purges them, which is honest and looks wrong — so the section
-                      says why, and names the verb that ends it. */}
-                  {!!trashed.data?.items.length && (
-                    <p className="px-1 text-[10.5px] leading-relaxed text-subtle text-pretty">
-                      {cs.chat.trashNote}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -295,9 +324,13 @@ function ConversationRow({
           </span>
         </span>
 
-        <span className="mt-0.5 block truncate text-[11.5px] text-muted">
-          {count(conversation.member_count, PLURAL.members)}
-        </span>
+        {/* ⚠ THE PREVIEW TOOK THE MEMBER COUNT'S LINE (design v10.1, D266), and
+            that is a trade rather than an addition. The row has one line to spend
+            here and "5 členů" is a fact about a room that changes twice a year,
+            while what a member is scanning this column for is whether anything was
+            said and by whom. The count still exists where it is consulted — the
+            thread header and the members panel. */}
+        <ConversationPreviewLine conversation={conversation} />
 
         <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
           {/* ⚠ *nezměřeno* rather than a zero it did not measure (D193/D161): the
@@ -347,6 +380,53 @@ function ConversationRow({
         </span>
       )}
     </Link>
+  )
+}
+
+/**
+ * The row's preview of the last message the CALLER may read (v10.1, D266).
+ *
+ * ⚠ THE SERVER SENDS FLAGS AND THIS FILE SENDS CZECH. `excerpt` is empty on a
+ * tombstone and on a files-only message, and the sentence for each lives in cs.ts
+ * with every other Czech string in the app — a preview line is not the place to
+ * start a second copy deck inside a Go file.
+ *
+ * ⚠ AND `null` IS A STATE WITH ITS OWN LINE, NOT A BLANK. It covers two situations
+ * that read the same from here — nobody has written in this room, and everything
+ * written is below this member's floor — and a row that simply lost its second line
+ * for one of them would look like a rendering bug rather than a fact.
+ */
+function ConversationPreviewLine({ conversation }: { conversation: Conversation }) {
+  const last = conversation.last_message
+  if (!last) {
+    return (
+      <span className="mt-0.5 block truncate text-[11.5px] italic text-subtle">
+        {cs.chat.previewNone}
+      </span>
+    )
+  }
+  // A tombstone previews as the tombstone (D223): the delete blanked the body in
+  // place and the thread says the same words two panes over.
+  //
+  // ⚠ AN EMPTY EXCERPT MEANS A FILES-ONLY MESSAGE, AND THE SERVER IS WHAT MAKES THAT
+  // TRUE (v10.1 review). `excerpt` cuts at the first newline, so a body somebody began
+  // with a Shift+Enter arrived empty and this line read it as "no text, so count the
+  // files" — printing *0 souborů* under a message with none. `LastMessages` now trims
+  // the leading blank lines, and a body that survives `validateBody` always has
+  // something in it, so an empty excerpt here can only be an empty BODY — which a
+  // message is only allowed when it carries files.
+  const what = last.deleted
+    ? cs.chat.word.deleted
+    : last.excerpt || count(last.attachment_count, PLURAL.files)
+  return (
+    <span
+      className={cn(
+        'mt-0.5 block truncate text-[11.5px] text-muted',
+        last.deleted && 'italic text-att-removed',
+      )}
+    >
+      {cs.chat.previewFrom(last.author_label, what)}
+    </span>
   )
 }
 

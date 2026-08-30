@@ -115,6 +115,30 @@ export function deleteMessage(messageID: string): Promise<void> {
   return apiFetch(`${base}/messages/${messageID}`, { method: 'DELETE' })
 }
 
+/**
+ * Add or remove the caller's reaction, and get the whole message back (D265).
+ *
+ * ⚠ `reacted` IS THE DESIRED STATE, NOT A TOGGLE, and the double tap is the reason.
+ * A gesture fires twice far more easily than a button does — a bounced finger, a
+ * retried request — and a toggle applied twice lands on the opposite of what was
+ * meant, with a chip that quietly vanished as the only evidence. PUT, so a replay
+ * is a no-op.
+ *
+ * ⚠ AND THE EMOJI RIDES IN THE BODY, not in the path. ❤️ is two code points
+ * (U+2764 U+FE0F) and a path segment would make the route's identity depend on how
+ * a client percent-encoded the variation selector.
+ */
+export function setReaction(
+  messageID: string,
+  emoji: string,
+  reacted: boolean,
+): Promise<ChatMessage> {
+  return apiFetch(`${base}/messages/${messageID}/reactions`, {
+    method: 'PUT',
+    body: { emoji, reacted },
+  })
+}
+
 /** Idempotent, and never backwards — a replayed older marker cannot un-read a room. */
 export function advanceRead(id: string, untilMessageID: string): Promise<ReadState> {
   return apiFetch(`${base}/conversations/${id}/read`, {

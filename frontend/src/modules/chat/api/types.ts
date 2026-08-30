@@ -54,11 +54,48 @@ export interface Conversation {
    * cannot be more certain than the figure it judges. Null until PR 3 measures.
    */
   over_conversation_limit: boolean | null
+  /**
+   * The row's preview line (v10.1, D266) — the newest message the CALLER may read.
+   *
+   * ⚠ NULL IS NOT "EMPTY ROOM". It is also a member whose floor sits above every
+   * message written so far, which is an ordinary state of a group somebody was
+   * added to five minutes ago. Render the absence, never a blank line, and never
+   * go looking for the room's own newest message instead.
+   */
+  last_message: ConversationPreview | null
+}
+
+/**
+ * The newest message the caller may read in a room, for the list row.
+ *
+ * ⚠ `excerpt` IS EMPTY ON A TOMBSTONE AND ON A FILES-ONLY MESSAGE, and the row says
+ * which in Czech from the flags below. The server deliberately sends no sentence:
+ * every other Czech string in this app lives in i18n/cs.ts, and a preview line is
+ * not the place to start a second copy deck.
+ */
+export interface ConversationPreview {
+  id: string
+  author_id: string
+  author_label: string
+  excerpt: string
+  created_at: string
+  deleted: boolean
+  attachment_count: number
 }
 
 export interface ConversationPage {
   items: Conversation[]
   next_cursor: string | null
+  /**
+   * How many conversations the CALLER has in the koš — a fact about the koš, not
+   * about this page, and present on both listings (v10.1, D267).
+   *
+   * ⚠ THE SIDEBAR HIDES THE KOŠ SECTION ON THIS AND NOTHING ELSE. Its rows are
+   * still fetched only when the section is opened, which is the whole reason the
+   * `?state=trash` query is lazy; this is how "is there anything to open" gets
+   * answered without undoing that.
+   */
+  trashed_count: number
 }
 
 export interface ConversationCreate {
@@ -133,10 +170,32 @@ export interface ChatMessage {
   body: string
   reply_to?: MessageQuote
   attachments: Attachment[]
+  /** Always an array. Empty on a tombstone, because the delete takes them with it. */
+  reactions: Reaction[]
   created_at: string
   /** Non-null ⇒ render *upraveno*. ⚠ There is no record of what it said before. */
   edited_at: string | null
   deleted: boolean
+}
+
+/**
+ * One emoji's chip on one message (v10.1, D265).
+ *
+ * ⚠ THERE IS NO `mine` AND NO `count` ON THE WIRE, AND THERE MUST NOT BE. The /ws
+ * frame carrying a message is marshalled ONCE for the whole audience (D233), so a
+ * per-recipient field would be right for at most one of them — and a count beside a
+ * list is a second spelling of `by.length` that can disagree with it. Both questions
+ * are answered here, against the identity this tab already holds.
+ */
+export interface Reaction {
+  emoji: string
+  /** Who reacted, oldest first. Carries a display name and never an email or a role. */
+  by: ReactionActor[]
+}
+
+export interface ReactionActor {
+  user_id: string
+  label: string
 }
 
 export interface MessagePage {

@@ -1181,3 +1181,21 @@ Dark-first, tokenised, light under `.light`, elevation by surface lightness — 
 - **No new chart.** If a per-conversation distribution bar is proposed for the Administrace block, §v6's chart rules apply in full — fixed order, 2 px gaps, legend always present, direct labels, mandatory secondary encoding — and it must be **validated, not settled by eye**.
 
 ⚠ **One thing no mock can carry, carried forward from §v9 as built:** a background job has no actor. v10's drain, koš purge and thumbnail generation all run without a viewer, and if any of them inherits a member-scoped read, the failure looks like a design bug in a screen that was designed correctly — a thumbnail that never appears, an attachment stuck *zpracovává se*, bytes that never fall. Worth remembering the second time a module gains both a scope and an async worker.
+
+---
+
+## §v10.1 — as built (2026-08-29)
+
+The `design/v10_1` bundle against the shipped module. **Two labels erased and one feature added** — `design/v10/Home.dc.html` and `design/v10_1/Home.dc.html` differ by **92 diff lines once CR is stripped**, and `CardTile`, `DocumentView`, `NoteView`, `support.js` and `github.md` are byte-identical between the two snapshots.
+
+**Reactions** (PRD D265 — ⚠ the bundle numbers this D264 and that number was taken on 2026-08-28). Seven emoji, a chip with a count under the bubble, who reacted under the cursor. Built as drawn, with three notes the mock could not carry:
+
+- **The chips sit between the body and the timestamp**, which is the mock's placement and an argument rather than a preference: a reaction belongs to *what was said*, not to *when*.
+- **The palette is a strip in the flow, not a floating popover.** The desktop mock draws it as an absolutely-positioned bar above the ☺; a popover anchored to a bubble inside a scroll box has to be repositioned on every scroll frame, which is the one thing a thread somebody is reading cannot afford. Below the chips it simply moves with them, and the phone's version was already that shape.
+- **44 px under a thumb and 26–34 at the desk**, per the mock. ⚠ Seven 44 px targets do not fit a 298 px bubble at 375 px, so the bar scrolls horizontally inside its own `om-scroll` container — which is what the mock does too. The page itself does not scroll.
+
+**The erased labels.** The list pane's subtitle explained the access model on a line read once and then scrolled past forever; the composer's hint parked a paragraph of documentation where the member types. ⚠ **Neither cap stopped being stated** — the over-cap refusal still names the MB beside the file it refused, which is where a limit is worth reading. The model still explains itself where it bites: the floor line, the members panel, and `celá domácnost` on Všichni's own row.
+
+**The row's preview took the member count's line**, which the mock's `c.preview` already showed and the build had not implemented. That is a trade rather than an addition: the row has one line to spend there, *5 členů* changes twice a year, and what the column is scanned for is whether anything was said and by whom.
+
+⚠ **One thing no mock could carry, and it is the design-side lesson of this pass.** A `truncate` line is `white-space: nowrap`, and a grid item's default `min-width: auto` resolves to its **min-content** width — so the moment a row's second line became a real sentence, the list pane's minimum width became that sentence's width. It measured **415 px inside a 375 px grid** and the pane clipped: the ＋ button lost its right half, every timestamp read *21* instead of *21:45*. The mock is right and the implementation of it was wrong in a way only a browser at 375 px could show. **Any mock that puts variable-length text on a fixed-width pane carries this hazard**, and the fix is a `min-w-0` on whichever box the width has to stop at — the width twin of the `min-h-0` v10 already needed twice on these same two panes.

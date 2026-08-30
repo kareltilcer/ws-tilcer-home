@@ -1,16 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Route, Routes, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { WifiOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { routes, type ShellLayout } from '@/app/routes'
+import { useAuth } from '@/app/auth'
 import { useOnline } from '@/platform/pwa/offline'
 import { ConversationList } from './ConversationList'
 import { ThreadView } from './ThreadView'
 import { MembersPanel } from './MembersPanel'
 import { StorageWarning } from './StorageWarning'
 import { UklidPage } from './UklidPage'
-import { useChatLiveSync, useLeaveWhenGone } from './api/hooks'
+import { pickConversationToOpen, readLastOpened, rememberLastOpened } from './lastOpened'
+import { useChatLiveSync, useConversations, useLeaveWhenGone } from './api/hooks'
 
 /**
  * Chat — the eleventh module, and the first one the household does not read in full.
@@ -55,6 +57,7 @@ function ChatLayout() {
   const { id } = useParams<{ id: string }>()
   const [membersOpen, setMembersOpen] = useState(false)
   const navigate = useNavigate()
+  useOpenSomething(id)
   // ⚠ The room this tab has open can be taken away by somebody else — trashed or
   // purged — and `gone` is the frame that says so. Leaving the route is the point of
   // that flag; dropping the thread cache and staying put left the member on a
@@ -89,7 +92,20 @@ function ChatLayout() {
             was never smaller than what it held: the newest messages and the
             composer were simply cut off the bottom of the page, with no scrollbar
             to say so. The two panes are where the height has to stop. */}
-        <aside className={id ? 'hidden min-h-0 lg:flex lg:flex-col lg:border-r lg:border-border' : 'flex min-h-0 flex-col lg:border-r lg:border-border'}>
+        {/* ⚠ `min-w-0` IS LOAD-BEARING HERE TOO, and it is the width twin of the
+            `min-h-0` note above — found by opening the page at 375 px, not by any
+            test (v10.1). `<main>` has carried it since v10; the aside did not, and
+            nothing noticed while its second line said "5 členů". A grid item
+            defaults to `min-width: auto`, which resolves to its MIN-CONTENT width,
+            and a `truncate` line is `white-space: nowrap` — so the moment the row's
+            second line became a preview of a real sentence, the pane's minimum
+            width became that sentence's. It measured 415 px inside a 375 px grid
+            and `overflow-hidden` clipped the difference: the ＋ button lost its
+            right half, every row's timestamp read "21" instead of "21:45", and
+            nothing scrolled to say so. The truncation could not help — it shortens
+            text to the width it is GIVEN, and the pane was being given the width of
+            the untruncated text. */}
+        <aside className={id ? 'hidden min-h-0 min-w-0 lg:flex lg:flex-col lg:border-r lg:border-border' : 'flex min-h-0 min-w-0 flex-col lg:border-r lg:border-border'}>
           {/* ⚠ THE MODULE-TOTAL WARNING SITS ON THE LIST, NOT IN A THREAD. It is
               about the household's bucket, so a member meets it where they choose a
               room rather than inside one — and it never appears beside the
@@ -150,6 +166,68 @@ function ChatLayout() {
       )}
     </div>
   )
+}
+
+/**
+ * The desktop never lands on an empty pane again (v10.1, D269).
+ *
+ * ⚠ IT REMEMBERS, AND IT ONLY ACTS AT ≥1024. At that width the list and the thread
+ * are both on screen (D262), so `/chat` was a permanent half-page telling the member
+ * to click something — every time they opened the module, including the ones where
+ * they were coming back to the room they had left five minutes ago. Below 1024 the
+ * list IS the screen and there is nothing empty to fill; redirecting there would
+ * make the conversation list unreachable, because the thread's back arrow goes to
+ * `/chat` and would bounce straight back into the thread.
+ *
+ * ⚠ THE MEDIA QUERY IS READ, NOT SUBSCRIBED TO. A member who drags a window from
+ * 900 px to 1300 px has a conversation list on screen and is looking at it; yanking
+ * them into a room because the viewport crossed a threshold is the app taking a
+ * decision they did not make. The check happens when the list arrives and when the
+ * route changes, which are the two moments a member has actually asked for
+ * something.
+ *
+ * ⚠ AND THE NAVIGATION IS A REPLACE. A push would put the empty `/chat` in the
+ * history, so browser-back from the thread would land on it and be redirected
+ * forward again — the trap, rebuilt one width up.
+ *
+ * ⚠ AND IT WAITS FOR A LIST THAT IS NOT MID-REFETCH (v10.1 review). D269's whole
+ * safety net is *a remembered room that is no longer in the list is ignored rather
+ * than followed into a 404* — and that guard reads the cache, which is at its most
+ * out of date exactly when it matters. Every route into `/chat` from a room that has
+ * GONE arrives one tick after `invalidateLists`: the delete dialog's own
+ * `navigate('/chat')`, and `useLeaveWhenGone` when somebody else trashes the room
+ * this tab has open. TanStack marks the listing stale and keeps its rows until the
+ * refetch lands, so `pickConversationToOpen` still found the dead room in `items`,
+ * still preferred it as the remembered one, and redirected the member straight back
+ * into "Konverzace nebyla nalezena." — the screen both of those exits exist to
+ * prevent. Skipping while `isFetching` costs the empty pane for one round trip and
+ * then opens the right room; `isFetching` is in the dependency list because a
+ * refetch that returns identical rows keeps the same `items` reference, and without
+ * it that case would never re-run and would open nothing at all.
+ */
+function useOpenSomething(openID: string | undefined): void {
+  const navigate = useNavigate()
+  const { identity } = useAuth()
+  const me = identity?.userId ?? ''
+  const active = useConversations('active')
+  const rooms = active.data?.items
+  const fetching = active.isFetching
+
+  // Remembering is the half that runs on every width: a phone member's last room is
+  // what the desktop will open tomorrow, and the two share the record.
+  useEffect(() => {
+    if (openID) rememberLastOpened(me, openID)
+  }, [me, openID])
+
+  useEffect(() => {
+    if (openID || !rooms || fetching) return
+    if (!window.matchMedia?.('(min-width: 1024px)').matches) return
+    const target = pickConversationToOpen(rooms, readLastOpened(me))
+    // ⚠ A MEMBER IN NO CONVERSATION GETS THE EMPTY STATE, which says what the module
+    // is. `pickConversationToOpen` answers '' for that rather than guessing, and
+    // this is where that answer is respected.
+    if (target) navigate(`${routes.chat}/${target}`, { replace: true })
+  }, [openID, rooms, fetching, me, navigate])
 }
 
 /**

@@ -1,14 +1,41 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.12.2
+  version: 0.13.0
   description: >-
-    API for the `home` household-management service. **0.12.2 IS v10 AS BUILT, PLUS ONE
-    WIRE CHANGE.** 0.12.0 was the v10 spec; 0.12.1 reconciled it against the shipped code
-    after PR 3 (attachments, the two thresholds, the clean-up page and the move to
-    Dokumenty).
+    API for the `home` household-management service. **0.13.0 IS v10.1 — CHAT'S SECOND
+    PASS.** 0.12.0 was the v10 spec, 0.12.1 reconciled it against the shipped code after
+    PR 3, and 0.12.2 made four list cursors one encoding.
 
-    **What 0.12.2 changes: the composite list cursors are now one encoding.** Four
+    **What 0.13.0 adds is one path and three fields, and none of it is breaking.**
+
+    ⚠ **`PUT /api/chat/messages/{id}/reactions`** — seven emoji, a chip per emoji under the
+    bubble (D265). It takes the **desired state** (`reacted: true|false`) rather than
+    toggling, because the gesture that drives it is a double tap: a gesture fires twice far
+    more easily than a button does, and a toggle applied twice lands on the opposite of what
+    the member meant with a vanished chip as the only evidence. The emoji rides in the BODY
+    and not in the path — ❤️ is two code points (U+2764 U+FE0F) and a path segment would make
+    the route's identity depend on how a client percent-encoded the variation selector.
+
+    ⚠ **`ChatMessage.reactions` carries NO `mine` AND NO `count`, and it must not grow
+    either.** The /ws frame carrying a message is marshalled ONCE for the whole audience
+    (D233), so a per-recipient field is right for at most one recipient; and a count beside a
+    list is a second spelling of `by.length` that can disagree with it. The reactors ride as
+    `(user_id, label)` pairs and every client answers both questions locally, which is what
+    every bubble already does to decide whether it is its own.
+
+    ⚠ **`ChatConversation.last_message` is bounded by the caller's floor** (D266). `MAX(id)`
+    over a conversation is the newest message the ROOM has, which for a member added
+    yesterday is a body they may not read — printed on the row they see before they open
+    anything, which is a worse disclosure than the thread's would be because nobody has to
+    click. It is `null` both for a room nobody has written in and for a member whose floor
+    sits above everything written so far; those are the same absence from here.
+
+    **`ChatConversationPage.trashed_count`** (D267) is how many conversations the CALLER has
+    in the koš, on both listings, so the sidebar can hide an empty koš without a second
+    request — the koš's ROWS are still fetched only when the section is opened.
+
+    **What 0.12.2 changed: the composite list cursors became one encoding.** Four
     collections paged on a sort tuple rather than on an id, and each had written its own
     token format — two of them in plain text a client could read. They now share
     `platform/cursor`, an unpadded base64url token described by the new `OpaqueCursor`
@@ -5015,6 +5042,67 @@ paths:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/chat/messages/{id}/reactions:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    put:
+      tags: [chat]
+      summary: Add or remove your reaction to a message
+      description: >-
+        Seven emoji, a chip per emoji under the bubble (PRD D265). Answers with the whole
+        re-rendered message, the way the edit does and for the same reason: the `/ws` frame
+        replaces the cached message outright, so anything the response omits disappears from
+        every other member's bubble until something refetches.
+
+        ⚠ **It takes the DESIRED STATE, not a toggle, and the double tap is why.** A gesture
+        fires twice far more easily than a button does — a bounced finger, a retried request,
+        a slow uplink — and a toggle applied twice lands on the opposite of what the member
+        meant, with a chip that quietly vanished as the only evidence. `PUT` with `reacted`
+        makes a replay a no-op. The same shape `PATCH …/members/me` uses for mute.
+
+        ⚠ **Authorship is deliberately NOT checked.** Edit and delete answer 404 to anybody
+        but the author; a reaction is every member's, the author's own included, and a
+        `reader` may leave one (D222).
+
+        ⚠ **No audit event and no push.** D231 keeps message mutations out of the Log, and a
+        reaction is strictly less than a message; auditing one would rebuild the
+        traffic-analysis record D231 declined to keep. It is not a notification either.
+
+        ⚠ **The `/ws` audience is the members whose floor sits BELOW this message**, not the
+        whole membership — the frame carries the whole message, body included, so the wider
+        audience would push an old message's text to exactly the people the floor keeps it
+        from. The same correction `PATCH /api/chat/messages/{id}` took in PR 2.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatReactionUpdate" }
+      responses:
+        "200":
+          description: The message, with its reactions as they now stand
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatMessage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: >-
+            Not a member of the conversation, below the caller's floor, the conversation is
+            in the koš, or no such message. All four are one response, byte-identical to the
+            one an unknown id gets (D217).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: >-
+            An emoji outside the palette, a body that omits `reacted`, or a reaction to a
+            tombstone. ⚠ A 422 rather than a 404 because none of them is a fact about
+            anybody's conversation: what is wrong is the caller's own request, and the
+            membership question was already answered above it. ⚠ **An absent `reacted` is
+            refused rather than read as `false`** — the field is the whole of what this route
+            decides, so defaulting it would delete a chip for a client that meant to add one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /api/chat/attachments/{id}/raw:
     parameters:
       - $ref: "#/components/parameters/PathId"
@@ -9134,7 +9222,10 @@ components:
       # schema says so and the wrong path stops being the ergonomic one.
       # `over_conversation_limit` is required and NULLABLE for the same reason
       # `bytes` is: null is its answer until PR 3 measures, not its absence.
-      required: [id, kind, name, created_at, updated_at, member_count, unread_count, bytes, muted, effective_from, reads_from_beginning, over_conversation_limit]
+      # `last_message` is required and NULLABLE for the reason `bytes` is: null is its
+      # ANSWER — a room nobody has written in, or a member whose floor sits above
+      # everything written so far — and not its absence.
+      required: [id, kind, name, created_at, updated_at, member_count, unread_count, bytes, muted, effective_from, reads_from_beginning, over_conversation_limit, last_message]
       description: >-
         A room. ⚠ It is addressed by its UUIDv7 `id` and has NO SLUG (PRD D220) — the house
         `freeSlug` pattern appends `-2` on a sibling collision, which here would disclose a
@@ -9208,16 +9299,71 @@ components:
             than left to be inferred (D237). ⚠ **Null whenever `bytes` is null** — it is a
             verdict ABOUT `bytes` and cannot be more certain than the figure it judges, the
             same D161 principle one field up. PR 3 is what makes it a boolean.
+        last_message:
+          oneOf:
+            - $ref: "#/components/schemas/ConversationPreview"
+            - type: "null"
+          description: >-
+            The row's preview line: the newest message THE CALLER may read (v10.1, D266).
+
+            ⚠ **Null is not "empty room".** It is also a member whose floor sits above every
+            message written so far, which is an ordinary state of a group somebody was added
+            to five minutes ago. Both render as an absence; neither renders the room's own
+            newest message.
+
+    ConversationPreview:
+      type: object
+      required: [id, author_id, author_label, excerpt, created_at, deleted, attachment_count]
+      description: >-
+        ⚠ **A SECOND READ OF A MESSAGE, THROUGH THE SAME FLOOR** — the shape
+        `ChatMessageQuote` warns about, one screen over. `MAX(id)` over a conversation is the
+        newest message the ROOM has, which for a member added yesterday is a body they may not
+        read, printed on the row they see before they open anything. That is a worse
+        disclosure than the thread's would be, because nobody has to click.
+
+        ⚠ **A tombstone is still the last message and is NOT skipped.** The delete blanks the
+        body in place (D223) and this reads the same column the thread does, so the preview
+        says *Zpráva byla smazána* exactly as the bubble does. Reaching past it to the newest
+        surviving message would print a line the room no longer ends with.
+      properties:
+        id: { type: string }
+        author_id: { type: string }
+        author_label: { type: string }
+        excerpt:
+          type: string
+          description: >-
+            First line, truncated. **Empty on a tombstone and on a files-only message** — the
+            client renders the Czech for each from the two flags below rather than from a
+            sentence the server wrote, because every other Czech string in the app lives in
+            `i18n/cs.ts` and a preview line is not the place to start a second copy deck.
+        created_at: { type: string, format: date-time }
+        deleted: { type: boolean }
+        attachment_count: { type: integer }
 
     ConversationPage:
       type: object
-      required: [items]
+      required: [items, trashed_count]
       properties:
         items:
           type: array
           description: ALWAYS an array, never null (D174).
           items: { $ref: "#/components/schemas/Conversation" }
         next_cursor: { type: [string, "null"] }
+        trashed_count:
+          type: integer
+          description: >-
+            How many conversations the CALLER has in the koš — a fact about the koš rather
+            than about this page, and answered the same on both listings (v10.1, D267).
+
+            ⚠ **It rides here so the sidebar can hide an empty koš without a second request.**
+            The section's ROWS are still fetched only when it is opened, which is the whole
+            reason `?state=trash` is lazy; this answers "is there anything to open" for the
+            price of an indexed count on a request the pane already makes.
+
+            ⚠ **It is member-scoped like every other read in the module**, admins included:
+            D255 gives an admin restore and purge over a room they may not read, and this is
+            a read. A count over the table would be a scalar answering how many conversations
+            exist.
 
     ConversationCreate:
       type: object
@@ -9292,7 +9438,7 @@ components:
 
     ChatMessage:
       type: object
-      required: [id, conversation_id, author_id, author_label, body, attachments, created_at, deleted]
+      required: [id, conversation_id, author_id, author_label, body, attachments, reactions, created_at, deleted]
       description: >-
         ⚠ A message mutation writes **no audit event** (PRD D231) — chat is the first module
         in Home whose primary mutation writes none, deliberately, guarded by
@@ -9314,12 +9460,67 @@ components:
           type: array
           description: ALWAYS an array, never null (D174).
           items: { $ref: "#/components/schemas/ChatAttachment" }
+        reactions:
+          type: array
+          description: >-
+            ALWAYS an array, never null (D174) — and empty on a tombstone, because the delete
+            takes them with it. D223 keeps the row so replies do not point at nothing; it does
+            not keep six people's ❤️ on a sentence nobody can read any more.
+          items: { $ref: "#/components/schemas/ChatReaction" }
         created_at: { type: string, format: date-time }
         edited_at:
           type: [string, "null"]
           format: date-time
           description: Non-null ⇒ the bubble renders *upraveno*. ⚠ There is no record of what it said before (D225).
         deleted: { type: boolean, description: "A tombstone — *Zpráva byla smazána* — kept so replies do not point at nothing (D223)." }
+
+    ChatReaction:
+      type: object
+      required: [emoji, by]
+      description: >-
+        One emoji's chip on one message (PRD D265).
+
+        ⚠ **There is no `mine` and no `count`, and neither may be added.** The `/ws` frame
+        carrying a message is marshalled ONCE for the whole audience (D233), so a
+        per-recipient field would be correct for at most one recipient; and a count beside a
+        list is a second spelling of `by.length` that can disagree with it. Both questions are
+        answered client-side against the identity the client already holds — which is what
+        every bubble already does to decide whether it is its own.
+      properties:
+        emoji:
+          type: string
+          description: >-
+            One of exactly seven: ❤️ 👍 😂 😮 😢 🙏 ✅. ⚠ The heart is TWO code points (U+2764
+            U+FE0F) and the variation selector is part of the value — the server compares
+            byte-for-byte, so a "tidied" bare ❤ is refused with 422.
+        by:
+          type: array
+          description: >-
+            Who reacted, oldest first. Carries a display name and — like everything else in
+            this module — never an email or a role (D230).
+          items: { $ref: "#/components/schemas/ChatReactionActor" }
+
+    ChatReactionActor:
+      type: object
+      required: [user_id, label]
+      properties:
+        user_id: { type: string }
+        label: { type: string, description: Display name at render time, from the session-projected directory (D230). }
+
+    ChatReactionUpdate:
+      type: object
+      required: [emoji, reacted]
+      properties:
+        emoji:
+          type: string
+          description: One of the seven. Anything else is a 422 — the palette is closed and the server is where that is true.
+        reacted:
+          type: boolean
+          description: >-
+            ⚠ The DESIRED state, not a toggle. `true` adds the caller's reaction, `false`
+            removes it, and both are idempotent — which is what makes a double tap that fired
+            twice land where the member meant rather than on the opposite of it. ⚠ **Required
+            in earnest: omitting it is a 422, not a `false`.**
 
     ChatMessageQuote:
       type: object

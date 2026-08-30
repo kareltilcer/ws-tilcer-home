@@ -4,6 +4,22 @@ Version history for the `home` service. Full detail lives in `PRD.md` (§10 Deci
 
 ---
 
+## v10.1 — 2026-08-29 · Chat's second pass (`chat`)
+
+> OpenAPI **0.12.2 → 0.13.0**. Decisions **D265–D269** (`PRD.md` §V10-10), as-built record in **§V10-14**. Migration **`12003`**, the third file in block 12. One pull request, against the shipped module — from the `design/v10_1` bundle plus four requests from Karel. ⚠ **The design bundle numbers its reactions decision D264 and that number was taken three days earlier**; the numbering here starts at D265, and the collision is recorded rather than quietly resolved.
+
+**Reactions** (D265) — seven emoji, a chip per emoji under the bubble, `PUT /api/chat/messages/{id}/reactions`. It takes the **desired state** rather than toggling, and the reason is the double tap: a gesture fires twice far more easily than a button does, and a toggle applied twice lands on the opposite of what the member meant with a vanished chip as the only evidence. The wire carries **no `mine` and no `count`** — `ws.PublishTo` marshals one frame for the whole audience (D233), so a per-recipient field is right for at most one recipient; the reactors ride as `(user_id, label)` pairs and every client answers both questions locally. No audit event, no push: D231 accepted that for messages, and a reaction is strictly less than one. The `/ws` audience is `MemberIDsAbove` — the frame carries the whole message.
+
+**Three touch gestures** (D268) — double tap hearts, swipe right replies, long press opens the reaction bar — and **every one has a visible control doing the same thing**, because this is a household app and a gesture nobody was told about cannot be the only way in. ⚠ The hard part is not firing during a scroll: a thread is a vertical scroller and a bubble fills most of its width, so *every* scroll starts as a press on one of them.
+
+**The row previews its last message** (D266), bounded by the floor — `MAX(id)` over a conversation is the newest message the ROOM has, which for a member added yesterday is a body they may not read, printed on the row they see before they open anything. **`/chat` opens the last room at ≥1024** (D269), gated on the viewport and not the data: below 1024 the list IS the screen, and redirecting there would make it unreachable. **The koš is drawn only when it has something in it** (D267) — what §V10-7's route table already said and the design already drew; `trashed_count` rides the active listing so knowing costs no request.
+
+⚠ **One defect found by opening the page**, and the third release running for that sentence: the preview line made the list pane's min-content width the sentence's width, so the pane measured 415 px inside a 375 px grid and the ＋ button and every timestamp were clipped. `min-w-0` on the aside — the width twin of a `min-h-0` note that has been in that file since v10.
+
+⚠ **Two `xhigh` review rounds, seventeen findings** (§V10-14). The second round is the one worth the name: it found that D266 had quietly given `chat_message.updated` a second consumer, so fixing a typo left every sidebar quoting the typo — and that the first round's own control guard had created a two-finger swipe that replied to a message nobody swiped. **One finding is recorded and NOT fixed**: the published `reply_to` is a per-recipient field on a frame marshalled once, which is v10's defect on the send path and not this pass's — every quote a reaction could leak has already been leaked by the reply's own creation frame. It is on the outstanding list with the shape of the fix.
+
+---
+
 ## v10 — 2026-08-26 (spec) · **PR 1 merged, PR 2 built, PR 3 outstanding** · Chat (`chat`)
 
 > OpenAPI **0.11.0 → 0.12.0** (spec; the served contract is still 0.11.0 until v10 ships). Decisions **D216–D258** (`PRD.md` §V10-10), plus **D259–D262 taken by a build-guide pass against the spec** before a line was written. Migration block **12**, the first new block since v8. Triggered by a short brief from Karel: a default group chat for all members, plus groups anybody can create and name, carrying images, video and files — and, because that will fill R2, a storage threshold and a clean-up page in Administrace. Scope was frozen the same day after an interview of nineteen questions, **then four decisions were deliberately re-opened before the PRD** and two of them changed. Resolved brief: `V10-chat-brief.md`. Build guide: `HANDOFF-12-chat.md`. **⚠ Ships as three pull requests, not one (D261).**
@@ -64,7 +80,9 @@ Four decisions came out of writing `HANDOFF-12` against the spec, the same kind 
 
 ### What v10 declines
 
-No reactions, threads, typing indicators, presence or read receipts · no forwarding, pinned messages or voice messages · **no transcoding and no video poster frames** · **no preview pipeline** — PDFs open in the browser's own viewer, `home-gotenberg` is not involved and `platform/preview` is not created · no message retention or auto-pruning (the koš is for conversations) · **no widget, no metric, no list** (the electricity precedent, enforced by `forbiddenImports`) · no third `visibility` for conversation-scoped documents · no per-conversation threshold override · **no blocking** · no `platform/members` strand · and neither the rewrite of v9's D190 fan-out nor the migration of `HOME_STORAGE_WARN_TOTAL_MB` into the new table, both of which v10 makes possible and neither of which is v10's.
+> ⚠ **Reactions are no longer on this list — v10.1 built them** (D265, above). The rest of it stands, and the entry is left in place rather than edited out: what a version declined and later changed its mind about is worth more as a record than as a tidy sentence.
+
+~~No reactions~~, threads, typing indicators, presence or read receipts · no forwarding, pinned messages or voice messages · **no transcoding and no video poster frames** · **no preview pipeline** — PDFs open in the browser's own viewer, `home-gotenberg` is not involved and `platform/preview` is not created · no message retention or auto-pruning (the koš is for conversations) · **no widget, no metric, no list** (the electricity precedent, enforced by `forbiddenImports`) · no third `visibility` for conversation-scoped documents · no per-conversation threshold override · **no blocking** · no `platform/members` strand · and neither the rewrite of v9's D190 fan-out nor the migration of `HOME_STORAGE_WARN_TOTAL_MB` into the new table, both of which v10 makes possible and neither of which is v10's.
 
 ### Data model (§V10-5)
 

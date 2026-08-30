@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/cursor"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
@@ -250,6 +251,111 @@ func (s *Store) GetConversation(ctx context.Context, q querier, actor, conversat
 		MemberCount: members, UnreadCount: unread, Muted: mutedInt != 0,
 		EffectiveFrom: effFrom, ReadsFromBeginning: fromStart, Bytes: nil,
 	}, nil
+}
+
+// TrashedCount is how many of the caller's conversations are in the koš (v10.1,
+// D267).
+//
+// ⚠ IT IS THE CALLER'S KOŠ, NOT THE HOUSEHOLD'S. The membership join is the same one
+// ListConversations is built on, so a room the caller is not in never enters the
+// count — a number that leaked how many rooms exist would be the leak table's row 11
+// answered in the affirmative by a scalar.
+//
+// ⚠ AND AN ADMIN GETS NO WIDER ANSWER. Restore and purge are verbs an admin has over
+// a room they may not read (D255); this is a READ, so it stays member-scoped like
+// every other one in the module.
+func (s *Store) TrashedCount(ctx context.Context, q querier, actor string) (int, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM chat_members m
+		  JOIN chat_conversations c ON c.id = m.conversation_id
+		 WHERE m.user_id = ? AND c.deleted_at IS NOT NULL`, actor).Scan(&n)
+	return n, err
+}
+
+// LastMessages is the newest message each named room has FOR THIS CALLER (v10.1,
+// D266) — the conversation row's preview line.
+//
+// ⚠ THE FLOOR IS IN THE QUERY AND SO IS THE KOŠ, and both are load-bearing. `MAX(id)`
+// over a conversation is the newest message the ROOM has, which for a member added
+// yesterday is a body they may not read — printed on the row they see before they
+// open anything, which is a worse leak than the thread's would be because nobody
+// has to click. And the `deleted_at IS NULL` join is memberScope's own term (D253):
+// a room in the koš has left every read of its messages, so it has no preview either.
+// Without it the koš listing was the one surface in the module handing back a body
+// from a trashed room — invisible only because TrashedRow does not draw one.
+//
+// ⚠ AND A TOMBSTONE IS STILL THE NEWEST MESSAGE. It is not skipped: `body` is
+// already blank on one (D223) and the preview says *Zpráva byla smazána*, exactly
+// as the thread does. Skipping back to the newest non-deleted message would print a
+// line the room no longer ends with.
+//
+// ⚠ ONE `MAX` PER ROOM, NOT ONE PER MESSAGE (v10.1 review). The obvious spelling —
+// `WHERE x.id = (SELECT MAX(y.id) …)` against chat_messages — is a CORRELATED SCALAR
+// SUBQUERY that SQLite re-evaluates for every message above the floor, so a page of
+// fifty rooms walked every message in all fifty: `EXPLAIN QUERY PLAN` drove the outer
+// loop from `idx_chat_messages_conv (conversation_id=? AND id>?)`. This form resolves
+// each room's newest id ONCE, from chat_members, and then looks the row up by primary
+// key — O(rooms) where the other was O(messages), on a request the list makes again on
+// every send, every read-marker advance and every window focus, against a pool capped
+// at one connection.
+//
+// It takes the ids the caller has already been listed, so it inherits the access
+// decision rather than making a second one — the AttachmentsForMessages shape.
+func (s *Store) LastMessages(ctx context.Context, q querier, actor string, conversationIDs []string) (map[string]ConversationPreview, error) {
+	out := map[string]ConversationPreview{}
+	if actor == "" || len(conversationIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(conversationIDs)+1)
+	args = append(args, actor)
+	for _, id := range conversationIDs {
+		args = append(args, id)
+	}
+	rows, err := q.QueryContext(ctx, `
+		WITH newest AS (
+		  SELECT m.conversation_id AS conversation_id,
+		         (SELECT MAX(y.id) FROM chat_messages y
+		           WHERE y.conversation_id = m.conversation_id
+		             AND y.id > m.effective_from_id) AS message_id
+		    FROM chat_members m
+		    JOIN chat_conversations c
+		      ON c.id = m.conversation_id AND c.deleted_at IS NULL
+		   WHERE m.user_id = ?
+		     AND m.conversation_id IN (`+appdb.Placeholders(len(conversationIDs))+`)
+		)
+		SELECT newest.conversation_id, x.id, x.author_id, x.body, x.created_at,
+		       x.deleted_at IS NOT NULL,
+		       (SELECT COUNT(*) FROM chat_attachments a WHERE a.message_id = x.id)
+		  FROM newest
+		  JOIN chat_messages x ON x.id = newest.message_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			convID string
+			p      ConversationPreview
+			body   string
+		)
+		if err := rows.Scan(&convID, &p.ID, &p.AuthorID, &body, &p.CreatedAt,
+			&p.Deleted, &p.AttachmentCount); err != nil {
+			return nil, err
+		}
+		// ⚠ THE LEADING BLANK LINES GO FIRST, AND ONLY HERE (v10.1 review). `excerpt`
+		// cuts at the first newline, so a body somebody began with a Shift+Enter —
+		// validateBody trims only the right-hand end — excerpted to "", and the row
+		// read the empty string as "this message is files only" and printed
+		// *0 souborů* under a message that carries none. After this trim an empty
+		// excerpt means an empty BODY, which a message can only have when it carries
+		// files (SendMessage refuses the other case), so the client's fallback is
+		// true again. The quote and the push preview keep `excerpt` as it was.
+		p.Excerpt = excerpt(strings.TrimLeft(body, " \t\r\n"))
+		out[convID] = p
+	}
+	return out, rows.Err()
 }
 
 // ConversationName reads a room's name for an audit summary or a push title. It

@@ -58,12 +58,52 @@ type Conversation struct {
 	// D161 lie one field up in boolean form — a definite "under the limit" derived
 	// from a figure nobody has measured. Null until PR 3 sums the bytes.
 	OverConversationLimit *bool `json:"over_conversation_limit"`
+
+	// LastMessage is the row's preview line (v10.1, D266) — null when the caller
+	// can see no message in this room at all.
+	//
+	// ⚠ NULL IS NOT "EMPTY ROOM". It is also a member whose floor sits above every
+	// message written so far, which is an ordinary state of a group somebody was
+	// added to five minutes ago — so the row renders the absence rather than a
+	// blank, and never the newest message the ROOM has.
+	LastMessage *ConversationPreview `json:"last_message"`
+}
+
+// ConversationPreview is the newest message the CALLER may read in a room.
+//
+// ⚠ IT IS A SECOND READ OF A MESSAGE, THROUGH THE SAME FLOOR, and it is the leak
+// this feature most easily introduces — the same shape MessageQuote warns about one
+// screen over. A "last message" taken as MAX(id) over the conversation is the newest
+// message the ROOM has, which for a member added yesterday is a body they may not
+// read, printed on the row they see before they open anything.
+type ConversationPreview struct {
+	ID          string `json:"id"`
+	AuthorID    string `json:"author_id"`
+	AuthorLabel string `json:"author_label"`
+	// Excerpt is the first line, truncated — EMPTY on a tombstone and on a message
+	// that carries only files. The client renders both from the flags below rather
+	// than from a sentence the server wrote, so the row's copy stays in cs.ts with
+	// every other Czech string in the app.
+	Excerpt         string `json:"excerpt"`
+	CreatedAt       string `json:"created_at"`
+	Deleted         bool   `json:"deleted"`
+	AttachmentCount int    `json:"attachment_count"`
 }
 
 // ConversationPage is the list response. Items is ALWAYS an array, never null (D174).
 type ConversationPage struct {
 	Items      []Conversation `json:"items"`
 	NextCursor *string        `json:"next_cursor"`
+
+	// TrashedCount is how many conversations the CALLER has in the koš — on both
+	// listings, and describing the koš rather than this page (v10.1, D267).
+	//
+	// ⚠ IT RIDES HERE SO THE SIDEBAR CAN HIDE AN EMPTY KOŠ WITHOUT A SECOND REQUEST.
+	// The section's rows are still fetched only when it is opened, which is the whole
+	// reason `?state=trash` is lazy; knowing whether there is anything to open is a
+	// scalar, and asking for it separately would undo that saving to answer a
+	// yes/no question.
+	TrashedCount int `json:"trashed_count"`
 }
 
 type ConversationCreate struct {
@@ -116,9 +156,52 @@ type Message struct {
 	Body           string        `json:"body"`
 	ReplyTo        *MessageQuote `json:"reply_to,omitempty"`
 	Attachments    []Attachment  `json:"attachments"`
-	CreatedAt      string        `json:"created_at"`
-	EditedAt       *string       `json:"edited_at"`
-	Deleted        bool          `json:"deleted"`
+	// Reactions is ALWAYS an array, never null (D174) — the empty one is a message
+	// nobody has reacted to, which is most of them.
+	Reactions []Reaction `json:"reactions"`
+	CreatedAt string     `json:"created_at"`
+	EditedAt  *string    `json:"edited_at"`
+	Deleted   bool       `json:"deleted"`
+}
+
+// Reaction is one emoji's chip on one message (v10.1, D265).
+//
+// ⚠ THERE IS NO `mine` AND NO `count`, DELIBERATELY. The /ws frame carrying a
+// Message is marshalled ONCE for the whole audience (ws.PublishTo), so a
+// per-recipient field would be right for at most one of them — and a count beside a
+// list is a second spelling of `len(By)` that can disagree with it. The client
+// answers both questions off `By`, which is the only thing that is true for
+// everybody.
+type Reaction struct {
+	Emoji string `json:"emoji"`
+	// By is who reacted, oldest first. ALWAYS an array, never null.
+	//
+	// ⚠ It carries a display name, and that is not a new disclosure: every bubble
+	// already prints `author_label`, and a reactor is a member of a conversation the
+	// caller is in. What it must never carry is an email or a role — the D230 rule
+	// the whole member directory is narrowed by.
+	By []ReactionActor `json:"by"`
+}
+
+// ReactionActor is one person under one chip.
+type ReactionActor struct {
+	UserID string `json:"user_id"`
+	Label  string `json:"label"`
+}
+
+// ReactionUpdate is the body of `PUT /api/chat/messages/{id}/reactions`.
+//
+// ⚠ Reacted IS THE DESIRED STATE, NOT A TOGGLE — see Store.SetReaction for why the
+// double-tap gesture is what settles that.
+//
+// ⚠ AND IT IS A POINTER SO ITS ABSENCE IS NOT A DECISION (v10.1 review round 2). A
+// plain bool decodes a body that never mentioned `reacted` as `false`, which this
+// route executes as a REMOVAL — so a client that sent only the emoji watched its own
+// chip disappear with a 200. The spec has always said `required: [emoji, reacted]`;
+// nil is how the server can tell the difference and answer 422.
+type ReactionUpdate struct {
+	Emoji   string `json:"emoji"`
+	Reacted *bool  `json:"reacted"`
 }
 
 // MessageQuote is the quoted parent of a reply.

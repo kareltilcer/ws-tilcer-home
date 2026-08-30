@@ -1,6 +1,16 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowUp, Bell, BellOff, MoreHorizontal, Plus, Users, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowUp,
+  Bell,
+  BellOff,
+  MoreHorizontal,
+  Plus,
+  Smile,
+  Users,
+  X,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
@@ -20,10 +30,13 @@ import {
   useRenameConversation,
   useSendMessage,
   useSetMuted,
+  useSetReaction,
   useUploadMessage,
 } from './api/hooks'
 import type { ChatMessage, Conversation, MessageQuote } from './api/types'
 import { AttachmentView } from './AttachmentView'
+import { useMessageGestures } from './gestures'
+import { hasReacted, HEART, isMine, reactionLabel, REACTION_PALETTE } from './reactions'
 import { newMessagesAnchor } from './when'
 
 /**
@@ -49,6 +62,11 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   const older = useLoadOlderMessages(conversationID)
   const advanceRead = useAdvanceRead(conversationID)
   const remove = useDeleteMessage(conversationID)
+  // ⚠ ONE MUTATION FOR THE THREAD, NOT ONE PER BUBBLE — the correction the delete
+  // took in the v10 review, applied to the verb that arrives with a gesture. A
+  // thread at the 200-message cap would otherwise mount two hundred mutation
+  // observers for something at most one bubble at a time is doing.
+  const react = useSetReaction(conversationID)
   const { identity } = useAuth()
   const me = identity?.userId ?? ''
 
@@ -394,6 +412,10 @@ export function ThreadView({ conversationID, onOpenMembers }: {
                 <Bubble
                   message={m}
                   mine={m.author_id === me}
+                  me={me}
+                  onReact={(emoji, reacted) =>
+                    react.mutate({ messageID: m.id, emoji, reacted })
+                  }
                   // ⚠ ONE MUTATION FOR THE THREAD, NOT ONE PER BUBBLE (v10 review).
                   // Bubble called useDeleteMessage itself, so a thread at the
                   // 200-message cap mounted two hundred mutation observers — for a
@@ -863,15 +885,20 @@ function FloorLine({
 function Bubble({
   message,
   mine,
+  me,
   onReply,
   onEdit,
   onDelete,
+  onReact,
 }: {
   message: ChatMessage
   mine: boolean
+  /** The caller's user id — how a chip decides whether it is theirs (D265). */
+  me: string
   onReply: () => void
   onEdit: () => void
   onDelete: () => void
+  onReact: (emoji: string, reacted: boolean) => void
 }) {
   if (message.deleted) {
     return (
@@ -886,11 +913,78 @@ function Bubble({
     )
   }
 
+  // ⚠ THE TOMBSTONE RETURNS ABOVE, BEFORE ANY HOOK. A tombstone has nothing to
+  // react to, nothing to reply to and nothing to swipe — and keeping the gesture
+  // state out of this branch entirely is what lets the early return stay an early
+  // return rather than becoming a rules-of-hooks problem the next person has to
+  // work around.
+  return (
+    <LiveBubble
+      message={message}
+      mine={mine}
+      me={me}
+      onReply={onReply}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onReact={onReact}
+    />
+  )
+}
+
+/**
+ * A message that still says something — the bubble with its gestures.
+ *
+ * ⚠ THE THREE GESTURES ARE ACCELERATORS AND NEVER THE ONLY WAY IN (D268). Double
+ * tap hearts, swipe-right replies, long press opens the reaction bar — and each of
+ * them has a control on screen doing the same thing, because this is a household app
+ * whose members include somebody on a desktop with no touchscreen and somebody who
+ * will never find a gesture nobody told them about. The footer keeps *Odpovědět*,
+ * the chips are buttons, and the ☺ opens the same bar the long press does.
+ */
+function LiveBubble({
+  message,
+  mine,
+  me,
+  onReply,
+  onEdit,
+  onDelete,
+  onReact,
+}: {
+  message: ChatMessage
+  mine: boolean
+  me: string
+  onReply: () => void
+  onEdit: () => void
+  onDelete: () => void
+  onReact: (emoji: string, reacted: boolean) => void
+}) {
+  const [picking, setPicking] = useState(false)
+  const gestures = useMessageGestures({
+    // ⚠ THE DOUBLE TAP TOGGLES rather than always adding. It is the one gesture with
+    // no visible twin of its own — the chip IS the twin — so a second double tap
+    // has to undo the first, or a mis-tapped heart is only removable by finding the
+    // chip and pressing it, which is the discoverability problem the gesture was
+    // meant to be an accelerator over.
+    onDoubleTap: () => onReact(HEART, !hasReacted(message.reactions, HEART, me)),
+    onSwipeReply: onReply,
+    onLongPress: () => setPicking(true),
+  })
+
   return (
     <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
       <div
+        // ⚠ `pan-y` RATHER THAN `none`. The browser keeps vertical panning on its
+        // own thread, so the thread scrolls exactly as it did while a horizontal
+        // drag is still available to the swipe. `touch-action: none` here would
+        // hand every scroll that starts on a bubble — which is most of them — to
+        // JavaScript, and a thread that stutters is a worse trade than no gesture.
+        style={{ transform: `translateX(${gestures.swipeX}px)`, touchAction: 'pan-y' }}
+        {...gestures.handlers}
         className={cn(
           'max-w-[min(560px,86%)] border px-3 py-2.5 text-fg lg:max-w-[min(560px,78%)]',
+          // No transition while the finger is down — the bubble tracks it — and one
+          // on the way back, so a released swipe settles instead of snapping.
+          gestures.swipeX === 0 && 'transition-transform',
           // ⚠ COLOUR ONLY REINFORCES. The two bubble tints are measured at 1.55:1
           // dark / 1.16:1 light against each other — deliberately below 3:1 — so
           // ALIGNMENT, the tail corner and the author label are what actually carry
@@ -900,6 +994,14 @@ function Bubble({
           mine
             ? 'rounded-[14px] rounded-br-[5px] border-bub-mine-edge bg-bub-mine'
             : 'rounded-[14px] rounded-bl-[5px] border-bub-theirs-edge bg-bub-theirs',
+          // ⚠ THE ARMED SWIPE SAYS SO, AND LAST SO IT WINS THE MERGE (v10.1 review).
+          // SWIPE_COMMIT decides when releasing will reply and the rubber band says
+          // further travel changes nothing — neither was drawn, so the member had 24 px
+          // of meaningless extra drag and no way to tell a committed swipe from an
+          // aborted one before lifting a finger that cannot be un-lifted. The accent
+          // edge is the cue a pressed chip already uses, on the border the bubble
+          // already has.
+          gestures.swipeArmed && 'border-accent',
         )}
       >
         {/* ⚠ `--bub-label` IS `--muted`, NOT `--subtle`: measured on `--s2` in the
@@ -923,6 +1025,18 @@ function Bubble({
             {message.body}
           </div>
         )}
+
+        {/* ⚠ THE CHIPS SIT UNDER THE CONTENT AND ABOVE THE SIGNATURE, which is the
+            design's placement and an argument rather than a preference: a reaction
+            belongs to what was SAID, not to when it was said. Between the body and
+            the timestamp is the only place that reads that way. */}
+        <ReactionRow
+          message={message}
+          me={me}
+          picking={picking}
+          onPicking={setPicking}
+          onReact={onReact}
+        />
 
         {/* ⚠ THE VERBS LIVE IN THE FOOTER, ALWAYS DRAWN. They used to be icons in a
             hover-revealed rail outside the bubble, which Tailwind v4 wraps in
@@ -955,6 +1069,128 @@ function Bubble({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The chips, the ☺ and the picker bar (v10.1, D265).
+ *
+ * ⚠ THE ROW IS ALWAYS RENDERED, EVEN WITH NO CHIPS, and that is what makes the
+ * feature discoverable at all. The ☺ is the visible twin of the long press — a
+ * gesture with no control beside it is a feature only the person who built it knows
+ * about, and this app is used by a household rather than by its author.
+ */
+function ReactionRow({
+  message,
+  me,
+  picking,
+  onPicking,
+  onReact,
+}: {
+  message: ChatMessage
+  me: string
+  picking: boolean
+  onPicking: (open: boolean) => void
+  onReact: (emoji: string, reacted: boolean) => void
+}) {
+  return (
+    <div className="mt-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {message.reactions.map((r) => {
+          const ours = isMine(r, me)
+          return (
+            <button
+              key={r.emoji}
+              type="button"
+              onClick={() => onReact(r.emoji, !ours)}
+              // ⚠ THE STATE IS NOT CARRIED BY THE ACCENT RING ALONE. `aria-pressed`
+              // says it to a screen reader and to anybody who cannot separate the
+              // two borders — the same rule the create dialog's member chips take.
+              aria-pressed={ours}
+              title={reactionLabel(r, me)}
+              // ⚠ AND THE ACCESSIBLE NAME IS WHO REACTED, not the numeral. Without
+              // it the button announces "❤️ 3" and the three people — the whole
+              // point of the chip — are unreachable.
+              aria-label={reactionLabel(r, me)}
+              className={cn(
+                'flex min-h-8 items-center gap-1.5 rounded-full border px-2 text-[13px] leading-none lg:min-h-[26px] lg:text-[12.5px]',
+                ours
+                  ? 'border-accent bg-accent-soft text-fg'
+                  : 'border-border bg-s2 text-fg hover:bg-s3',
+              )}
+            >
+              <span aria-hidden>{r.emoji}</span>
+              {/* Mono tabular, so 3 and 40 do not shift the chips beside them — the
+                  same reasoning the unread badge takes one pane over. */}
+              <span
+                aria-hidden
+                className={cn(
+                  'font-mono text-[10.5px] font-bold tabular-nums',
+                  ours ? 'text-fg' : 'text-muted',
+                )}
+              >
+                {r.by.length}
+              </span>
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          onClick={() => onPicking(!picking)}
+          aria-expanded={picking}
+          aria-label={cs.chat.reactionAdd}
+          title={cs.chat.reactionAdd}
+          className={cn(
+            'grid h-8 w-8 place-items-center rounded-full text-[13px] lg:h-[26px] lg:w-[26px] lg:text-[12px]',
+            picking
+              ? 'border border-accent bg-accent-soft text-fg'
+              : 'border border-dashed border-border-strong text-muted hover:text-fg',
+          )}
+        >
+          <Smile size={14} aria-hidden />
+        </button>
+      </div>
+
+      {/* ⚠ A STRIP IN THE FLOW, NOT A FLOATING POPOVER. The design draws the phone's
+          palette as a bar under the message, and a popover anchored to a bubble
+          inside a scroll box has to be repositioned on every scroll frame — which
+          is the one thing a thread cannot afford while somebody is reading it.
+          Below the chips it simply moves with them. */}
+      {picking && (
+        <div
+          role="group"
+          aria-label={cs.chat.reactionPickerLabel}
+          className="om-scroll mt-1.5 flex gap-1 overflow-x-auto rounded-[12px] border border-border-strong bg-s1 p-1"
+        >
+          {REACTION_PALETTE.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              onClick={() => {
+                onReact(emoji, !hasReacted(message.reactions, emoji, me))
+                onPicking(false)
+              }}
+              aria-label={emoji}
+              // ⚠ 44 px UNDER A THUMB, 34 AT THE DESK — the design's two sizes. This
+              // bar is the gesture's landing place, so it is reached with the same
+              // finger that held the message down.
+              className="grid h-11 w-11 flex-none place-items-center rounded-[10px] text-[20px] leading-none hover:bg-s3 lg:h-[34px] lg:w-[34px] lg:rounded-[9px] lg:text-[17px]"
+            >
+              <span aria-hidden>{emoji}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => onPicking(false)}
+            aria-label={cs.chat.reactionPickerClose}
+            title={cs.chat.reactionPickerClose}
+            className="grid h-11 w-9 flex-none place-items-center rounded-[10px] text-muted hover:bg-s3 hover:text-fg lg:h-[34px] lg:w-8"
+          >
+            <X size={15} aria-hidden />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -1346,18 +1582,15 @@ function Composer({
         </Button>
       </div>
 
-      {/* ⚠ BOTH CAPS, WHERE THE FILES GO IN. The per-file limit is the server's
-          (`max_upload_mb`) rather than a constant, and the sentence names it — a
-          member who learns the cap by having a 60 MB video refused has already spent
-          the minutes this check exists to save. */}
-      {!editing && (
-        <p className="text-[11px] leading-normal text-subtle text-pretty">
-          {cs.chat.composerHint(
-            Math.round(maxBytes / (1024 * 1024)),
-            count(MAX_FILES, PLURAL.files),
-          )}
-        </p>
-      )}
+      {/* ⚠ THE STANDING HINT IS GONE (design v10.1). It named both caps and the
+          reason they are Dokumenty's, permanently, under every composer in the app
+          — a paragraph of documentation parked where the member types, read once
+          and then in the way for good.
+
+          ⚠ NEITHER CAP STOPPED BEING STATED, and this is the check that matters:
+          `maxBytes` still refuses an over-cap file BEFORE it is uploaded, and
+          `filesRejected` above names the MB beside the file it refused. A limit is
+          worth reading at the moment it bites, which is where it now is. */}
     </div>
   )
 }

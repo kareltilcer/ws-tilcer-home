@@ -11,7 +11,9 @@ import { cs } from '@/i18n/cs'
 import { apiErrorMessage } from '@/api/client'
 import { subscribeToFrames, type LiveFrame } from '@/api/ws'
 import { clientId } from '@/api/clientId'
+import { useAuth } from '@/app/auth'
 import { useOnline } from '@/platform/pwa/offline'
+import { hasReacted } from '../reactions'
 import * as api from './endpoints'
 import type {
   ChatMembershipEvent,
@@ -21,6 +23,8 @@ import type {
   ConversationEvent,
   ConversationPage,
   MessagePage,
+  Reaction,
+  ReactionActor,
 } from './types'
 
 // Chat's data layer.
@@ -94,6 +98,9 @@ export function useLoadMoreConversations(state?: 'active' | 'trash') {
         return {
           items: [...old.items, ...more.items.filter((c) => !seen.has(c.id))],
           next_cursor: more.next_cursor,
+          // The newer answer wins: the koš describes the caller, not this page, and
+          // the later request is the fresher reading of it.
+          trashed_count: more.trashed_count,
         }
       })
     },
@@ -285,7 +292,15 @@ export function useEditMessage(conversationID: string) {
   return useMutation({
     mutationFn: (input: { id: string; body: string }) => api.editMessage(input.id, input.body),
     onError: failed(cs.chat.actionFailed),
-    onSuccess: (msg) => replaceMessage(qc, conversationID, msg),
+    // ⚠ AND THE LIST GOES WITH IT SINCE v10.1 (review round 2). An edit used to move
+    // nothing on the conversation row, so patching the thread was the whole of it —
+    // and then D266 put the message's own text on that row. Fixing a typo in the
+    // newest message left the sidebar quoting the typo, in the member's OWN tab,
+    // until something unrelated invalidated the listing.
+    onSuccess: (msg) => {
+      replaceMessage(qc, conversationID, msg)
+      void qc.invalidateQueries({ queryKey: qk.chatConversations() })
+    },
   })
 }
 
@@ -307,6 +322,130 @@ export function useDeleteMessage(conversationID: string) {
       void qc.invalidateQueries({ queryKey: qk.chatConversations() })
     },
   })
+}
+
+/**
+ * useSetReaction is the chip, the double tap and the long-press bar (D265).
+ *
+ * ⚠ IT IS OPTIMISTIC, AND IT ROLLS BACK — the state the design's matrix names for
+ * this screen ("reakce se vrátí zpět"). A reaction is the cheapest thing in the
+ * module to send and the most obviously physical: a finger lands on a chip and the
+ * chip has to answer in that frame, not after a round trip to a droplet. So the
+ * cached message is patched before the request and restored if the request refuses.
+ *
+ * ⚠ THE ROLLBACK UNDOES OUR OWN CHIP ON WHATEVER IS CACHED NOW — it does not put
+ * back a snapshot (review round 2). A snapshot is the version that destroys somebody
+ * else's mark: the /ws frames carrying OTHER people's chips land on this same object
+ * while the request is in flight, and writing back the message as it was before our
+ * tap erases every one of them. `applyReaction` touches only the caller's own entry
+ * under one emoji, so re-applying its inverse removes exactly what we added and
+ * leaves everything that arrived meanwhile standing.
+ *
+ * ⚠ AND IT ONLY ROLLS BACK WHAT IT ACTUALLY APPLIED. The route is idempotent — that
+ * is the whole reason it is a PUT — so a tap asking for the state the chip is already
+ * in changes nothing, and inverting THAT would remove a reaction the member still has
+ * or add one they never left. The comparison is made once, before the patch.
+ *
+ * ⚠ AND IT PATCHES RATHER THAN INVALIDATES ON SUCCESS. The response IS the message,
+ * exactly as it is for an edit; refetching a two-hundred-message thread because
+ * somebody tapped a heart is the shape `invalidateLists` was written to stop.
+ */
+export function useSetReaction(conversationID: string) {
+  const qc = useQueryClient()
+  const { identity } = useAuth()
+  const me = { user_id: identity.userId, label: identity.label }
+  return useMutation({
+    mutationFn: (input: { messageID: string; emoji: string; reacted: boolean }) =>
+      api.setReaction(input.messageID, input.emoji, input.reacted),
+    onMutate: (input) => {
+      const held = cachedMessage(qc, conversationID, input.messageID)
+      // Nothing to patch when the thread is not cached — a reaction from a surface
+      // that is not the open thread has nothing to show and nothing to undo — and
+      // nothing to patch when the chip is already in the state being asked for.
+      if (!held || hasReacted(held.reactions, input.emoji, me.user_id) === input.reacted) {
+        return { applied: false }
+      }
+      replaceMessage(qc, conversationID, applyReaction(held, input.emoji, input.reacted, me))
+      return { applied: true }
+    },
+    onError: (e, input, context) => {
+      if (context?.applied) {
+        const now = cachedMessage(qc, conversationID, input.messageID)
+        if (now) {
+          replaceMessage(qc, conversationID, applyReaction(now, input.emoji, !input.reacted, me))
+        }
+      }
+      toast.error(apiErrorMessage(e, cs.chat.actionFailed))
+    },
+    onSuccess: (msg) => replaceMessage(qc, conversationID, msg),
+  })
+}
+
+/** cachedMessage is one message out of the thread this tab holds, if it holds it. */
+function cachedMessage(
+  qc: QueryClient,
+  conversationID: string,
+  messageID: string,
+): ChatMessage | undefined {
+  return qc
+    .getQueryData<MessagePage>(qk.chatMessages(conversationID))
+    ?.items.find((m) => m.id === messageID)
+}
+
+/**
+ * previewsMessage is whether the ACTIVE listing's row for this room is currently
+ * drawing this message as its preview line (D266).
+ *
+ * Only the active listing is asked: a trashed room's preview is null by construction
+ * — `LastMessages` carries memberScope's own koš term — so nothing on the koš listing
+ * can go stale when a message changes.
+ */
+function previewsMessage(qc: QueryClient, conversationID: string, messageID: string): boolean {
+  const page = qc.getQueryData<ConversationPage>(qk.chatConversations())
+  return page?.items.find((c) => c.id === conversationID)?.last_message?.id === messageID
+}
+
+/**
+ * applyReaction is the optimistic patch, and the same arithmetic the server does.
+ *
+ * ⚠ IT IS PURE AND IT IS EXPORTED SO IT CAN BE TESTED. An optimistic update that is
+ * wrong is worse than none: it puts a chip on screen that the next frame takes away,
+ * which reads as the app losing the tap it just acknowledged.
+ */
+export function applyReaction(
+  message: ChatMessage,
+  emoji: string,
+  reacted: boolean,
+  me: ReactionActor,
+): ChatMessage {
+  const existing = message.reactions.find((r) => r.emoji === emoji)
+  const without = message.reactions.filter((r) => r.emoji !== emoji)
+  if (!reacted) {
+    const left = (existing?.by ?? []).filter((a) => a.user_id !== me.user_id)
+    // An emoji nobody is left holding is a chip that stops existing, rather than a
+    // chip reading zero.
+    return { ...message, reactions: left.length ? withReaction(message, emoji, left) : without }
+  }
+  // Idempotent, for the reason the route is: a double tap that fired twice must not
+  // put the member under the same chip twice.
+  if (existing?.by.some((a) => a.user_id === me.user_id)) return message
+  return { ...message, reactions: withReaction(message, emoji, [...(existing?.by ?? []), me]) }
+}
+
+/**
+ * withReaction rebuilds the chip list with one emoji's actors replaced, KEEPING THE
+ * SERVER'S ORDER.
+ *
+ * The chips are ordered by the palette server-side so two members see one order and
+ * nothing jumps under a reader's finger. A new chip is appended here rather than
+ * sorted into place: the response that lands a moment later carries the right order
+ * anyway, and re-deriving the palette's ordering in the optimistic path would be a
+ * second spelling of it that can disagree.
+ */
+function withReaction(message: ChatMessage, emoji: string, by: ReactionActor[]): Reaction[] {
+  const at = message.reactions.findIndex((r) => r.emoji === emoji)
+  if (at < 0) return [...message.reactions, { emoji, by }]
+  return message.reactions.map((r, i) => (i === at ? { emoji, by } : r))
 }
 
 /**
@@ -555,13 +694,27 @@ export function applyChatFrame(qc: QueryClient, frame: LiveFrame): void {
   if (frame.type === 'chat_message.updated' || frame.type === 'chat_message.deleted') {
     // Neither extends the thread, so neither carries a prev_message_id and neither
     // can represent a gap.
+    const held = cachedMessage(qc, convID, ev.message.id)
     replaceMessage(qc, convID, ev.message)
     // ⚠ BUT A DELETE MOVES THE BADGE (v10 review). UnreadCount excludes
     // `deleted_at IS NOT NULL`, so the server's count drops the moment this frame
     // is published — and patching only the thread left the row beside it counting
-    // a message the recipient can now see is a tombstone. An EDIT changes no
-    // count, which is why only this branch pays for the refetch.
-    if (frame.type === 'chat_message.deleted') {
+    // a message the recipient can now see is a tombstone.
+    //
+    // ⚠ AND SINCE v10.1 AN EDIT MOVES THE ROW'S PREVIEW (review round 2). D266 put
+    // the message's own text on the conversation row, so `chat_message.updated` is
+    // no longer a frame the list can ignore — but it is also the frame a REACTION
+    // publishes, and refetching the listing every time somebody taps a chip is
+    // exactly the traffic this module patches rather than invalidates to avoid. Two
+    // conditions separate them: the row has to be previewing THIS message, and
+    // `edited_at` has to have moved, which is true of every edit and of no reaction.
+    // A frame for a message this tab holds no copy of cannot be told apart, so it
+    // falls back to the row's own answer.
+    const movesTheRow =
+      frame.type === 'chat_message.deleted' ||
+      (previewsMessage(qc, convID, ev.message.id) &&
+        (held === undefined || held.edited_at !== ev.message.edited_at))
+    if (movesTheRow) {
       void qc.invalidateQueries({ queryKey: qk.chatConversations() })
     }
   }

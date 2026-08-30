@@ -11,7 +11,7 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
-// Handler serves the `chat` tag of openapi.yaml 0.12.0.
+// Handler serves the `chat` tag of openapi.yaml 0.13.0.
 type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
@@ -79,6 +79,13 @@ func (h *Handler) Mount(r chi.Router) {
 
 			g.Patch("/messages/{id}", h.editMessage)
 			g.Delete("/messages/{id}", h.deleteMessage)
+			// ⚠ PUT, NOT POST, AND NOT A TOGGLE ROUTE (v10.1, D265). The body names
+			// the state the chip should be in when this returns, so the double-tap
+			// gesture — which fires twice far more easily than a button does — is
+			// idempotent rather than a coin flip. The emoji rides in the BODY rather
+			// than in the path: ❤️ is two code points and a path segment would make
+			// the route's identity depend on how a client percent-encoded U+FE0F.
+			g.Put("/messages/{id}/reactions", h.setReaction)
 
 			g.Delete("/attachments/{id}", h.removeAttachment)
 			g.Post("/attachments/{id}/move", h.moveAttachment)
@@ -323,6 +330,18 @@ func (h *Handler) editMessage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteMessage(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, h.svc.DeleteMessage(r.Context(), chi.URLParam(r, "id")))
+}
+
+// setReaction adds or removes the caller's reaction and answers with the whole
+// re-rendered message — the shape editMessage uses, for the reason it uses it.
+func (h *Handler) setReaction(w http.ResponseWriter, r *http.Request) {
+	var in ReactionUpdate
+	if err := httpx.DecodeJSON(r, &in); err != nil {
+		httpx.WriteError(w, httpx.ErrUnprocessable(err.Error()))
+		return
+	}
+	m, err := h.svc.SetReaction(r.Context(), chi.URLParam(r, "id"), in)
+	httpx.Respond(w, http.StatusOK, m, err)
 }
 
 // ---- search and directory ----
