@@ -150,7 +150,21 @@ export function ThreadView({ conversationID, onOpenMembers }: {
    * message above does: moving the view under a member reading history is the bug,
    * not the fix.
    */
-  const boxMounted = Boolean(conversation.data && thread.data)
+  /**
+   * ⚠ THE FLAG IS THE RENDER GATE, NOT THE DATA (review round 4). "Is there data" and
+   * "is the box on screen" are not the same question, because a refetch that FAILS
+   * KEEPS ITS DATA: the query flips to error, the early returns below hand back the
+   * retry screen instead of the box, and a `conversation.data && thread.data` flag
+   * never moves. So the effect neither disconnected from the box that went away nor
+   * observed the one the retry brought back — it spent the rest of the mount watching
+   * a detached node while the live box had no observer at all, and the re-pin above
+   * silently stopped happening. One backend restart mid-conversation (a Coolify
+   * rebuild is enough) took this whole fix away until the member left the room and
+   * came back. The three early returns are what decide whether the box exists, so
+   * they are what this has to read.
+   */
+  const boxMounted =
+    !conversation.isPending && !thread.isPending && !conversation.isError && !thread.isError
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -168,7 +182,7 @@ export function ThreadView({ conversationID, onOpenMembers }: {
     })
     observer.observe(el)
     return () => observer.disconnect()
-    // ⚠ THE DEP IS "IS THERE A BOX YET", NOT THE DATA. `thread.data` would tear the
+    // ⚠ THE DEP IS "IS THE BOX RENDERED", NOT THE DATA. `thread.data` would tear the
     // observer down and build another on every arriving message — the churn the one
     // scroll handler below was consolidated to remove — for an element that does not
     // change again for the life of the mount.

@@ -264,7 +264,7 @@ function ChatOffline({ fill }: { fill: boolean }) {
     <div
       className={cn(
         'grid min-h-[340px] place-items-center px-6 py-10 text-center',
-        // ⚠ NO 100dvh ARITHMETIC HERE, UNLIKE ChatLayout, and the reason is that
+        // ⚠ NO VIEWPORT ARITHMETIC HERE, UNLIKE ChatLayout, and the reason is that
         // this is the one chat screen that renders WHILE THE OFFLINE BANNER IS UP —
         // they have the same trigger. The chrome tokens count the header and the
         // thumb bar; the banner is a third strip above both, and its height depends

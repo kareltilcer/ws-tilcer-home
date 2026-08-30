@@ -56,7 +56,11 @@ describe('the chat viewport tokens — overridden in one file, read in another',
   // ⚠ AND THE HEADER'S TERM IS LEFT ALONE, because the header itself is: 61 px of
   // "home / theme / sign out" stays above the thread while a keyboard is up. Zeroing
   // it here without hiding it there is the same drift as the bar, in the other file.
+  // ⚠ EITHER QUOTE, because the assertion is a NEGATIVE one and a negative that names
+  // one spelling is a guard the next writer walks past without noticing. The quotes
+  // stay in the pattern all the same: unquoted, it would also fire on the prose above
+  // the style object, which names the token on purpose.
   it('never overrides the header term, which is never hidden', () => {
-    expect(shell).not.toMatch(/'--chat-chrome-top'/)
+    expect(shell).not.toMatch(/['"]--chat-chrome-top['"]/)
   })
 })
