@@ -1450,6 +1450,25 @@ function Quote({ quote }: { quote: MessageQuote }) {
 }
 
 /**
+ * The one line a quote shows OF the message it points at — the first line that says
+ * something, or, when the message is files only, how many files it carries.
+ *
+ * ⚠ IT MIRRORS THE SERVER'S `excerpt` (messages.go): leading blank lines dropped,
+ * then a cut at the first newline. The in-bubble quote is handed that string on the
+ * wire; the composer's banner holds the whole message and has to make it itself, and
+ * the two must not read differently for the same body — the member picks a message
+ * in the thread and then checks the banner above their thumb.
+ *
+ * ⚠ AND AN EMPTY BODY MEANS FILES, never an empty line: a message needs a body OR an
+ * attachment (D224), so nothing else can be left. The count is the vocabulary the
+ * conversation row already previews a files-only message with.
+ */
+function quoteLine(message: ChatMessage): string {
+  const first = message.body.replace(/^\s+/, '').split(/[\r\n]/, 1)[0]
+  return first || count(message.attachments.length, PLURAL.files)
+}
+
+/**
  * The composer: drag-and-drop, paste and a picker, up to ten files (D224).
  *
  * ⚠ AN OVER-CAP FILE IS REFUSED BEFORE IT IS UPLOADED, naming the limit in MB. The
@@ -1595,11 +1614,31 @@ function Composer({
       }}
     >
       {replyTo && !editing && (
-        <div className="flex items-center gap-2 rounded-[10px] border border-border bg-s2 px-2.5 py-2 text-xs">
-          <span className="min-w-0 flex-1 truncate text-muted">
-            {cs.chat.replyingTo} <span className="font-semibold">{replyTo.author_label}</span>
-          </span>
-          <button type="button" onClick={onClearReply} className="flex-none text-muted hover:text-fg">
+        /* ⚠ THE BANNER SHOWS THE MESSAGE, NOT ONLY WHO WROTE IT. It used to read
+           *Odpovídáte na Kája* and stop there — and in a room where Kája has just
+           written five times that sentence is equally true of all five, so the one
+           thing the member needed to check before pressing Odeslat was the one thing
+           it did not say. There is no unsend; a reply landing under the wrong
+           message is permanent.
+
+           ⚠ IT IS THE THREAD'S OWN QUOTE SHAPE — the same 3 px rule against
+           `--border-strong` that `Quote` draws inside a bubble — so what is staged
+           here and what appears in the thread afterwards read as one object. Only
+           the excerpt's colour differs, `--fg` against the bubble quote's `--muted`,
+           because the roles are swapped: in a bubble the quote is context beside the
+           body, and here the quote IS the content and the label above it is chrome. */
+        <div className="flex items-start gap-2 rounded-[10px] border border-border bg-s2 px-2.5 py-2 text-xs">
+          <div className="min-w-0 flex-1 border-l-[3px] border-border-strong pl-2.5">
+            <div className="truncate text-muted">
+              {cs.chat.replyingTo} <span className="font-semibold">{replyTo.author_label}</span>
+            </div>
+            <div className="truncate text-[11.5px] text-fg">{quoteLine(replyTo)}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClearReply}
+            className="flex-none text-muted hover:text-fg"
+          >
             {cs.chat.cancel}
           </button>
         </div>
