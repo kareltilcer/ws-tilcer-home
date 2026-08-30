@@ -74,9 +74,25 @@ function ChatLayout() {
        pane's own border-right is the only line between them, and there is no rounded
        frame to inset. From 768 up that box IS the viewport minus nothing, so
        `h-full` is the whole answer; below it the shell still has a header above and
-       thumb tabs below, which is what --chat-chrome measures (theme/globals.css).
-       The old `lg:h-[calc(100dvh-4rem)]` was the md:py-8 that is now gone. */
-    <div className="h-[calc(100dvh-var(--chat-chrome))] md:h-full">
+       thumb tabs below, which is what --chat-chrome-top and --chat-chrome-bottom
+       measure (theme/globals.css).
+       The old `lg:h-[calc(100dvh-4rem)]` was the md:py-8 that is now gone.
+
+       ⚠ AND ALL THREE TERMS ARE TOKENS BECAUSE TWO OF THEM MOVE. --chat-viewport
+       was `100dvh` written here until a keyboard showed what that unit cannot see:
+       it measures the layout viewport, which a soft keyboard does not shrink, so the
+       composer sat under the keyboard and the browser scrolled the whole page up to
+       reach it — taking the thread's header off the top of the screen with it.
+       AppShell swaps it for the visual viewport's height and zeroes the thumb bar's
+       term while a keyboard is up, and hides the bar to match.
+
+       ⚠ AND THE TWO CHROME TERMS ARE SUBTRACTED SEPARATELY, WHICH IS NOT A STYLE
+       CHOICE. A `--chat-chrome` adding them up on :root substitutes its var()s where
+       it is declared, so the override on the shell root moved nothing and the box
+       came out 57 px short of the keyboard — measured, with the override plainly
+       applied. The addition has to happen where the tokens are read, and this is
+       where they are read. */
+    <div className="h-[calc(var(--chat-viewport)-var(--chat-chrome-top)-var(--chat-chrome-bottom))] md:h-full">
       {/* 312px is the artboard's list pane, not a rounded 320: with the card frame
           and the shell's padding gone, that pane's border-right is the only line
           between the two and it now lands where the design puts it. */}
@@ -250,10 +266,10 @@ function ChatOffline({ fill }: { fill: boolean }) {
         'grid min-h-[340px] place-items-center px-6 py-10 text-center',
         // ⚠ NO 100dvh ARITHMETIC HERE, UNLIKE ChatLayout, and the reason is that
         // this is the one chat screen that renders WHILE THE OFFLINE BANNER IS UP —
-        // they have the same trigger. --chat-chrome counts the header and the thumb
-        // bar; the banner is a third strip above both, and its height depends on how
-        // its two sentences wrap (73 px at 375 px), so a constant cannot know it.
-        // Subtracting only --chat-chrome left this box 16 px taller than the
+        // they have the same trigger. The chrome tokens count the header and the
+        // thumb bar; the banner is a third strip above both, and its height depends
+        // on how its two sentences wrap (73 px at 375 px), so a constant cannot know
+        // it. Subtracting only that chrome left this box 16 px taller than the
         // viewport: a strip that scrolled with nothing in it, which is the exact
         // defect the panes were just fixed for. A short centred block does not need
         // a viewport below 768. From 768 up `<main>` is a flex child with a real

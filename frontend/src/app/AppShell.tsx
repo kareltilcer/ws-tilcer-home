@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   CalendarClock,
@@ -31,6 +31,7 @@ import { useLiveSync } from '@/api/ws'
 import { useOnline } from '@/platform/pwa/offline'
 import { usePushKeepalive } from '@/platform/push/usePush'
 import { useUnreadTotal } from '@/modules/chat/api/hooks'
+import { useSoftKeyboard } from '@/hooks/useSoftKeyboard'
 
 interface NavItem {
   to: string
@@ -114,6 +115,14 @@ export function AppShell() {
   // not in the settings panel, because the failure it repairs is silent — nobody
   // opens Nastavení to fix a problem they cannot see.
   usePushKeepalive()
+  /**
+   * ⚠ THE KEYBOARD IS THE SHELL'S TO KNOW ABOUT, NOT CHAT'S. Both things it changes
+   * are the shell's own: the thumb-tab bar, which no module renders, and the two
+   * tokens the chat viewport is built out of, which reach it down the cascade rather
+   * than through a prop. Chat asking the question itself would leave the bar visible
+   * over a keyboard nobody can see past.
+   */
+  const keyboard = useSoftKeyboard()
 
   const unread = useUnreadTotal()
   // ⚠ THE BADGE IS ATTACHED HERE RATHER THAN DECLARED IN PRIMARY, because PRIMARY is
@@ -138,7 +147,26 @@ export function AppShell() {
   )
 
   return (
-    <div className="min-h-full md:flex md:h-screen md:overflow-hidden">
+    /* ⚠ THE TOKENS ARE OVERWRITTEN HERE, ON THE ELEMENT EVERY ROUTE HANGS OFF.
+       --chat-viewport becomes what is actually on screen above the keyboard and
+       --chat-chrome-bottom drops the thumb bar's 57 px, because the bar is hidden
+       for the same span (theme/globals.css carries the arithmetic, ChatPage the one
+       formula that reads it). Below 768 that leaves the chat box exactly as tall as
+       the strip between the app header and the keyboard: the thread header stays at
+       the top of the screen, the composer sits on the keyboard's edge, and nothing
+       is left for the browser to scroll the page for. Nothing else in the app reads
+       either token, and every width from 768 up ignores both. */
+    <div
+      className="min-h-full md:flex md:h-screen md:overflow-hidden"
+      style={
+        keyboard.open
+          ? ({
+              '--chat-viewport': `${keyboard.viewport}px`,
+              '--chat-chrome-bottom': '0px',
+            } as CSSProperties)
+          : undefined
+      }
+    >
       <Toaster theme={theme} position="top-center" richColors />
       {/* Desktop side nav */}
       <aside className="hidden md:flex md:w-60 md:flex-col md:border-r md:border-border md:bg-s1">
@@ -211,8 +239,20 @@ export function AppShell() {
 
       {/* Mobile bottom tab bar: the four daily tabs + the "Více" overflow. Since v4
           every member has something behind "Více" (Dokumenty), so the tab is no
-          longer admin-only (D49). */}
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-s1 md:hidden">
+          longer admin-only (D49).
+
+          ⚠ AND IT STANDS DOWN WHILE A KEYBOARD IS UP. It is fixed to the LAYOUT
+          viewport, which a keyboard does not shrink, so it was never on screen at
+          those moments anyway — it sat behind the keyboard while its 57 px went on
+          being subtracted from the chat box above. Hiding it is what lets that 57 px
+          go to the thread instead, and it is why --chat-chrome-bottom may be zeroed
+          on the root: the two are one decision and must not drift apart. */}
+      <nav
+        className={cn(
+          'fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-s1 md:hidden',
+          keyboard.open && 'hidden',
+        )}
+      >
         {primaryItems.map((item) => (
           <TabLink key={item.to} item={item} />
         ))}

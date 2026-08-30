@@ -254,14 +254,16 @@
      it must not borrow the danger family. */
   --att-removed: var(--unmeasured);
 
-  /* ⚠ DECLARED, because ChatPage READS IT. `h-[calc(100dvh-var(--chat-chrome))]` is
-     what stops the two panes growing to their content. It is the app chrome above
-     and below the chat viewport BELOW 768 — the only widths where the shell has
-     any — and it is a MEASUREMENT OF AppShell rather than a round number: the
-     mobile header is py-3 twice over a 36 px button plus its border (61 px), and
-     the thumb-tab bar is a 56 px minimum plus its border (57 px).
+  /* ⚠ DECLARED, because ChatPage READS THEM:
+     `h-[calc(var(--chat-viewport)-var(--chat-chrome-top)-var(--chat-chrome-bottom))]`
+     is what stops the two panes growing to their content. Three terms — the viewport
+     chat is measured against, and the app chrome above and below it. That chrome
+     exists BELOW 768 only, the only widths where the shell has any, and it is a
+     MEASUREMENT OF AppShell rather than a round number: the mobile header is py-3
+     twice over a 36 px button plus its border (61 px), and the thumb-tab bar is a
+     56 px minimum plus its border (57 px).
 
-     ⚠ IT IS THE WHOLE CHROME NOW, WHICH 8rem NEVER WAS. 128 px was tuned while
+     ⚠ IT IS THE WHOLE CHROME, WHICH 8rem NEVER WAS. 128 px was tuned while
      `<main>` still put px-4 py-5 pb-24 around chat, so the viewport was being
      divided between two subtractions and neither could be read on its own — they
      did not add up, and the 49 px they missed by was a strip of page that scrolled
@@ -271,12 +273,33 @@
      fold. ⚠ AND IT STILL CHANGES WITH AppShell — a taller header or a taller tab
      bar has to be counted here, and nowhere else.
 
+     ⚠ AND TWO OF THE THREE MOVE WHILE A KEYBOARD IS UP. A soft keyboard shrinks
+     neither 100dvh nor the layout viewport the tab bar is fixed to, so the composer
+     went under the keyboard, the browser scrolled the page to reveal it, and the
+     thread's own header left the top of the screen. AppShell overwrites
+     --chat-viewport with the visual viewport's height and --chat-chrome-bottom with
+     zero for exactly as long as a keyboard is up (useSoftKeyboard), and hides the
+     tab bar over the same span — which is what lets that bar's 57 px go to the
+     thread rather than to a strip behind the keyboard. The values here are the
+     no-keyboard case, and every width from 768 up ignores all three (`md:h-full`).
+
+     ⚠ AND THAT IS WHY THERE IS NO --chat-chrome ADDING THE TWO UP. A custom
+     property's var() references are substituted where the property is DECLARED, so
+     a `--chat-chrome: calc(var(--chat-chrome-top) + var(--chat-chrome-bottom))`
+     living on :root keeps resolving against :root's 57 px no matter what any
+     descendant sets --chat-chrome-bottom to. Measured: the box came out 57 px short
+     of the keyboard with the override plainly applied on the shell root. The
+     addition has to happen where the tokens are READ, which is the one calc in
+     ChatPage.
+
      ⚠ IT DOES NOT COUNT THE OFFLINE BANNER, AND IT CANNOT: that strip is only up
      when the network is gone, and its height depends on how its two sentences
-     wrap. Nothing that uses this token renders underneath it — ChatLayout is
+     wrap. Nothing that uses these tokens renders underneath it — ChatLayout is
      replaced by the offline screen, which deliberately sizes itself with no
      viewport arithmetic at all (ChatPage). */
-  --chat-chrome: 118px;
+  --chat-chrome-top: 61px;
+  --chat-chrome-bottom: 57px;
+  --chat-viewport: 100dvh;
 
   --shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --radius: 10px;

@@ -137,6 +137,35 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   }, [newest?.id, conversationID, conversation.data])
 
   /**
+   * ⚠ THE BOX CAN SHRINK UNDER SOMEBODY WHO IS AT THE BOTTOM, and a scroll box that
+   * shrinks keeps its `scrollTop` — so the newest messages slide out below the fold
+   * with nobody having scrolled. On a phone that now happens every time the keyboard
+   * opens: the shell hands chat the strip left above it (useSoftKeyboard) and this
+   * pane loses the keyboard's height in one frame, which would have taken the
+   * message somebody is answering off the screen at the moment they started
+   * answering it. The same shrink arrives from the composer, which grows a row for a
+   * reply chip, an attachment list and a rejected file.
+   *
+   * ⚠ AND IT FOLLOWS ONLY SOMEBODY ALREADY AT THE BOTTOM, for the reason the live
+   * message above does: moving the view under a member reading history is the bug,
+   * not the fix.
+   */
+  const boxMounted = Boolean(conversation.data && thread.data)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+    // ⚠ THE DEP IS "IS THERE A BOX YET", NOT THE DATA. `thread.data` would tear the
+    // observer down and build another on every arriving message — the churn the one
+    // scroll handler below was consolidated to remove — for an element that does not
+    // change again for the life of the mount.
+  }, [boxMounted])
+
+  /**
    * Loading older messages PREPENDS above the viewport, so without an anchor the
    * content under the member's eyes jumps down by the height of the page they just
    * asked for — they press *Načíst starší* and lose their place, which is the one
