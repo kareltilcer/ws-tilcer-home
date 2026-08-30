@@ -970,6 +970,16 @@ function LiveBubble({
   const [picking, setPicking] = useState(false)
   /** The ☺ and the bar it opens are no longer siblings, so the link is written out. */
   const pickerID = useId()
+  /**
+   * ⚠ AND THE TRIGGER IS HANDED DOWN THE SAME WAY, for the same reason (v10.1
+   * review). Moving the bar out of the bubble put the whole footer between the ☺ and
+   * the palette it opens — press the ☺ on a keyboard and the next Tab stops are the
+   * message's own verbs, which on your own message means *Odpovědět*, *Upravit* and
+   * *Smazat zprávu* before a single emoji. The bar takes focus when it opens and
+   * gives it back to this button when it closes, which is what the DOM adjacency
+   * used to do for nothing.
+   */
+  const smile = useRef<HTMLButtonElement>(null)
   const gestures = useMessageGestures({
     // ⚠ THE DOUBLE TAP TOGGLES rather than always adding. It is the one gesture with
     // no visible twin of its own — the chip IS the twin — so a second double tap
@@ -1068,6 +1078,7 @@ function LiveBubble({
           me={me}
           picking={picking}
           pickerID={pickerID}
+          triggerRef={smile}
           onPicking={setPicking}
           onReact={onReact}
         />
@@ -1111,6 +1122,7 @@ function LiveBubble({
           message={message}
           me={me}
           mine={mine}
+          trigger={smile}
           onPicking={setPicking}
           onReact={onReact}
         />
@@ -1132,6 +1144,7 @@ function ReactionRow({
   me,
   picking,
   pickerID,
+  triggerRef,
   onPicking,
   onReact,
 }: {
@@ -1140,69 +1153,69 @@ function ReactionRow({
   picking: boolean
   /** The bar's `id`, for the ☺'s `aria-controls` — they are in different subtrees. */
   pickerID: string
+  /** The ☺ itself, so the bar can hand focus back to it. Same subtree problem. */
+  triggerRef: React.RefObject<HTMLButtonElement | null>
   onPicking: (open: boolean) => void
   onReact: (emoji: string, reacted: boolean) => void
 }) {
   return (
-    <div className="mt-1.5">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {message.reactions.map((r) => {
-          const ours = isMine(r, me)
-          return (
-            <button
-              key={r.emoji}
-              type="button"
-              onClick={() => onReact(r.emoji, !ours)}
-              // ⚠ THE STATE IS NOT CARRIED BY THE ACCENT RING ALONE. `aria-pressed`
-              // says it to a screen reader and to anybody who cannot separate the
-              // two borders — the same rule the create dialog's member chips take.
-              aria-pressed={ours}
-              title={reactionLabel(r, me)}
-              // ⚠ AND THE ACCESSIBLE NAME IS WHO REACTED, not the numeral. Without
-              // it the button announces "❤️ 3" and the three people — the whole
-              // point of the chip — are unreachable.
-              aria-label={reactionLabel(r, me)}
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {message.reactions.map((r) => {
+        const ours = isMine(r, me)
+        return (
+          <button
+            key={r.emoji}
+            type="button"
+            onClick={() => onReact(r.emoji, !ours)}
+            // ⚠ THE STATE IS NOT CARRIED BY THE ACCENT RING ALONE. `aria-pressed`
+            // says it to a screen reader and to anybody who cannot separate the
+            // two borders — the same rule the create dialog's member chips take.
+            aria-pressed={ours}
+            title={reactionLabel(r, me)}
+            // ⚠ AND THE ACCESSIBLE NAME IS WHO REACTED, not the numeral. Without
+            // it the button announces "❤️ 3" and the three people — the whole
+            // point of the chip — are unreachable.
+            aria-label={reactionLabel(r, me)}
+            className={cn(
+              'flex min-h-8 items-center gap-1.5 rounded-full border px-2 text-[13px] leading-none lg:min-h-[26px] lg:text-[12.5px]',
+              ours
+                ? 'border-accent bg-accent-soft text-fg'
+                : 'border-border bg-s2 text-fg hover:bg-s3',
+            )}
+          >
+            <span aria-hidden>{r.emoji}</span>
+            {/* Mono tabular, so 3 and 40 do not shift the chips beside them — the
+                same reasoning the unread badge takes one pane over. */}
+            <span
+              aria-hidden
               className={cn(
-                'flex min-h-8 items-center gap-1.5 rounded-full border px-2 text-[13px] leading-none lg:min-h-[26px] lg:text-[12.5px]',
-                ours
-                  ? 'border-accent bg-accent-soft text-fg'
-                  : 'border-border bg-s2 text-fg hover:bg-s3',
+                'font-mono text-[10.5px] font-bold tabular-nums',
+                ours ? 'text-fg' : 'text-muted',
               )}
             >
-              <span aria-hidden>{r.emoji}</span>
-              {/* Mono tabular, so 3 and 40 do not shift the chips beside them — the
-                  same reasoning the unread badge takes one pane over. */}
-              <span
-                aria-hidden
-                className={cn(
-                  'font-mono text-[10.5px] font-bold tabular-nums',
-                  ours ? 'text-fg' : 'text-muted',
-                )}
-              >
-                {r.by.length}
-              </span>
-            </button>
-          )
-        })}
-        <button
-          type="button"
-          onClick={() => onPicking(!picking)}
-          aria-expanded={picking}
-          // Only while it exists: a reference to an absent id is a broken one.
-          aria-controls={picking ? pickerID : undefined}
-          aria-label={cs.chat.reactionAdd}
-          title={cs.chat.reactionAdd}
-          className={cn(
-            'grid h-8 w-8 place-items-center rounded-full text-[13px] lg:h-[26px] lg:w-[26px] lg:text-[12px]',
-            picking
-              ? 'border border-accent bg-accent-soft text-fg'
-              : 'border border-dashed border-border-strong text-muted hover:text-fg',
-          )}
-        >
-          <Smile size={14} aria-hidden />
-        </button>
-      </div>
-
+              {r.by.length}
+            </span>
+          </button>
+        )
+      })}
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => onPicking(!picking)}
+        aria-expanded={picking}
+        // Only while it exists: a reference to an absent id is a broken one.
+        aria-controls={picking ? pickerID : undefined}
+        aria-label={cs.chat.reactionAdd}
+        title={cs.chat.reactionAdd}
+        className={cn(
+          'grid h-8 w-8 place-items-center rounded-full text-[13px] lg:h-[26px] lg:w-[26px] lg:text-[12px]',
+          picking
+            ? 'border border-accent bg-accent-soft text-fg'
+            : 'border border-dashed border-border-strong text-muted hover:text-fg',
+        )}
+      >
+        <Smile size={14} aria-hidden />
+      </button>
     </div>
   )
 }
@@ -1224,6 +1237,7 @@ function ReactionPicker({
   message,
   me,
   mine,
+  trigger,
   onPicking,
   onReact,
 }: {
@@ -1232,6 +1246,8 @@ function ReactionPicker({
   me: string
   /** Which edge it hangs from — the same edge its bubble is already against. */
   mine: boolean
+  /** The ☺ that opened it, so focus has somewhere to go back to. */
+  trigger: React.RefObject<HTMLButtonElement | null>
   onPicking: (open: boolean) => void
   onReact: (emoji: string, reacted: boolean) => void
 }) {
@@ -1246,10 +1262,34 @@ function ReactionPicker({
    * hand either. `block: 'nearest'` moves the box by the minimum and does nothing at
    * all when the bar already fits — and in a layout effect it is never painted in the
    * wrong place first. The optional call is for jsdom, which has no such method.
+   *
+   * ⚠ AND IT TAKES FOCUS, BECAUSE IT IS NO LONGER NEXT TO ITS TRIGGER (v10.1 review).
+   * In the flow the bar sat immediately after the ☺, so Tab walked straight into the
+   * emoji; hung off the row it comes after the whole bubble, and on your own message
+   * the stops in between are *Odpovědět*, *Upravit* and *Smazat zprávu* — the member
+   * presses the ☺, tabs, and is offered the delete. `aria-controls` says the two are
+   * related but moves nobody. Taking focus on open and handing it back on close is
+   * what the dialogs in this app already do, and it repairs the older half of the
+   * same problem: picking an emoji used to drop focus on `<body>`.
+   *
+   * `preventScroll` because the scroll was already decided one line up, and the
+   * restore is skipped when the member has deliberately tabbed out of the bar — then
+   * the focus is theirs and not ours to move. Both nodes are read on the way in and
+   * held: a cleanup that reaches through a ref is reading it after the commit that
+   * tore the tree down, and React never remounts the ☺ while the bar it opened is up.
    */
   useLayoutEffect(() => {
-    bar.current?.scrollIntoView?.({ block: 'nearest' })
-  }, [])
+    const el = bar.current
+    const back = trigger.current
+    el?.scrollIntoView?.({ block: 'nearest' })
+    el?.querySelector('button')?.focus({ preventScroll: true })
+    return () => {
+      const active = document.activeElement
+      if (!active || active === document.body || el?.contains(active)) {
+        back?.focus({ preventScroll: true })
+      }
+    }
+  }, [trigger])
 
   return (
     <>
