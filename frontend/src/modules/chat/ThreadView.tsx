@@ -1231,8 +1231,15 @@ function ReactionRow({
  * It is absolute against the row, and the row is inside the scroll box — so it travels
  * with its message for nothing, with no listener and no measurement per frame. The one
  * measurement is `scrollIntoView`, taken once when it opens.
+ *
+ * ⚠ EXPORTED FOR ITS TEST, AND IT IS THE ONE PIECE OF THIS WORTH TESTING (v10.1 review
+ * round 2). The rest of the fix is stacking contexts, containing blocks and
+ * `scrollIntoView`, none of which jsdom has a layout engine to see — but the focus
+ * contract is plain DOM, jsdom implements `activeElement` and `focus()`, and it is
+ * where the bug this round found actually was. Nothing else below `ThreadView` needs
+ * to be reachable: this component takes seven ordinary props and calls no query hook.
  */
-function ReactionPicker({
+export function ReactionPicker({
   id,
   message,
   me,
@@ -1274,9 +1281,17 @@ function ReactionPicker({
    *
    * `preventScroll` because the scroll was already decided one line up, and the
    * restore is skipped when the member has deliberately tabbed out of the bar — then
-   * the focus is theirs and not ours to move. Both nodes are read on the way in and
-   * held: a cleanup that reaches through a ref is reading it after the commit that
-   * tore the tree down, and React never remounts the ☺ while the bar it opened is up.
+   * the focus is theirs and not ours to move.
+   *
+   * ⚠ WHICH IS WHY THE SCRIM REFUSES THE FOCUS A PRESS WOULD GIVE IT (round 2). The
+   * scrim is this bar's SIBLING, so a scrim holding the focus is indistinguishable
+   * from here from a member who moved it — and dismissing by tapping outside, the
+   * commonest way out there is, took the exception and dropped focus on `<body>`. The
+   * refusal is one `preventDefault` on the element itself; see its note below.
+   *
+   * Both nodes are read on the way in and held: a cleanup that reaches through a ref
+   * is reading it after the commit that tore the tree down, and React never remounts
+   * the ☺ while the bar it opened is up.
    */
   useLayoutEffect(() => {
     const el = bar.current
@@ -1291,6 +1306,27 @@ function ReactionPicker({
     }
   }, [trigger])
 
+  /**
+   * ⚠ ESCAPE CLOSES IT, BECAUSE THE SCRIM MADE IT MODAL (v10.1 review round 2). The
+   * strip this replaced was an ordinary run of buttons in the flow: the page went on
+   * working around it, so leaving it open cost nothing and there was nothing to
+   * escape from. The overlay is the opposite — it takes the focus, and its scrim
+   * swallows every pointer event in the viewport — and a surface that stops the app
+   * has to answer the one key everybody presses at it. Without this the way out was
+   * Tab to the ✕ or Shift+Tab to the ☺, both of which have to be discovered.
+   *
+   * On `document` rather than on the bar, so it still answers after the member has
+   * tabbed out of the bar and left it open behind them — the one state where they
+   * are furthest from the ✕ and most likely to reach for the key.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onPicking(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onPicking])
+
   return (
     <>
       {/* ⚠ A WAY OUT THAT IS NOT THE BAR — the conversation menu's scrim, on the
@@ -1299,12 +1335,30 @@ function ReactionPicker({
           only, for the reason written out up there: announced, it is an invisible
           full-viewport control called *Zrušit* between the ☺ and the first emoji, met
           by exactly the people who cannot see what it is for. The keyboard keeps the
-          ✕, which is a labelled control and is inside the bar. */}
+          ✕, which is a labelled control and is inside the bar.
+
+          ⚠ AND IT MUST NOT TAKE THE FOCUS ON ITS WAY DOWN (v10.1 review round 2).
+          This is where the header's copy stops being a copy. A press focuses a
+          button, `tabIndex={-1}` or not, and the scrim is the bar's SIBLING — so
+          dismissing by tapping outside, which is the way out this scrim exists to
+          provide, made `document.activeElement` the scrim: not null, not `<body>`,
+          not inside the bar, so every arm of the restore above failed, the ☺ never
+          got its focus back, and unmounting the scrim dropped focus on `<body>`.
+          Measured: `activeElement` was BODY after a scrim click. It also meant a
+          press left real focus sitting on an `aria-hidden` node, which is the one
+          place a screen reader has been told there is nothing to read.
+
+          Refusing the default on mousedown answers both, and it is the whole of the
+          difference: focus stays on the emoji the bar took it to, the restore above
+          sees it inside the bar and hands it back, and the click still fires. The
+          header's scrim needs none of this — its menu never takes focus, so it has
+          none to lose. */}
       <button
         type="button"
         tabIndex={-1}
         aria-hidden
         className="fixed inset-0 z-10 cursor-default"
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => onPicking(false)}
       />
       <div
