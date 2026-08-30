@@ -237,6 +237,53 @@ func TestRevalidateSession_RevokeSurvivesACancelledCaller(t *testing.T) {
 	}
 }
 
+// ⚠ THE PUMP REFRESHES THE IDENTITY TOO, AND IT IS THE PATH THAT USUALLY DOES.
+// The re-mint writes the member's email and display name alongside the roles
+// (D270), and `push.Store.Members` projects the household directory from whichever
+// session was confirmed most recently — so for anybody sitting on an open socket
+// rather than issuing requests, THIS tick is what carries a rename to everybody
+// else. The HTTP middleware's copy of this is covered in auth_test.go; nothing
+// covered the tick, and the two do not share a caller.
+//
+// ⚠ AND IT IS ASSERTED THROUGH A CANCELLED CALLER, which is the half that is not
+// the middleware's. From here ctx is a connection's, so a member closing their tab
+// in the window between Mint returning and the UPDATE would cancel the write —
+// leaving the identity fetched and thrown away, the stamp unmoved, and the session
+// re-minting on every tick for the rest of its life. The write is detached for
+// exactly this, the same as the revoke above.
+func TestRevalidateSession_ReMintRefreshesTheIdentityOnADetachedWrite(t *testing.T) {
+	h := newHarness(t)
+	sess, _ := h.authed(t) // logged in as Marie / marie@tilcer.cz
+
+	// Renamed (and re-addressed) in auth since the socket was opened.
+	h.fake.mintID = auth.Identity{
+		UserID: "u1", Email: "marie.nova@tilcer.cz", DisplayName: "Marie Nová", Roles: []string{"admin"},
+	}
+	h.clock = h.clock.Add(20 * time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	h.fake.onMint = cancel
+
+	userID, verdict := h.cfg.RevalidateSession(ctx, sess.Value)
+	if verdict != auth.SessionLive || userID != "u1" {
+		t.Fatalf("RevalidateSession = %q/%v, want u1/SessionLive — a rename is not a revocation",
+			userID, verdict)
+	}
+
+	email, name, roles := cachedIdentity(t, h.db)
+	if name != "Marie Nová" || email != "marie.nova@tilcer.cz" {
+		t.Errorf("session row = %q/%q after a tick, want the minted identity — the directory is "+
+			"projected from this row and a socket-only member has nothing else refreshing it",
+			email, name)
+	}
+	if roles != `["admin"]` {
+		t.Errorf("roles = %s, want [\"admin\"] — the roles half must not regress", roles)
+	}
+	if h.fake.mintCalls != 1 {
+		t.Errorf("mint calls = %d, want 1", h.fake.mintCalls)
+	}
+}
+
 // TestCheckSession pins the bare row check the websocket's CONNECT-TIME seam is
 // built on. Like wsRevalidation's, its three-state mapping is a household-wide
 // outage inverted silently: err mapped to SessionGone policy-closes a redialing

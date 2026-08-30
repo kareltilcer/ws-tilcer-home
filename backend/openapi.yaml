@@ -7,12 +7,14 @@ info:
     PASS.** 0.12.0 was the v10 spec, 0.12.1 reconciled it against the shipped code after
     PR 3, and 0.12.2 made four list cursors one encoding.
 
-    **0.13.1 changes no shape at all.** It reconciles one description against the shipped
-    code: the household directory said it cached each identity "at login", which stopped
-    being true when the fifteen-minute role re-mint started writing the email and the
-    display name too (D270). A reader of this spec would have concluded that a rename in
-    auth never reaches Home until that member logs in again — which is the behaviour the
-    change removed.
+    **0.13.1 changes no shape at all.** It reconciles the two descriptions of the member
+    directory against the shipped code: both said the identity behind it was cached "at
+    login", which stopped being true when the fifteen-minute role re-mint started writing
+    the email and the display name too (D270). A reader of this spec would have concluded
+    that a rename in auth never reaches Home until that member logs in again — which is
+    the behaviour the change removed. Both surfaces say it, so both are corrected: the
+    composer's `NotificationCatalog.members`, and `GET /api/chat/directory`, which is the
+    one a member actually looks at.
 
     **What 0.13.0 adds is one path and three fields, and none of it is breaking.**
 
@@ -5420,10 +5422,15 @@ paths:
         D230). User id and display name, and nothing else.
 
         ⚠ The directory is a LOGIN HISTORY. Home has no `users` table — it is projected from
-        `sessions`, newest identity per user — so **a person who has never logged in cannot
-        be added to a conversation**, and a display name changed in the auth service arrives
-        on that member's next login and not before. The picker's empty and stale states say
-        so rather than looking broken.
+        `sessions` — so **a person who has never logged in cannot be added to a
+        conversation**, and the picker's empty state says so rather than looking broken.
+
+        ⚠ **It is the FRESHEST identity per user, not the newest session's** (D270). Each
+        member is shown from the session auth confirmed most recently, and a display name
+        changed in auth arrives within one role-refresh window — about fifteen minutes on a
+        session in use — rather than at that member's next login. A name ERASED in auth is
+        the one case that still waits for the next login: a mint that carries no name is
+        read as "this token did not say", never as "the member cleared it".
       responses:
         "200":
           description: OK — always an array, never null (D174).
@@ -7174,7 +7181,10 @@ components:
             the one they logged into most recently — a device signed into once and left in
             a drawer is never re-minted, so its copy must not outrank the one being kept
             current. A rename in auth therefore reaches the household within one refresh
-            window rather than at that member's next login.
+            window rather than at that member's next login. ⚠ An ERASED name is the
+            exception and still waits for the next login: a mint that carries no name is
+            read as "this token did not say", never as "the member cleared it", so a field
+            the token is silent about is kept rather than blanked.
           items: { $ref: "#/components/schemas/HouseholdMember" }
         tokens:
           type: object

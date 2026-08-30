@@ -207,13 +207,12 @@ func (c Config) refreshIdentity(ctx context.Context, sess Session, now time.Time
 // again, which is precisely the behaviour everyone had before this existed.
 func mergeIdentity(sess Session, minted Identity) Identity {
 	out := sess.identity()
+	// The roles are replaced outright; the two identity fields fall back through
+	// firstNonEmpty, which is the same "empty means the token did not supply it"
+	// reading the login handler already applies to a client-sent email.
 	out.Roles = minted.Roles
-	if minted.Email != "" {
-		out.Email = minted.Email
-	}
-	if minted.DisplayName != "" {
-		out.DisplayName = minted.DisplayName
-	}
+	out.Email = firstNonEmpty(minted.Email, sess.Email)
+	out.DisplayName = firstNonEmpty(minted.DisplayName, sess.DisplayName)
 	return out
 }
 
