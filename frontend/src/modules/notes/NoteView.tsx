@@ -179,6 +179,7 @@ export function NoteView({
   const failCount = useRef(0) // consecutive transient failures → cap the auto-retry
   const justSavedTimer = useRef<ReturnType<typeof setTimeout>>(undefined) // clears the "Uloženo" flag
   const recovered = useRef(false) // guards the one-shot draft recovery on mount
+  const modeChosen = useRef(false) // the opening mode has been settled (draft recovery or the empty-note default)
   const pendingTokens = useRef(new Set<string>()) // placeholders of the uploads still resolving
   const staleSeed = useRef(false) // the WYSIWYG editor was seeded from a draft holding placeholders
   const draftRef = useRef<string | null>(null) // latest draft, readable from the []-deps unmount flush
@@ -432,7 +433,31 @@ export function NoteView({
     syncedBodyRef.current = stored
     setDraft(mirror) // arms the autosave effect, which re-persists and re-mirrors it
     setMode('markdown')
+    modeChosen.current = true // recovery outranks the empty-note default below
     toast(cs.notes.draftRecovered)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.data, editable])
+
+  // An empty note opens in Vizuální, not Číst. Číst has nothing to render for a note
+  // with no body, and an empty note is nearly always one just created from the "nová
+  // poznámka" dialog — which lands the user on a read-only tab, one click away from
+  // writing the thing they opened the dialog to write. This runs ONCE per mount: a
+  // deliberate switch back to Číst on a still-empty note must stick, and a note emptied
+  // by deleting its text must not yank the tab out from under the person deleting it.
+  // Declared after the recovery effect above so a rescued draft keeps its Markdown tab
+  // (both fire in the same commit; the ref, not the ordering of the state updates, is
+  // what decides).
+  useEffect(() => {
+    if (modeChosen.current || !editable || !note.data || note.data.archived || draft !== null) return
+    modeChosen.current = true
+    const stored = note.data.body_md ?? ''
+    if (stored.trim() !== '') return
+    // The same conflict baseline enterEdit takes when it opens an editor over a null
+    // draft. Without it a body that is blank but not literally empty ("\n") would read
+    // as someone else's edit the moment the first keystroke arms the changed-elsewhere
+    // check, and the user would be told to reload a version identical to their own.
+    syncedBodyRef.current = stored
+    setMode('visual')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note.data, editable])
 

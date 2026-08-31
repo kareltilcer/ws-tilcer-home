@@ -319,6 +319,10 @@ export function MilkdownEditor({
       root,
       defaultValue,
       featureConfigs: {
+        // Crepe ships an English placeholder ("Please enter..."), and an empty note now
+        // opens straight into this editor — so that string is the first thing anyone
+        // sees on a brand-new note, on the one screen of an otherwise Czech app.
+        [Crepe.Feature.Placeholder]: { text: cs.notes.visualPlaceholder },
         // A pasted/dropped/picked image FILE goes straight to object storage; Crepe
         // awaits this and inserts the node already pointing at the returned URL.
         [Crepe.Feature.ImageBlock]: {
