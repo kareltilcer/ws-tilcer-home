@@ -322,7 +322,10 @@ export function MilkdownEditor({
         // Crepe ships an English placeholder ("Please enter..."), and an empty note now
         // opens straight into this editor — so that string is the first thing anyone
         // sees on a brand-new note, on the one screen of an otherwise Czech app.
-        [Crepe.Feature.Placeholder]: { text: cs.notes.visualPlaceholder },
+        // `doc`, not Crepe's default `block`: this string is the empty-NOTE invitation,
+        // and at block scope it also lands on every blank line inside a note already
+        // being written — telling someone mid-note to start writing.
+        [Crepe.Feature.Placeholder]: { text: cs.notes.visualPlaceholder, mode: 'doc' },
         // A pasted/dropped/picked image FILE goes straight to object storage; Crepe
         // awaits this and inserts the node already pointing at the returned URL.
         [Crepe.Feature.ImageBlock]: {

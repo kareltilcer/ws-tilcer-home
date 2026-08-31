@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { qk } from '@/api/keys'
 import { cs } from '@/i18n/cs'
 import type { NoteDetail } from './api/types'
 import { NoteView } from './NoteView'
@@ -33,10 +34,17 @@ vi.mock('@/app/auth', () => ({
 }))
 
 // Crepe is lazy-loaded and needs a real DOM/ProseMirror; the stub stands in for the
-// Vizuální surface and echoes what it was seeded with.
+// Vizuální surface, echoes what it was seeded with, and offers a button that emits an
+// edit — the one thing a test cannot do by typing into a ProseMirror that isn't there.
+const EMITTED = vi.hoisted(() => 'napsáno ve Vizuálním')
 vi.mock('./MilkdownEditor', () => ({
-  MilkdownEditor: ({ defaultValue }: { defaultValue: string }) => (
-    <div data-testid="visual-editor">{defaultValue}</div>
+  MilkdownEditor: ({ defaultValue, onChange }: { defaultValue: string; onChange: (md: string) => void }) => (
+    <div data-testid="visual-editor">
+      {defaultValue}
+      <button type="button" onClick={() => onChange(EMITTED)}>
+        emit
+      </button>
+    </div>
   ),
 }))
 
@@ -62,15 +70,22 @@ const note = (body_md: string | null): NoteDetail => ({
 
 function renderNote() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <NoteView noteId={NOTE_ID} />
     </QueryClientProvider>,
   )
+  // The client comes back so a test can play the part of a refetch landing under an
+  // already-open editor.
+  return { ...view, qc }
 }
 
 const markdownTab = () => screen.getByRole('button', { name: cs.notes.modeMarkdown })
 const readTab = () => screen.getByRole('button', { name: cs.notes.modeRead })
+const emit = () => screen.getByRole('button', { name: 'emit' })
+// The "změněno jinde" advisory, addressed by its one action rather than its sentence:
+// the banner's text node sits beside the button, so the button is the unambiguous probe.
+const conflictBanner = () => screen.queryByRole('button', { name: cs.notes.reloadTheirs })
 
 describe('NoteView opening mode', () => {
   beforeEach(() => {
@@ -148,5 +163,42 @@ describe('NoteView opening mode', () => {
     await userEvent.clear(screen.getByPlaceholderText(cs.notes.bodyPlaceholder))
     expect(screen.getByPlaceholderText(cs.notes.bodyPlaceholder)).toHaveValue('')
     expect(screen.queryByTestId('visual-editor')).not.toBeInTheDocument()
+  })
+})
+
+// The editor this opens by itself is a real edit session and has to be watched like
+// one. Crepe is seeded once and never re-reads the query, so the ONLY thing that can
+// tell the user their empty editor is standing over a note that has since gained text
+// is the "změněno jinde" advisory — which stays dormant while the draft is null.
+describe('NoteView auto-opened editor and the changed-elsewhere advisory', () => {
+  beforeEach(() => {
+    auth.canWrite = true
+    localStorage.clear()
+    getNote.mockReset()
+  })
+
+  // A body arriving after the mode was chosen: a persisted cache catching up on
+  // reconnect, or another member's edit refetched off the WS echo.
+  it('warns when the note gains a body while the auto-opened editor sits on the empty one', async () => {
+    getNote.mockResolvedValue(note(''))
+    const { qc } = renderNote()
+    await screen.findByTestId('visual-editor')
+    expect(conflictBanner()).not.toBeInTheDocument()
+    // The query observer notifies on a timer, not a microtask, so the assertion has to
+    // wait for the render rather than assume act() already produced it.
+    qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
+    expect(await screen.findByRole('button', { name: cs.notes.reloadTheirs })).toBeInTheDocument()
+  })
+
+  // The blank-but-not-empty body is the case the conflict baseline is taken for: with
+  // the advisory armed from the start, a stored "\n" that nobody else touched must not
+  // read as someone else's edit and offer to reload a version identical to this one.
+  it('stays quiet when a whitespace-only note is typed into', async () => {
+    getNote.mockResolvedValue(note('\n\n   \n'))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(emit())
+    expect(await screen.findByText(EMITTED)).toBeInTheDocument()
+    expect(conflictBanner()).not.toBeInTheDocument()
   })
 })

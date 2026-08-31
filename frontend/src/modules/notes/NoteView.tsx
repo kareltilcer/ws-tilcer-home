@@ -452,11 +452,21 @@ export function NoteView({
     modeChosen.current = true
     const stored = note.data.body_md ?? ''
     if (stored.trim() !== '') return
-    // The same conflict baseline enterEdit takes when it opens an editor over a null
-    // draft. Without it a body that is blank but not literally empty ("\n") would read
-    // as someone else's edit the moment the first keystroke arms the changed-elsewhere
-    // check, and the user would be told to reload a version identical to their own.
+    // Everything enterEdit does when it opens an editor over a null draft, and for its
+    // reasons: this IS an edit session, the user just didn't have to click for it.
+    //
+    // The BASELINE, so a body that is blank but not literally empty ("\n") doesn't read
+    // as someone else's edit and tell the user to reload a version identical to theirs.
     syncedBodyRef.current = stored
+    // And the DRAFT, which is what puts the "změněno jinde" advisory on watch: it
+    // early-returns while the draft is null, and Crepe is seeded once per `reseed` and
+    // never re-reads the query. A null draft left this editor outside BOTH, so a body
+    // that arrived AFTER this effect ran — a week-old persisted cache catching up on
+    // reconnect, or another member's edit over the WS echo — left the user looking at an
+    // empty editor over a note that has text, unwarned until their own first keystroke.
+    // Seeding the draft with the stored body shows nothing different (it IS the body)
+    // and restores the advisory, and its "načíst jejich verzi" re-seed, from the start.
+    setDraft(stored)
     setMode('visual')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note.data, editable])
