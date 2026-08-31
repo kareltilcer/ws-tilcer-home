@@ -47,7 +47,14 @@ func (s *Service) notifyPush(ctx context.Context, conversationName string, recip
 		// ⚠ Tag COLLAPSES PER CONVERSATION, so twenty messages in one room are one
 		// banner that keeps updating rather than twenty banners. Two rooms still
 		// produce two, because the id is in the tag.
+		//
+		// Renotify is what keeps that collapsing from also silencing it. Without it
+		// the replacement is delivered mutely — the second message in a room, and
+		// every one after it, updated a notification nobody was told had changed.
+		// One entry per room, but an alert per message: the collapsing was always
+		// about the shade not filling up, never about going quiet.
 		Tag:      "chat:" + m.ConversationID,
+		Renotify: true,
 		Data:     map[string]any{"conversation_id": m.ConversationID, "message_id": m.ID},
 		Category: push.CategoryChat,
 		Kind:     push.KindChat,

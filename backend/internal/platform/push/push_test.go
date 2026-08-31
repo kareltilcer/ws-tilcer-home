@@ -64,6 +64,17 @@ func (f *fakeClient) count() int {
 	return len(f.requests)
 }
 
+// lastHeader reads a header off the most recent POST. Send waits for its whole
+// fan-out before returning, so by then there is nothing still writing.
+func (f *fakeClient) lastHeader(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) == 0 {
+		return ""
+	}
+	return f.requests[len(f.requests)-1].Header.Get(name)
+}
+
 // recorder captures delivery rows in memory, standing in for the admin module's
 // table (which platform deliberately does not own).
 type recorder struct {
@@ -492,6 +503,65 @@ func TestEnvelopeKeepsAnExplicitKind(t *testing.T) {
 	e := NormalizeForTest(Envelope{Title: "T", Category: CategorySummaries, Kind: KindTest})
 	if e.Kind != KindTest {
 		t.Errorf("Kind = %q, want the explicit %q to survive normalization", e.Kind, KindTest)
+	}
+}
+
+// Renotify is what stops a same-tag replacement from arriving silently, so it has
+// to survive onto the wire — the service worker cannot re-alert on a field the
+// payload never carried.
+func TestEnvelopeCarriesRenotifyToTheWire(t *testing.T) {
+	b, err := json.Marshal(NormalizeForTest(Envelope{
+		Title: "T", Tag: "chat:c1", Renotify: true, Category: CategoryChat,
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"renotify":true`) {
+		t.Errorf("payload dropped renotify: %s", b)
+	}
+}
+
+// ⚠ showNotification THROWS a TypeError on renotify with an empty tag, and a push
+// handler that throws shows NOTHING AT ALL — turning a caller's half-filled
+// envelope into the silent delivery renotify exists to prevent. The service worker
+// guards this too; losing the re-alert is the only acceptable failure here.
+func TestEnvelopeDropsRenotifyWithoutATag(t *testing.T) {
+	e := NormalizeForTest(Envelope{Title: "T", Renotify: true, Category: CategoryChat})
+	if e.Renotify {
+		t.Error("renotify survived with no tag to hang it on — showNotification rejects that pair")
+	}
+}
+
+// Urgency is the push SERVICE's scheduling hint: "normal" is explicitly withheld
+// on low battery, which is right for a digest and wrong for a message somebody is
+// waiting on. A chat notification delivered at the next wakeup has already missed
+// its conversation.
+func TestChatIsDeliveredAtHighUrgencyAndNothingElseIs(t *testing.T) {
+	for _, tc := range []struct {
+		category string
+		want     string
+	}{
+		{CategoryChat, "high"},
+		{CategoryBroadcast, "normal"},
+		{CategoryTriggers, "normal"},
+		{CategorySummaries, "normal"},
+	} {
+		t.Run(tc.category, func(t *testing.T) {
+			sqldb := testsupport.NewDB(t)
+			client := newFakeClient()
+			svc, _ := newService(t, sqldb, client, time.Now)
+			subscribe(t, sqldb, svc.Store(), "u1", "https://push.example/u1")
+
+			results := svc.Send(context.Background(), []string{"u1"}, Envelope{
+				Title: "T", Body: "B", Category: tc.category,
+			})
+			if len(results) != 1 || results[0].Status != StatusSent {
+				t.Fatalf("expected one delivered push, got %+v", results)
+			}
+			if got := client.lastHeader("Urgency"); got != tc.want {
+				t.Errorf("category %q sent Urgency %q, want %q", tc.category, got, tc.want)
+			}
+		})
 	}
 }
 

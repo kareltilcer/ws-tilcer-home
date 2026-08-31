@@ -59,7 +59,7 @@ type Push interface {
 }
 ```
 
-- **Send.** Resolve each recipient's rows in `push_subscriptions`, **filtered by `notification_preferences`** (master off ⇒ skip user; the envelope's `Category` off ⇒ skip). Encrypt+POST via webpush-go with the VAPID `Authorization`, `TTL` ~ a day, `Urgency: normal`. Bounded concurrency (a worker pool, e.g. 8). Write one `notification_deliveries` row per endpoint attempt (`kind`/`category` from the caller). **Never** block a request thread on Send — callers (broadcast, tailer, ticker) run it off the request path.
+- **Send.** Resolve each recipient's rows in `push_subscriptions`, **filtered by `notification_preferences`** (master off ⇒ skip user; the envelope's `Category` off ⇒ skip). Encrypt+POST via webpush-go with the VAPID `Authorization`, `TTL` ~ a day, and `Urgency` from the category — `high` for `chat`, `normal` for everything else (`normal` is the bucket a push service withholds on low battery, which is right for a digest and wrong for a message somebody is waiting on). Bounded concurrency (a worker pool, e.g. 8). Write one `notification_deliveries` row per endpoint attempt (`kind`/`category` from the caller). **Never** block a request thread on Send — callers (broadcast, tailer, ticker) run it off the request path.
 - **Dead-endpoint pruning.** `404`/`410` ⇒ **delete** the subscription (status `expired`). `429`/`5xx`/network ⇒ status `failed`, set/keep `failing_since`; a subscription failing continuously past `HOME_NOTIF_MAX_FAILDAYS` is pruned on the next attempt.
 - **Payload size:** Web Push caps ~4 KB encrypted — keep bodies short; truncate defensively.
 - The VAPID keypair comes from env (§14); `VAPIDPublicKey()` serves the public key to FR-P3. **Never** expose the private key.

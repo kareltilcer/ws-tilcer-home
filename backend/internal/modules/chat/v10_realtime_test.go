@@ -14,6 +14,7 @@ import (
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/optional"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 )
 
 // TestMessagePublishReachesExactlyTheMembers is D233.
@@ -264,6 +265,45 @@ func TestPushGoesToEveryMemberButTheAuthorAndHonoursTheMute(t *testing.T) {
 	}
 	if len(recipients) != 1 || recipients[0] != quiet.id {
 		t.Fatalf("push went to %v, want only %s", recipients, quiet.id)
+	}
+}
+
+// TestEveryMessageInARoomRe-alertsUnderTheOneCollapseTag is the other half of the
+// per-conversation Tag.
+//
+// ⚠ THE COLLAPSING AND THE SILENCE CAME FROM THE SAME FIELD, AND ONLY ONE OF THEM
+// WAS WANTED. A notification that replaces a same-tag predecessor does not alert
+// again unless Renotify says so, so shipping the tag alone bought one tidy entry
+// per room at the price of announcing only the FIRST message in it. Every reply
+// after that updated a notification in the shade with no sound, no vibration and
+// no banner — worst precisely during an active conversation, which is the moment
+// somebody most wants to be told.
+//
+// So both fields are asserted together on the SECOND message, not the first: the
+// first message alerted correctly even with the bug, and a test that sends one
+// message passes against the code this replaces.
+func TestEveryMessageInARoomRealertsUnderTheOneCollapseTag(t *testing.T) {
+	hh := newHousehold(t, kaja, andy)
+	c := hh.group(kaja, "Domácnost", andy)
+
+	hh.send(kaja, c.ID, "první")
+	first := hh.awaitPushEnvelope(t)
+	hh.send(kaja, c.ID, "druhá")
+	second := hh.awaitPushEnvelope(t)
+
+	wantTag := "chat:" + c.ID
+	for _, e := range []struct {
+		which string
+		env   push.Envelope
+	}{{"first", first}, {"second", second}} {
+		if e.env.Tag != wantTag {
+			t.Errorf("%s message tagged %q, want %q — two rooms must stay two entries",
+				e.which, e.env.Tag, wantTag)
+		}
+		if !e.env.Renotify {
+			t.Errorf("%s message did not ask to re-alert: a same-tag replacement is "+
+				"delivered silently, so this message reached the phone unannounced", e.which)
+		}
 	}
 }
 

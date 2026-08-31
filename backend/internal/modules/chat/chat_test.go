@@ -85,17 +85,33 @@ func (c *capturedPush) Send(_ context.Context, recipients []string, e push.Envel
 func (c *capturedPush) VAPIDPublicKey() string { return "" }
 func (c *capturedPush) Enabled() bool          { return true }
 
-// awaitPush blocks until the next push lands and returns its recipients.
-func (hh *household) awaitPush(t *testing.T) []string {
+// awaitSend blocks until the next push lands. Chat sends off the request path, so
+// every accessor below has to wait for the goroutine rather than read behind it.
+func (hh *household) awaitSend(t *testing.T) {
 	t.Helper()
 	select {
 	case <-hh.pushes.sent:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("no push was sent within 2s")
 	}
+}
+
+// awaitPush blocks until the next push lands and returns its recipients.
+func (hh *household) awaitPush(t *testing.T) []string {
+	t.Helper()
+	hh.awaitSend(t)
 	hh.pushes.mu.Lock()
 	defer hh.pushes.mu.Unlock()
 	return hh.pushes.recipients[len(hh.pushes.recipients)-1]
+}
+
+// awaitPushEnvelope blocks until the next push lands and returns what it carried.
+func (hh *household) awaitPushEnvelope(t *testing.T) push.Envelope {
+	t.Helper()
+	hh.awaitSend(t)
+	hh.pushes.mu.Lock()
+	defer hh.pushes.mu.Unlock()
+	return hh.pushes.envelopes[len(hh.pushes.envelopes)-1]
 }
 
 // capturedNotify records every targeted /ws publish: who it reached and what it
