@@ -16,19 +16,9 @@
 
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching'
 import { NavigationRoute, registerRoute } from 'workbox-routing'
+import { notificationFor, type Envelope } from './platform/push/notification'
 
 declare const self: ServiceWorkerGlobalScope
-
-/** Envelope is the payload platform/push sends (push.Envelope's wire half). */
-interface Envelope {
-  module?: string
-  type?: string
-  title?: string
-  body?: string
-  url?: string
-  tag?: string
-  data?: Record<string, unknown>
-}
 
 // ---- PWA: precache + navigation fallback ----
 
@@ -74,23 +64,8 @@ self.addEventListener('push', (event: PushEvent) => {
     envelope = { title: 'Home', body: event.data?.text() ?? '' }
   }
 
-  const title = envelope.title || 'Home'
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body: envelope.body ?? '',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/badge-72.png',
-      // The collapse tag lets a newer push of the same kind replace an older one
-      // instead of stacking (a morning summary should not pile up).
-      tag: envelope.tag,
-      data: {
-        url: envelope.url ?? '/',
-        module: envelope.module,
-        type: envelope.type,
-        ...envelope.data,
-      },
-    }),
-  )
+  const { title, options } = notificationFor(envelope)
+  event.waitUntil(self.registration.showNotification(title, options))
 })
 
 /** inAppTarget resolves a notification's click target, and refuses to leave the

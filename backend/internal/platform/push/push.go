@@ -76,6 +76,21 @@ type Envelope struct {
 	URL    string         `json:"url"`            // in-app path a click opens; defaults to "/"
 	Tag    string         `json:"tag,omitempty"`  // collapse key: a newer push replaces an older one
 	Data   map[string]any `json:"data,omitempty"` // extra routing hints for the SW
+	// Renotify re-alerts when this push REPLACES an earlier one with the same Tag.
+	//
+	// ⚠ IT IS THE OTHER HALF OF Tag, AND LEAVING IT FALSE IS WHY CHAT WENT SILENT.
+	// The Notifications API says a notification that replaces a same-tag predecessor
+	// does not alert again unless this is set — no sound, no vibration, no banner.
+	// So a tag alone buys collapsing at the price of silence: the FIRST message in a
+	// room alerted and every one after it, while that notification still sat in the
+	// shade, arrived with nothing to notice. Which is precisely backwards, because
+	// an active conversation is when a member most wants to be told.
+	//
+	// A module that collapses in order to UPDATE quietly — a progress count, an
+	// unread total — wants the false default. One that collapses a stream of real
+	// events wants this. That is a per-module decision, so it lives on the envelope
+	// rather than being inferred from Tag being set.
+	Renotify bool `json:"renotify,omitempty"`
 
 	Category    string `json:"-"` // mute bucket (required)
 	Kind        string `json:"-"` // delivery-log label (defaults per category — see kindForCategory)
@@ -318,7 +333,7 @@ func (s *Service) deliver(ctx context.Context, sub Subscription, payload []byte,
 		VAPIDPublicKey:  s.cfg.VAPIDPublicKey,
 		VAPIDPrivateKey: s.cfg.VAPIDPrivateKey,
 		TTL:             int(s.cfg.TTL.Seconds()),
-		Urgency:         webpush.UrgencyNormal,
+		Urgency:         urgencyForCategory(e.Category),
 		Topic:           webpushTopic(e.Tag),
 	})
 	if err != nil {
@@ -384,6 +399,13 @@ func (e Envelope) normalized() Envelope {
 	if e.Kind == "" {
 		e.Kind = kindForCategory(e.Category)
 	}
+	// Renotify without a Tag is not merely useless — `showNotification` THROWS a
+	// TypeError on it, and a throwing push handler shows nothing at all. The
+	// service worker guards this too; clearing it here means a caller that sets
+	// one and forgets the other loses the re-alert rather than the notification.
+	if e.Tag == "" {
+		e.Renotify = false
+	}
 	e.Title = truncateRunes(e.Title, maxTitleRunes)
 	e.Body = truncateRunes(e.Body, MaxBodyRunes)
 	return e
@@ -408,6 +430,24 @@ func kindForCategory(category string) string {
 	}
 }
 
+// urgencyForCategory is the Urgency header a category ships with.
+//
+// Urgency is the push SERVICE's scheduling hint, not the phone's display rule —
+// it decides whether the message is handed over now or held while the device is
+// dozing or low on battery. "normal" is explicitly the bucket that is withheld on
+// low battery, which is the right trade for a morning summary and the wrong one
+// for a message somebody is waiting on: a chat notification that arrives with the
+// next wakeup has already missed the conversation it belonged to.
+//
+// Everything else keeps "normal" deliberately. High urgency on a scheduled digest
+// spends a member's battery to deliver news that keeps.
+func urgencyForCategory(category string) webpush.Urgency {
+	if category == CategoryChat {
+		return webpush.UrgencyHigh
+	}
+	return webpush.UrgencyNormal
+}
+
 func truncateRunes(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -419,6 +459,15 @@ func truncateRunes(s string, max int) string {
 // webpushTopic maps a collapse tag onto the Topic header. The header is
 // restricted to base64url characters, so anything else is dropped rather than
 // risking a 400 from the push service.
+//
+// ⚠ TOPIC AND Tag COLLAPSE IN TWO DIFFERENT PLACES, AND CHAT WANTS ONLY ONE.
+// Topic collapses at the push SERVICE, replacing a message that has not been
+// delivered yet; Tag collapses in the browser, replacing a notification already
+// on screen. Chat's tag is "chat:<id>", whose colon is not base64url, so chat has
+// only ever had the second — and that is now load-bearing rather than incidental.
+// Widening this filter to admit ':' would let a phone that was briefly offline
+// receive ONE message where three were sent, and Renotify would faithfully alert
+// once for the one that survived. Collapse on screen, never on the wire.
 func webpushTopic(tag string) string {
 	if tag == "" || len(tag) > 32 {
 		return ""
