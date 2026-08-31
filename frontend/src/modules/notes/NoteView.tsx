@@ -179,6 +179,7 @@ export function NoteView({
   const failCount = useRef(0) // consecutive transient failures → cap the auto-retry
   const justSavedTimer = useRef<ReturnType<typeof setTimeout>>(undefined) // clears the "Uloženo" flag
   const opened = useRef(false) // the opening surface has been settled (see the mount effect)
+  const untouched = useRef(false) // no input of the user's has reached this session's draft yet
   const pendingTokens = useRef(new Set<string>()) // placeholders of the uploads still resolving
   const staleSeed = useRef(false) // the WYSIWYG editor was seeded from a draft holding placeholders
   const draftRef = useRef<string | null>(null) // latest draft, readable from the []-deps unmount flush
@@ -194,6 +195,11 @@ export function NoteView({
     if (seed) {
       syncedBodyRef.current = seed.stored
       setDraft(seed.initial)
+      // A session seeded with the note's OWN body holds nothing of the user's yet, and
+      // stays that way until they type (see editDraft and the conflict effect). A
+      // RESCUED draft is the opposite: it is text a previous session failed to persist,
+      // so it counts as touched from the first render and is never adopted away silently.
+      untouched.current = seed.initial === seed.stored
     }
     if (m === 'visual') {
       // Crepe reads `defaultValue` once per `reseed` value and never again, so a new
@@ -205,6 +211,17 @@ export function NoteView({
       staleSeed.current = pendingTokens.current.size > 0
     }
     setMode(m)
+  }
+
+  // editDraft is every path where the USER's own input reaches the draft: typing in
+  // either editor, a paste, and the image-upload swaps that finish a paste. It marks the
+  // session touched, and nothing ever marks it untouched again — from the first keystroke
+  // on, an incoming body is a real conflict that goes to the user through the banner.
+  // Seeding a session (openEditor) and adopting the stored body (adoptStored) put the
+  // NOTE's text in the draft, not the user's, so they deliberately bypass this.
+  const editDraft: typeof setDraft = (next) => {
+    untouched.current = false
+    setDraft(next)
   }
 
   // adoptStored discards our draft and takes the stored body instead, re-seeding the
@@ -440,11 +457,10 @@ export function NoteView({
     if (draft === null || !note.data || save.isPending) return
     const stored = note.data.body_md ?? ''
     if (stored === syncedBodyRef.current || stored === draft) return
-    // Their edit landed over an editor holding NOTHING of ours: the draft is still
-    // exactly the body this session opened over, nothing is queued to save and no
-    // upload is in flight, so the user has typed nothing that adopting their version
-    // could lose. Take it silently instead of raising a banner that asks them to
-    // choose between their own untouched copy and the same text.
+    // Their edit landed over an editor holding NOTHING of ours: nothing the user typed
+    // has ever reached this draft, so adopting their version can lose nothing of theirs.
+    // Take it silently instead of raising a banner that asks them to choose between the
+    // note's own stale text and the same note's new text.
     //
     // Load-bearing, not cosmetic: the WYSIWYG editor is seeded once per `reseed` and
     // never re-reads the query, so without the re-seed it would keep showing the body
@@ -453,7 +469,17 @@ export function NoteView({
     // session the mount effect below opens BY ITSELF on an empty note: the user never
     // asked for an editor, so an empty draft they never typed into must not become
     // the thing that wipes a body someone else filled in meanwhile.
-    if (draft === syncedBodyRef.current && pendingSave.current === null && uploadsInFlight === 0) {
+    //
+    // The gate is `untouched` — a flag the user's first input clears for good — and NOT
+    // `draft === syncedBodyRef.current`. That equality is not "never typed into": a
+    // successful save advances the baseline to the body it just wrote (save.onSuccess),
+    // so someone who has been writing for ten minutes satisfies it again the moment
+    // autosave catches up, and their text would be replaced under the caret with no
+    // banner at all. The other two conditions stay, and uploadsInFlight in particular is
+    // not redundant: a pasted image reaches the draft only when its emission or its URL
+    // swap lands, so between the paste and that swap the flag is still true and this
+    // counter is the only thing standing between an incoming body and the paste.
+    if (untouched.current && pendingSave.current === null && uploadsInFlight === 0) {
       adoptStored(stored)
       return
     }
@@ -585,7 +611,7 @@ export function NoteView({
   // so edits typed while an upload was in flight survive. A null draft means it was
   // discarded meanwhile (e.g. "load their version") — leave it discarded.
   const swapInDraft = (from: string, to: string) =>
-    setDraft((prev) => (prev === null ? prev : prev.split(from).join(to)))
+    editDraft((prev) => (prev === null ? prev : prev.split(from).join(to)))
 
   // resolveUploadToken uploads `source()` and replaces its in-flight placeholder token
   // with the real reference URL — or strips the placeholder image on failure. Runs
@@ -611,7 +637,7 @@ export function NoteView({
       // Remove the whole enclosing image reference — `![alt](token)` (any alt) or a
       // raw-HTML `<img … src="token" …>` — plus any bare leftover, so no dangling
       // `![alt]()` or `<img src="">` is persisted.
-      setDraft((prev) => (prev === null ? prev : stripUploadToken(prev, token)))
+      editDraft((prev) => (prev === null ? prev : stripUploadToken(prev, token)))
       toast.error(cs.notes.imageUploadError)
       return null
     } finally {
@@ -662,7 +688,7 @@ export function NoteView({
       if (file) {
         e.preventDefault()
         const token = nextUploadingToken()
-        setDraft(splice(`![](${token})`)) // reserve the caret spot immediately
+        editDraft(splice(`![](${token})`)) // reserve the caret spot immediately
         void resolveUploadToken(token, () => Promise.resolve(file), file.name || 'obrazek')
         return
       }
@@ -684,7 +710,7 @@ export function NoteView({
     const tokenByURI = new Map(uris.map((uri) => [uri, nextUploadingToken()]))
     let staged = text
     for (const [uri, token] of tokenByURI) staged = staged.split(uri).join(token)
-    setDraft(splice(staged))
+    editDraft(splice(staged))
     for (const [uri, token] of tokenByURI) {
       // fetch resolves a data: URI to its bytes in the browser.
       void resolveUploadToken(token, async () => (await fetch(uri)).blob())
@@ -930,7 +956,7 @@ export function NoteView({
           <textarea
             value={body}
             spellCheck={false}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => editDraft(e.target.value)}
             onPaste={onMarkdownPaste}
             placeholder={cs.notes.bodyPlaceholder}
             className="h-full min-h-[300px] w-full resize-y rounded-xl border border-border bg-s2 px-4 py-3.5 font-mono text-sm leading-relaxed text-fg outline-none focus:border-accent"
@@ -948,7 +974,7 @@ export function NoteView({
               key={`${noteId}-${reseed}`}
               noteId={noteId}
               defaultValue={body}
-              onChange={setDraft}
+              onChange={editDraft}
               onInlineImage={beginInlineImageUpload}
             />
           </Suspense>

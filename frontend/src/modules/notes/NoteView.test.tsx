@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { qk } from '@/api/keys'
@@ -222,6 +222,48 @@ describe('NoteView auto-opened editor and the changed-elsewhere advisory', () =>
     qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
     expect(await screen.findByRole('button', { name: cs.notes.reloadTheirs })).toBeInTheDocument()
     expect(screen.getByText(EMITTED)).toBeInTheDocument() // their version is offered, not imposed
+  })
+
+  // The same conflict, one autosave later — and this is the one an equality check gets
+  // wrong. A successful save advances the conflict baseline to the body it just wrote, so
+  // "the draft equals the baseline" goes back to being TRUE for someone who has been
+  // writing all along. Their text is still theirs: the arriving body has to go to the
+  // banner, not silently into the editor under their caret.
+  it('still warns when a body arrives after the user typed AND the autosave landed', async () => {
+    getNote.mockResolvedValue(note(''))
+    const { qc } = renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(emit())
+    // Wait for the real debounced save to land — the write reaching the server is what
+    // moves the baseline; short-circuiting it would test a state the app never reaches.
+    await waitFor(() => expect(updateNote).toHaveBeenCalledWith(NOTE_ID, { body_md: EMITTED }, undefined), {
+      timeout: 3000,
+    })
+    await waitFor(() => expect(qc.getQueryData(qk.noteDetail(NOTE_ID))).toMatchObject({ body_md: EMITTED }))
+    expect(conflictBanner()).not.toBeInTheDocument() // our own save is not someone else's edit
+
+    qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
+    expect(await screen.findByRole('button', { name: cs.notes.reloadTheirs })).toBeInTheDocument()
+    expect(screen.getByText(EMITTED)).toBeInTheDocument() // not replaced under them
+    expect(screen.queryByText('nákup: mléko')).not.toBeInTheDocument()
+  })
+
+  // Typing is typing on either surface: the Markdown textarea feeds the same draft, so it
+  // has to mark the session touched too — and again this only bites once the save has
+  // landed, because until then the queued write is what holds the adopt off.
+  it('still warns when a body arrives after the user typed in Markdown and it saved', async () => {
+    getNote.mockResolvedValue(note(''))
+    const { qc } = renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(markdownTab())
+    await userEvent.type(screen.getByPlaceholderText(cs.notes.bodyPlaceholder), 'moje věta')
+    await waitFor(() => expect(qc.getQueryData(qk.noteDetail(NOTE_ID))).toMatchObject({ body_md: 'moje věta' }), {
+      timeout: 3000,
+    })
+
+    qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
+    expect(await screen.findByRole('button', { name: cs.notes.reloadTheirs })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(cs.notes.bodyPlaceholder)).toHaveValue('moje věta')
   })
 
   // The blank-but-not-empty body is the case the conflict baseline is taken for: with
