@@ -178,12 +178,44 @@ export function NoteView({
   const saveFailed = useRef(false) // last save errored → back off the auto-retry
   const failCount = useRef(0) // consecutive transient failures → cap the auto-retry
   const justSavedTimer = useRef<ReturnType<typeof setTimeout>>(undefined) // clears the "Uloženo" flag
-  const recovered = useRef(false) // guards the one-shot draft recovery on mount
-  const modeChosen = useRef(false) // the opening mode has been settled (draft recovery or the empty-note default)
+  const opened = useRef(false) // the opening surface has been settled (see the mount effect)
   const pendingTokens = useRef(new Set<string>()) // placeholders of the uploads still resolving
   const staleSeed = useRef(false) // the WYSIWYG editor was seeded from a draft holding placeholders
   const draftRef = useRef<string | null>(null) // latest draft, readable from the []-deps unmount flush
   draftRef.current = draft
+
+  // openEditor is the ONE way an edit session starts, so the three ways in — the tab
+  // click, a draft rescued on mount, and the empty note that opens itself — cannot
+  // drift apart. `seed` sets the two things a session is made of: the DRAFT the editor
+  // renders and autosave watches, and the conflict BASELINE the "změněno jinde"
+  // advisory measures the stored body against. Omit it to re-enter a session that is
+  // already open (just switching tabs), which must not re-baseline anything.
+  const openEditor = (m: Exclude<Mode, 'read'>, seed?: { stored: string; initial: string }) => {
+    if (seed) {
+      syncedBodyRef.current = seed.stored
+      setDraft(seed.initial)
+    }
+    if (m === 'visual') {
+      // Crepe reads `defaultValue` once per `reseed` value and never again, so a new
+      // seed needs a new editor. Seeding it from a draft that still holds an upload
+      // placeholder gives it a token it cannot resolve; remember that so the re-seed
+      // effect below re-seeds it once the uploads land. (Entering Vizuální with
+      // nothing in flight seeds clean — the common case.)
+      setReseed((r) => r + 1)
+      staleSeed.current = pendingTokens.current.size > 0
+    }
+    setMode(m)
+  }
+
+  // adoptStored discards our draft and takes the stored body instead, re-seeding the
+  // WYSIWYG editor from it (same reseed reason as above). Both the user-driven "načíst
+  // jejich verzi" and the silent adopt in the conflict effect go through here.
+  const adoptStored = (stored: string) => {
+    setDraft(stored)
+    syncedBodyRef.current = stored
+    setReseed((r) => r + 1)
+    staleSeed.current = false // re-seeded from the stored body, which holds no placeholders
+  }
 
   // structural=true when the change moves the note's tree row or its pinned-notes
   // entry (rename, pin): it invalidates the tree and dashboard queries so both hosts
@@ -407,67 +439,70 @@ export function NoteView({
   useEffect(() => {
     if (draft === null || !note.data || save.isPending) return
     const stored = note.data.body_md ?? ''
-    if (stored !== syncedBodyRef.current && stored !== draft) {
-      setChangedElsewhere(true)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note.data?.body_md, draft, save.isPending])
-
-  // Recover an autosaved draft a previous session couldn't persist — a teardown flush
-  // that failed transiently (its onSettled retry couldn't run once unmounted), or a
-  // tab killed before it ran. The mirror outlives the unmount in localStorage; on
-  // reopen, if it still differs from the stored body, restore it into the editor (in
-  // Markdown mode) and let autosave re-attempt the write. A mirror equal to the stored
-  // body is a stale leftover from a save that did land — just drop it. Runs once, only
-  // for editors, and never over an active in-memory draft.
-  useEffect(() => {
-    if (recovered.current || !editable || !note.data || note.data.archived || draft !== null) return
-    recovered.current = true
-    const mirror = readDraftMirror(noteId)
-    if (mirror === null) return
-    const stored = note.data.body_md ?? ''
-    if (mirror === stored) {
-      clearDraftMirror(noteId)
+    if (stored === syncedBodyRef.current || stored === draft) return
+    // Their edit landed over an editor holding NOTHING of ours: the draft is still
+    // exactly the body this session opened over, nothing is queued to save and no
+    // upload is in flight, so the user has typed nothing that adopting their version
+    // could lose. Take it silently instead of raising a banner that asks them to
+    // choose between their own untouched copy and the same text.
+    //
+    // Load-bearing, not cosmetic: the WYSIWYG editor is seeded once per `reseed` and
+    // never re-reads the query, so without the re-seed it would keep showing the body
+    // from before their edit — and the first keystroke into that stale doc would
+    // autosave it straight back over what they wrote. That matters most for the
+    // session the mount effect below opens BY ITSELF on an empty note: the user never
+    // asked for an editor, so an empty draft they never typed into must not become
+    // the thing that wipes a body someone else filled in meanwhile.
+    if (draft === syncedBodyRef.current && pendingSave.current === null && uploadsInFlight === 0) {
+      adoptStored(stored)
       return
     }
-    syncedBodyRef.current = stored
-    setDraft(mirror) // arms the autosave effect, which re-persists and re-mirrors it
-    setMode('markdown')
-    modeChosen.current = true // recovery outranks the empty-note default below
-    toast(cs.notes.draftRecovered)
+    setChangedElsewhere(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note.data, editable])
+  }, [note.data?.body_md, draft, save.isPending, uploadsInFlight])
 
-  // An empty note opens in Vizuální, not Číst. Číst has nothing to render for a note
-  // with no body, and an empty note is nearly always one just created from the "nová
-  // poznámka" dialog — which lands the user on a read-only tab, one click away from
-  // writing the thing they opened the dialog to write. This runs ONCE per mount: a
-  // deliberate switch back to Číst on a still-empty note must stick, and a note emptied
-  // by deleting its text must not yank the tab out from under the person deleting it.
-  // Declared after the recovery effect above so a rescued draft keeps its Markdown tab
-  // (both fire in the same commit; the ref, not the ordering of the state updates, is
-  // what decides).
+  // WHICH SURFACE A NOTE OPENS ON, settled ONCE per mount. One effect, not two, so the
+  // two candidates below can't race across a declaration order nobody would think to
+  // preserve — the earlier split needed a paragraph of comment to explain why it was
+  // safe, which is the tell.
+  //
+  // 1. A draft a previous session couldn't persist outranks everything: a teardown
+  //    flush that failed transiently (its onSettled retry couldn't run once unmounted),
+  //    or a tab killed before it ran. The mirror outlives the unmount in localStorage;
+  //    if it still differs from the stored body, restore it — in MARKDOWN, so the
+  //    rescued text is shown verbatim — and let autosave re-attempt the write. A mirror
+  //    equal to the stored body is a stale leftover from a save that DID land: drop it.
+  // 2. Otherwise an empty note opens in VIZUÁLNÍ, not Číst. Číst has nothing to render
+  //    for a note with no body, and an empty note is nearly always one just created from
+  //    the "nová poznámka" dialog — which lands the user on a read-only tab, one click
+  //    away from writing the thing they opened the dialog to write. Blank counts as
+  //    empty: a body of "\n" renders as nothing and the user can't tell the two apart.
+  //
+  // Once, because a deliberate switch back to Číst on a still-empty note must stick, and
+  // a note emptied by deleting its text must not yank the tab out from under the person
+  // deleting it. Never for a reader (no editor to be dropped into), never over an
+  // archived note, and never over an active in-memory draft.
   useEffect(() => {
-    if (modeChosen.current || !editable || !note.data || note.data.archived || draft !== null) return
-    modeChosen.current = true
+    if (opened.current || !editable || !note.data || note.data.archived || draft !== null) return
+    opened.current = true
     const stored = note.data.body_md ?? ''
+    const mirror = readDraftMirror(noteId)
+    if (mirror !== null && mirror !== stored) {
+      openEditor('markdown', { stored, initial: mirror }) // arms autosave, which re-persists and re-mirrors it
+      toast(cs.notes.draftRecovered)
+      return
+    }
+    if (mirror !== null) clearDraftMirror(noteId)
     if (stored.trim() !== '') return
-    // Everything enterEdit does when it opens an editor over a null draft, and for its
-    // reasons: this IS an edit session, the user just didn't have to click for it.
-    //
-    // The BASELINE, so a body that is blank but not literally empty ("\n") doesn't read
-    // as someone else's edit and tell the user to reload a version identical to theirs.
-    syncedBodyRef.current = stored
-    // And the DRAFT, which is what puts the "změněno jinde" advisory on watch: it
-    // early-returns while the draft is null, and Crepe is seeded once per `reseed` and
-    // never re-reads the query. A null draft left this editor outside BOTH, so a body
-    // that arrived AFTER this effect ran — a week-old persisted cache catching up on
-    // reconnect, or another member's edit over the WS echo — left the user looking at an
-    // empty editor over a note that has text, unwarned until their own first keystroke.
-    // Seeding the draft with the stored body shows nothing different (it IS the body)
-    // and restores the advisory, and its "načíst jejich verzi" re-seed, from the start.
-    setDraft(stored)
-    setMode('visual')
+    // The baseline AND the draft, exactly as a tab click would set them: this IS an edit
+    // session, the user just didn't have to ask for it. The baseline keeps a body that is
+    // blank but not literally empty ("\n") from reading as someone else's edit and
+    // offering to reload a version identical to this one. The draft is what puts the
+    // conflict effect above on watch — it early-returns while the draft is null — so a
+    // body arriving after this runs (a persisted cache catching up on reconnect, another
+    // member's edit over the WS echo) is adopted into the editor instead of being sat on
+    // by a surface that never re-reads the query.
+    openEditor('visual', { stored, initial: stored })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note.data, editable])
 
@@ -540,20 +575,11 @@ export function NoteView({
       : cs.notes.root
   const body = draft ?? n.body_md ?? ''
 
-  const enterEdit = (m: Exclude<Mode, 'read'>) => {
-    if (draft === null) {
-      setDraft(n.body_md ?? '')
-      syncedBodyRef.current = n.body_md ?? ''
-    }
-    if (m === 'visual') {
-      setReseed((r) => r + 1)
-      // Seeding Crepe from a draft that still holds an upload placeholder gives it a token
-      // it cannot resolve; remember that so the effect above re-seeds it once the uploads
-      // land. (Entering Vizuální with nothing in flight seeds clean — the common case.)
-      staleSeed.current = pendingTokens.current.size > 0
-    }
-    setMode(m)
-  }
+  // A tab click into an editor. A null draft means no session is open yet, so this one
+  // starts it from the stored body; otherwise we're just moving between two views of a
+  // session that is already running and its draft/baseline stay untouched.
+  const enterEdit = (m: Exclude<Mode, 'read'>) =>
+    openEditor(m, draft === null ? { stored: n.body_md ?? '', initial: n.body_md ?? '' } : undefined)
 
   // Swap `from` for `to` in the LIVE draft (a functional update, not a stale snapshot),
   // so edits typed while an upload was in flight survive. A null draft means it was
@@ -676,10 +702,7 @@ export function NoteView({
     pendingSave.current = null
     clearDraftMirror(noteId)
     saveFailed.current = false
-    setDraft(n.body_md ?? '')
-    syncedBodyRef.current = n.body_md ?? ''
-    setReseed((r) => r + 1)
-    staleSeed.current = false // re-seeded from the stored body, which holds no placeholders
+    adoptStored(n.body_md ?? '')
     setChangedElsewhere(false)
   }
 

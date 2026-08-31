@@ -15,9 +15,10 @@ import { NoteView } from './NoteView'
 // visible verbatim), and a deliberate switch back to Číst.
 
 const getNote = vi.hoisted(() => vi.fn())
+const updateNote = vi.hoisted(() => vi.fn())
 vi.mock('./api/endpoints', () => ({
   getNote,
-  updateNote: vi.fn(),
+  updateNote,
   pinNote: vi.fn(),
   unpinNote: vi.fn(),
   uploadNoteImage: vi.fn(),
@@ -68,6 +69,18 @@ const note = (body_md: string | null): NoteDetail => ({
   pinned: { household: false, personal: false },
 })
 
+// updateNote has to RESOLVE A NOTE: the component's onSuccess reads `d.body_md` off
+// whatever comes back, so a bare vi.fn() (resolving undefined) would throw in there and
+// send every autosave a test happens to trigger down the save-FAILURE path — toast,
+// retry backoff and all — while looking like it saved.
+function resetApi() {
+  auth.canWrite = true
+  localStorage.clear()
+  getNote.mockReset()
+  updateNote.mockReset()
+  updateNote.mockImplementation(async (_id: string, patch: { body_md?: string }) => note(patch.body_md ?? ''))
+}
+
 function renderNote() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const view = render(
@@ -88,11 +101,7 @@ const emit = () => screen.getByRole('button', { name: 'emit' })
 const conflictBanner = () => screen.queryByRole('button', { name: cs.notes.reloadTheirs })
 
 describe('NoteView opening mode', () => {
-  beforeEach(() => {
-    auth.canWrite = true
-    localStorage.clear()
-    getNote.mockReset()
-  })
+  beforeEach(resetApi)
 
   it('opens an empty note in Vizuální', async () => {
     getNote.mockResolvedValue(note(''))
@@ -167,19 +176,29 @@ describe('NoteView opening mode', () => {
 })
 
 // The editor this opens by itself is a real edit session and has to be watched like
-// one. Crepe is seeded once and never re-reads the query, so the ONLY thing that can
-// tell the user their empty editor is standing over a note that has since gained text
-// is the "změněno jinde" advisory — which stays dormant while the draft is null.
+// one. Crepe is seeded once and never re-reads the query, so an empty editor standing
+// over a note that has since gained text will save its empty doc back over that text on
+// the first keystroke unless something intervenes. Nothing was typed into it, so the
+// note's own body is taken silently; once something HAS been typed, the "změněno jinde"
+// advisory puts the choice to the user instead.
 describe('NoteView auto-opened editor and the changed-elsewhere advisory', () => {
-  beforeEach(() => {
-    auth.canWrite = true
-    localStorage.clear()
-    getNote.mockReset()
+  beforeEach(resetApi)
+
+  // Opening a note must not, by itself, write anything: the seeded draft IS the note's
+  // body, so autosave has nothing to persist and the durable mirror stays empty. The
+  // teardown flush is where an unwanted save would surface, so unmount and look.
+  it('saves nothing just by opening an empty note', async () => {
+    getNote.mockResolvedValue(note('\n\n   \n'))
+    const { unmount } = renderNote()
+    await screen.findByTestId('visual-editor')
+    unmount()
+    expect(updateNote).not.toHaveBeenCalled()
+    expect(localStorage.getItem(`poznamky:draft:${NOTE_ID}`)).toBeNull()
   })
 
-  // A body arriving after the mode was chosen: a persisted cache catching up on
+  // A body arriving after the surface was chosen: a persisted cache catching up on
   // reconnect, or another member's edit refetched off the WS echo.
-  it('warns when the note gains a body while the auto-opened editor sits on the empty one', async () => {
+  it('adopts a body that arrives while the auto-opened editor sits on the empty one', async () => {
     getNote.mockResolvedValue(note(''))
     const { qc } = renderNote()
     await screen.findByTestId('visual-editor')
@@ -187,7 +206,22 @@ describe('NoteView auto-opened editor and the changed-elsewhere advisory', () =>
     // The query observer notifies on a timer, not a microtask, so the assertion has to
     // wait for the render rather than assume act() already produced it.
     qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
+    // Re-seeded, not just noticed: the editor is showing their text, so the next
+    // keystroke lands on top of it instead of replacing it.
+    expect(await screen.findByText('nákup: mléko')).toBeInTheDocument()
+    expect(conflictBanner()).not.toBeInTheDocument()
+  })
+
+  // The adopt is only ever silent while there is nothing to lose. Once the user has
+  // typed, their text and the arriving one are a real conflict and it goes to them.
+  it('still warns when a body arrives after the user has typed', async () => {
+    getNote.mockResolvedValue(note(''))
+    const { qc } = renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(emit())
+    qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
     expect(await screen.findByRole('button', { name: cs.notes.reloadTheirs })).toBeInTheDocument()
+    expect(screen.getByText(EMITTED)).toBeInTheDocument() // their version is offered, not imposed
   })
 
   // The blank-but-not-empty body is the case the conflict baseline is taken for: with
