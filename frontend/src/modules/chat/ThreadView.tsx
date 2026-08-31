@@ -137,6 +137,58 @@ export function ThreadView({ conversationID, onOpenMembers }: {
   }, [newest?.id, conversationID, conversation.data])
 
   /**
+   * ⚠ THE BOX CAN SHRINK UNDER SOMEBODY WHO IS AT THE BOTTOM, and a scroll box that
+   * shrinks keeps its `scrollTop` — so the newest messages slide out below the fold
+   * with nobody having scrolled. On a phone that now happens every time the keyboard
+   * opens: the shell hands chat the strip left above it (useSoftKeyboard) and this
+   * pane loses the keyboard's height in one frame, which would have taken the
+   * message somebody is answering off the screen at the moment they started
+   * answering it. The same shrink arrives from the composer, which grows a row for a
+   * reply chip, an attachment list and a rejected file.
+   *
+   * ⚠ AND IT FOLLOWS ONLY SOMEBODY ALREADY AT THE BOTTOM, for the reason the live
+   * message above does: moving the view under a member reading history is the bug,
+   * not the fix.
+   */
+  /**
+   * ⚠ THE FLAG IS THE RENDER GATE, NOT THE DATA (review round 4). "Is there data" and
+   * "is the box on screen" are not the same question, because a refetch that FAILS
+   * KEEPS ITS DATA: the query flips to error, the early returns below hand back the
+   * retry screen instead of the box, and a `conversation.data && thread.data` flag
+   * never moves. So the effect neither disconnected from the box that went away nor
+   * observed the one the retry brought back — it spent the rest of the mount watching
+   * a detached node while the live box had no observer at all, and the re-pin above
+   * silently stopped happening. One backend restart mid-conversation (a Coolify
+   * rebuild is enough) took this whole fix away until the member left the room and
+   * came back. The three early returns are what decide whether the box exists, so
+   * they are what this has to read.
+   */
+  const boxMounted =
+    !conversation.isPending && !thread.isPending && !conversation.isError && !thread.isError
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    // ⚠ ONLY A SHRINK MOVES ANYTHING (review round 3). A box that GROWS keeps its own
+    // bottom: `scrollTop` was at its maximum, that maximum falls as `clientHeight`
+    // rises, and the browser clamps to it — so the keyboard leaving, or the composer
+    // handing a row back, needs nothing from here. It also takes the observer's FIRST
+    // delivery out of the picture, which reports the box's starting size and was
+    // re-doing the pin the effect above had just done on the same commit.
+    let height = el.clientHeight
+    const observer = new ResizeObserver(() => {
+      const shrank = el.clientHeight < height
+      height = el.clientHeight
+      if (shrank && atBottom.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+    // ⚠ THE DEP IS "IS THE BOX RENDERED", NOT THE DATA. `thread.data` would tear the
+    // observer down and build another on every arriving message — the churn the one
+    // scroll handler below was consolidated to remove — for an element that does not
+    // change again for the life of the mount.
+  }, [boxMounted])
+
+  /**
    * Loading older messages PREPENDS above the viewport, so without an anchor the
    * content under the member's eyes jumps down by the height of the page they just
    * asked for — they press *Načíst starší* and lose their place, which is the one
