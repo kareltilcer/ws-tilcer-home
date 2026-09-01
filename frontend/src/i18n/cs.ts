@@ -139,6 +139,7 @@ export const cs = {
     goneTitle: 'Poznámka už není dostupná',
     goneBody: 'Někdo ji mezitím smazal. Zavři toto okno.',
     bodyPlaceholder: 'Piš v Markdownu…',
+    visualPlaceholder: 'Začni psát…',
     // organisation
     rename: 'Přejmenovat',
     move: 'Přesunout',
