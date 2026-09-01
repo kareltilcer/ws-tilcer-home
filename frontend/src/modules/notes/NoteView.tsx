@@ -13,11 +13,15 @@ import { useAuth } from '@/app/auth'
 import { routes } from '@/app/routes'
 import { Spinner } from '@/components/ui/ui'
 import { MarkdownView } from '@/components/common/MarkdownView'
+import { VisualToolbar } from './VisualToolbar'
 import { MAX_INLINE_IMAGE_DATA_LEN } from './inlineImage'
+import type { NoteEditorHandle } from './MilkdownEditor'
 
 // Milkdown (Crepe) is heavy (ProseMirror + CodeMirror). Lazy-load it so it stays
 // out of the landing bundle and is fetched only when someone opens the WYSIWYG
-// ("Vizuální") mode — the read/Markdown modes need none of it.
+// ("Vizuální") mode — the read/Markdown modes need none of it. VisualToolbar is
+// deliberately NOT part of that chunk: it only names commands (a type-only import,
+// erased at build), so the bar can render while Crepe is still being fetched.
 const MilkdownEditor = lazy(() => import('./MilkdownEditor').then((m) => ({ default: m.MilkdownEditor })))
 
 type Mode = 'read' | 'visual' | 'markdown'
@@ -184,6 +188,7 @@ export function NoteView({
   const staleSeed = useRef(false) // the WYSIWYG editor was seeded from a draft holding placeholders
   const draftRef = useRef<string | null>(null) // latest draft, readable from the []-deps unmount flush
   draftRef.current = draft
+  const editorRef = useRef<NoteEditorHandle>(null) // the Vizuální toolbar's way into the editor
 
   // openEditor is the ONE way an edit session starts, so the three ways in — the tab
   // click, a draft rescued on mount, and the empty note that opens itself — cannot
@@ -807,6 +812,7 @@ export function NoteView({
               type="button"
               onClick={copyLink}
               title={cs.notes.copyLinkTitle}
+              aria-label={cs.notes.copyLinkLabel}
               className="inline-flex h-[34px] items-center gap-1.5 rounded-md border border-border bg-s2 px-3 text-[12.5px] font-semibold text-fg hover:bg-s3"
             >
               <Link2 size={14} className="text-accent" /> {cs.notes.copyLink}
@@ -949,6 +955,10 @@ export function NoteView({
         )}
       </div>
 
+      {/* Formatting bar — Vizuální only, and outside the scroller below so it stays put
+          while a long note scrolls under it. */}
+      {mode === 'visual' && <VisualToolbar onCommand={(command) => editorRef.current?.format(command)} />}
+
       {/* Body */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6">
         {mode === 'read' && <MarkdownView>{body}</MarkdownView>}
@@ -972,6 +982,7 @@ export function NoteView({
           >
             <MilkdownEditor
               key={`${noteId}-${reseed}`}
+              ref={editorRef}
               noteId={noteId}
               defaultValue={body}
               onChange={editDraft}

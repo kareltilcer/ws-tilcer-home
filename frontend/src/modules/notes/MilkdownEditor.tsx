@@ -1,9 +1,24 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import { Crepe } from '@milkdown/crepe'
+import { commandsCtx, editorViewCtx } from '@milkdown/kit/core'
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
+import type { Ctx } from '@milkdown/kit/ctx'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import {
+  blockquoteSchema,
+  bulletListSchema,
+  headingSchema,
+  inlineCodeSchema,
+  paragraphSchema,
+  setBlockTypeCommand,
+  toggleEmphasisCommand,
+  toggleInlineCodeCommand,
+  toggleStrongCommand,
+  wrapInBlockTypeCommand,
+} from '@milkdown/kit/preset/commonmark'
+import { toggleLinkCommand } from '@milkdown/kit/component/link-tooltip'
 import { toast } from 'sonner'
 import '@milkdown/crepe/theme/common/style.css'
 import './crepe-theme.css'
@@ -290,11 +305,85 @@ function inlineImageUploads(opts: {
   }
 }
 
+// NoteFormatCommand is the closed set the Vizuální toolbar can ask for: the minimal bar
+// the design draws (headings, bold/italic, list, quote, code, link) and no more — this is
+// a household notes app, not a CMS. The toolbar itself lives in the host, because it has
+// to sit outside the scrolling body; naming commands rather than exporting milkdown's own
+// is what lets it do that without dragging ProseMirror into the landing bundle.
+export type NoteFormatCommand = 'h1' | 'h2' | 'bold' | 'italic' | 'bulletList' | 'quote' | 'code' | 'link'
+
+// NoteEditorHandle is the toolbar's whole reach into the editor.
+export type NoteEditorHandle = { format: (command: NoteFormatCommand) => void }
+
+// applyFormat maps one toolbar command onto milkdown's commands. The mapping mirrors
+// Crepe's own `top-bar` feature (which ships disabled, and English) command for command,
+// so the toolbar, the slash menu and the keymap can never disagree about what a given
+// piece of formatting means.
+function applyFormat(ctx: Ctx, command: NoteFormatCommand) {
+  const commands = ctx.get(commandsCtx)
+  const view = ctx.get(editorViewCtx)
+  switch (command) {
+    case 'h1':
+    case 'h2': {
+      // Two buttons and no "normal text" entry beside them, so a heading button is also
+      // the only way back OUT of a heading: on a block that already is this level, return
+      // it to a paragraph rather than re-applying the level it has, which would look like
+      // a dead button.
+      const level = command === 'h1' ? 1 : 2
+      const { parent } = view.state.selection.$from
+      const active = parent.type === headingSchema.type(ctx) && parent.attrs.level === level
+      commands.call(
+        setBlockTypeCommand.key,
+        active ? { nodeType: paragraphSchema.type(ctx) } : { nodeType: headingSchema.type(ctx), attrs: { level } },
+      )
+      break
+    }
+    case 'bold':
+      commands.call(toggleStrongCommand.key)
+      break
+    case 'italic':
+      commands.call(toggleEmphasisCommand.key)
+      break
+    case 'bulletList':
+      commands.call(wrapInBlockTypeCommand.key, { nodeType: bulletListSchema.type(ctx) })
+      break
+    case 'quote':
+      commands.call(wrapInBlockTypeCommand.key, { nodeType: blockquoteSchema.type(ctx) })
+      break
+    case 'code': {
+      // With nothing selected there is no range to mark, so toggling code has to arm the
+      // NEXT characters typed instead — a stored mark. Without this the button does
+      // nothing at all on an empty caret, which is exactly where someone reaches for it.
+      const { state } = view
+      if (!state.selection.empty) {
+        commands.call(toggleInlineCodeCommand.key)
+        break
+      }
+      const markType = inlineCodeSchema.type(ctx)
+      const armed = (state.storedMarks ?? state.selection.$from.marks()).some((m) => m.type === markType)
+      view.dispatch(armed ? state.tr.removeStoredMark(markType) : state.tr.addStoredMark(markType.create()))
+      break
+    }
+    case 'link':
+      // The LINK TOOLTIP's ToggleLink, not commonmark's: it opens the URL editor over the
+      // selection and focuses that input a frame later, so this branch returns without
+      // pulling focus back into the doc. Commonmark's would apply a link mark with an
+      // empty href and leave no way to fill one in.
+      commands.call(toggleLinkCommand.key)
+      return
+  }
+  // A keyboard activation (Tab to the button, Enter) genuinely moved focus out of the
+  // editor — the pointer path never does, since the button prevents its own mousedown.
+  // Put the caret back either way, so typing continues where the formatting just landed.
+  view.focus()
+}
+
 export function MilkdownEditor({
   noteId,
   defaultValue,
   onChange,
   onInlineImage,
+  ref,
 }: {
   noteId: string
   defaultValue: string
@@ -304,8 +393,30 @@ export function MilkdownEditor({
   // uploaded here instead would put the image outside the host's autosave hold and lose it
   // whenever this editor is torn down mid-upload.
   onInlineImage: (src: string) => InlineImageUpload
+  // The formatting toolbar's handle. It goes live only between the two points where
+  // `editor.action` can reach a view — see `ready` below — and no-ops before and after.
+  ref?: Ref<NoteEditorHandle>
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
+  // The created editor, or null while it is still mounting / after it is torn down.
+  // `editor.action` reads the view out of the ctx, which exists only in between.
+  const ready = useRef<Crepe | null>(null)
+  useImperativeHandle(
+    ref,
+    () => ({
+      format: (command) => {
+        const crepe = ready.current
+        if (!crepe) return
+        try {
+          crepe.editor.action((ctx) => applyFormat(ctx, command))
+        } catch {
+          /* a command that cannot apply where the caret is (no valid wrapping, a stale
+             position) is a no-op, not something the user can act on */
+        }
+      },
+    }),
+    [],
+  )
   // Keep the latest callbacks without re-running the create effect.
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -417,12 +528,14 @@ export function MilkdownEditor({
       .then(() => {
         if (disposed) return
         baseline = crepe.getMarkdown()
+        ready.current = crepe // the toolbar can reach a view from here on
       })
       .catch(() => {
         /* editor failed to mount — the raw Markdown tab remains the escape hatch */
       })
     return () => {
       disposed = true
+      ready.current = null
       void crepe.destroy()
     }
     // Intentionally create once; remount via `key` to change the note/content.
