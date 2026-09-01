@@ -502,7 +502,12 @@ export function DokumentyPage() {
 
       {createFolder && (
         <CreateFolderDialog
-          location={currentFolderId() ? (idx.folderNamePathById.get(currentFolderId()!) ?? '') : cs.documents.rootLocation}
+          location={(() => {
+            const f = currentFolderId()
+            if (f) return idx.folderNamePathById.get(f) ?? ''
+            // The ROOT the create lands in is the one on screen (D40, same as Poznámky).
+            return scope === 'private' ? cs.privacy.rootLocationDocuments : cs.documents.rootLocation
+          })()}
           pending={createFolderMut.isPending}
           onSubmit={(name, icon) => createFolderMut.mutate({ name, icon })}
           onClose={() => setCreateFolder(false)}
@@ -846,7 +851,7 @@ function FolderPane({ p, node }: { p: ViewProps; node: DocFolderNode | null }) {
 
       <div className="om-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {empty ? (
-          <EmptyState root={isRoot} scope={p.scope} canWrite={p.canWrite} onUpload={p.onPickFiles} />
+          <EmptyState root={isRoot} scope={p.scope} canWrite={p.canWrite} onUpload={p.onPickFiles} onCreateFolder={p.onCreateFolder} />
         ) : (
           <>
             {folders.length > 0 && (
@@ -953,7 +958,7 @@ function MobileView(p: ViewProps) {
         {p.searching ? (
           <SearchResults p={p} />
         ) : empty ? (
-          <EmptyState root={!node} scope={p.scope} canWrite={p.canWrite} onUpload={p.onPickFiles} />
+          <EmptyState root={!node} scope={p.scope} canWrite={p.canWrite} onUpload={p.onPickFiles} onCreateFolder={p.onCreateFolder} />
         ) : (
           <>
             {folders.length > 0 && (
@@ -1199,16 +1204,24 @@ function SearchResults({ p }: { p: ViewProps }) {
 // there says nothing about who can see the tree, and leaves Dokumenty out of step
 // with Poznámky, whose EmptyRoot has done this since the branch started (D40: one
 // behaviour, two implementations).
+//
+// ⚠ It offers the FOLDER action beside the upload, for the reason the Poznámky
+// twin now does (D40). Dokumenty was never stranded the way Poznámky was — its
+// mobile header renders above this state, folder button and all — but an empty
+// tree whose one offer is "nahrát" says the tree is a pile of files, and a
+// household that never makes the first folder never makes the second.
 function EmptyState({
   root,
   scope,
   canWrite,
   onUpload,
+  onCreateFolder,
 }: {
   root: boolean
   scope: Scope
   canWrite: boolean
   onUpload: () => void
+  onCreateFolder: () => void
 }) {
   const priv = root && scope === 'private'
   return (
@@ -1230,9 +1243,14 @@ function EmptyState({
           {priv ? cs.privacy.emptyDocumentsBody : root ? cs.documents.emptyRootBody : cs.documents.emptyFolderBody}
         </p>
         {canWrite && (
-          <Button variant="primary" onClick={onUpload}>
-            <Upload size={16} aria-hidden /> {cs.documents.upload}
-          </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button variant="primary" onClick={onUpload}>
+              <Upload size={16} aria-hidden /> {cs.documents.upload}
+            </Button>
+            <Button onClick={onCreateFolder}>
+              <FolderPlus size={16} aria-hidden /> {cs.documents.createFolderFull}
+            </Button>
+          </div>
         )}
       </div>
     </div>

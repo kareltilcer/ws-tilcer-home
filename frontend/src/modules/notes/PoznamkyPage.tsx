@@ -401,7 +401,9 @@ export function PoznamkyPage() {
           kind={create.kind}
           location={(() => {
             const p = createParentId()
-            return p ? idx.folderById.get(p)?.name ?? cs.notes.root : cs.notes.rootLocation
+            if (p) return idx.folderById.get(p)?.name ?? cs.notes.root
+            // The ROOT the create lands in is the one on screen, so name that one.
+            return scope === 'private' ? cs.privacy.rootLocationNotes : cs.notes.rootLocation
           })()}
           pending={createMut.isPending}
           onSubmit={(name, icon) => createMut.mutate({ name, icon })}
@@ -690,7 +692,8 @@ function FolderPane(p: ViewProps) {
   const childNotes = p.idx.childItems.get(p.sel.folderId) ?? []
   const empty = childFolders.length === 0 && childNotes.length === 0
 
-  if (p.rootEmpty && !searching) return <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} scope={p.scope} />
+  if (p.rootEmpty && !searching)
+    return <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} onCreateFolder={p.onCreateFolder} scope={p.scope} />
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -720,7 +723,7 @@ function FolderPane(p: ViewProps) {
         {searching ? (
           <SearchResults p={p} />
         ) : empty ? (
-          <EmptyFolder canWrite={p.canWrite} onCreate={p.onCreateNote} />
+          <EmptyFolder canWrite={p.canWrite} onCreate={p.onCreateNote} onCreateFolder={p.onCreateFolder} />
         ) : (
           <>
             {childFolders.map((node) => (
@@ -875,7 +878,7 @@ function MobileView(p: ViewProps) {
     return (
       <>
         {switcher}
-        <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} scope={p.scope} />
+        <EmptyRoot canWrite={p.canWrite} onCreate={p.onCreateNote} onCreateFolder={p.onCreateFolder} scope={p.scope} />
       </>
     )
 
@@ -923,7 +926,7 @@ function MobileView(p: ViewProps) {
         {searching ? (
           <SearchResults p={p} />
         ) : empty ? (
-          <EmptyFolder canWrite={p.canWrite} onCreate={p.onCreateNote} />
+          <EmptyFolder canWrite={p.canWrite} onCreate={p.onCreateNote} onCreateFolder={p.onCreateFolder} />
         ) : (
           <>
             {childFolders.map((node) => (
@@ -992,14 +995,36 @@ function SmallBtn({ onClick, children, danger, full }: { onClick: () => void; ch
   )
 }
 
-// EmptyRoot is two states, not one.
+// EmptyRoot is two states, not one — and on BOTH of them the tree is empty, so
+// whatever it offers is the whole of what the page can do.
 //
 // ⚠ The EMPTY PRIVATE ROOT is the state every member sees on day one, and it is
 // the only place the whole feature ever gets to say what it is FOR. So it is
 // written copy rather than a shrug — and it is careful not to overpromise:
 // "nobody else, not even an admin" is true; anything implying encryption is not
 // (an admin with the database file reads everything).
-function EmptyRoot({ canWrite, onCreate, scope }: { canWrite: boolean; onCreate: () => void; scope: Scope }) {
+//
+// ⚠ AND IT OFFERS BOTH CREATE ACTIONS, not just the note. On MOBILE this state is
+// an early return in MobileView: the header row that carries the folder button
+// never renders, so a phone standing in an empty root — the day-one screen —
+// could reach no way to make a folder at all. The only route to one was to create
+// a note first, purely to get the header back. The body copy had been naming the
+// missing action the whole time ("nebo si obsah roztřiďte do složek").
+//
+// Both buttons render on desktop too, where the toolbar already carries the pair.
+// That is the same duplication the note button has always had, and the empty state
+// is where somebody with nothing on screen looks.
+function EmptyRoot({
+  canWrite,
+  onCreate,
+  onCreateFolder,
+  scope,
+}: {
+  canWrite: boolean
+  onCreate: () => void
+  onCreateFolder: () => void
+  scope: Scope
+}) {
   const priv = scope === 'private'
   return (
     <div className="grid flex-1 place-items-center py-16 text-center">
@@ -1015,16 +1040,37 @@ function EmptyRoot({ canWrite, onCreate, scope }: { canWrite: boolean; onCreate:
         <p className="mb-1.5 text-lg font-bold">{priv ? cs.privacy.emptyNotesTitle : cs.notes.emptyRootTitle}</p>
         <p className="mb-4 text-sm text-muted text-pretty">{priv ? cs.privacy.emptyNotesBody : cs.notes.emptyRootBody}</p>
         {canWrite && (
-          <button type="button" onClick={onCreate} className="h-10 rounded-md bg-accent px-4 text-sm font-bold text-accent-fg">
-            {cs.notes.createNoteFull}
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button type="button" onClick={onCreate} className="h-10 rounded-md bg-accent px-4 text-sm font-bold text-accent-fg">
+              {cs.notes.createNoteFull}
+            </button>
+            <button
+              type="button"
+              onClick={onCreateFolder}
+              className="inline-flex h-10 items-center gap-1.5 rounded-md border border-border bg-s2 px-4 text-sm font-bold text-fg hover:bg-s3"
+            >
+              <FolderPlus size={15} aria-hidden /> {cs.notes.createFolderFull}
+            </button>
+          </div>
         )}
       </div>
     </div>
   )
 }
 
-function EmptyFolder({ canWrite, onCreate }: { canWrite: boolean; onCreate: () => void }) {
+// The same pair inside a folder. Here the mobile header IS rendered, so the folder
+// button is a second route rather than the only one — but an empty state that
+// names one of the two things you can put in a folder reads as the only thing you
+// can put in a folder, and the folder tree is the whole point of the module.
+function EmptyFolder({
+  canWrite,
+  onCreate,
+  onCreateFolder,
+}: {
+  canWrite: boolean
+  onCreate: () => void
+  onCreateFolder: () => void
+}) {
   return (
     <div className="grid place-items-center py-12 text-center">
       <div>
@@ -1032,9 +1078,18 @@ function EmptyFolder({ canWrite, onCreate }: { canWrite: boolean; onCreate: () =
         <p className="mb-1 font-semibold">{cs.notes.emptyFolderTitle}</p>
         <p className="mb-3.5 text-sm text-muted text-pretty">{cs.notes.emptyFolderBody}</p>
         {canWrite && (
-          <button type="button" onClick={onCreate} className="h-9 rounded-md bg-accent px-4 text-sm font-bold text-accent-fg">
-            {cs.notes.noteHere}
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button type="button" onClick={onCreate} className="h-9 rounded-md bg-accent px-4 text-sm font-bold text-accent-fg">
+              {cs.notes.noteHere}
+            </button>
+            <button
+              type="button"
+              onClick={onCreateFolder}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-s2 px-4 text-sm font-bold text-fg hover:bg-s3"
+            >
+              <FolderPlus size={14} aria-hidden /> {cs.notes.folderHere}
+            </button>
+          </div>
         )}
       </div>
     </div>
