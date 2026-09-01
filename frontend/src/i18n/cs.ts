@@ -107,7 +107,9 @@ export const cs = {
     newFolder: 'Složka',
     newNote: 'Poznámka',
     createNoteFull: 'Vytvořit poznámku',
+    createFolderFull: 'Vytvořit složku',
     noteHere: 'Poznámka sem',
+    folderHere: 'Složka sem',
     root: 'Poznámky',
     tree: 'Strom složek',
     readOnly: 'Jen pro čtení',
@@ -210,6 +212,7 @@ export const cs = {
     rootLocation: 'Dokumenty (kořen)',
     tree: 'Strom složek',
     newFolder: 'Složka',
+    createFolderFull: 'Vytvořit složku',
     upload: 'Nahrát dokument',
     uploadShort: 'Nahrát',
     viewList: 'Seznam',
@@ -1195,6 +1198,16 @@ export const cs = {
     /** Page subtitle in the private root — says who can see it, and no more. */
     subtitleNotes: 'Jen pro tebe — nikdo jiný je nevidí',
     subtitleDocuments: 'Jen pro tebe — nikdo jiný je nevidí',
+    /**
+     * What the create dialog calls the root it is about to create in.
+     *
+     * ⚠ Carrier 5 lands HERE too. Both pages fell back to the SHARED label
+     * ('Poznámky (kořen)') whenever the parent was null, so a folder started in
+     * the private root was confirmed against the name of the other tree — on the
+     * one screen whose whole job is to say where the thing will land.
+     */
+    rootLocationNotes: 'Soukromé poznámky (kořen)',
+    rootLocationDocuments: 'Soukromé dokumenty (kořen)',
     emptyNotesTitle: 'Tvoje soukromé poznámky',
     emptyNotesBody:
       'Sem si můžeš psát, co nepatří celé domácnosti. Nikdo jiný to neuvidí — ani správce. Kdykoli později můžeš jednotlivou poznámku publikovat do sdílených.',
