@@ -1676,6 +1676,15 @@ paths:
         The original for natively-previewable types (preview_kind="native": PDF, image,
         text), else the derived preview PDF (preview_kind="pdf"). 409 while the preview is
         pending or if it failed; 204 if the type is download-only (preview_kind="none").
+
+        A PDF response carries `Content-Security-Policy: sandbox allow-scripts
+        allow-downloads`. The relaxation is scoped to application/pdf on THIS endpoint
+        (/raw keeps the bare `sandbox`) and never grants `allow-same-origin`, so the frame
+        stays origin-opaque (D48); `allow-downloads` is what lets Chrome for Android's
+        in-frame placeholder hand the file to the platform viewer. Since the bytes are
+        cached for a year, the SPA frames `?sandbox=<n>` — a cache key the server ignores,
+        bumped whenever that policy changes — while the permanent URL stays clean. The
+        policy is also re-sent on a 304, so revalidating refreshes a stored one.
       responses:
         "200":
           description: The previewable bytes (image, text, or application/pdf)

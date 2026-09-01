@@ -57,11 +57,22 @@ const (
 // word "preview" — whose only job is to hand the file to the platform viewer, which
 // it does by starting a DOWNLOAD from inside the frame. Without this token that
 // download is refused and the button is simply dead, which is the entire mobile
-// preview experience. It grants the framed document nothing it could not already
-// get: /download serves the same bytes to the same session, one button up in the
-// header. Both this header and the iframe's own `sandbox` attribute must carry the
-// token — they are ANDed, so relaxing one alone changes nothing (see PdfPreview in
-// frontend/src/modules/documents/DocumentView.tsx).
+// preview experience.
+//
+// What the token grants is WIDER than what the button uses, and the honest version
+// of that is worth writing down: a document allowed to start downloads may start
+// them for any URL it can reach, not only for its own bytes. It is acceptable here
+// and would not be everywhere — the only script that runs in this frame is Chrome's
+// own PDF viewer, which exposes no network-capable JavaScript to the document, and a
+// download hands bytes TO the reader rather than out of the household. The line that
+// is never crossed is still `allow-same-origin`.
+//
+// Both this header and the iframe's own `sandbox` attribute must carry the token —
+// they are ANDed, so relaxing one alone changes nothing (see PdfPreview in
+// frontend/src/modules/documents/DocumentView.tsx). ⚠ CHANGING THIS VALUE IS NOT
+// ENOUGH ON ITS OWN: a /preview response is cached `immutable` for a year, so the
+// frame must be pointed at a new URL for the new policy to be fetched at all —
+// PdfPreview carries that cache key and the comment there explains it.
 const pdfSandbox = "sandbox allow-scripts allow-downloads"
 
 // strictSandbox is the default for everything else: no capabilities at all.
@@ -102,6 +113,14 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 		// ETag would get a 304 — "yes, and it hasn't changed" — for a document they
 		// may not see.
 		setContentCache(w, etag, sd.Visibility == visibilityPrivate)
+		// The isolation policy rides on the 304 as well, and that is not decoration:
+		// a cache updates a stored response's header fields from the 304 it
+		// revalidated with, so a policy sent only alongside the bytes is frozen into
+		// every cache entry at the moment it was first stored. Without this line a
+		// private document — which revalidates on every single view (D208) — would
+		// go on enforcing whatever sandbox it was first served with, and a tightening
+		// after some future PDF-viewer CVE would reach nobody who already has the file.
+		setIsolationPolicy(w, mode, contentType)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -225,15 +244,23 @@ func (h *Handler) resolveRange(w http.ResponseWriter, r *http.Request, id, key s
 // storage blip breaks that document in that browser for a year.
 func writeContentHeaders(w http.ResponseWriter, sd storedDocument, mode contentMode, contentType, etag string) {
 	setContentCache(w, etag, sd.Visibility == visibilityPrivate)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	setIsolationPolicy(w, mode, contentType)
 	w.Header().Set("Content-Type", mimeTypeHeader(contentType))
-	if isPDF(contentType) && mode == contentPreview {
-		w.Header().Set("Content-Security-Policy", pdfSandbox)
-	} else {
-		w.Header().Set("Content-Security-Policy", strictSandbox)
-	}
 	w.Header().Set("Content-Disposition", dispositionFor(mode, contentType, sd.OriginalFilename))
 	w.Header().Set("Accept-Ranges", "bytes")
+}
+
+// setIsolationPolicy stamps the two headers that ARE the D48 policy, as opposed to
+// the ones that merely describe the bytes. They are split out because they go on the
+// 304 too — see the If-None-Match branch in serveContent for why a policy that only
+// ever travels with the bytes cannot be changed afterwards.
+func setIsolationPolicy(w http.ResponseWriter, mode contentMode, contentType string) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if isPDF(contentType) && mode == contentPreview {
+		w.Header().Set("Content-Security-Policy", pdfSandbox)
+		return
+	}
+	w.Header().Set("Content-Security-Policy", strictSandbox)
 }
 
 // setContentCache stamps the cache validators. Only ever called on a response that

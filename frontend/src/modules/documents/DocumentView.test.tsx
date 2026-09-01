@@ -89,9 +89,11 @@ describe('DocumentView PDF preview', () => {
     renderDocument()
 
     await waitFor(() => expect(frame()).not.toBeNull())
-    const tokens = frame()!.getAttribute('sandbox')!.split(/\s+/)
-    expect(tokens).toContain('allow-scripts')
-    expect(tokens).toContain('allow-downloads')
+    // Exactly these two — the whole set, not a containment check. The Go half is
+    // pinned to the same string, and "contains allow-scripts" would have let a later
+    // allow-popups or allow-forms in without a word, which is the drift this file
+    // exists to catch.
+    expect(frame()!.getAttribute('sandbox')).toBe('allow-scripts allow-downloads')
   })
 
   it('never grants the frame same-origin access', async () => {
@@ -100,6 +102,18 @@ describe('DocumentView PDF preview', () => {
 
     await waitFor(() => expect(frame()).not.toBeNull())
     expect(frame()!.getAttribute('sandbox')).not.toContain('allow-same-origin')
+  })
+
+  // The response's CSP is the other half of the same sandbox, and a shared /preview is
+  // cached `immutable` for a year — so the frame has to ask for a URL the browser
+  // cannot already have an answer for, or the relaxation never reaches the phone that
+  // needed it. The permanent URL stays clean: it is what the fallback link uses.
+  it('frames a URL no year-old cache entry can answer', async () => {
+    getDocument.mockResolvedValue(doc())
+    renderDocument()
+
+    await waitFor(() => expect(frame()).not.toBeNull())
+    expect(frame()!.getAttribute('src')).toBe(`/api/documents/${DOC_ID}/preview?sandbox=2`)
   })
 
   it('offers the new-tab fallback for the browsers that refuse the frame', async () => {

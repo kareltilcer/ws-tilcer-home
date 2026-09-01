@@ -430,6 +430,20 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	if strings.Contains(csp, "allow-same-origin") {
 		t.Error("a preview must never be granted same-origin access")
 	}
+	// The policy rides on the 304 as well. A cache updates a stored response's header
+	// fields from the 304 it revalidated with, so a sandbox that only ever travels
+	// with the bytes is frozen into every cache entry the day it was first stored —
+	// and could never be tightened again on a client that already has the file.
+	rr = a.get("/api/documents/"+pdf.ID+"/preview", [2]string{"If-None-Match", `"` + pdf.Checksum + `"`})
+	if rr.Code != http.StatusNotModified {
+		t.Fatalf("preview If-None-Match = %d, want 304", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Security-Policy"); got != csp {
+		t.Errorf("304 preview CSP = %q, want the 200's %q", got, csp)
+	}
+	if rr.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Error("a 304 must refresh nosniff too, for the same reason")
+	}
 
 	// pending: an Office file whose conversion has not run yet.
 	docx := a.uploadOK("Podmínky.docx", zipBytes(), nil)
