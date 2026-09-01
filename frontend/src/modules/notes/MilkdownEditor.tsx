@@ -438,6 +438,9 @@ export function MilkdownEditor({
         // it would reappear on a blank line the user opened up mid-note — telling someone
         // already writing to start writing. `doc` shows it only while the note is empty.
         [Crepe.Feature.Placeholder]: { text: cs.notes.visualPlaceholder, mode: 'doc' },
+        // The URL editor the ↗ toolbar button opens. Its buttons are icons, so this
+        // placeholder is the whole of its copy — and it ships English.
+        [Crepe.Feature.LinkTooltip]: { inputPlaceholder: cs.notes.linkPlaceholder },
         // A pasted/dropped/picked image FILE goes straight to object storage; Crepe
         // awaits this and inserts the node already pointing at the returned URL.
         [Crepe.Feature.ImageBlock]: {

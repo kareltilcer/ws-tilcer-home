@@ -152,6 +152,9 @@ export const cs = {
     toolbarQuote: 'Citace',
     toolbarCode: 'Kód',
     toolbarLink: 'Odkaz',
+    // Crepe's link tooltip, which the ↗ button is the ordinary way into. Its own
+    // default is the English „Paste link…".
+    linkPlaceholder: 'Vlož odkaz…',
     // organisation
     rename: 'Přejmenovat',
     move: 'Přesunout',
