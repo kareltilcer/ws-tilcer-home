@@ -64,7 +64,7 @@ const doc = (overrides: Partial<DocumentDetail> = {}): DocumentDetail => ({
     permalink: `/d/${DOC_ID}`,
     raw: `/api/documents/${DOC_ID}/raw`,
     download: `/api/documents/${DOC_ID}/download`,
-    preview: `/api/documents/${DOC_ID}/preview?sandbox=2`,
+    preview: `/api/documents/${DOC_ID}/preview?sandbox=3`,
     thumbnail: `/api/documents/${DOC_ID}/thumbnail`,
   },
   ...overrides,
@@ -95,7 +95,7 @@ describe('DocumentView PDF preview', () => {
     // pinned to the same string, and "contains allow-scripts" would have let a later
     // allow-popups or allow-forms in without a word, which is the drift this file
     // exists to catch.
-    expect(frame()!.getAttribute('sandbox')).toBe('allow-scripts allow-downloads')
+    expect(frame()!.getAttribute('sandbox')).toBe('allow-scripts allow-downloads allow-popups')
   })
 
   it('never grants the frame same-origin access', async () => {

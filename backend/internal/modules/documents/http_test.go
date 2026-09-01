@@ -130,7 +130,7 @@ func TestHTTP_UploadStreamsMultipartAndAppliesMetadataFields(t *testing.T) {
 	// The preview URL carries the SERVER's sandbox cache key. It is pinned here
 	// because the client is not allowed to invent one: the key versions pdfSandbox,
 	// and the whole point of the server owning it is that the two cannot drift.
-	if d.Urls.Preview != "/api/documents/"+d.ID+"/preview?sandbox=2" {
+	if d.Urls.Preview != "/api/documents/"+d.ID+"/preview?sandbox=3" {
 		t.Errorf("preview url = %q, want the permanent path plus the sandbox cache key", d.Urls.Preview)
 	}
 }
@@ -432,8 +432,8 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	// allow-same-origin: the frame stays origin-opaque.
 	rr := a.get("/api/documents/" + pdf.ID + "/preview")
 	csp := rr.Header().Get("Content-Security-Policy")
-	if csp != "sandbox allow-scripts allow-downloads" {
-		t.Errorf("pdf preview CSP = %q, want \"sandbox allow-scripts allow-downloads\"", csp)
+	if csp != "sandbox allow-scripts allow-downloads allow-popups" {
+		t.Errorf("pdf preview CSP = %q, want \"sandbox allow-scripts allow-downloads allow-popups\"", csp)
 	}
 	if strings.Contains(csp, "allow-same-origin") {
 		t.Error("a preview must never be granted same-origin access")

@@ -52,26 +52,34 @@ const (
 // itself be an active document (HTML/SVG never reach this path: they are
 // download-only, preview_kind "none").
 //
-// `allow-downloads` is there for PHONES. Chrome for Android does not render a PDF
-// inside a frame at all: it draws its own placeholder — an "Open" button over the
-// word "preview" — whose only job is to hand the file to the platform viewer, which
-// it does by starting a DOWNLOAD from inside the frame. Without this token that
-// download is refused and the button is simply dead, which is the entire mobile
-// preview experience.
+// `allow-popups` is there for PHONES, and it is the token the placeholder actually
+// wants. Chrome for Android does not render a PDF inside a frame at all: it draws its
+// own placeholder — an "Open" button over the word "preview" — and that button calls
+// window.open on the framed URL. Without this token the call is refused and the button
+// is simply dead, which is the entire mobile preview experience. The refusal is only
+// visible in a remote-debugging console, which is why this was first shipped as
+// `allow-downloads` on the guess that the button saved the file; the device said
+// otherwise, verbatim:
 //
-// What the token grants is WIDER than what the button uses, and the honest version
-// of that is worth writing down: a document allowed to start downloads may start
-// them for any URL it can reach, not only for its own bytes. It is acceptable here
-// and would not be everywhere — the only script that runs in this frame is Chrome's
-// own PDF viewer, which exposes no network-capable JavaScript to the document, and a
-// download hands bytes TO the reader rather than out of the household. The line that
-// is never crossed is still `allow-same-origin`.
+//	Blocked opening '…/preview?sandbox=2' in a new window because the request was
+//	made in a sandboxed frame whose 'allow-popups' permission is not set.
 //
-// Both this header and the iframe's own `sandbox` attribute must carry the token —
+// Deliberately NOT `allow-popups-to-escape-sandbox`: without it the popup INHERITS
+// these flags, so the tab the button opens is sandboxed exactly as the frame was. That
+// is also why it renders — the same document already opens under this header from the
+// SPA's "Otevřít v novém okně" link, which is the one path that worked on a phone
+// throughout.
+//
+// `allow-downloads` is kept, and its reason is NOT the button. It is what lets the
+// reader save the PDF out of the tab the button opens (which inherits these flags) and
+// out of the fallback link's tab. previewFilename below is what gives that save a
+// usable name.
+//
+// Both this header and the iframe's own `sandbox` attribute must carry every token —
 // they are ANDed, so relaxing one alone changes nothing (see PdfPreview in
 // frontend/src/modules/documents/DocumentView.tsx). ⚠ CHANGING THIS VALUE IS NOT
 // ENOUGH ON ITS OWN: bump previewSandboxVersion below in the same edit.
-const pdfSandbox = "sandbox allow-scripts allow-downloads"
+const pdfSandbox = "sandbox allow-scripts allow-downloads allow-popups"
 
 // previewSandboxVersion is a CACHE KEY for the policy above, and the reason it lives
 // HERE rather than in the SPA is the whole point of it. A shared /preview response is
@@ -87,8 +95,9 @@ const pdfSandbox = "sandbox allow-scripts allow-downloads"
 // not taking effect for a year. Next to the value it versions, the two cannot drift.
 //
 // ⚠ Bump on every change to pdfSandbox. It costs one re-fetch of a PDF the reader
-// had cached, once.
-const previewSandboxVersion = "2"
+// had cached, once. (2 → 3 when allow-popups was added; the bump is the only reason
+// a phone that had already framed the document saw the new policy at all.)
+const previewSandboxVersion = "3"
 
 // strictSandbox is the default for everything else: no capabilities at all.
 const strictSandbox = "sandbox"
