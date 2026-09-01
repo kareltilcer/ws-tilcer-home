@@ -1691,10 +1691,10 @@ paths:
         endpoint (/raw keeps the bare `sandbox`) and never grants `allow-same-origin` or
         `allow-popups-to-escape-sandbox`, so the frame stays origin-opaque and any tab it
         opens inherits the same sandbox (D48). `allow-popups` is what lets Chrome for
-        Android's in-frame placeholder hand the file to the platform viewer — it does so
-        by calling window.open on this URL. `allow-downloads` covers saving the file out
-        of the tab that opens, so the response also names it (`inline; filename=…`, the
-        original's stem carrying a `.pdf` extension when the preview is a derived one).
+        Android's in-frame placeholder work: its "Open" button calls window.open on this
+        URL. `allow-downloads` covers a save out of the tab that opens, so the response
+        also names the file (`inline; filename=…`, the original's stem carrying a `.pdf`
+        extension when the preview is a derived one).
 
         A SHARED response is `immutable` for a year while a private one revalidates on
         every view (D208), so a change to that sandbox would not by itself reach a client

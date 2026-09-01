@@ -426,12 +426,12 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	if rr := a.get("/api/documents/" + pdf.ID + "/preview"); rr.Code != http.StatusOK {
 		t.Errorf("native preview = %d, want 200", rr.Code)
 	}
-	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run
-	// and for Chrome for Android's placeholder to hand the file to the platform viewer:
-	// allow-popups, because that "Open" button calls window.open and is simply dead
-	// without it, plus allow-downloads for the save out of the tab it opens. Still no
-	// allow-same-origin: the frame stays origin-opaque, and so does that tab, which
-	// inherits these flags (no allow-popups-to-escape-sandbox).
+	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run and
+	// for Chrome for Android's placeholder to work: allow-popups, because that "Open"
+	// button calls window.open and is simply dead without it, plus allow-downloads for a
+	// save out of the tab it opens. Still no allow-same-origin: the frame stays
+	// origin-opaque, and so does that tab, which inherits these flags (no
+	// allow-popups-to-escape-sandbox). Why each token: pdfSandbox in content.go.
 	rr := a.get("/api/documents/" + pdf.ID + "/preview")
 	csp := rr.Header().Get("Content-Security-Policy")
 	if csp != "sandbox allow-scripts allow-downloads allow-popups" {
@@ -440,8 +440,8 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	if strings.Contains(csp, "allow-same-origin") {
 		t.Error("a preview must never be granted same-origin access")
 	}
-	// A preview is SAVED and not only framed — from the tab the placeholder opens, under
-	// this very response — so the response has to name the file. With a bare `inline`
+	// A preview can be SAVED and not only framed — out of the tab the placeholder opens,
+	// under this very response — so the response has to name the file. With a bare `inline`
 	// the browser has nothing to use and falls back to the last path segment, so every
 	// document a phone opens this way lands in Downloads as `preview.pdf`, then
 	// `preview (1).pdf`.
@@ -491,12 +491,11 @@ func TestHTTP_PreviewStates(t *testing.T) {
 // case cannot: a preview_kind "pdf" row streams application/pdf out of a document
 // whose original_filename still ends in .docx.
 //
-// Both ways of getting this wrong are user-visible on a phone: Chrome for Android's
-// placeholder opens the preview in a tab of its own and the file is saved from there,
-// under this same response and so under this same name. A bare `inline` puts
-// `preview.pdf` in Downloads for every document in the household; naming it from
-// original_filename puts a PDF there called "Podmínky.docx", which the platform viewer
-// then refuses. The stem survives and the extension follows the bytes.
+// Both ways of getting this wrong are user-visible on a phone: the preview is saved out
+// of a tab serving this very response, so this is the name it lands under. A bare
+// `inline` puts `preview.pdf` in Downloads for every document in the household; naming
+// it from original_filename puts a PDF there called "Podmínky.docx", which Android's
+// viewer then refuses. The stem survives and the extension follows the bytes.
 func TestHTTP_ADerivedPreviewIsNamedForThePDFItActuallyIs(t *testing.T) {
 	a := newAPI(t, "editor")
 	// An ASCII filename on purpose: rfc5987's Latin-1 fallback is pinned by its own

@@ -8,12 +8,11 @@ import { DocumentView } from './DocumentView'
 // THE PDF FRAME'S SANDBOX. The token list is a security boundary (D48) that is also
 // load-bearing for the reader, and the two pulls are in opposite directions — which
 // is why it is pinned rather than left to the comment beside it. Too strict and the
-// preview is dead on a phone: Chrome for Android renders no PDF in a frame at all,
-// only its own "Open" placeholder, which hands the file to the platform viewer by
-// calling window.open on it — refused, silently, when allow-popups is missing, and
-// allow-downloads is then what lets the reader save it out of the tab that opens. Too
-// loose and the frame stops being isolated: allow-same-origin would put arbitrary
-// uploaded bytes inside home's origin, with its cookies and its DOM.
+// preview is dead on a phone: Chrome for Android renders no PDF in a frame at all, only
+// its own "Open" placeholder, whose button calls window.open — refused, silently, when
+// allow-popups is missing. Too loose and the frame stops being isolated:
+// allow-same-origin would put arbitrary uploaded bytes inside home's origin, with its
+// cookies and its DOM. What each token is for: pdfSandbox in content.go.
 //
 // The header half of the same contract lives in the Go test (TestHTTP_PreviewStates).
 // Both must carry a token for it to have any effect — the attribute and the response

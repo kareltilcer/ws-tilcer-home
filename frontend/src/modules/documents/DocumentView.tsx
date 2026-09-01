@@ -402,32 +402,16 @@ function DocumentPreview({ doc, mode }: { doc: DocumentDetail; mode: ReturnType<
 // The sandbox is `allow-scripts allow-downloads allow-popups` and deliberately NOT
 // `allow-same-origin`: the browser's built-in PDF viewer is script-driven and shows
 // nothing without the first, while withholding the last keeps the frame in an opaque
-// origin, unable to touch home's cookies or DOM. The backend sets a matching CSP on
-// the response, and the two are ANDed — a token added here and not there does
-// nothing at all (see pdfSandbox in backend/internal/modules/documents/content.go).
+// origin, unable to touch home's cookies or DOM. `allow-popups` is what makes the frame
+// usable ON A PHONE — Chrome for Android draws its own "Open" placeholder instead of the
+// PDF, and that button calls window.open, refused and silently dead without the token.
 //
-// `allow-popups` is what makes the frame usable ON A PHONE. Chrome for Android never
-// renders the PDF itself; it draws its own placeholder with an "Open" button, and that
-// button calls window.open on the framed URL. While the token was missing the call was
-// refused and the button did nothing — silently, with no way for the reader to tell
-// why, since the refusal is logged only to a console no phone shows. It was first
-// shipped as `allow-downloads` on the guess that the button SAVED the file; the device
-// said popup, in as many words, and the guess is recorded in content.go so the next
-// reader does not have to re-derive it. `allow-popups-to-escape-sandbox` is still
-// refused, so the tab that opens inherits this same sandbox.
-//
-// That inheritance is also what BOUNDS the grant, which is wider than the one button
-// that needs it: a PDF is not inert — the browser's viewer runs the JavaScript and link
-// annotations the file carries — so it may open a tab for any URL it can reach, unasked.
-// What the bound covers is the ORIGIN, not the network: whatever lands there is
-// sandboxed exactly as this frame is, so it is origin-opaque, cannot reach home's
-// cookies or DOM, and cannot submit a form — but it keeps `allow-scripts`, and a
-// scripted page can still talk to the network from an opaque origin. The guarantee is
-// "nothing of home's leaks", not "nothing leaks", and for the household's own uploads
-// that is the right one.
-//
-// `allow-downloads` stays for a different job than the one it was added for: saving
-// the PDF out of the tab the button opens, which inherits these flags.
+// The backend sets a matching CSP on the response and the two are ANDed, so a token
+// added here and not there does nothing at all. THE FULL ACCOUNT — what each token is
+// for, what the grant does and does not bound, and what is still untested on a device —
+// lives with the header, beside the cache key that versions it: pdfSandbox in
+// backend/internal/modules/documents/content.go. Keep this list identical to that one;
+// the reasoning is kept in one place on purpose, having gone stale in several at once.
 //
 // Some browsers still refuse to render a PDF in a sandboxed frame, so an explicit
 // "open in a new tab" fallback sits under the frame — the user is never stuck. It
