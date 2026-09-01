@@ -74,7 +74,12 @@ const focus = vi.fn()
 
 // mount hands applyFormat a ctx around one document and one selection.
 function mount(root: ProseNode, anchor: number, head = anchor): Ctx {
-  const state = EditorState.create({ doc: root, selection: TextSelection.create(root, anchor, head) })
+  return mountState(EditorState.create({ doc: root, selection: TextSelection.create(root, anchor, head) }))
+}
+
+// mountState is the same ctx around a state assembled elsewhere — for the cases where the
+// STORED-mark set is the thing under test and has to come from a real transaction.
+function mountState(state: EditorState): Ctx {
   const view = { state, dispatch, focus }
   const values = new Map<unknown, unknown>([
     [schemaCtx, schema],
@@ -203,6 +208,10 @@ describe('applyFormat marks', () => {
   })
 })
 
+// linked builds a paragraph whose whole text carries one link mark.
+const linkedPara = (text: string, href = 'https://example.test') =>
+  nodes.paragraph.create(null, schema.text(text, [schema.marks.link.create({ href })]))
+
 describe('applyFormat link', () => {
   it('opens the URL editor over a selection and leaves focus to it', () => {
     const root = doc(para('mléko'))
@@ -217,14 +226,27 @@ describe('applyFormat link', () => {
   // An empty caret inside a link has no range to give a new href to. Opening the editor
   // there splices a SECOND link into the middle of the first one on confirm.
   it('disarms the link mark on an empty caret inside a link', () => {
-    const linked = nodes.paragraph.create(
-      null,
-      schema.text('mléko', [schema.marks.link.create({ href: 'https://example.test' })]),
-    )
-    const root = doc(linked)
+    const root = doc(linkedPara('mléko'))
     applyFormat(mount(root, caretAt(root, 'mléko')), 'link')
     expect(call).not.toHaveBeenCalledWith(toggleLinkCommand.key)
     expect(dispatched().storedMarks).toEqual([])
+  })
+
+  // The press above leaves an EMPTY stored-mark set behind, and nothing moves the caret
+  // between two clicks on the same button — so a guard that reads the stored set first
+  // answers "no link here" the second time and opens the URL editor over the very range
+  // it just refused. The guard has to ask the document.
+  it('still refuses on a second press, when the first press emptied the stored marks', () => {
+    const root = doc(linkedPara('mléko'))
+    const at = caretAt(root, 'mléko')
+    const state = EditorState.create({ doc: root, selection: TextSelection.create(root, at) })
+    // Exactly the state the first press leaves: a cursor still inside the link, carrying a
+    // stored set that no longer holds it.
+    const after = state.apply(state.tr.removeStoredMark(schema.marks.link))
+    expect(after.storedMarks).toEqual([])
+
+    applyFormat(mountState(after), 'link')
+    expect(call).not.toHaveBeenCalledWith(toggleLinkCommand.key)
   })
 })
 
