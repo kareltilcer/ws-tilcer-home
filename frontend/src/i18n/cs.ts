@@ -140,6 +140,21 @@ export const cs = {
     goneBody: 'Někdo ji mezitím smazal. Zavři toto okno.',
     bodyPlaceholder: 'Piš v Markdownu…',
     visualPlaceholder: 'Začni psát…',
+    // Vizuální formatting bar. `toolbar` names the group; the rest are the tooltip
+    // and the accessible name of one button each — the button FACE is the design's
+    // glyph (H1, B, •, …), which reads as nothing useful when spoken aloud.
+    toolbar: 'Formátování',
+    toolbarH1: 'Nadpis 1',
+    toolbarH2: 'Nadpis 2',
+    toolbarBold: 'Tučně',
+    toolbarItalic: 'Kurzíva',
+    toolbarBullet: 'Odrážky',
+    toolbarQuote: 'Citace',
+    toolbarCode: 'Kód',
+    toolbarLink: 'Odkaz',
+    // Crepe's link tooltip, which the ↗ button is the ordinary way into. Its own
+    // default is the English "Paste link…".
+    linkPlaceholder: 'Vlož odkaz…',
     // organisation
     rename: 'Přejmenovat',
     move: 'Přesunout',
@@ -175,6 +190,9 @@ export const cs = {
     badgeBoth: 'Pro všechny',
     // sharing
     copyLink: 'Odkaz',
+    // The face says only "Odkaz", which the Vizuální toolbar's link button is also
+    // called: spoken aloud the two were indistinguishable, so this one says which.
+    copyLinkLabel: 'Kopírovat odkaz',
     copyLinkTitle: 'Zkopírovat odkaz — otevře se jen přihlášeným členům domácnosti',
     copyLinkDone: 'Odkaz zkopírován — otevře se jen přihlášeným členům domácnosti',
     copyLinkError: 'Odkaz se nepodařilo zkopírovat',

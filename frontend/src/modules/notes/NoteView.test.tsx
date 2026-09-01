@@ -1,5 +1,6 @@
+import { useImperativeHandle, type Ref } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { qk } from '@/api/keys'
@@ -37,16 +38,30 @@ vi.mock('@/app/auth', () => ({
 // Crepe is lazy-loaded and needs a real DOM/ProseMirror; the stub stands in for the
 // Vizuální surface, echoes what it was seeded with, and offers a button that emits an
 // edit — the one thing a test cannot do by typing into a ProseMirror that isn't there.
+// It also records the formatting commands the toolbar sends down its handle, which is
+// the whole of what the toolbar can be asked to prove without a real editor under it.
 const EMITTED = vi.hoisted(() => 'napsáno ve Vizuálním')
+const formatted = vi.hoisted(() => [] as string[])
 vi.mock('./MilkdownEditor', () => ({
-  MilkdownEditor: ({ defaultValue, onChange }: { defaultValue: string; onChange: (md: string) => void }) => (
-    <div data-testid="visual-editor">
-      {defaultValue}
-      <button type="button" onClick={() => onChange(EMITTED)}>
-        emit
-      </button>
-    </div>
-  ),
+  MilkdownEditor: ({
+    defaultValue,
+    onChange,
+    ref,
+  }: {
+    defaultValue: string
+    onChange: (md: string) => void
+    ref?: Ref<{ format: (command: string) => void }>
+  }) => {
+    useImperativeHandle(ref, () => ({ format: (command: string) => formatted.push(command) }), [])
+    return (
+      <div data-testid="visual-editor">
+        {defaultValue}
+        <button type="button" onClick={() => onChange(EMITTED)}>
+          emit
+        </button>
+      </div>
+    )
+  },
 }))
 
 const NOTE_ID = 'n1'
@@ -75,6 +90,7 @@ const note = (body_md: string | null): NoteDetail => ({
 // retry backoff and all — while looking like it saved.
 function resetApi() {
   auth.canWrite = true
+  formatted.length = 0
   localStorage.clear()
   getNote.mockReset()
   updateNote.mockReset()
@@ -99,6 +115,7 @@ const emit = () => screen.getByRole('button', { name: 'emit' })
 // The "změněno jinde" advisory, addressed by its one action rather than its sentence:
 // the banner's text node sits beside the button, so the button is the unambiguous probe.
 const conflictBanner = () => screen.queryByRole('button', { name: cs.notes.reloadTheirs })
+const formatBar = () => screen.queryByRole('group', { name: cs.notes.toolbar })
 
 describe('NoteView opening mode', () => {
   beforeEach(resetApi)
@@ -276,5 +293,55 @@ describe('NoteView auto-opened editor and the changed-elsewhere advisory', () =>
     await userEvent.click(emit())
     expect(await screen.findByText(EMITTED)).toBeInTheDocument()
     expect(conflictBanner()).not.toBeInTheDocument()
+  })
+})
+
+// The Vizuální formatting bar. What the commands DO belongs to milkdown and is stubbed
+// out here; what this view owns is which tab the bar belongs to and that pressing a
+// button reaches the editor at all — the two halves that were simply missing.
+describe('NoteView Vizuální toolbar', () => {
+  beforeEach(resetApi)
+
+  it('shows the formatting bar on the Vizuální tab', async () => {
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    const bar = formatBar()
+    expect(bar).toBeInTheDocument()
+    // The whole minimal set the design draws, and nothing beyond it.
+    expect(within(bar as HTMLElement).getAllByRole('button')).toHaveLength(8)
+    expect(within(bar as HTMLElement).getByRole('button', { name: cs.notes.toolbarH1 })).toBeInTheDocument()
+  })
+
+  // Číst has nothing to format and Markdown is the raw text itself — a bar that applied
+  // to neither would be a control that does nothing on two of the three tabs.
+  it('is absent on Číst and on Markdown', async () => {
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(markdownTab())
+    expect(formatBar()).not.toBeInTheDocument()
+    await userEvent.click(readTab())
+    expect(formatBar()).not.toBeInTheDocument()
+  })
+
+  // A reader never reaches an editor, so they must not be shown its controls either.
+  it('is absent for a reader', async () => {
+    auth.canWrite = false
+    getNote.mockResolvedValue(note('mléko'))
+    renderNote()
+    expect(await screen.findByText(cs.notes.readOnly)).toBeInTheDocument()
+    expect(formatBar()).not.toBeInTheDocument()
+  })
+
+  // The bar renders outside the editor and reaches it through a handle, so the wiring
+  // between the two is the thing that can silently come apart.
+  it('sends the pressed command down to the editor', async () => {
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(screen.getByRole('button', { name: cs.notes.toolbarBold }))
+    await userEvent.click(screen.getByRole('button', { name: cs.notes.toolbarLink }))
+    expect(formatted).toEqual(['bold', 'link'])
   })
 })

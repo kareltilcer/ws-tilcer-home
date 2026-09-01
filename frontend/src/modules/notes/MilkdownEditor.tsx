@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import { Crepe } from '@milkdown/crepe'
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import { applyFormat, type NoteEditorHandle } from './noteFormat'
 import { toast } from 'sonner'
 import '@milkdown/crepe/theme/common/style.css'
 import './crepe-theme.css'
@@ -295,6 +296,7 @@ export function MilkdownEditor({
   defaultValue,
   onChange,
   onInlineImage,
+  ref,
 }: {
   noteId: string
   defaultValue: string
@@ -304,8 +306,30 @@ export function MilkdownEditor({
   // uploaded here instead would put the image outside the host's autosave hold and lose it
   // whenever this editor is torn down mid-upload.
   onInlineImage: (src: string) => InlineImageUpload
+  // The formatting toolbar's handle. It goes live only between the two points where
+  // `editor.action` can reach a view — see `ready` below — and no-ops before and after.
+  ref?: Ref<NoteEditorHandle>
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
+  // The created editor, or null while it is still mounting / after it is torn down.
+  // `editor.action` reads the view out of the ctx, which exists only in between.
+  const ready = useRef<Crepe | null>(null)
+  useImperativeHandle(
+    ref,
+    () => ({
+      format: (command) => {
+        const crepe = ready.current
+        if (!crepe) return
+        try {
+          crepe.editor.action((ctx) => applyFormat(ctx, command))
+        } catch {
+          /* a command that cannot apply where the caret is (no valid wrapping, a stale
+             position) is a no-op, not something the user can act on */
+        }
+      },
+    }),
+    [],
+  )
   // Keep the latest callbacks without re-running the create effect.
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -327,6 +351,9 @@ export function MilkdownEditor({
         // it would reappear on a blank line the user opened up mid-note — telling someone
         // already writing to start writing. `doc` shows it only while the note is empty.
         [Crepe.Feature.Placeholder]: { text: cs.notes.visualPlaceholder, mode: 'doc' },
+        // The URL editor the ↗ toolbar button opens. Its buttons are icons, so this
+        // placeholder is the whole of its copy — and it ships English.
+        [Crepe.Feature.LinkTooltip]: { inputPlaceholder: cs.notes.linkPlaceholder },
         // A pasted/dropped/picked image FILE goes straight to object storage; Crepe
         // awaits this and inserts the node already pointing at the returned URL.
         [Crepe.Feature.ImageBlock]: {
@@ -354,6 +381,13 @@ export function MilkdownEditor({
     // adopting the first markdownUpdated emission — means the user's first real edit
     // is never swallowed, even if Crepe emits no initial markdownUpdated at all.
     let baseline: string | null = null
+    // …and the baseline is disarmed the moment a genuine emission gets through. Left
+    // armed for the editor's whole life it also swallows the emission that brings the doc
+    // BACK to the text it was seeded with — unbold what you just bolded, delete what you
+    // just typed, undo — and the draft then keeps the intermediate version the user has
+    // just taken back, which is what autosave persists while the editor shows the
+    // original. The formatting toolbar makes that a two-click path (B, then B again).
+    let edited = false
 
     // forward is the one gate every emission passes through. It runs on markdownUpdated
     // and again whenever a placeholder is minted (see onTokenMinted).
@@ -383,7 +417,8 @@ export function MilkdownEditor({
         // the load-bearing half of this.
         if (pendingInlineImageRefs(out).length) return
       }
-      if (out === baseline) return
+      if (!edited && out === baseline) return
+      edited = true
       onChangeRef.current(out)
     }
 
@@ -417,12 +452,14 @@ export function MilkdownEditor({
       .then(() => {
         if (disposed) return
         baseline = crepe.getMarkdown()
+        ready.current = crepe // the toolbar can reach a view from here on
       })
       .catch(() => {
         /* editor failed to mount — the raw Markdown tab remains the escape hatch */
       })
     return () => {
       disposed = true
+      ready.current = null
       void crepe.destroy()
     }
     // Intentionally create once; remount via `key` to change the note/content.
