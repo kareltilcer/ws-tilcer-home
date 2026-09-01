@@ -113,11 +113,12 @@ export const deleteDocumentFolder = (id: string, opts: { cascade?: boolean; hard
 export const moveDocumentFolder = (id: string, body: { parent_id?: string | null; position: string }) =>
   apiFetch<DocFolder>(`/api/documents/folders/${encodeURIComponent(id)}/move`, { method: 'POST', body })
 
-/** documentContentUrl builds a content URL for an <img>/<iframe>/anchor target.
- *  These are permanent and household-only: they carry the session cookie and are
- *  never presigned storage links. */
-export const documentContentUrl = (id: string, kind: 'raw' | 'download' | 'preview' | 'thumbnail') =>
-  `/api/documents/${encodeURIComponent(id)}/${kind}`
+/* There is deliberately no client-side content-URL builder. Every <img>/<iframe>/anchor
+ * target comes from `doc.urls`, which the SERVER stamps — and for `preview` that value
+ * carries the `?sandbox=<n>` cache key that busts a year-old `immutable` entry when the
+ * PDF sandbox policy changes (pdfSandbox in backend/.../documents/content.go). A helper
+ * that pasted `/api/documents/{id}/preview` together would drop the key, and the only
+ * symptom would be a phone quietly enforcing a superseded security header for a year. */
 
 export const publishDocument = (id: string, body: PublishRequest = {}) =>
   apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/publish`, {

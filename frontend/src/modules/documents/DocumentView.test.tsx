@@ -10,7 +10,8 @@ import { DocumentView } from './DocumentView'
 // is why it is pinned rather than left to the comment beside it. Too strict and the
 // preview is dead on a phone: Chrome for Android renders no PDF in a frame at all,
 // only its own "Open" placeholder, which hands the file to the platform viewer by
-// starting a download — refused, silently, when allow-downloads is missing. Too
+// calling window.open on it — refused, silently, when allow-popups is missing, and
+// allow-downloads is then what lets the reader save it out of the tab that opens. Too
 // loose and the frame stops being isolated: allow-same-origin would put arbitrary
 // uploaded bytes inside home's origin, with its cookies and its DOM.
 //
@@ -91,10 +92,11 @@ describe('DocumentView PDF preview', () => {
     renderDocument()
 
     await waitFor(() => expect(frame()).not.toBeNull())
-    // Exactly these two — the whole set, not a containment check. The Go half is
-    // pinned to the same string, and "contains allow-scripts" would have let a later
-    // allow-popups or allow-forms in without a word, which is the drift this file
-    // exists to catch.
+    // Exactly these three — the whole set, not a containment check. The Go half is
+    // pinned to the same string, and "contains allow-scripts" would let a later
+    // allow-forms or allow-popups-to-escape-sandbox in without a word, which is the
+    // drift this file exists to catch. allow-popups itself cost a device error, a
+    // review and a version bump to arrive; a fourth token should cost the same.
     expect(frame()!.getAttribute('sandbox')).toBe('allow-scripts allow-downloads allow-popups')
   })
 

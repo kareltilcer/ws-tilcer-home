@@ -416,6 +416,13 @@ function DocumentPreview({ doc, mode }: { doc: DocumentDetail; mode: ReturnType<
 // reader does not have to re-derive it. `allow-popups-to-escape-sandbox` is still
 // refused, so the tab that opens inherits this same sandbox.
 //
+// That inheritance is also what BOUNDS the grant, which is wider than the one button
+// that needs it: a PDF is not inert — the browser's viewer runs the JavaScript and link
+// annotations the file carries — so it may open a tab for any URL it can reach, unasked.
+// Whatever lands there is sandboxed exactly as this frame is: opaque origin, no reach
+// into home's cookies or DOM, and no `allow-forms`, so a page imitating a login screen
+// has nowhere to send what is typed into it.
+//
 // `allow-downloads` stays for a different job than the one it was added for: saving
 // the PDF out of the tab the button opens, which inherits these flags.
 //

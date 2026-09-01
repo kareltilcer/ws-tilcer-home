@@ -427,9 +427,11 @@ func TestHTTP_PreviewStates(t *testing.T) {
 		t.Errorf("native preview = %d, want 200", rr.Code)
 	}
 	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run
-	// and for Chrome for Android's placeholder to hand the file to the platform viewer
-	// (allow-downloads — without it that "Open" button is dead), with no
-	// allow-same-origin: the frame stays origin-opaque.
+	// and for Chrome for Android's placeholder to hand the file to the platform viewer:
+	// allow-popups, because that "Open" button calls window.open and is simply dead
+	// without it, plus allow-downloads for the save out of the tab it opens. Still no
+	// allow-same-origin: the frame stays origin-opaque, and so does that tab, which
+	// inherits these flags (no allow-popups-to-escape-sandbox).
 	rr := a.get("/api/documents/" + pdf.ID + "/preview")
 	csp := rr.Header().Get("Content-Security-Policy")
 	if csp != "sandbox allow-scripts allow-downloads allow-popups" {
@@ -438,10 +440,11 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	if strings.Contains(csp, "allow-same-origin") {
 		t.Error("a preview must never be granted same-origin access")
 	}
-	// A preview is DOWNLOADED and not only framed — that is what allow-downloads is
-	// for — so the response has to name the file. With a bare `inline` the browser has
-	// nothing to use and falls back to the last path segment, so every document a
-	// phone opens this way lands in Downloads as `preview.pdf`, then `preview (1).pdf`.
+	// A preview is SAVED and not only framed — from the tab the placeholder opens, under
+	// this very response — so the response has to name the file. With a bare `inline`
+	// the browser has nothing to use and falls back to the last path segment, so every
+	// document a phone opens this way lands in Downloads as `preview.pdf`, then
+	// `preview (1).pdf`.
 	disp := rr.Header().Get("Content-Disposition")
 	if !strings.HasPrefix(disp, "inline") || !strings.Contains(disp, `filename="smlouva.pdf"`) {
 		t.Errorf("pdf preview disposition = %q, want an inline naming smlouva.pdf", disp)
