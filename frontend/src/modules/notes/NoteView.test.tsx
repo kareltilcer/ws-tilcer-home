@@ -1,5 +1,5 @@
 import { useImperativeHandle, type Ref } from 'react'
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -82,6 +82,11 @@ vi.mock('./MilkdownEditor', () => ({
   },
 }))
 
+// A global one test stubs (fetch, for the image-upload path) is taken back down after that
+// test rather than before the next one, so it cannot outlive the case that wanted it —
+// including past the last test in the file, where a beforeEach never runs again.
+afterEach(() => vi.unstubAllGlobals())
+
 const NOTE_ID = 'n1'
 
 const note = (body_md: string | null): NoteDetail => ({
@@ -110,7 +115,6 @@ function resetApi() {
   auth.canWrite = true
   formatted.length = 0
   localStorage.clear()
-  vi.unstubAllGlobals()
   getNote.mockReset()
   updateNote.mockReset()
   uploadNoteImage.mockReset()

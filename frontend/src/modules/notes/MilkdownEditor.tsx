@@ -6,6 +6,7 @@ import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { applyFormat, type NoteEditorHandle } from './noteFormat'
+import { mayTakeCaret } from './noteFocus'
 import { toast } from 'sonner'
 import '@milkdown/crepe/theme/common/style.css'
 import './crepe-theme.css'
@@ -297,14 +298,11 @@ function inlineImageUploads(opts: {
 // It can only run once create() has resolved: the ProseMirror view it focuses is what
 // create() builds, and reaching into the ctx before then throws.
 //
-// WHICH IS WHY IT ASKS FIRST. create() takes tens of milliseconds even on a warm cache,
-// and the caret can have moved by then — the rename field one header up opens on a tap,
-// takes the caret itself, and COMMITS THE TITLE when it loses it. Pulling focus out of
-// there is the same theft the host refuses on its re-seeds, so refuse it here too and
-// leave the caret where the user put it. What still counts as unclaimed: nothing focused
-// at all, whatever held focus when this editor mounted (Chrome leaves the "Vizuální" tab
-// button focused after the tap that opened us), an ANCESTOR of our root (the Nástěnka
-// overlay's dialog focuses itself on open), and anything already inside the editor.
+// WHICH IS WHY IT ASKS FIRST (mayTakeCaret, which owns the rule and the reasoning): the
+// lazy chunk and then create() are both waits the user can put the caret somewhere
+// themselves during, and pulling it back out is the same theft the host refuses on its
+// re-seeds. `opened` is what held focus when this editor mounted, which is the baseline
+// that question is answered against.
 //
 // ⚠ THE PHONE KEYBOARD THIS IS MEANT TO RAISE MAY STAY DOWN ON iOS. Safari opens the
 // keyboard only for a focus() that is still part of the tap that asked for it, and
@@ -313,10 +311,7 @@ function inlineImageUploads(opts: {
 // Markdown tab (a plain textarea, focused in the same commit as the tap) is the surface
 // that raises the keyboard reliably there.
 function focusDoc(crepe: Crepe, root: HTMLElement, opened: Element | null) {
-  const active = document.activeElement
-  const unclaimed =
-    active === null || active === document.body || active === opened || active.contains(root) || root.contains(active)
-  if (!unclaimed) return
+  if (!mayTakeCaret(root, opened, document.activeElement)) return
   try {
     crepe.editor.action((ctx) => ctx.get(editorViewCtx).focus())
   } catch {
