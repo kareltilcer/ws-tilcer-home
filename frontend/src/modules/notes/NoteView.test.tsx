@@ -38,23 +38,26 @@ vi.mock('@/app/auth', () => ({
 // Crepe is lazy-loaded and needs a real DOM/ProseMirror; the stub stands in for the
 // Vizuální surface, echoes what it was seeded with, and offers a button that emits an
 // edit — the one thing a test cannot do by typing into a ProseMirror that isn't there.
-// It also records the formatting commands the toolbar sends down its handle, which is
-// the whole of what the toolbar can be asked to prove without a real editor under it.
+// It also records the formatting commands the toolbar sends down its handle, and reports
+// whether the caret was asked for — which is as far as either can be proven without a
+// real editor under it: putting the caret in a document is milkdown's half of that.
 const EMITTED = vi.hoisted(() => 'napsáno ve Vizuálním')
 const formatted = vi.hoisted(() => [] as string[])
 vi.mock('./MilkdownEditor', () => ({
   MilkdownEditor: ({
     defaultValue,
+    autoFocus,
     onChange,
     ref,
   }: {
     defaultValue: string
+    autoFocus?: boolean
     onChange: (md: string) => void
     ref?: Ref<{ format: (command: string) => void }>
   }) => {
     useImperativeHandle(ref, () => ({ format: (command: string) => formatted.push(command) }), [])
     return (
-      <div data-testid="visual-editor">
+      <div data-testid="visual-editor" data-autofocus={String(autoFocus === true)}>
         {defaultValue}
         <button type="button" onClick={() => onChange(EMITTED)}>
           emit
@@ -110,7 +113,9 @@ function renderNote() {
 }
 
 const markdownTab = () => screen.getByRole('button', { name: cs.notes.modeMarkdown })
+const visualTab = () => screen.getByRole('button', { name: cs.notes.modeVisual })
 const readTab = () => screen.getByRole('button', { name: cs.notes.modeRead })
+const bodyTextarea = () => screen.getByPlaceholderText(cs.notes.bodyPlaceholder)
 const emit = () => screen.getByRole('button', { name: 'emit' })
 // The "změněno jinde" advisory, addressed by its one action rather than its sentence:
 // the banner's text node sits beside the button, so the button is the unambiguous probe.
@@ -343,5 +348,80 @@ describe('NoteView Vizuální toolbar', () => {
     await userEvent.click(screen.getByRole('button', { name: cs.notes.toolbarBold }))
     await userEvent.click(screen.getByRole('button', { name: cs.notes.toolbarLink }))
     expect(formatted).toEqual(['bold', 'link'])
+  })
+})
+
+// WHERE THE CARET GOES. Someone who opens a blank page means to write on it, and on a
+// phone the caret is what raises the keyboard — without it the Vizuální tab lands you in
+// an editor that needs a second tap before a single letter can be typed. A note that
+// already HAS text is the opposite case: it was opened to be read, and pulling the caret
+// into it would slide half of it under a keyboard nobody asked for.
+describe('NoteView autofocus on an empty note', () => {
+  beforeEach(resetApi)
+
+  it('asks for the caret in the editor an empty note opens by itself', async () => {
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    expect(await screen.findByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'true')
+  })
+
+  it('focuses the Markdown textarea when an empty note is taken to that tab', async () => {
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(markdownTab())
+    expect(bodyTextarea()).toHaveFocus()
+  })
+
+  // Blank is empty everywhere else in this view (it renders as nothing and the user
+  // cannot tell the two apart), so the caret follows it here too.
+  it('focuses the Markdown textarea on a whitespace-only note', async () => {
+    getNote.mockResolvedValue(note('\n\n   \n'))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(markdownTab())
+    expect(bodyTextarea()).toHaveFocus()
+  })
+
+  it('leaves the caret alone on a note that already has text', async () => {
+    getNote.mockResolvedValue(note('mléko'))
+    renderNote()
+    await screen.findByText('mléko')
+    await userEvent.click(markdownTab())
+    expect(bodyTextarea()).not.toHaveFocus()
+    await userEvent.click(visualTab())
+    expect(screen.getByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'false')
+  })
+
+  // A rescued draft opens in Markdown carrying text the user has not saved. That is a
+  // session already under way, not a blank page — the caret stays where it is.
+  it('leaves the caret alone on a recovered draft', async () => {
+    localStorage.setItem(`poznamky:draft:${NOTE_ID}`, 'rozepsaná věta')
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    expect(await screen.findByDisplayValue('rozepsaná věta')).not.toHaveFocus()
+  })
+
+  // Once the note has been written in, moving between the tabs is moving between two
+  // views of a note in progress — the caret belongs wherever the user left it.
+  it('stops asking for the caret once the note has been written in', async () => {
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(emit())
+    await userEvent.click(markdownTab())
+    expect(bodyTextarea()).not.toHaveFocus()
+  })
+
+  // Someone else's body arriving re-seeds the auto-opened editor, which remounts it. The
+  // user never asked for that and need not even have the caret in the note — they could
+  // be renaming it — so the re-seed must not carry the request the open made.
+  it('does not grab the caret when a body arrives from elsewhere', async () => {
+    getNote.mockResolvedValue(note(''))
+    const { qc } = renderNote()
+    expect(await screen.findByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'true')
+    qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
+    expect(await screen.findByText('nákup: mléko')).toBeInTheDocument()
+    expect(screen.getByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'false')
   })
 })

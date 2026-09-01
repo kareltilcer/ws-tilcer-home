@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import { Crepe } from '@milkdown/crepe'
+import { editorViewCtx } from '@milkdown/kit/core'
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -291,15 +292,39 @@ function inlineImageUploads(opts: {
   }
 }
 
+// focusDoc puts the caret in the editor's document — the host asks for it on an empty
+// note, where the point is that someone who opened a blank page can start typing into it.
+// It can only run once create() has resolved: the ProseMirror view it focuses is what
+// create() builds, and reaching into the ctx before then throws.
+//
+// ⚠ THE PHONE KEYBOARD THIS IS MEANT TO RAISE MAY STAY DOWN ON iOS. Safari opens the
+// keyboard only for a focus() that is still part of the tap that asked for it, and
+// create() is a promise — the tap is over by the time there is a view to focus. The caret
+// still lands, so the note is one tap from being written in rather than two, and the
+// Markdown tab (a plain textarea, focused in the same commit as the tap) is the surface
+// that raises the keyboard reliably there.
+function focusDoc(crepe: Crepe) {
+  try {
+    crepe.editor.action((ctx) => ctx.get(editorViewCtx).focus())
+  } catch {
+    /* no view to focus (a create that half-failed) — the user taps in, as they did before */
+  }
+}
+
 export function MilkdownEditor({
   noteId,
   defaultValue,
+  autoFocus,
   onChange,
   onInlineImage,
   ref,
 }: {
   noteId: string
   defaultValue: string
+  // Take the caret as soon as there is a document to put it in (see focusDoc). Read once,
+  // when the editor is created, exactly like `defaultValue` — the host bumps this
+  // component's `key` on every re-seed, which is the only place either one changes.
+  autoFocus?: boolean
   onChange: (markdown: string) => void
   // onInlineImage delegates a PASTED image's bytes to the host, which owns the placeholder
   // and the upload (see InlineImageUpload). Required, not optional: a fallback that
@@ -453,6 +478,7 @@ export function MilkdownEditor({
         if (disposed) return
         baseline = crepe.getMarkdown()
         ready.current = crepe // the toolbar can reach a view from here on
+        if (autoFocus) focusDoc(crepe)
       })
       .catch(() => {
         /* editor failed to mount — the raw Markdown tab remains the escape hatch */
