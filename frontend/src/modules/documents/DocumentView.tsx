@@ -397,21 +397,6 @@ function DocumentPreview({ doc, mode }: { doc: DocumentDetail; mode: ReturnType<
   }
 }
 
-// previewSandbox is a CACHE KEY on the frame's URL, not a parameter the backend reads
-// (it ignores the query string entirely). The response's own `Content-Security-Policy:
-// sandbox …` is the other half of the frame's sandbox, and a SHARED document's
-// /preview is cached `private, immutable, max-age=31536000` (D41/D208) — nothing
-// revalidates it for a year. Without a new URL, a phone that had already opened this
-// document would go on framing the OLD, download-blocking header long after the fix
-// deployed: dead button, no error, on exactly the documents whose dead button sent
-// the reader looking for the fix. The backend re-sends the policy on a 304, which
-// covers the private tree (it revalidates on every view — D208); only a URL no cache
-// has an answer for covers the shared one.
-//
-// ⚠ Bump it whenever pdfSandbox in backend/internal/modules/documents/content.go
-// changes. It costs one re-fetch of a PDF the reader had cached, once.
-const previewSandbox = 'sandbox=2'
-
 // PdfPreview renders a PDF (or a derived Office→PDF) in a SANDBOXED iframe.
 //
 // The sandbox is `allow-scripts allow-downloads` and deliberately NOT
@@ -432,14 +417,21 @@ const previewSandbox = 'sandbox=2'
 // document no network-capable JavaScript; `allow-same-origin` is still refused.
 //
 // Some browsers still refuse to render a PDF in a sandboxed frame, so an explicit
-// "open in a new tab" fallback sits under the frame — the user is never stuck.
+// "open in a new tab" fallback sits under the frame — the user is never stuck. It
+// points at THE SAME URL as the frame, which is not incidental: the response does not
+// depend on the query string, so a second URL for the same bytes buys nothing and
+// costs a second cache entry — a reader who frames a 30 MB scan and then taps the
+// fallback would pull it twice, on a phone.
 //
-// The frame's src carries previewSandbox, which is a CACHE KEY and nothing else.
+// `doc.urls.preview` already carries the `?sandbox=<n>` cache key the backend stamps
+// on it (urls.go), because a shared preview is cached `immutable` for a year and the
+// server owns the policy that key versions. There is deliberately nothing to keep in
+// sync here.
 function PdfPreview({ doc }: { doc: DocumentDetail }) {
   return (
     <div className="flex h-full min-h-[420px] flex-col gap-2">
       <iframe
-        src={`${doc.urls.preview}?${previewSandbox}`}
+        src={doc.urls.preview}
         title={`${cs.documents.previewFrameLabel}: ${doc.title}`}
         sandbox="allow-scripts allow-downloads"
         className="h-[65vh] min-h-[360px] w-full rounded-[10px] border border-border-strong bg-s2"

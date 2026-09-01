@@ -19,10 +19,12 @@ import { DocumentView } from './DocumentView'
 // CSP are ANDed — so each half is pinned where it is written.
 
 const getDocument = vi.hoisted(() => vi.fn())
-vi.mock('./api/endpoints', () => ({
+// Only getDocument is replaced and the rest of the module comes through. A
+// hand-written stand-in goes stale the moment DocumentView imports one more endpoint,
+// and says so as "x is not a function" pointing at component code rather than here.
+vi.mock('./api/endpoints', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api/endpoints')>()),
   getDocument,
-  pinDocument: vi.fn(),
-  unpinDocument: vi.fn(),
 }))
 
 vi.mock('@/app/auth', () => ({
@@ -62,7 +64,7 @@ const doc = (overrides: Partial<DocumentDetail> = {}): DocumentDetail => ({
     permalink: `/d/${DOC_ID}`,
     raw: `/api/documents/${DOC_ID}/raw`,
     download: `/api/documents/${DOC_ID}/download`,
-    preview: `/api/documents/${DOC_ID}/preview`,
+    preview: `/api/documents/${DOC_ID}/preview?sandbox=2`,
     thumbnail: `/api/documents/${DOC_ID}/thumbnail`,
   },
   ...overrides,
@@ -107,21 +109,29 @@ describe('DocumentView PDF preview', () => {
   // The response's CSP is the other half of the same sandbox, and a shared /preview is
   // cached `immutable` for a year — so the frame has to ask for a URL the browser
   // cannot already have an answer for, or the relaxation never reaches the phone that
-  // needed it. The permanent URL stays clean: it is what the fallback link uses.
-  it('frames a URL no year-old cache entry can answer', async () => {
+  // needed it. That cache key belongs to the BACKEND (urls.go stamps it beside the
+  // pdfSandbox constant it versions), so the frame's whole job is to use the URL it
+  // was handed, unedited.
+  it('frames the URL the API handed it, cache key and all', async () => {
     getDocument.mockResolvedValue(doc())
     renderDocument()
 
     await waitFor(() => expect(frame()).not.toBeNull())
-    expect(frame()!.getAttribute('src')).toBe(`/api/documents/${DOC_ID}/preview?sandbox=2`)
+    expect(frame()!.getAttribute('src')).toBe(doc().urls.preview)
+    expect(doc().urls.preview).toContain('?sandbox=')
   })
 
-  it('offers the new-tab fallback for the browsers that refuse the frame', async () => {
+  // The fallback points at the SAME URL as the frame, and that is worth pinning: the
+  // response does not depend on the query string, so a second URL for the same bytes
+  // buys nothing and costs a second cache entry — a reader who frames a 30 MB scan and
+  // then taps the fallback would pull it twice, on a phone.
+  it('offers a new-tab fallback on the same URL, so the bytes are fetched once', async () => {
     getDocument.mockResolvedValue(doc())
     renderDocument()
 
+    await waitFor(() => expect(frame()).not.toBeNull())
     const link = await screen.findByRole('link', { name: cs.documents.previewOpenInTab })
-    expect(link).toHaveAttribute('href', `/api/documents/${DOC_ID}/preview`)
+    expect(link.getAttribute('href')).toBe(frame()!.getAttribute('src'))
   })
 
   // The relaxation is scoped to the PDF renderer. An image is drawn by the app in an

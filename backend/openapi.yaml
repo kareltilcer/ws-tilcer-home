@@ -1669,6 +1669,15 @@ paths:
   /api/documents/{id}/preview:
     parameters:
       - $ref: "#/components/parameters/PathId"
+      - name: sandbox
+        in: query
+        required: false
+        schema: { type: string }
+        description: >-
+          A CACHE KEY for the PDF sandbox policy, ignored by the handler. Clients send
+          back the value baked into `urls.preview` rather than inventing one; it is
+          bumped server-side whenever the sandbox changes, so that a response cached
+          `immutable` cannot answer with a superseded security header.
     get:
       tags: [documents]
       summary: Stream the best previewable representation
@@ -1681,10 +1690,16 @@ paths:
         allow-downloads`. The relaxation is scoped to application/pdf on THIS endpoint
         (/raw keeps the bare `sandbox`) and never grants `allow-same-origin`, so the frame
         stays origin-opaque (D48); `allow-downloads` is what lets Chrome for Android's
-        in-frame placeholder hand the file to the platform viewer. Since the bytes are
-        cached for a year, the SPA frames `?sandbox=<n>` — a cache key the server ignores,
-        bumped whenever that policy changes — while the permanent URL stays clean. The
-        policy is also re-sent on a 304, so revalidating refreshes a stored one.
+        in-frame placeholder hand the file to the platform viewer — which it does by
+        SAVING it first, so the response also names the file (`inline; filename=…`, the
+        original's stem carrying a `.pdf` extension when the preview is a derived one).
+
+        A SHARED response is `immutable` for a year while a private one revalidates on
+        every view (D208), so a change to that sandbox would not by itself reach a client
+        that already holds the bytes. Two things carry it: the isolation headers are
+        re-sent on a 304, which covers the private tree, and `urls.preview` carries a
+        `?sandbox=<n>` cache key — bumped server-side alongside the policy — which covers
+        the shared one.
       responses:
         "200":
           description: The previewable bytes (image, text, or application/pdf)
@@ -6307,7 +6322,7 @@ components:
         permalink: { type: string, description: "SPA short route, e.g. /d/{id}." }
         raw: { type: string, description: "/api/documents/{id}/raw" }
         download: { type: string, description: "/api/documents/{id}/download" }
-        preview: { type: string, description: "/api/documents/{id}/preview" }
+        preview: { type: string, description: "/api/documents/{id}/preview plus the `?sandbox=<n>` cache key for the PDF sandbox policy. The path is the permanent part; use this value as given rather than rebuilding it." }
         thumbnail: { type: string, description: "/api/documents/{id}/thumbnail" }
     Document:
       type: object

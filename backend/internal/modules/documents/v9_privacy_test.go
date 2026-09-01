@@ -279,6 +279,25 @@ func TestConditionalRequestOnPrivateContentIs304ToOwnerAnd404ToAnyoneElse(t *tes
 	if owner.Code != http.StatusNotModified {
 		t.Errorf("owner's conditional re-request: %d, want 304", owner.Code)
 	}
+	// The private tree is the ONE that revalidates on every view, which makes its 304
+	// the only channel through which a D48 header can ever be changed on a client that
+	// already holds the bytes. A cache updates a stored response from the 304 it
+	// revalidated with, so a policy that rides only on the 200 is frozen the day it
+	// was first stored — and a tightening after a future PDF-viewer CVE would reach
+	// nobody. All three isolation headers have to come back.
+	for _, h := range []struct{ name, want string }{
+		{"X-Content-Type-Options", first.Header().Get("X-Content-Type-Options")},
+		{"Content-Security-Policy", first.Header().Get("Content-Security-Policy")},
+		{"Content-Disposition", first.Header().Get("Content-Disposition")},
+	} {
+		if h.want == "" {
+			t.Fatalf("the 200 carried no %s — the D48 boundary is missing on the first read", h.name)
+		}
+		if got := owner.Header().Get(h.name); got != h.want {
+			t.Errorf("304 %s = %q, want the 200's %q. A private stream revalidates on every "+
+				"view (D208); if the policy does not ride the 304 it can never be changed", h.name, got, h.want)
+		}
+	}
 	intruder := hh.as(andy, http.MethodGet, "/api/documents/"+doc.ID+"/raw", [2]string{"If-None-Match", etag})
 	if intruder.Code != http.StatusNotFound {
 		t.Errorf("another member's conditional request with the owner's ETag: %d, want 404. "+
