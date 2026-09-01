@@ -1,7 +1,7 @@
 import { commandsCtx, editorViewCtx } from '@milkdown/kit/core'
-import { lift } from '@milkdown/kit/prose/commands'
+import { liftTarget } from '@milkdown/kit/prose/transform'
 import type { Ctx } from '@milkdown/kit/ctx'
-import type { EditorState } from '@milkdown/kit/prose/state'
+import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { MarkType, NodeType } from '@milkdown/kit/prose/model'
 import {
   blockquoteSchema,
@@ -64,6 +64,22 @@ function insideNode(state: EditorState, type: NodeType): boolean {
   return false
 }
 
+// liftOutOf takes the selection's block range out of the NAMED ancestor — the unwrap
+// milkdown ships no command for. prosemirror-commands' bare `lift` is not it: it lifts out
+// of the nearest liftable parent, whatever that parent happens to be. On `> - mléko` that
+// parent is the list item, so the quote button pulled the paragraph out of the LIST and
+// left the blockquote standing — the one button that says "quote" un-bulleted instead.
+// Naming the ancestor in blockRange's predicate is what makes the button undo the thing it
+// applies; liftListItemCommand names the list the same way, and only this branch didn't.
+function liftOutOf(state: EditorState, type: NodeType, dispatch: (tr: Transaction) => void): boolean {
+  const { $from, $to } = state.selection
+  const range = $from.blockRange($to, (node) => node.type === type)
+  const target = range && liftTarget(range)
+  if (!range || target == null) return false
+  dispatch(state.tr.lift(range, target).scrollIntoView())
+  return true
+}
+
 // wholeRangeIsHeading answers the question setBlockTypeCommand actually acts on: is EVERY
 // textblock in the selection already a heading of this level? Asking only the block the
 // selection starts in ($from.parent) reads a selection running from a heading down into
@@ -122,14 +138,17 @@ export function applyFormat(ctx: Ctx, command: NoteFormatCommand) {
       if (insideNode(view.state, listItemSchema.type(ctx))) commands.call(liftListItemCommand.key)
       else commands.call(wrapInBlockTypeCommand.key, { nodeType: bulletListSchema.type(ctx) })
       break
-    case 'quote':
+    case 'quote': {
       // The quote button has the sharper end of the same problem: blockquote's content is
       // `block+`, so wrapping a quote in a quote IS valid and a second press silently
-      // indents again instead of undoing. `lift` is the unwrap milkdown ships no command
-      // for — it takes the block range out of the blockquote around it.
-      if (insideNode(view.state, blockquoteSchema.type(ctx))) lift(view.state, view.dispatch)
-      else commands.call(wrapInBlockTypeCommand.key, { nodeType: blockquoteSchema.type(ctx) })
+      // indents again instead of undoing. liftOutOf is the unwrap milkdown ships no
+      // command for — it takes the block range out of the blockquote around it, and out of
+      // THAT one rather than out of whatever happens to be nearer (see liftOutOf).
+      const blockquote = blockquoteSchema.type(ctx)
+      if (insideNode(view.state, blockquote)) liftOutOf(view.state, blockquote, view.dispatch)
+      else commands.call(wrapInBlockTypeCommand.key, { nodeType: blockquote })
       break
+    }
     case 'code': {
       // With nothing selected there is no range to mark, so toggling code has to arm the
       // NEXT characters typed instead — a stored mark. Without this the button does

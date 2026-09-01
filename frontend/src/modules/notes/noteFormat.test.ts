@@ -173,6 +173,25 @@ describe('applyFormat lists and quotes', () => {
     // The lift really removed the blockquote, not merely dispatched something.
     expect(dispatched().doc.firstChild?.type).toBe(schema.nodes.paragraph)
   })
+
+  // A bare `lift` unwraps the NEAREST liftable parent, which inside `> - mléko` is the
+  // list item — so the quote button used to un-bullet and leave the quote standing. The
+  // ancestor has to be named, or the button undoes something other than what it applies.
+  it('lifts a quoted bullet out of the quote, leaving the bullet alone', () => {
+    const root = doc(quote(list(item(para('mléko')))))
+    applyFormat(mount(root, caretAt(root, 'mléko')), 'quote')
+    const lifted = dispatched().doc
+    expect(lifted.firstChild?.type).toBe(schema.nodes.bullet_list)
+    expect(lifted.firstChild?.textContent).toBe('mléko')
+  })
+
+  // The mirror image, and the reason the list branch never needed this: liftListItem finds
+  // its own range by naming the list, so `•` inside a quoted bullet stays on the bullet.
+  it('lifts the item, not the quote, when the bullet button is pressed inside a quote', () => {
+    const root = doc(quote(list(item(para('mléko')))))
+    applyFormat(mount(root, caretAt(root, 'mléko')), 'bulletList')
+    expect(call).toHaveBeenCalledWith(liftListItemCommand.key)
+  })
 })
 
 describe('applyFormat marks', () => {
@@ -264,7 +283,8 @@ describe('applyFormat schema resolution', () => {
   // The mapping resolves schema types by milkdown's own ids; if one of them ever stopped
   // matching, every test above would still pass against the wrong node.
   it('resolves the milkdown schema ids the mapping depends on', () => {
-    const ctx = mount(doc(para('mléko')), caretAt(doc(para('mléko')), 'mléko'))
+    const root = doc(para('mléko'))
+    const ctx = mount(root, caretAt(root, 'mléko'))
     expect(headingSchema.type(ctx)).toBe(schema.nodes.heading)
     expect(paragraphSchema.type(ctx)).toBe(schema.nodes.paragraph)
     expect(blockquoteSchema.type(ctx)).toBe(schema.nodes.blockquote)
