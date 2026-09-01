@@ -418,12 +418,14 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	if rr := a.get("/api/documents/" + pdf.ID + "/preview"); rr.Code != http.StatusOK {
 		t.Errorf("native preview = %d, want 200", rr.Code)
 	}
-	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run,
-	// with no allow-same-origin — the frame stays origin-opaque.
+	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run
+	// and for Chrome for Android's placeholder to hand the file to the platform viewer
+	// (allow-downloads — without it that "Open" button is dead), with no
+	// allow-same-origin: the frame stays origin-opaque.
 	rr := a.get("/api/documents/" + pdf.ID + "/preview")
 	csp := rr.Header().Get("Content-Security-Policy")
-	if csp != "sandbox allow-scripts" {
-		t.Errorf("pdf preview CSP = %q, want \"sandbox allow-scripts\"", csp)
+	if csp != "sandbox allow-scripts allow-downloads" {
+		t.Errorf("pdf preview CSP = %q, want \"sandbox allow-scripts allow-downloads\"", csp)
 	}
 	if strings.Contains(csp, "allow-same-origin") {
 		t.Error("a preview must never be granted same-origin access")

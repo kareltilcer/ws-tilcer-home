@@ -51,7 +51,18 @@ const (
 // storage, or DOM. Only ever applied to application/pdf, never to a type that could
 // itself be an active document (HTML/SVG never reach this path: they are
 // download-only, preview_kind "none").
-const pdfSandbox = "sandbox allow-scripts"
+//
+// `allow-downloads` is there for PHONES. Chrome for Android does not render a PDF
+// inside a frame at all: it draws its own placeholder — an "Open" button over the
+// word "preview" — whose only job is to hand the file to the platform viewer, which
+// it does by starting a DOWNLOAD from inside the frame. Without this token that
+// download is refused and the button is simply dead, which is the entire mobile
+// preview experience. It grants the framed document nothing it could not already
+// get: /download serves the same bytes to the same session, one button up in the
+// header. Both this header and the iframe's own `sandbox` attribute must carry the
+// token — they are ANDed, so relaxing one alone changes nothing (see PdfPreview in
+// frontend/src/modules/documents/DocumentView.tsx).
+const pdfSandbox = "sandbox allow-scripts allow-downloads"
 
 // strictSandbox is the default for everything else: no capabilities at all.
 const strictSandbox = "sandbox"
