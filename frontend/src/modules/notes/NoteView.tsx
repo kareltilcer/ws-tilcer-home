@@ -139,6 +139,12 @@ const stripUploadToken = (text: string, token: string): string => {
     .join('')
 }
 
+// isBlank is the module's one spelling of "a body with nothing in it". Blank counts as
+// empty throughout this view — a body of "\n" renders as nothing and the user cannot tell
+// the two apart — and two rules turn on that same reading (which surface a note opens on,
+// and whether the surface being entered takes the caret), so they read it from here.
+const isBlank = (text: string) => text.trim() === ''
+
 // NoteView is the standalone note read/edit surface reused verbatim by both the
 // Poznámky pane and the Nástěnka overlay (FR-P8). It owns the note fetch, the
 // three-mode editor (Číst · Vizuální · Markdown over one body_md), autosave
@@ -170,6 +176,7 @@ export function NoteView({
   const [mode, setMode] = useState<Mode>('read')
   const [draft, setDraft] = useState<string | null>(null)
   const [reseed, setReseed] = useState(0) // bump to remount the WYSIWYG editor
+  const [autoFocus, setAutoFocus] = useState(false) // the surface being entered should take the caret
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
   const [pinMenu, setPinMenu] = useState(false)
   const [changedElsewhere, setChangedElsewhere] = useState(false)
@@ -206,6 +213,13 @@ export function NoteView({
       // so it counts as touched from the first render and is never adopted away silently.
       untouched.current = seed.initial === seed.stored
     }
+    // An empty note is an invitation to write, so the surface being entered takes the
+    // caret — which is what raises the keyboard on a phone, where tapping "Vizuální"
+    // otherwise opens an editor you still have to tap a second time to type a word in.
+    // Only when it IS empty: taking the caret on a note that already has text would
+    // slide half of it under a keyboard nobody asked for. A tab click into a session
+    // that is already open carries no seed, so its own draft is the body being entered.
+    setAutoFocus(isBlank(seed ? seed.initial : (draft ?? '')))
     if (m === 'visual') {
       // Crepe reads `defaultValue` once per `reseed` value and never again, so a new
       // seed needs a new editor. Seeding it from a draft that still holds an upload
@@ -237,6 +251,13 @@ export function NoteView({
     syncedBodyRef.current = stored
     setReseed((r) => r + 1)
     staleSeed.current = false // re-seeded from the stored body, which holds no placeholders
+    // Their text arriving is not the user entering anything — and this re-seed remounts
+    // the WYSIWYG editor, so a request left standing from the open would pull the caret
+    // back into it out of wherever the user actually is (renaming the note, say) on
+    // someone else's save. This is one half of the rule; the upload re-seed below is the
+    // other: ONLY the re-seed openEditor itself makes carries a focus request, because
+    // openEditor is the only one the user asked for.
+    setAutoFocus(false)
   }
 
   // structural=true when the change moves the note's tree row or its pinned-notes
@@ -524,7 +545,7 @@ export function NoteView({
       return
     }
     if (mirror !== null) clearDraftMirror(noteId)
-    if (stored.trim() !== '') return
+    if (!isBlank(stored)) return
     // The baseline AND the draft, exactly as a tab click would set them: this IS an edit
     // session, the user just didn't have to ask for it. The baseline keeps a body that is
     // blank but not literally empty ("\n") from reading as someone else's edit and
@@ -546,6 +567,12 @@ export function NoteView({
   useEffect(() => {
     if (!staleSeed.current || uploadsInFlight > 0 || mode !== 'visual') return
     staleSeed.current = false
+    // The other half of adoptStored's rule: a re-seed the user did not ask for drops any
+    // standing focus request. A note CAN be blank with an upload still in flight — paste
+    // an image, then delete the node again while it uploads — and re-entering Vizuální
+    // there arms the request and this re-seed at once, so without this the remount would
+    // pull the caret back out of wherever the wait had left the user.
+    setAutoFocus(false)
     setReseed((r) => r + 1)
   }, [uploadsInFlight, mode])
 
@@ -964,6 +991,11 @@ export function NoteView({
         {mode === 'read' && <MarkdownView>{body}</MarkdownView>}
         {mode === 'markdown' && (
           <textarea
+            // Empty note: the caret starts here, so a phone raises its keyboard on the
+            // tab tap itself — React focuses an autoFocus element during the same commit,
+            // which keeps the tap and the focus one gesture as far as iOS is concerned.
+            // The Vizuální surface cannot promise that (see MilkdownEditor).
+            autoFocus={autoFocus}
             value={body}
             spellCheck={false}
             onChange={(e) => editDraft(e.target.value)}
@@ -985,6 +1017,7 @@ export function NoteView({
               ref={editorRef}
               noteId={noteId}
               defaultValue={body}
+              autoFocus={autoFocus}
               onChange={editDraft}
               onInlineImage={beginInlineImageUpload}
             />
