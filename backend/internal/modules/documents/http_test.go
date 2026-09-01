@@ -3,6 +3,7 @@ package documents_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -29,6 +30,7 @@ type api struct {
 	handler http.Handler
 	svc     *documents.Service
 	blob    blobstore.BlobStore
+	db      *sql.DB
 }
 
 func newAPI(t *testing.T, roles ...string) *api {
@@ -45,7 +47,7 @@ func newAPI(t *testing.T, roles ...string) *api {
 	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	h := documents.NewHandler(svc)
 	handler := testsupport.Router(t, db, h.Mount, roles...)
-	return &api{t: t, handler: handler, svc: svc, blob: store}
+	return &api{t: t, handler: handler, svc: svc, blob: store, db: db}
 }
 
 func (a *api) do(method, path, body string) *httptest.ResponseRecorder {
@@ -124,6 +126,12 @@ func TestHTTP_UploadStreamsMultipartAndAppliesMetadataFields(t *testing.T) {
 	// The response carries the permanent id-based URL block (D42).
 	if d.Urls.Raw != "/api/documents/"+d.ID+"/raw" || d.Urls.Permalink != "/d/"+d.ID {
 		t.Errorf("urls = %+v, want id-based permanent URLs", d.Urls)
+	}
+	// The preview URL carries the SERVER's sandbox cache key. It is pinned here
+	// because the client is not allowed to invent one: the key versions pdfSandbox,
+	// and the whole point of the server owning it is that the two cannot drift.
+	if d.Urls.Preview != "/api/documents/"+d.ID+"/preview?sandbox=2" {
+		t.Errorf("preview url = %q, want the permanent path plus the sandbox cache key", d.Urls.Preview)
 	}
 }
 
@@ -418,15 +426,44 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	if rr := a.get("/api/documents/" + pdf.ID + "/preview"); rr.Code != http.StatusOK {
 		t.Errorf("native preview = %d, want 200", rr.Code)
 	}
-	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run,
-	// with no allow-same-origin — the frame stays origin-opaque.
+	// A PDF preview relaxes the sandbox just enough for the browser's viewer to run
+	// and for Chrome for Android's placeholder to hand the file to the platform viewer
+	// (allow-downloads — without it that "Open" button is dead), with no
+	// allow-same-origin: the frame stays origin-opaque.
 	rr := a.get("/api/documents/" + pdf.ID + "/preview")
 	csp := rr.Header().Get("Content-Security-Policy")
-	if csp != "sandbox allow-scripts" {
-		t.Errorf("pdf preview CSP = %q, want \"sandbox allow-scripts\"", csp)
+	if csp != "sandbox allow-scripts allow-downloads" {
+		t.Errorf("pdf preview CSP = %q, want \"sandbox allow-scripts allow-downloads\"", csp)
 	}
 	if strings.Contains(csp, "allow-same-origin") {
 		t.Error("a preview must never be granted same-origin access")
+	}
+	// A preview is DOWNLOADED and not only framed — that is what allow-downloads is
+	// for — so the response has to name the file. With a bare `inline` the browser has
+	// nothing to use and falls back to the last path segment, so every document a
+	// phone opens this way lands in Downloads as `preview.pdf`, then `preview (1).pdf`.
+	disp := rr.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(disp, "inline") || !strings.Contains(disp, `filename="smlouva.pdf"`) {
+		t.Errorf("pdf preview disposition = %q, want an inline naming smlouva.pdf", disp)
+	}
+	// The policy rides on the 304 as well. A cache updates a stored response's header
+	// fields from the 304 it revalidated with, so a sandbox that only ever travels
+	// with the bytes is frozen into every cache entry the day it was first stored —
+	// and could never be tightened again on a client that already has the file.
+	rr = a.get("/api/documents/"+pdf.ID+"/preview", [2]string{"If-None-Match", `"` + pdf.Checksum + `"`})
+	if rr.Code != http.StatusNotModified {
+		t.Fatalf("preview If-None-Match = %d, want 304", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Security-Policy"); got != csp {
+		t.Errorf("304 preview CSP = %q, want the 200's %q", got, csp)
+	}
+	if rr.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Error("a 304 must refresh nosniff too, for the same reason")
+	}
+	if got := rr.Header().Get("Content-Disposition"); got != disp {
+		t.Errorf("304 preview disposition = %q, want the 200's %q. It is the third D48 "+
+			"header, and a stored `inline` that can never be tightened to `attachment` is "+
+			"the same freeze the sandbox had", got, disp)
 	}
 
 	// pending: an Office file whose conversion has not run yet.
@@ -444,6 +481,48 @@ func TestHTTP_PreviewStates(t *testing.T) {
 	// No thumbnail generated yet → 404, and the UI falls back to a type icon.
 	if rr := a.get("/api/documents/" + pdf.ID + "/thumbnail"); rr.Code != http.StatusNotFound {
 		t.Errorf("missing thumbnail = %d, want 404", rr.Code)
+	}
+}
+
+// TestHTTP_ADerivedPreviewIsNamedForThePDFItActuallyIs covers the branch the native
+// case cannot: a preview_kind "pdf" row streams application/pdf out of a document
+// whose original_filename still ends in .docx.
+//
+// Both ways of getting this wrong are user-visible on a phone, because Chrome for
+// Android saves the file before opening it. A bare `inline` puts `preview.pdf` in
+// Downloads for every document in the household; naming it from original_filename
+// puts a PDF there called "Podmínky.docx", which the platform viewer then refuses.
+// The stem survives and the extension follows the bytes.
+func TestHTTP_ADerivedPreviewIsNamedForThePDFItActuallyIs(t *testing.T) {
+	a := newAPI(t, "editor")
+	// An ASCII filename on purpose: rfc5987's Latin-1 fallback is pinned by its own
+	// test, and this one is about the extension, not the transliteration.
+	docx := a.uploadOK("Podminky pojisteni.docx", zipBytes(), nil)
+
+	// Stand in for the converter: the worker is not running in this harness, so the
+	// derived object and the row it is reached through are written directly.
+	key := "documents/" + docx.ID + "/preview.pdf"
+	pdf := pdfBytes()
+	if err := a.blob.Put(context.Background(), key, bytes.NewReader(pdf), int64(len(pdf)), "application/pdf"); err != nil {
+		t.Fatalf("stage the derived preview: %v", err)
+	}
+	if _, err := a.db.Exec(
+		`UPDATE documents SET preview_kind = 'pdf', preview_status = 'ready', preview_key = ? WHERE id = ?`,
+		key, docx.ID); err != nil {
+		t.Fatalf("mark the preview ready: %v", err)
+	}
+
+	rr := a.get("/api/documents/" + docx.ID + "/preview")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("derived preview = %d, want 200", rr.Code)
+	}
+	disp := rr.Header().Get("Content-Disposition")
+	if !strings.Contains(disp, `filename="Podminky pojisteni.pdf"`) {
+		t.Errorf("derived preview disposition = %q, want the stem with a .pdf extension", disp)
+	}
+	if strings.Contains(disp, ".docx") {
+		t.Errorf("derived preview disposition = %q — these bytes are a PDF, and a phone "+
+			"saves them under this name before handing them to the platform viewer", disp)
 	}
 }
 

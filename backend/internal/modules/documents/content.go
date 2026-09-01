@@ -51,7 +51,44 @@ const (
 // storage, or DOM. Only ever applied to application/pdf, never to a type that could
 // itself be an active document (HTML/SVG never reach this path: they are
 // download-only, preview_kind "none").
-const pdfSandbox = "sandbox allow-scripts"
+//
+// `allow-downloads` is there for PHONES. Chrome for Android does not render a PDF
+// inside a frame at all: it draws its own placeholder — an "Open" button over the
+// word "preview" — whose only job is to hand the file to the platform viewer, which
+// it does by starting a DOWNLOAD from inside the frame. Without this token that
+// download is refused and the button is simply dead, which is the entire mobile
+// preview experience.
+//
+// What the token grants is WIDER than what the button uses, and the honest version
+// of that is worth writing down: a document allowed to start downloads may start
+// them for any URL it can reach, not only for its own bytes. It is acceptable here
+// and would not be everywhere — the only script that runs in this frame is Chrome's
+// own PDF viewer, which exposes no network-capable JavaScript to the document, and a
+// download hands bytes TO the reader rather than out of the household. The line that
+// is never crossed is still `allow-same-origin`.
+//
+// Both this header and the iframe's own `sandbox` attribute must carry the token —
+// they are ANDed, so relaxing one alone changes nothing (see PdfPreview in
+// frontend/src/modules/documents/DocumentView.tsx). ⚠ CHANGING THIS VALUE IS NOT
+// ENOUGH ON ITS OWN: bump previewSandboxVersion below in the same edit.
+const pdfSandbox = "sandbox allow-scripts allow-downloads"
+
+// previewSandboxVersion is a CACHE KEY for the policy above, and the reason it lives
+// HERE rather than in the SPA is the whole point of it. A shared /preview response is
+// `private, immutable, max-age=31536000` (D41/D208), so nothing revalidates it for a
+// year: a header tightened today would not reach a phone that framed the document
+// last month. The only thing that reaches it sooner is a URL no cache has an answer
+// for, so urlsFor stamps `?sandbox=<this>` onto the preview URL it hands the client.
+// The handler never reads it — the query string is ignored end to end.
+//
+// Kept in the SPA instead — one language and one build away from the constant it
+// busts — changing pdfSandbox and forgetting the bump is a one-line mistake that no
+// test on either side can see, and whose only symptom is a security policy quietly
+// not taking effect for a year. Next to the value it versions, the two cannot drift.
+//
+// ⚠ Bump on every change to pdfSandbox. It costs one re-fetch of a PDF the reader
+// had cached, once.
+const previewSandboxVersion = "2"
 
 // strictSandbox is the default for everything else: no capabilities at all.
 const strictSandbox = "sandbox"
@@ -91,6 +128,14 @@ func (h *Handler) serveContent(w http.ResponseWriter, r *http.Request, mode cont
 		// ETag would get a 304 — "yes, and it hasn't changed" — for a document they
 		// may not see.
 		setContentCache(w, etag, sd.Visibility == visibilityPrivate)
+		// The isolation policy rides on the 304 as well, and that is not decoration:
+		// a cache updates a stored response's header fields from the 304 it
+		// revalidated with, so a policy sent only alongside the bytes is frozen into
+		// every cache entry at the moment it was first stored. Without this line a
+		// private document — which revalidates on every single view (D208) — would
+		// go on enforcing whatever sandbox it was first served with, and a tightening
+		// after some future PDF-viewer CVE would reach nobody who already has the file.
+		setIsolationPolicy(w, *sd, mode, contentType)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -214,15 +259,31 @@ func (h *Handler) resolveRange(w http.ResponseWriter, r *http.Request, id, key s
 // storage blip breaks that document in that browser for a year.
 func writeContentHeaders(w http.ResponseWriter, sd storedDocument, mode contentMode, contentType, etag string) {
 	setContentCache(w, etag, sd.Visibility == visibilityPrivate)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	setIsolationPolicy(w, sd, mode, contentType)
 	w.Header().Set("Content-Type", mimeTypeHeader(contentType))
+	w.Header().Set("Accept-Ranges", "bytes")
+}
+
+// setIsolationPolicy stamps the THREE headers that ARE the D48 policy, as opposed to
+// the ones that merely describe the bytes. They are split out because they go on the
+// 304 too — see the If-None-Match branch in serveContent for why a policy that only
+// ever travels with the bytes cannot be changed afterwards.
+//
+// Content-Disposition is one of the three — the package comment above lists it as
+// such — and it is here for exactly the reason the other two are. It is what makes an
+// uploaded .html download instead of executing in home.tilcer.cz, so a stored
+// `inline` that could never be tightened to `attachment` would be the same freeze the
+// sandbox had. A 304 may carry it: RFC 9110 §15.4.5 permits representation metadata
+// whose purpose is guiding a cache update, and Go strips only Content-Type,
+// Content-Length and Transfer-Encoding from a 304.
+func setIsolationPolicy(w http.ResponseWriter, sd storedDocument, mode contentMode, contentType string) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", dispositionFor(mode, contentType, sd.OriginalFilename))
 	if isPDF(contentType) && mode == contentPreview {
 		w.Header().Set("Content-Security-Policy", pdfSandbox)
-	} else {
-		w.Header().Set("Content-Security-Policy", strictSandbox)
+		return
 	}
-	w.Header().Set("Content-Disposition", dispositionFor(mode, contentType, sd.OriginalFilename))
-	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Security-Policy", strictSandbox)
 }
 
 // setContentCache stamps the cache validators. Only ever called on a response that
@@ -323,10 +384,11 @@ func dispositionFor(mode contentMode, contentType, filename string) string {
 	case contentThumbnail:
 		return "inline"
 	case contentPreview:
+		name := previewFilename(contentType, filename)
 		if InlineSafe(contentType) {
-			return "inline"
+			return "inline; " + rfc5987(name)
 		}
-		return "attachment; " + rfc5987(filename)
+		return "attachment; " + rfc5987(name)
 	default: // contentRaw
 		if InlineSafe(contentType) {
 			return "inline; " + rfc5987(filename)
@@ -334,6 +396,28 @@ func dispositionFor(mode contentMode, contentType, filename string) string {
 		// Anything that could execute in home's origin downloads instead.
 		return "attachment; " + rfc5987(filename)
 	}
+}
+
+// previewFilename names the bytes /preview actually serves, which are NOT always the
+// uploaded ones: a derived Office→PDF preview streams application/pdf out of a row
+// whose original_filename still ends in .docx.
+//
+// The name matters because a preview is DOWNLOADED and not only rendered — Chrome for
+// Android's in-frame placeholder hands the file to the platform viewer by saving it
+// first, which is what pdfSandbox's allow-downloads exists for. With a bare `inline`
+// the browser has no name to use and falls back to the last path segment, so every
+// document a phone opens this way lands in Downloads as `preview.pdf`, then
+// `preview (1).pdf`, and the reader cannot tell one from another. Handing back
+// "Podmínky.docx" for a PDF would be the opposite mistake, so a derived preview keeps
+// the stem and takes the .pdf.
+func previewFilename(contentType, filename string) string {
+	if !isPDF(contentType) || strings.HasSuffix(strings.ToLower(filename), ".pdf") {
+		return filename
+	}
+	if i := strings.LastIndexByte(filename, '.'); i > 0 {
+		return filename[:i] + ".pdf"
+	}
+	return filename + ".pdf"
 }
 
 // parseRange parses a single-range `bytes=` header. Multi-range requests are not
