@@ -1,24 +1,10 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import { Crepe } from '@milkdown/crepe'
-import { commandsCtx, editorViewCtx } from '@milkdown/kit/core'
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
-import type { Ctx } from '@milkdown/kit/ctx'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import {
-  blockquoteSchema,
-  bulletListSchema,
-  headingSchema,
-  inlineCodeSchema,
-  paragraphSchema,
-  setBlockTypeCommand,
-  toggleEmphasisCommand,
-  toggleInlineCodeCommand,
-  toggleStrongCommand,
-  wrapInBlockTypeCommand,
-} from '@milkdown/kit/preset/commonmark'
-import { toggleLinkCommand } from '@milkdown/kit/component/link-tooltip'
+import { applyFormat, type NoteEditorHandle } from './noteFormat'
 import { toast } from 'sonner'
 import '@milkdown/crepe/theme/common/style.css'
 import './crepe-theme.css'
@@ -305,79 +291,6 @@ function inlineImageUploads(opts: {
   }
 }
 
-// NoteFormatCommand is the closed set the Vizuální toolbar can ask for: the minimal bar
-// the design draws (headings, bold/italic, list, quote, code, link) and no more — this is
-// a household notes app, not a CMS. The toolbar itself lives in the host, because it has
-// to sit outside the scrolling body; naming commands rather than exporting milkdown's own
-// is what lets it do that without dragging ProseMirror into the landing bundle.
-export type NoteFormatCommand = 'h1' | 'h2' | 'bold' | 'italic' | 'bulletList' | 'quote' | 'code' | 'link'
-
-// NoteEditorHandle is the toolbar's whole reach into the editor.
-export type NoteEditorHandle = { format: (command: NoteFormatCommand) => void }
-
-// applyFormat maps one toolbar command onto milkdown's commands. The mapping mirrors
-// Crepe's own `top-bar` feature (which ships disabled, and English) command for command,
-// so the toolbar, the slash menu and the keymap can never disagree about what a given
-// piece of formatting means.
-function applyFormat(ctx: Ctx, command: NoteFormatCommand) {
-  const commands = ctx.get(commandsCtx)
-  const view = ctx.get(editorViewCtx)
-  switch (command) {
-    case 'h1':
-    case 'h2': {
-      // Two buttons and no "normal text" entry beside them, so a heading button is also
-      // the only way back OUT of a heading: on a block that already is this level, return
-      // it to a paragraph rather than re-applying the level it has, which would look like
-      // a dead button.
-      const level = command === 'h1' ? 1 : 2
-      const { parent } = view.state.selection.$from
-      const active = parent.type === headingSchema.type(ctx) && parent.attrs.level === level
-      commands.call(
-        setBlockTypeCommand.key,
-        active ? { nodeType: paragraphSchema.type(ctx) } : { nodeType: headingSchema.type(ctx), attrs: { level } },
-      )
-      break
-    }
-    case 'bold':
-      commands.call(toggleStrongCommand.key)
-      break
-    case 'italic':
-      commands.call(toggleEmphasisCommand.key)
-      break
-    case 'bulletList':
-      commands.call(wrapInBlockTypeCommand.key, { nodeType: bulletListSchema.type(ctx) })
-      break
-    case 'quote':
-      commands.call(wrapInBlockTypeCommand.key, { nodeType: blockquoteSchema.type(ctx) })
-      break
-    case 'code': {
-      // With nothing selected there is no range to mark, so toggling code has to arm the
-      // NEXT characters typed instead — a stored mark. Without this the button does
-      // nothing at all on an empty caret, which is exactly where someone reaches for it.
-      const { state } = view
-      if (!state.selection.empty) {
-        commands.call(toggleInlineCodeCommand.key)
-        break
-      }
-      const markType = inlineCodeSchema.type(ctx)
-      const armed = (state.storedMarks ?? state.selection.$from.marks()).some((m) => m.type === markType)
-      view.dispatch(armed ? state.tr.removeStoredMark(markType) : state.tr.addStoredMark(markType.create()))
-      break
-    }
-    case 'link':
-      // The LINK TOOLTIP's ToggleLink, not commonmark's: it opens the URL editor over the
-      // selection and focuses that input a frame later, so this branch returns without
-      // pulling focus back into the doc. Commonmark's would apply a link mark with an
-      // empty href and leave no way to fill one in.
-      commands.call(toggleLinkCommand.key)
-      return
-  }
-  // A keyboard activation (Tab to the button, Enter) genuinely moved focus out of the
-  // editor — the pointer path never does, since the button prevents its own mousedown.
-  // Put the caret back either way, so typing continues where the formatting just landed.
-  view.focus()
-}
-
 export function MilkdownEditor({
   noteId,
   defaultValue,
@@ -468,6 +381,13 @@ export function MilkdownEditor({
     // adopting the first markdownUpdated emission — means the user's first real edit
     // is never swallowed, even if Crepe emits no initial markdownUpdated at all.
     let baseline: string | null = null
+    // …and the baseline is disarmed the moment a genuine emission gets through. Left
+    // armed for the editor's whole life it also swallows the emission that brings the doc
+    // BACK to the text it was seeded with — unbold what you just bolded, delete what you
+    // just typed, undo — and the draft then keeps the intermediate version the user has
+    // just taken back, which is what autosave persists while the editor shows the
+    // original. The formatting toolbar makes that a two-click path (B, then B again).
+    let edited = false
 
     // forward is the one gate every emission passes through. It runs on markdownUpdated
     // and again whenever a placeholder is minted (see onTokenMinted).
@@ -497,7 +417,8 @@ export function MilkdownEditor({
         // the load-bearing half of this.
         if (pendingInlineImageRefs(out).length) return
       }
-      if (out === baseline) return
+      if (!edited && out === baseline) return
+      edited = true
       onChangeRef.current(out)
     }
 

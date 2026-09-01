@@ -1,5 +1,5 @@
 import { cs } from '@/i18n/cs'
-import type { NoteFormatCommand } from './MilkdownEditor'
+import type { NoteFormatCommand } from './noteFormat'
 
 // VisualToolbar is the formatting bar of the Vizuální mode — the one thing the design
 // has drawn since v3 that the WYSIWYG surface shipped without, leaving every heading,
@@ -7,9 +7,9 @@ import type { NoteFormatCommand } from './MilkdownEditor'
 //
 // It renders in NoteView's column rather than inside the editor, because the design puts
 // it OUTSIDE the scrolling body: a formatting bar that scrolls away halfway down a note
-// is a bar you have to go looking for. The commands themselves live with the editor
-// (MilkdownEditor's applyFormat); this file names them and imports nothing else from
-// there but a type, so ProseMirror stays out of the landing bundle.
+// is a bar you have to go looking for. What the commands DO lives in noteFormat's
+// applyFormat, beside the milkdown imports; this file takes nothing from there but the
+// type naming them, which erases at build, so ProseMirror stays out of the landing bundle.
 //
 // Crepe ships a bar of its own (`top-bar`, off by default) and it is not this one: it is
 // English-labelled, reaches well past the minimal set — tables, task lists, LaTeX — and

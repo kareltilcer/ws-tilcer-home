@@ -15,7 +15,7 @@ import { Spinner } from '@/components/ui/ui'
 import { MarkdownView } from '@/components/common/MarkdownView'
 import { VisualToolbar } from './VisualToolbar'
 import { MAX_INLINE_IMAGE_DATA_LEN } from './inlineImage'
-import type { NoteEditorHandle } from './MilkdownEditor'
+import type { NoteEditorHandle } from './noteFormat'
 
 // Milkdown (Crepe) is heavy (ProseMirror + CodeMirror). Lazy-load it so it stays
 // out of the landing bundle and is fetched only when someone opens the WYSIWYG

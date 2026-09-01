@@ -153,7 +153,7 @@ export const cs = {
     toolbarCode: 'Kód',
     toolbarLink: 'Odkaz',
     // Crepe's link tooltip, which the ↗ button is the ordinary way into. Its own
-    // default is the English „Paste link…".
+    // default is the English "Paste link…".
     linkPlaceholder: 'Vlož odkaz…',
     // organisation
     rename: 'Přejmenovat',
@@ -190,7 +190,7 @@ export const cs = {
     badgeBoth: 'Pro všechny',
     // sharing
     copyLink: 'Odkaz',
-    // The face says only „Odkaz", which the Vizuální toolbar's link button is also
+    // The face says only "Odkaz", which the Vizuální toolbar's link button is also
     // called: spoken aloud the two were indistinguishable, so this one says which.
     copyLinkLabel: 'Kopírovat odkaz',
     copyLinkTitle: 'Zkopírovat odkaz — otevře se jen přihlášeným členům domácnosti',
