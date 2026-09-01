@@ -491,11 +491,12 @@ func TestHTTP_PreviewStates(t *testing.T) {
 // case cannot: a preview_kind "pdf" row streams application/pdf out of a document
 // whose original_filename still ends in .docx.
 //
-// Both ways of getting this wrong are user-visible on a phone, because Chrome for
-// Android saves the file before opening it. A bare `inline` puts `preview.pdf` in
-// Downloads for every document in the household; naming it from original_filename
-// puts a PDF there called "Podmínky.docx", which the platform viewer then refuses.
-// The stem survives and the extension follows the bytes.
+// Both ways of getting this wrong are user-visible on a phone: Chrome for Android's
+// placeholder opens the preview in a tab of its own and the file is saved from there,
+// under this same response and so under this same name. A bare `inline` puts
+// `preview.pdf` in Downloads for every document in the household; naming it from
+// original_filename puts a PDF there called "Podmínky.docx", which the platform viewer
+// then refuses. The stem survives and the extension follows the bytes.
 func TestHTTP_ADerivedPreviewIsNamedForThePDFItActuallyIs(t *testing.T) {
 	a := newAPI(t, "editor")
 	// An ASCII filename on purpose: rfc5987's Latin-1 fallback is pinned by its own
@@ -525,7 +526,7 @@ func TestHTTP_ADerivedPreviewIsNamedForThePDFItActuallyIs(t *testing.T) {
 	}
 	if strings.Contains(disp, ".docx") {
 		t.Errorf("derived preview disposition = %q — these bytes are a PDF, and a phone "+
-			"saves them under this name before handing them to the platform viewer", disp)
+			"saves them under this name out of the tab the placeholder opens", disp)
 	}
 }
 

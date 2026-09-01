@@ -419,9 +419,12 @@ function DocumentPreview({ doc, mode }: { doc: DocumentDetail; mode: ReturnType<
 // That inheritance is also what BOUNDS the grant, which is wider than the one button
 // that needs it: a PDF is not inert — the browser's viewer runs the JavaScript and link
 // annotations the file carries — so it may open a tab for any URL it can reach, unasked.
-// Whatever lands there is sandboxed exactly as this frame is: opaque origin, no reach
-// into home's cookies or DOM, and no `allow-forms`, so a page imitating a login screen
-// has nowhere to send what is typed into it.
+// What the bound covers is the ORIGIN, not the network: whatever lands there is
+// sandboxed exactly as this frame is, so it is origin-opaque, cannot reach home's
+// cookies or DOM, and cannot submit a form — but it keeps `allow-scripts`, and a
+// scripted page can still talk to the network from an opaque origin. The guarantee is
+// "nothing of home's leaks", not "nothing leaks", and for the household's own uploads
+// that is the right one.
 //
 // `allow-downloads` stays for a different job than the one it was added for: saving
 // the PDF out of the tab the button opens, which inherits these flags.

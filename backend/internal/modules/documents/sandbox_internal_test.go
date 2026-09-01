@@ -6,20 +6,26 @@ import "testing"
 // behaviour test: it asserts a pair of constants against literals, which is
 // normally a test that only restates the code.
 //
-// It earns its place because the invariant it guards is not checkable any other
-// way and has already been broken in production. pdfSandbox is enforced by the
-// browser; previewSandboxVersion is what makes a browser ASK for it again. A SHARED
-// /preview response is `private, immutable, max-age=31536000` (a private one
-// revalidates on every view under D208 and takes the policy off the 304, which is the
-// one path that needs no bump), so a policy changed without a bump reaches nobody who
-// has already opened a shared document — for a year, silently, with every test on
-// both sides still green. That is precisely what
-// happened when `allow-popups` was found to be the token the Android placeholder
-// actually wanted: without the bump the second fix would have looked as ineffective
-// as the first.
+// It earns its place because the invariant it guards is not checkable any other way.
+// pdfSandbox is enforced by the browser; previewSandboxVersion is what makes a browser
+// ASK for it again. A SHARED /preview response is `private, immutable, max-age=31536000`
+// (a private one revalidates on every view under D208 and takes the policy off the 304,
+// which is the one path that needs no bump), so a policy changed without a bump reaches
+// nobody who has already opened a shared document — for a year, silently, with every
+// test on both sides still green. That is what the `allow-popups` fix would have run
+// into had the bump been forgotten: the second attempt would have looked as ineffective
+// as the first, for the opposite reason. The bump was not forgotten, and this test is
+// what makes the next one just as hard to forget.
 //
-// So changing pdfSandbox alone fails here, and the failure says what to do.
-func TestPreviewSandboxVersionIsBumpedWithThePolicy(t *testing.T) {
+// ⚠ WHAT IT CAN AND CANNOT DO. It cannot verify that a bump HAPPENED — the version is a
+// literal on both sides, so someone who edits pdfSandbox and updates only `policy` below
+// leaves this green. What it can do is make a policy edit impossible to make SILENTLY:
+// the first assertion fails on any change to the policy, and its message is where the
+// reader is told to bump. The second is the same forcing move pointed the other way, so
+// a bump cannot be made without reading this file either. It is a stop sign, not a lock
+// — the lock would be deriving the key from a hash of the policy, at the cost of a value
+// that can no longer be grepped, read out of a URL, or recognised in a log line.
+func TestPdfSandboxAndItsCacheKeyArePinnedTogether(t *testing.T) {
 	const (
 		policy  = "sandbox allow-scripts allow-downloads allow-popups"
 		version = "3"

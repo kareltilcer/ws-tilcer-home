@@ -70,15 +70,20 @@ const (
 // SPA's "Otevřít v novém okně" link, which is the one path that worked on a phone
 // throughout.
 //
-// What the token grants is WIDER than what the button uses, and the honest version of
-// that is worth writing down: a PDF is not inert — Chrome's viewer runs the JavaScript
+// What these tokens grant is WIDER than what the button uses, and the honest version of
+// that is worth writing down. A PDF is not inert — Chrome's viewer runs the JavaScript
 // and the link annotations the file carries — so a document allowed to open windows may
-// open one for any URL it can reach, unasked. It is acceptable here because the
-// inheritance above is what BOUNDS it: whatever lands in that tab is sandboxed exactly
-// as the frame is, so it is origin-opaque, has no path to home's cookies or DOM, and
-// cannot so much as submit a form — `allow-forms` is not granted, so a page that
-// imitates a login screen has nowhere to send what is typed into it. The uploads are
-// the household's own, and the line that is never crossed is still `allow-same-origin`.
+// open one for any URL it can reach, unasked, and a document allowed to start downloads
+// may start them for any URL too, not only for its own bytes.
+//
+// What the inheritance above BOUNDS is the ORIGIN, not the network: whatever lands in
+// that tab is sandboxed exactly as the frame is, so it is origin-opaque, has no path to
+// home's cookies, storage or DOM, and cannot submit a form. It is NOT cut off from the
+// network — a document holding `allow-scripts` can still fetch, beacon or load an image
+// wherever it likes, opaque origin or not — so what is bounded is "nothing of home's
+// leaks", which is not the same as "nothing leaks". That is the right bound for these
+// bytes: the uploads are the household's own, a download hands bytes TO the reader, and
+// the line that is never crossed is still `allow-same-origin`.
 //
 // `allow-downloads` is kept, and its reason is NOT the button. It is what lets the
 // reader save the PDF out of the tab the button opens (which inherits these flags) and
@@ -424,12 +429,11 @@ func dispositionFor(mode contentMode, contentType, filename string) string {
 // The name matters because a preview is SAVED and not only rendered — Chrome for
 // Android's in-frame placeholder hands the file to the platform viewer by opening it in
 // a tab of its own (pdfSandbox's allow-popups), and the save happens from there, under
-// this same response and so under this same name. With a bare `inline`
-// the browser has no name to use and falls back to the last path segment, so every
-// document a phone opens this way lands in Downloads as `preview.pdf`, then
-// `preview (1).pdf`, and the reader cannot tell one from another. Handing back
-// "Podmínky.docx" for a PDF would be the opposite mistake, so a derived preview keeps
-// the stem and takes the .pdf.
+// this same response and so under this same name. With a bare `inline` the browser has
+// no name to use and falls back to the last path segment, so every document a phone
+// opens this way lands in Downloads as `preview.pdf`, then `preview (1).pdf`, and the
+// reader cannot tell one from another. Handing back "Podmínky.docx" for a PDF would be
+// the opposite mistake, so a derived preview keeps the stem and takes the .pdf.
 func previewFilename(contentType, filename string) string {
 	if !isPDF(contentType) || strings.HasSuffix(strings.ToLower(filename), ".pdf") {
 		return filename
