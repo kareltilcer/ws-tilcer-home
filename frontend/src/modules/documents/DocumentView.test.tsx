@@ -8,11 +8,11 @@ import { DocumentView } from './DocumentView'
 // THE PDF FRAME'S SANDBOX. The token list is a security boundary (D48) that is also
 // load-bearing for the reader, and the two pulls are in opposite directions — which
 // is why it is pinned rather than left to the comment beside it. Too strict and the
-// preview is dead on a phone: Chrome for Android renders no PDF in a frame at all,
-// only its own "Open" placeholder, which hands the file to the platform viewer by
-// starting a download — refused, silently, when allow-downloads is missing. Too
-// loose and the frame stops being isolated: allow-same-origin would put arbitrary
-// uploaded bytes inside home's origin, with its cookies and its DOM.
+// preview is dead on a phone: Chrome for Android renders no PDF in a frame at all, only
+// its own "Open" placeholder, whose button calls window.open — refused, silently, when
+// allow-popups is missing. Too loose and the frame stops being isolated:
+// allow-same-origin would put arbitrary uploaded bytes inside home's origin, with its
+// cookies and its DOM. What each token is for: pdfSandbox in content.go.
 //
 // The header half of the same contract lives in the Go test (TestHTTP_PreviewStates).
 // Both must carry a token for it to have any effect — the attribute and the response
@@ -64,7 +64,7 @@ const doc = (overrides: Partial<DocumentDetail> = {}): DocumentDetail => ({
     permalink: `/d/${DOC_ID}`,
     raw: `/api/documents/${DOC_ID}/raw`,
     download: `/api/documents/${DOC_ID}/download`,
-    preview: `/api/documents/${DOC_ID}/preview?sandbox=2`,
+    preview: `/api/documents/${DOC_ID}/preview?sandbox=3`,
     thumbnail: `/api/documents/${DOC_ID}/thumbnail`,
   },
   ...overrides,
@@ -91,11 +91,12 @@ describe('DocumentView PDF preview', () => {
     renderDocument()
 
     await waitFor(() => expect(frame()).not.toBeNull())
-    // Exactly these two — the whole set, not a containment check. The Go half is
-    // pinned to the same string, and "contains allow-scripts" would have let a later
-    // allow-popups or allow-forms in without a word, which is the drift this file
-    // exists to catch.
-    expect(frame()!.getAttribute('sandbox')).toBe('allow-scripts allow-downloads')
+    // Exactly these three — the whole set, not a containment check. The Go half is
+    // pinned to the same string, and "contains allow-scripts" would let a later
+    // allow-forms or allow-popups-to-escape-sandbox in without a word, which is the
+    // drift this file exists to catch. allow-popups itself cost a device error, a
+    // review and a version bump to arrive; a fourth token should cost the same.
+    expect(frame()!.getAttribute('sandbox')).toBe('allow-scripts allow-downloads allow-popups')
   })
 
   it('never grants the frame same-origin access', async () => {

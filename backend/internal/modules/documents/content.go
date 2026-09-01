@@ -52,26 +52,50 @@ const (
 // itself be an active document (HTML/SVG never reach this path: they are
 // download-only, preview_kind "none").
 //
-// `allow-downloads` is there for PHONES. Chrome for Android does not render a PDF
-// inside a frame at all: it draws its own placeholder — an "Open" button over the
-// word "preview" — whose only job is to hand the file to the platform viewer, which
-// it does by starting a DOWNLOAD from inside the frame. Without this token that
-// download is refused and the button is simply dead, which is the entire mobile
-// preview experience.
+// `allow-popups` is there for PHONES. Chrome for Android does not render a PDF inside
+// a frame at all: it draws its own placeholder with an "Open" button, and that button
+// calls window.open on the framed URL. Without this token the call is refused and the
+// button is simply dead, which is the entire mobile preview experience. The refusal is
+// visible only in a remote-debugging console, which is why this first shipped as
+// `allow-downloads` on the guess that the button saved the file; the device said
+// otherwise, verbatim:
 //
-// What the token grants is WIDER than what the button uses, and the honest version
-// of that is worth writing down: a document allowed to start downloads may start
-// them for any URL it can reach, not only for its own bytes. It is acceptable here
-// and would not be everywhere — the only script that runs in this frame is Chrome's
-// own PDF viewer, which exposes no network-capable JavaScript to the document, and a
-// download hands bytes TO the reader rather than out of the household. The line that
-// is never crossed is still `allow-same-origin`.
+//	Blocked opening '…/preview?sandbox=2' in a new window because the request was
+//	made in a sandboxed frame whose 'allow-popups' permission is not set.
 //
-// Both this header and the iframe's own `sandbox` attribute must carry the token —
+// Deliberately NOT `allow-popups-to-escape-sandbox`: without it the opened tab INHERITS
+// these flags, so it is sandboxed exactly as the frame was — the same terms the SPA's
+// "Otevřít v novém okně" fallback already loads this response under.
+//
+// ⚠ WHAT THE PHONE DOES NEXT IS UNTESTED. No Android device was available; what is
+// measured is only that the call the device's error names is permitted now and was
+// refused before. Whether the opened tab renders the PDF or downloads it and hands it
+// to Android's own viewer has not been seen, so nothing here rests on which it is.
+// `allow-downloads` is kept to cover the second case and any manual save — out of that
+// tab or out of the fallback tab, both of which load this same sandboxed response — and
+// previewFilename below is what names that save. If a device ever shows the tab
+// rendering, this is the token to try removing.
+//
+// What these tokens grant is WIDER than the one button that needs them, and the honest
+// version of that is worth writing down. A PDF is not inert — the viewer runs the
+// JavaScript and the link annotations the file carries — so a malicious upload could
+// point a click at a window of its choosing, or at a download of some URL other than
+// its own bytes.
+//
+// What the inheritance above BOUNDS is the ORIGIN, not the network: whatever lands in
+// that tab is sandboxed exactly as the frame is, so it is origin-opaque, has no path to
+// home's cookies, storage or DOM, and cannot submit a form. It is NOT cut off from the
+// network — a document holding `allow-scripts` can still fetch, beacon or load an image
+// wherever it likes, opaque origin or not — so what is bounded is "nothing of home's
+// leaks", which is not the same as "nothing leaks". That is the right bound for these
+// bytes: the uploads are the household's own, and the line that is never crossed is
+// still `allow-same-origin`.
+//
+// Both this header and the iframe's own `sandbox` attribute must carry every token —
 // they are ANDed, so relaxing one alone changes nothing (see PdfPreview in
 // frontend/src/modules/documents/DocumentView.tsx). ⚠ CHANGING THIS VALUE IS NOT
 // ENOUGH ON ITS OWN: bump previewSandboxVersion below in the same edit.
-const pdfSandbox = "sandbox allow-scripts allow-downloads"
+const pdfSandbox = "sandbox allow-scripts allow-downloads allow-popups"
 
 // previewSandboxVersion is a CACHE KEY for the policy above, and the reason it lives
 // HERE rather than in the SPA is the whole point of it. A shared /preview response is
@@ -87,8 +111,10 @@ const pdfSandbox = "sandbox allow-scripts allow-downloads"
 // not taking effect for a year. Next to the value it versions, the two cannot drift.
 //
 // ⚠ Bump on every change to pdfSandbox. It costs one re-fetch of a PDF the reader
-// had cached, once.
-const previewSandboxVersion = "2"
+// had cached, once. (2 → 3 when allow-popups was added: a SHARED preview is immutable
+// for a year, so without the bump a phone that had already framed one would have kept
+// the old policy; a private one revalidates and takes the change off the 304.)
+const previewSandboxVersion = "3"
 
 // strictSandbox is the default for everything else: no capabilities at all.
 const strictSandbox = "sandbox"
@@ -402,11 +428,11 @@ func dispositionFor(mode contentMode, contentType, filename string) string {
 // uploaded ones: a derived Office→PDF preview streams application/pdf out of a row
 // whose original_filename still ends in .docx.
 //
-// The name matters because a preview is DOWNLOADED and not only rendered — Chrome for
-// Android's in-frame placeholder hands the file to the platform viewer by saving it
-// first, which is what pdfSandbox's allow-downloads exists for. With a bare `inline`
-// the browser has no name to use and falls back to the last path segment, so every
-// document a phone opens this way lands in Downloads as `preview.pdf`, then
+// The name matters because a preview can be SAVED and not only rendered — out of the
+// tab Chrome for Android's placeholder opens (pdfSandbox's allow-popups), or out of the
+// SPA's fallback tab, both serving this same response and so this same name. With a
+// bare `inline` the browser has no name to use and falls back to the last path segment,
+// so every document a phone opens this way lands in Downloads as `preview.pdf`, then
 // `preview (1).pdf`, and the reader cannot tell one from another. Handing back
 // "Podmínky.docx" for a PDF would be the opposite mistake, so a derived preview keeps
 // the stem and takes the .pdf.

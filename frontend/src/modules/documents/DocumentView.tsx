@@ -399,22 +399,19 @@ function DocumentPreview({ doc, mode }: { doc: DocumentDetail; mode: ReturnType<
 
 // PdfPreview renders a PDF (or a derived Office→PDF) in a SANDBOXED iframe.
 //
-// The sandbox is `allow-scripts allow-downloads` and deliberately NOT
+// The sandbox is `allow-scripts allow-downloads allow-popups` and deliberately NOT
 // `allow-same-origin`: the browser's built-in PDF viewer is script-driven and shows
 // nothing without the first, while withholding the last keeps the frame in an opaque
-// origin, unable to touch home's cookies or DOM. The backend sets a matching CSP on
-// the response, and the two are ANDed — a token added here and not there does
-// nothing at all (see pdfSandbox in backend/internal/modules/documents/content.go).
+// origin, unable to touch home's cookies or DOM. `allow-popups` is what makes the frame
+// usable ON A PHONE — Chrome for Android draws its own "Open" placeholder instead of the
+// PDF, and that button calls window.open, refused and silently dead without the token.
 //
-// `allow-downloads` is what makes the frame usable ON A PHONE. Chrome for Android
-// never renders the PDF itself; it draws its own placeholder with an "Open" button,
-// and that button hands the file to the platform viewer by starting a download from
-// inside the frame. While the token was missing the download was refused and the
-// button did nothing — silently, with no way for the reader to tell why. What the
-// token grants is wider than that one button uses — a document allowed to download
-// may download any URL, not only its own bytes — and it is granted anyway because
-// the only script in this frame is the browser's PDF viewer, which hands the
-// document no network-capable JavaScript; `allow-same-origin` is still refused.
+// The backend sets a matching CSP on the response and the two are ANDed, so a token
+// added here and not there does nothing at all. THE FULL ACCOUNT — what each token is
+// for, what the grant does and does not bound, and what is still untested on a device —
+// lives with the header, beside the cache key that versions it: pdfSandbox in
+// backend/internal/modules/documents/content.go. Keep this list identical to that one;
+// the reasoning is kept in one place on purpose, having gone stale in several at once.
 //
 // Some browsers still refuse to render a PDF in a sandboxed frame, so an explicit
 // "open in a new tab" fallback sits under the frame — the user is never stuck. It
@@ -433,7 +430,7 @@ function PdfPreview({ doc }: { doc: DocumentDetail }) {
       <iframe
         src={doc.urls.preview}
         title={`${cs.documents.previewFrameLabel}: ${doc.title}`}
-        sandbox="allow-scripts allow-downloads"
+        sandbox="allow-scripts allow-downloads allow-popups"
         className="h-[65vh] min-h-[360px] w-full rounded-[10px] border border-border-strong bg-s2"
       />
       <div className="flex items-center justify-center gap-2">

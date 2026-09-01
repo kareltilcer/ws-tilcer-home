@@ -113,11 +113,9 @@ export const deleteDocumentFolder = (id: string, opts: { cascade?: boolean; hard
 export const moveDocumentFolder = (id: string, body: { parent_id?: string | null; position: string }) =>
   apiFetch<DocFolder>(`/api/documents/folders/${encodeURIComponent(id)}/move`, { method: 'POST', body })
 
-/** documentContentUrl builds a content URL for an <img>/<iframe>/anchor target.
- *  These are permanent and household-only: they carry the session cookie and are
- *  never presigned storage links. */
-export const documentContentUrl = (id: string, kind: 'raw' | 'download' | 'preview' | 'thumbnail') =>
-  `/api/documents/${encodeURIComponent(id)}/${kind}`
+/* No client-side content-URL builder, on purpose: every <img>/<iframe>/anchor target
+ * comes from `doc.urls`, and a rebuilt `preview` would drop the `?sandbox=<n>` cache key
+ * the server stamps on it (see PdfPreview in ../DocumentView.tsx). */
 
 export const publishDocument = (id: string, body: PublishRequest = {}) =>
   apiFetch<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/publish`, {
