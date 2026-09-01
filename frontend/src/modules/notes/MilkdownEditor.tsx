@@ -297,13 +297,26 @@ function inlineImageUploads(opts: {
 // It can only run once create() has resolved: the ProseMirror view it focuses is what
 // create() builds, and reaching into the ctx before then throws.
 //
+// WHICH IS WHY IT ASKS FIRST. create() takes tens of milliseconds even on a warm cache,
+// and the caret can have moved by then — the rename field one header up opens on a tap,
+// takes the caret itself, and COMMITS THE TITLE when it loses it. Pulling focus out of
+// there is the same theft the host refuses on its re-seeds, so refuse it here too and
+// leave the caret where the user put it. What still counts as unclaimed: nothing focused
+// at all, whatever held focus when this editor mounted (Chrome leaves the "Vizuální" tab
+// button focused after the tap that opened us), an ANCESTOR of our root (the Nástěnka
+// overlay's dialog focuses itself on open), and anything already inside the editor.
+//
 // ⚠ THE PHONE KEYBOARD THIS IS MEANT TO RAISE MAY STAY DOWN ON iOS. Safari opens the
 // keyboard only for a focus() that is still part of the tap that asked for it, and
 // create() is a promise — the tap is over by the time there is a view to focus. The caret
 // still lands, so the note is one tap from being written in rather than two, and the
 // Markdown tab (a plain textarea, focused in the same commit as the tap) is the surface
 // that raises the keyboard reliably there.
-function focusDoc(crepe: Crepe) {
+function focusDoc(crepe: Crepe, root: HTMLElement, opened: Element | null) {
+  const active = document.activeElement
+  const unclaimed =
+    active === null || active === document.body || active === opened || active.contains(root) || root.contains(active)
+  if (!unclaimed) return
   try {
     crepe.editor.action((ctx) => ctx.get(editorViewCtx).focus())
   } catch {
@@ -364,6 +377,9 @@ export function MilkdownEditor({
   useEffect(() => {
     const root = hostRef.current
     if (!root) return
+    // Whatever holds the caret at this moment is focusDoc's baseline for "the user has
+    // not moved it since we opened" — read now, while create() is still ahead of us.
+    const openedWith = document.activeElement
     const crepe = new Crepe({
       root,
       defaultValue,
@@ -478,7 +494,7 @@ export function MilkdownEditor({
         if (disposed) return
         baseline = crepe.getMarkdown()
         ready.current = crepe // the toolbar can reach a view from here on
-        if (autoFocus) focusDoc(crepe)
+        if (autoFocus) focusDoc(crepe, root, openedWith)
       })
       .catch(() => {
         /* editor failed to mount — the raw Markdown tab remains the escape hatch */

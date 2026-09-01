@@ -17,12 +17,13 @@ import { NoteView } from './NoteView'
 
 const getNote = vi.hoisted(() => vi.fn())
 const updateNote = vi.hoisted(() => vi.fn())
+const uploadNoteImage = vi.hoisted(() => vi.fn())
 vi.mock('./api/endpoints', () => ({
   getNote,
   updateNote,
   pinNote: vi.fn(),
   unpinNote: vi.fn(),
-  uploadNoteImage: vi.fn(),
+  uploadNoteImage,
 }))
 
 const auth = vi.hoisted(() => ({ canWrite: true }))
@@ -42,17 +43,20 @@ vi.mock('@/app/auth', () => ({
 // whether the caret was asked for — which is as far as either can be proven without a
 // real editor under it: putting the caret in a document is milkdown's half of that.
 const EMITTED = vi.hoisted(() => 'napsáno ve Vizuálním')
+const PASTED_IMAGE = vi.hoisted(() => 'data:image/png;base64,AAAA')
 const formatted = vi.hoisted(() => [] as string[])
 vi.mock('./MilkdownEditor', () => ({
   MilkdownEditor: ({
     defaultValue,
     autoFocus,
     onChange,
+    onInlineImage,
     ref,
   }: {
     defaultValue: string
     autoFocus?: boolean
     onChange: (md: string) => void
+    onInlineImage: (src: string) => { token: string; url: Promise<string | null> }
     ref?: Ref<{ format: (command: string) => void }>
   }) => {
     useImperativeHandle(ref, () => ({ format: (command: string) => formatted.push(command) }), [])
@@ -61,6 +65,17 @@ vi.mock('./MilkdownEditor', () => ({
         {defaultValue}
         <button type="button" onClick={() => onChange(EMITTED)}>
           emit
+        </button>
+        {/* A pasted image, handed over the way the real editor hands one over: the HOST
+            mints the placeholder and owns the upload, and the editor's next emission is
+            what actually carries that placeholder into the draft. */}
+        <button type="button" onClick={() => onChange(`![](${onInlineImage(PASTED_IMAGE).token})`)}>
+          paste image
+        </button>
+        {/* …and the emission that follows deleting that image node again, which leaves
+            the note blank with its upload still running. */}
+        <button type="button" onClick={() => onChange('')}>
+          emit empty
         </button>
       </div>
     )
@@ -95,8 +110,10 @@ function resetApi() {
   auth.canWrite = true
   formatted.length = 0
   localStorage.clear()
+  vi.unstubAllGlobals()
   getNote.mockReset()
   updateNote.mockReset()
+  uploadNoteImage.mockReset()
   updateNote.mockImplementation(async (_id: string, patch: { body_md?: string }) => note(patch.body_md ?? ''))
 }
 
@@ -423,5 +440,27 @@ describe('NoteView autofocus on an empty note', () => {
     qc.setQueryData(qk.noteDetail(NOTE_ID), note('nákup: mléko'))
     expect(await screen.findByText('nákup: mléko')).toBeInTheDocument()
     expect(screen.getByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'false')
+  })
+
+  // The OTHER re-seed the user never asked for: the one that waits for a pasted image's
+  // upload. A note can be blank with an upload still in flight — paste an image, delete
+  // the node again — so re-entering Vizuální there arms the request and that re-seed at
+  // once, and the remount it performs must drop the request just as the adopt above does.
+  it('does not grab the caret when the upload re-seed remounts the editor', async () => {
+    // beginInlineImageUpload reads the pasted src's bytes with fetch(); jsdom has no
+    // network and the bytes are beside the point — only that an upload goes in flight.
+    vi.stubGlobal('fetch', async () => ({ blob: async () => new Blob(['x']) }))
+    let landUpload: (v: { url: string }) => void = () => {}
+    uploadNoteImage.mockImplementation(() => new Promise<{ url: string }>((r) => (landUpload = r)))
+    getNote.mockResolvedValue(note(''))
+    renderNote()
+    await screen.findByTestId('visual-editor')
+    await userEvent.click(screen.getByRole('button', { name: 'paste image' }))
+    await userEvent.click(screen.getByRole('button', { name: 'emit empty' }))
+    await userEvent.click(readTab())
+    await userEvent.click(visualTab())
+    expect(screen.getByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'true')
+    landUpload({ url: 'https://r2.example/obrazek.png' })
+    await waitFor(() => expect(screen.getByTestId('visual-editor')).toHaveAttribute('data-autofocus', 'false'))
   })
 })

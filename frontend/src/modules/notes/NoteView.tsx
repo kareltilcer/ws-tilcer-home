@@ -139,6 +139,12 @@ const stripUploadToken = (text: string, token: string): string => {
     .join('')
 }
 
+// isBlank is the module's one spelling of "a body with nothing in it". Blank counts as
+// empty throughout this view — a body of "\n" renders as nothing and the user cannot tell
+// the two apart — and two rules turn on that same reading (which surface a note opens on,
+// and whether the surface being entered takes the caret), so they read it from here.
+const isBlank = (text: string) => text.trim() === ''
+
 // NoteView is the standalone note read/edit surface reused verbatim by both the
 // Poznámky pane and the Nástěnka overlay (FR-P8). It owns the note fetch, the
 // three-mode editor (Číst · Vizuální · Markdown over one body_md), autosave
@@ -213,7 +219,7 @@ export function NoteView({
     // Only when it IS empty: taking the caret on a note that already has text would
     // slide half of it under a keyboard nobody asked for. A tab click into a session
     // that is already open carries no seed, so its own draft is the body being entered.
-    setAutoFocus((seed ? seed.initial : (draft ?? '')).trim() === '')
+    setAutoFocus(isBlank(seed ? seed.initial : (draft ?? '')))
     if (m === 'visual') {
       // Crepe reads `defaultValue` once per `reseed` value and never again, so a new
       // seed needs a new editor. Seeding it from a draft that still holds an upload
@@ -248,8 +254,9 @@ export function NoteView({
     // Their text arriving is not the user entering anything — and this re-seed remounts
     // the WYSIWYG editor, so a request left standing from the open would pull the caret
     // back into it out of wherever the user actually is (renaming the note, say) on
-    // someone else's save. The other re-seed (the one that waits for an upload) cannot
-    // carry a standing request: a note with an image uploading into it is not empty.
+    // someone else's save. This is one half of the rule; the upload re-seed below is the
+    // other: ONLY the re-seed openEditor itself makes carries a focus request, because
+    // openEditor is the only one the user asked for.
     setAutoFocus(false)
   }
 
@@ -538,7 +545,7 @@ export function NoteView({
       return
     }
     if (mirror !== null) clearDraftMirror(noteId)
-    if (stored.trim() !== '') return
+    if (!isBlank(stored)) return
     // The baseline AND the draft, exactly as a tab click would set them: this IS an edit
     // session, the user just didn't have to ask for it. The baseline keeps a body that is
     // blank but not literally empty ("\n") from reading as someone else's edit and
@@ -560,6 +567,12 @@ export function NoteView({
   useEffect(() => {
     if (!staleSeed.current || uploadsInFlight > 0 || mode !== 'visual') return
     staleSeed.current = false
+    // The other half of adoptStored's rule: a re-seed the user did not ask for drops any
+    // standing focus request. A note CAN be blank with an upload still in flight — paste
+    // an image, then delete the node again while it uploads — and re-entering Vizuální
+    // there arms the request and this re-seed at once, so without this the remount would
+    // pull the caret back out of wherever the wait had left the user.
+    setAutoFocus(false)
     setReseed((r) => r + 1)
   }, [uploadsInFlight, mode])
 
