@@ -18,6 +18,7 @@ const RECURRENCE_OPTIONS: { value: Recurrence; label: string }[] = [
 ]
 
 const LEAD_OPTIONS: { value: ReminderLead; label: string }[] = [
+  { value: '0d', label: 'v den události' },
   { value: '1d', label: '1 den' },
   { value: '2d', label: '2 dny' },
   { value: '1w', label: '1 týden' },
@@ -122,7 +123,7 @@ export function EventForm({
     setError('')
     if (!title.trim()) return setError('Zadejte název.')
     if (!startsOn) return setError('Zadejte datum.')
-    if (reminderEnabled && !reminderLead) return setError('Vyberte předstih připomínky.')
+    if (reminderEnabled && !reminderLead) return setError('Vyberte, kdy připomenout.')
     // Editing a recurring event affects the whole series — confirm first.
     if (editing && wasRecurring && !confirming) {
       setConfirming(true)
@@ -181,7 +182,7 @@ export function EventForm({
         <Field label="Připomínka">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={reminderEnabled} onChange={(e) => setReminderEnabled(e.target.checked)} className="h-4 w-4" />
-            Připomenout předem
+            Připomenout
           </label>
           {/* Reserve space for the conditional lead selector. */}
           <div className="mt-2 min-h-[44px]">

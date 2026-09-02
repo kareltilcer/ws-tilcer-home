@@ -288,3 +288,43 @@ func TestEventListsUnknownKey(t *testing.T) {
 
 // czDay renders the "d. M." suffix the list provider appends.
 func czDay(d dates.Date) string { return fmt.Sprintf("%d. %d.", d.D, int(d.M)) }
+
+// A "0d" lead subtracts nothing, so the same-day reminder opens on the event's
+// OWN morning. The two neighbours are what pin that: an event tomorrow is not
+// active yet and one yesterday is already overdue, so a lead that had drifted by
+// a day in either direction would move one of them across the boundary. The
+// widget and the "na dnešek" list are both read, because the same-day reminder
+// is worth nothing if it reaches the dashboard and not the 08:00 summary.
+func TestSameDayLeadOpensOnTheDayItself(t *testing.T) {
+	f := newFixture(t)
+	mod := events.NewModule(f.svc, pragueLoc(t), testLookbackDays)
+	today := dates.New(2026, 7, 15)
+	at := asOfDay(t, "2026-07-15")
+
+	mustCreate(t, f, "Vynést koš", "2026-07-15", "", "0d")       // opens this morning
+	mustCreate(t, f, "Odvézt kontejner", "2026-07-16", "", "0d") // opens tomorrow — not yet
+	mustCreate(t, f, "Zalít kytky", "2026-07-14", "", "0d")      // opened yesterday — overdue
+
+	widget := events.NewPripominkyProviderForTest(events.NewStore(f.db), testLookbackDays, testMaxOcc, func() dates.Date { return today })
+	data, err := widget.Data(context.Background(), registry.User{})
+	if err != nil {
+		t.Fatalf("widget data: %v", err)
+	}
+	rem := data.(events.PripominkyWidget).Reminders
+
+	if len(rem) != 2 {
+		t.Fatalf("widget rows = %+v, want 2 (tomorrow's same-day reminder is not active yet)", rem)
+	}
+	if rem[0].Title != "Zalít kytky" || !rem[0].Overdue {
+		t.Errorf("first row = %+v, want yesterday's overdue", rem[0])
+	}
+	if rem[1].Title != "Vynést koš" || rem[1].Overdue || rem[1].DaysUntil != 0 || rem[1].ReminderLead != "0d" {
+		t.Errorf("second row = %+v, want today's 0d reminder, not overdue, days_until 0", rem[1])
+	}
+
+	got := items(t, mod.ListProvider(), events.ListPripominkyToday, at)
+	if strings.Join(got, "|") != "Vynést koš (15. 7.)" {
+		t.Errorf("pripominky_today = %v, want only today's same-day reminder", got)
+	}
+}
+

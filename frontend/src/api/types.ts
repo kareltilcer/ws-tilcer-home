@@ -18,7 +18,8 @@
 //   - auth (Mode B) and per-device push, which are platform rather than any
 //     module's.
 
-export type ReminderLead = '1d' | '2d' | '1w' | '2w' | '1m'
+// '0d' is the same-day reminder — a lead of nothing, opening on the event’s own date.
+export type ReminderLead = '0d' | '1d' | '2d' | '1w' | '2w' | '1m'
 
 export interface ChecklistProgress {
   done: number

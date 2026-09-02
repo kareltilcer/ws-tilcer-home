@@ -10,6 +10,7 @@ import { MarkdownView } from './MarkdownView'
 import { LinksEditor } from './LinksEditor'
 
 const LEAD_LABEL: Record<ReminderLead, string> = {
+  '0d': 'v den události',
   '1d': '1 den předem',
   '2d': '2 dny předem',
   '1w': 'týden předem',

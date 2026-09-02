@@ -21,9 +21,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"testing/fstest"
 
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
@@ -50,40 +48,13 @@ var v10Files = []string{
 }
 
 // preV10MigrationFS is the merged schema WITHOUT v10's three files — exactly the
-// migration set production had applied the morning v10 ships.
+// migration set production had applied the morning v10 ships. The exclusion, and
+// the guard that fires when a name in the list is not in the set, live in
+// migrationFSWithout (events_same_day_lead_test.go), which 04002's upgrade test
+// needs for the same reason with a different list.
 func preV10MigrationFS(t *testing.T) fs.FS {
 	t.Helper()
-	full, err := bootstrap.MigrationFS()
-	if err != nil {
-		t.Fatalf("assemble migrations: %v", err)
-	}
-	names, err := fs.Glob(full, "*.sql")
-	if err != nil {
-		t.Fatalf("glob migrations: %v", err)
-	}
-	skip := map[string]bool{}
-	for _, f := range v10Files {
-		skip[f] = true
-	}
-	out := fstest.MapFS{}
-	for _, name := range names {
-		if skip[name] {
-			delete(skip, name)
-			continue
-		}
-		b, err := fs.ReadFile(full, name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		out[name] = &fstest.MapFile{Data: b}
-	}
-	// A renamed v10 migration would silently turn this into "migrate everything,
-	// twice" — a test that proves nothing while staying green.
-	for name := range skip {
-		t.Fatalf("v10 migration %q is not in the merged migration set — was it renamed? "+
-			"v10Files must be kept in step or this test stops testing the upgrade at all", name)
-	}
-	return out
+	return migrationFSWithout(t, v10Files)
 }
 
 // ---- the out-of-order claim, verified rather than assumed ----
