@@ -149,6 +149,28 @@ func fingerprint(t *testing.T, sqldb *sql.DB, query string) []string {
 	return out
 }
 
+// eventIndexes is the index set 04001 built, named ONCE. Both directions of 04002
+// have to hand exactly this back, so both assert against the same literal rather
+// than a copy of it — a copy is how one of them ends up pinning a schema the other
+// has already moved on from.
+var eventIndexes = map[string][]string{
+	"events":                     {"idx_events_reminder", "idx_events_starts_on"},
+	"event_links":                {"idx_event_links_event_position"},
+	"event_reminder_completions": {"idx_completions_event_occ"},
+}
+
+// assertEventIndexes checks all three tables. Losing one costs nothing that fails:
+// the dashboard's hot query and the per-event link and completion lookups just go
+// to full scans.
+func assertEventIndexes(t *testing.T, sqldb *sql.DB, after string) {
+	t.Helper()
+	for table, want := range eventIndexes {
+		if got := indexesOn(t, sqldb, table); !equalStrings(got, want) {
+			t.Errorf("after the %s %s has indexes %v, want %v", after, table, got, want)
+		}
+	}
+}
+
 // TestSameDayLeadRebuildKeepsChildrenAndTheCascade is the whole reason 04002 is
 // three rebuilds instead of one.
 func TestSameDayLeadRebuildKeepsChildrenAndTheCascade(t *testing.T) {
@@ -171,17 +193,7 @@ func TestSameDayLeadRebuildKeepsChildrenAndTheCascade(t *testing.T) {
 			" before: %v\n  after: %v", beforeChildren, after)
 	}
 
-	// The indexes come back on all three tables, or the dashboard's hot query and
-	// the per-event link and completion lookups quietly go to full scans.
-	for table, want := range map[string][]string{
-		"events":                     {"idx_events_reminder", "idx_events_starts_on"},
-		"event_links":                {"idx_event_links_event_position"},
-		"event_reminder_completions": {"idx_completions_event_occ"},
-	} {
-		if got := indexesOn(t, sqldb, table); !equalStrings(got, want) {
-			t.Errorf("after the rebuild %s has indexes %v, want %v", table, got, want)
-		}
-	}
+	assertEventIndexes(t, sqldb, "rebuild")
 
 	// The point of the exercise: '0d' is accepted, and only '0d' joined the list.
 	if _, err := sqldb.Exec(`
@@ -259,15 +271,7 @@ func TestSameDayLeadDownRemapsRatherThanDropping(t *testing.T) {
 		VALUES ('z', 'X', '2026-07-15', 1, '0d', '2026-07-01T10:00:00.000Z', '2026-07-01T10:00:00.000Z')`); err == nil {
 		t.Error("a same-day reminder was accepted after the down migration — the CHECK was not restored")
 	}
-	for table, want := range map[string][]string{
-		"events":                     {"idx_events_reminder", "idx_events_starts_on"},
-		"event_links":                {"idx_event_links_event_position"},
-		"event_reminder_completions": {"idx_completions_event_occ"},
-	} {
-		if got := indexesOn(t, sqldb, table); !equalStrings(got, want) {
-			t.Errorf("after the down %s has indexes %v, want %v", table, got, want)
-		}
-	}
+	assertEventIndexes(t, sqldb, "down")
 
 	// And Up runs again over the rolled-back schema, because a down nobody can undo
 	// is not a rollback.

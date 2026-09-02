@@ -118,7 +118,11 @@ export function EventForm({
     setError('')
     if (!title.trim()) return setError('Zadejte název.')
     if (!startsOn) return setError('Zadejte datum.')
-    if (reminderEnabled && !reminderLead) return setError('Vyberte, kdy připomenout.')
+    // No "pick a lead" check: there is no state that needs one. reminderLead is a
+    // non-nullable union seeded with '1w', an event without a reminder comes back
+    // as reminder_lead null (the store maps the NULL column to null, never ""), so
+    // the ?? fallback always lands on a real lead. The check that used to stand
+    // here could not fire, and its message could not be read.
     // Editing a recurring event affects the whole series — confirm first.
     if (editing && wasRecurring && !confirming) {
       setConfirming(true)
@@ -190,7 +194,13 @@ export function EventForm({
               everything below it down — the jump the reserve exists to prevent.
               visibility:hidden also keeps the hidden chips out of the tab order and
               the accessibility tree, which display:none-by-unmounting did for free
-              and opacity would not. */}
+              and opacity would not.
+
+              aria-hidden STAYS beside it rather than being trimmed as a duplicate:
+              vitest runs with css:false, so in jsdom the class is a bare name with
+              no computed style and the attribute is the ONLY half of the hiding a
+              test can assert on. The two are not interchangeable — visibility is
+              what takes the chips out of the tab order — so neither one goes. */}
           <div className={cn('mt-2 flex flex-wrap gap-1.5', !reminderEnabled && 'invisible')} aria-hidden={!reminderEnabled || undefined}>
             {LEAD_OPTIONS.map((o) => (
               <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>

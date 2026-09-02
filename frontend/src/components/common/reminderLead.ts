@@ -17,10 +17,13 @@ export const LEAD_LABEL: Record<ReminderLead, string> = {
   '1m': 'měsíc předem',
 }
 
-// LEAD_OPTIONS is LEAD_LABEL in the order the form offers, soonest first —
-// derived from the table rather than retyped beside it, so a new lead reaches
-// the chips by being labelled and by nothing else. Insertion order is the key
-// order here: every key is a non-numeric string, so Object.keys preserves it.
+// LEAD_OPTIONS is LEAD_LABEL in the order the form offers: SHORTEST LEAD FIRST,
+// from the day itself out to a month before it. (That is the latest-arriving
+// reminder first, not the soonest — the chips read as a distance from the event,
+// which is the thing a member is choosing.) Derived from the table rather than
+// retyped beside it, so a new lead reaches the chips by being labelled and by
+// nothing else. Insertion order is the key order here: every key is a non-numeric
+// string, so Object.keys preserves it.
 export const LEAD_OPTIONS: { value: ReminderLead; label: string }[] = (
   Object.keys(LEAD_LABEL) as ReminderLead[]
 ).map((value) => ({ value, label: LEAD_LABEL[value] }))

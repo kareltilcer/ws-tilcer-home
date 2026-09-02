@@ -9,8 +9,14 @@ import { LEAD_LABEL } from './reminderLead'
 // unmounted behind a min-height reserve that held one row of chips while the phone
 // drew two, so ticking the box shoved the rest of the form down. The assertion
 // below is on the DOM rather than on pixels, because that is the part jsdom can
-// actually see: the chips exist unticked, and the hiding is visibility (which
-// keeps them out of the tab order) rather than an unmount.
+// actually see: the chips exist unticked, and they are hidden rather than unmounted.
+//
+// ⚠ AND JSDOM SEES ONLY HALF OF THE HIDING. vitest.config.ts sets `css: false`, so
+// Tailwind's `invisible` is a bare class name here with no computed style behind
+// it — naming the class is the most this environment can say about it. The
+// queryByRole assertion below therefore rests on the `aria-hidden` beside that
+// class, not on visibility: in a browser both apply, in jsdom only one of them
+// exists, and that is why the component carries both.
 
 // Only the create call is stubbed: the form is rendered in create mode, so the
 // getEvent query never enables and reconcileLinks walks two empty lists.
@@ -35,8 +41,8 @@ describe('EventForm reminder lead', () => {
     const sameDay = screen.getByRole('button', { name: LEAD_LABEL['0d'], hidden: true })
     expect(sameDay.parentElement).toHaveClass('invisible')
     // Laid out, and at the same time genuinely hidden: the chips are not in the
-    // accessibility tree (and so not in the tab order) until the box is ticked,
-    // which is what unmounting used to buy and opacity would not have.
+    // accessibility tree (and so, in a browser, not in the tab order) until the box
+    // is ticked — what unmounting used to buy and opacity would not have.
     expect(screen.queryByRole('button', { name: LEAD_LABEL['0d'] })).toBeNull()
   })
 

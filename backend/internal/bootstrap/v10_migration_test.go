@@ -1,10 +1,11 @@
 package bootstrap_test
 
-// v10's three migrations, and the one of them that rewrites live rows.
+// v10's four migrations, and the one of them that rewrites live rows.
 //
 // ⚠ `08003` IS THE ONLY v10 MIGRATION THAT TOUCHES AN EXISTING TABLE WITH DATA IN
-// IT. `12001` creates a new block and `02004` is an ALTER TABLE ADD COLUMN plus a
-// CREATE TABLE — neither can lose anything. 08003 widens two CHECK constraints on
+// IT. `12001` creates a new block, `02004` is an ALTER TABLE ADD COLUMN plus a
+// CREATE TABLE, and `12002` adds a column to a table `12001` had just created —
+// none of the three can lose anything. 08003 widens two CHECK constraints on
 // `notification_deliveries`, and SQLite cannot alter a CHECK, so it is a full table
 // rebuild: create wide, copy every row, drop, rename, re-create four indexes.
 //
@@ -19,7 +20,6 @@ import (
 	"io/fs"
 	"os"
 	"sort"
-	"strings"
 	"testing"
 
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
@@ -47,7 +47,7 @@ var v10Files = []string{
 	"12002_chat_attachment_document_path.sql",
 }
 
-// preV10MigrationFS is the merged schema WITHOUT v10's three files — exactly the
+// preV10MigrationFS is the merged schema WITHOUT v10's four files — exactly the
 // migration set production had applied the morning v10 ships. The exclusion, and
 // the guard that fires when a name in the list is not in the set, live in
 // migrationFSWithout (events_same_day_lead_test.go), which 04002's upgrade test
@@ -62,7 +62,7 @@ func preV10MigrationFS(t *testing.T) fs.FS {
 // TestV10OutOfOrderMigrationsApplyOverAnUpgradedDatabase is the claim
 // 02004_chat_platform.sql makes in its own header, tested.
 //
-// Two of v10's three files are numerically BELOW `11001`, which production applied
+// Two of v10's four files are numerically BELOW `11001`, which production applied
 // when v8 shipped. HANDOFF-12 §9.3 says "the runner tolerates it — verify that
 // before writing them, not after", and this is that verification: migrate to the
 // pre-v10 set, then migrate again with the full one, and require both to succeed.
@@ -395,26 +395,17 @@ func indexesOn(t *testing.T, sqldb *sql.DB, table string) []string {
 
 // deliveryFingerprint is every delivery row as one comparable list. Comparing it
 // before and after the rebuild turns "did we lose or reorder anything?" into a
-// single assertion.
+// single assertion. It goes through the package's one fingerprint helper
+// (events_same_day_lead_test.go) rather than scanning its own rows, so both
+// rebuild tests report a lost row the same way — and both check rows.Err().
 func deliveryFingerprint(t *testing.T, sqldb *sql.DB) []string {
 	t.Helper()
-	rows, err := sqldb.Query(`
-		SELECT id, ts, kind, category, COALESCE(rule_id, '<null>'), user_id,
-		       COALESCE(subscription_id, '<null>'), status, COALESCE(error, '<null>')
+	return fingerprint(t, sqldb, `
+		SELECT id || '|' || ts || '|' || kind || '|' || category || '|' ||
+		       COALESCE(rule_id, '<null>') || '|' || user_id || '|' ||
+		       COALESCE(subscription_id, '<null>') || '|' || status || '|' ||
+		       COALESCE(error, '<null>')
 		  FROM notification_deliveries ORDER BY id`)
-	if err != nil {
-		t.Fatalf("fingerprint deliveries: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var f [9]string
-		if err := rows.Scan(&f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8]); err != nil {
-			t.Fatalf("scan delivery: %v", err)
-		}
-		out = append(out, strings.Join(f[:], "|"))
-	}
-	return out
 }
 
 func ftsCount(t *testing.T, sqldb *sql.DB, term string) int {
