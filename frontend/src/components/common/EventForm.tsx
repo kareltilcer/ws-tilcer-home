@@ -184,17 +184,23 @@ export function EventForm({
             <input type="checkbox" checked={reminderEnabled} onChange={(e) => setReminderEnabled(e.target.checked)} className="h-4 w-4" />
             Připomenout
           </label>
-          {/* Reserve space for the conditional lead selector. */}
-          <div className="mt-2 min-h-[44px]">
-            {reminderEnabled && (
-              <div className="flex flex-wrap gap-1.5">
-                {LEAD_OPTIONS.map((o) => (
-                  <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
-                    {o.label}
-                  </Chip>
-                ))}
-              </div>
-            )}
+          {/* The lead selector is always laid out and merely hidden while the box is
+              unticked, so the space it reserves IS its own — it cannot be reserved
+              wrongly. A min-height was the reserve before, and 44px held one row of
+              chips: on a phone the selector has always wrapped to two (72.7px at
+              375 px), so ticking the box pushed everything below it down by ~29px,
+              which is the jump the reserve exists to prevent. visibility:hidden also
+              keeps the hidden chips out of the tab order and the accessibility tree,
+              which display:none-by-unmounting did for free and opacity would not. */}
+          <div
+            className={'mt-2 flex flex-wrap gap-1.5' + (reminderEnabled ? '' : ' invisible')}
+            aria-hidden={!reminderEnabled}
+          >
+            {LEAD_OPTIONS.map((o) => (
+              <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
+                {o.label}
+              </Chip>
+            ))}
           </div>
         </Field>
 
