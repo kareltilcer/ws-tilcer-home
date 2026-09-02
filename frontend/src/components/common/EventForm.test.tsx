@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EventForm } from './EventForm'
-import { LEAD_LABEL } from './reminderLead'
+import { LEAD_LABELS } from './reminderLead'
 
 // ⚠ THE LEAD SELECTOR IS LAID OUT WHETHER OR NOT THE BOX IS TICKED. It used to be
 // unmounted behind a min-height reserve that held one row of chips while the phone
@@ -38,19 +38,19 @@ function renderForm() {
 describe('EventForm reminder lead', () => {
   it('lays the lead chips out while the box is unticked, hidden rather than unmounted', () => {
     renderForm()
-    const sameDay = screen.getByRole('button', { name: LEAD_LABEL['0d'], hidden: true })
+    const sameDay = screen.getByRole('button', { name: LEAD_LABELS['0d'].chip, hidden: true })
     expect(sameDay.parentElement).toHaveClass('invisible')
     // Laid out, and at the same time genuinely hidden: the chips are not in the
     // accessibility tree (and so, in a browser, not in the tab order) until the box
     // is ticked — what unmounting used to buy and opacity would not have.
-    expect(screen.queryByRole('button', { name: LEAD_LABEL['0d'] })).toBeNull()
+    expect(screen.queryByRole('button', { name: LEAD_LABELS['0d'].chip })).toBeNull()
   })
 
   it('offers every lead in the shared table, worded as the detail view words them', async () => {
     const user = userEvent.setup()
     renderForm()
     await user.click(screen.getByLabelText('Připomenout'))
-    for (const label of Object.values(LEAD_LABEL)) {
+    for (const label of Object.values(LEAD_LABELS).map((l) => l.chip)) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
     }
   })
@@ -67,7 +67,7 @@ describe('EventForm reminder lead', () => {
     const date = document.querySelectorAll('input[type="date"]')[0] as HTMLInputElement
     fireEvent.change(date, { target: { value: '2026-07-15' } })
     await user.click(screen.getByLabelText('Připomenout'))
-    await user.click(screen.getByRole('button', { name: LEAD_LABEL['0d'] }))
+    await user.click(screen.getByRole('button', { name: LEAD_LABELS['0d'].chip }))
     await user.click(screen.getByRole('button', { name: 'Vytvořit' }))
 
     await waitFor(() => expect(createEvent).toHaveBeenCalled())
@@ -83,8 +83,8 @@ describe('EventForm reminder lead', () => {
     const user = userEvent.setup()
     renderForm()
     await user.click(screen.getByLabelText('Připomenout'))
-    await user.click(screen.getByRole('button', { name: LEAD_LABEL['2w'] }))
-    expect(screen.getByRole('button', { name: LEAD_LABEL['2w'] })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: LEAD_LABEL['0d'] })).toHaveAttribute('aria-pressed', 'false')
+    await user.click(screen.getByRole('button', { name: LEAD_LABELS['2w'].chip }))
+    expect(screen.getByRole('button', { name: LEAD_LABELS['2w'].chip })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: LEAD_LABELS['0d'].chip })).toHaveAttribute('aria-pressed', 'false')
   })
 })

@@ -7,7 +7,7 @@ import { Button, Spinner } from '@/components/ui/ui'
 import { fmtDateISO } from '@/i18n/format'
 import { MarkdownView } from './MarkdownView'
 import { LinksEditor } from './LinksEditor'
-import { LEAD_LABEL } from './reminderLead'
+import { LEAD_LABELS } from './reminderLead'
 
 function recurrenceLabel(rrule: string | null): string {
   if (!rrule) return 'Neopakuje se'
@@ -73,7 +73,7 @@ export function EventDetail({
               {recurrenceLabel(e.rrule)}
             </span>
             {e.reminder_enabled && e.reminder_lead && (
-              <span className="text-muted">🔔 {LEAD_LABEL[e.reminder_lead]}</span>
+              <span className="text-muted">🔔 {LEAD_LABELS[e.reminder_lead].detail}</span>
             )}
           </div>
 
