@@ -14,9 +14,11 @@ info:
     no stored value changes meaning and no existing client sends it, but a client that
     validates responses against a pinned 0.13.x copy will reject an event the household
     creates with it, which is why it is a minor and not a patch. The math is the identity
-    — `occurrence − 0d = occurrence` — so the reminder enters the Připomínky widget on the
-    event's own morning and turns overdue the next day, exactly as a "1d" lead does one
-    day earlier. `HOME_DASHBOARD_LOOKBACK_DAYS` is what still bounds how long it stays.
+    — `occurrence − 0d = occurrence` — so the reminder ENTERS the Připomínky widget on the
+    event's own morning, where a "1d" lead would have entered a day earlier. Only the entry
+    moves: overdue is `occurrence_on` in the past, which no lead touches, so a same-day
+    reminder turns overdue the morning after the event exactly as every other lead does.
+    `HOME_DASHBOARD_LOOKBACK_DAYS` is what still bounds how long it stays.
 
     **0.13.1 changes no shape at all.** It reconciles the two descriptions of the member
     directory against the shipped code: both said the identity behind it was cached "at

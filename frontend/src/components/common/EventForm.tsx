@@ -6,7 +6,9 @@ import type { EventInput } from '@/modules/events/api/endpoints'
 import type { ReminderLead } from '@/api/types'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Input, Textarea } from '@/components/ui/ui'
+import { cn } from '@/lib/utils'
 import { LinksEditor, type EditableLink } from './LinksEditor'
+import { LEAD_OPTIONS } from './reminderLead'
 
 type Recurrence = 'none' | 'weekly' | 'monthly' | 'yearly'
 
@@ -15,15 +17,6 @@ const RECURRENCE_OPTIONS: { value: Recurrence; label: string }[] = [
   { value: 'weekly', label: 'týdně' },
   { value: 'monthly', label: 'měsíčně' },
   { value: 'yearly', label: 'ročně' },
-]
-
-const LEAD_OPTIONS: { value: ReminderLead; label: string }[] = [
-  { value: '0d', label: 'v den události' },
-  { value: '1d', label: '1 den' },
-  { value: '2d', label: '2 dny' },
-  { value: '1w', label: '1 týden' },
-  { value: '2w', label: '2 týdny' },
-  { value: '1m', label: '1 měsíc' },
 ]
 
 const SERIES_WARNING =
@@ -51,9 +44,11 @@ function buildRRule(rec: Recurrence, until: string): string {
 }
 
 // EventForm creates or edits an event (whole series). All-day date (no time
-// field), recurrence with an optional end date, and a conditional reminder lead
-// whose space is reserved so revealing it never jumps the layout. Editing a
-// recurring event requires confirming the series-edit warning before saving.
+// field), recurrence with an optional end date, and a reminder lead. Both of the
+// conditional blocks are ALWAYS LAID OUT and merely hidden, so neither reveal
+// jumps the layout and neither has a reserved height that could be guessed wrong.
+// Editing a recurring event requires confirming the series-edit warning before
+// saving.
 export function EventForm({
   eventId,
   open,
@@ -169,13 +164,16 @@ export function EventForm({
               </Chip>
             ))}
           </div>
-          {/* Reserve space so the end-date reveal doesn't jump the layout. */}
-          <div className="mt-2 min-h-[64px]">
-            {recurrence !== 'none' && (
-              <Field label="Konec opakování (nepovinné)">
-                <Input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="max-w-[220px]" />
-              </Field>
-            )}
+          {/* Laid out always, hidden while the event does not repeat — the same
+              trade as the lead selector below, for the same reason: a min-height
+              reserve is a guess at the height of what it hides, and the one it
+              replaces (64px) was already about 2px away from the Field it stood in
+              for. visibility:hidden keeps the date input out of the tab order and
+              the accessibility tree while it means nothing. */}
+          <div className={cn('mt-2', recurrence === 'none' && 'invisible')} aria-hidden={recurrence === 'none' || undefined}>
+            <Field label="Konec opakování (nepovinné)">
+              <Input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="max-w-[220px]" />
+            </Field>
           </div>
         </Field>
 
@@ -186,16 +184,14 @@ export function EventForm({
           </label>
           {/* The lead selector is always laid out and merely hidden while the box is
               unticked, so the space it reserves IS its own — it cannot be reserved
-              wrongly. A min-height was the reserve before, and 44px held one row of
-              chips: on a phone the selector has always wrapped to two (72.7px at
-              375 px), so ticking the box pushed everything below it down by ~29px,
-              which is the jump the reserve exists to prevent. visibility:hidden also
-              keeps the hidden chips out of the tab order and the accessibility tree,
-              which display:none-by-unmounting did for free and opacity would not. */}
-          <div
-            className={'mt-2 flex flex-wrap gap-1.5' + (reminderEnabled ? '' : ' invisible')}
-            aria-hidden={!reminderEnabled}
-          >
+              wrongly, and it costs nothing when the labels get longer or a lead is
+              added. A min-height was the reserve before, and its 44px held ONE row of
+              chips while the phone had always drawn two, so ticking the box pushed
+              everything below it down — the jump the reserve exists to prevent.
+              visibility:hidden also keeps the hidden chips out of the tab order and
+              the accessibility tree, which display:none-by-unmounting did for free
+              and opacity would not. */}
+          <div className={cn('mt-2 flex flex-wrap gap-1.5', !reminderEnabled && 'invisible')} aria-hidden={!reminderEnabled || undefined}>
             {LEAD_OPTIONS.map((o) => (
               <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
                 {o.label}
@@ -242,10 +238,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+// Chip is one option in a single-select row. aria-pressed is what carries the
+// selection: the active state is otherwise a colour, which a screen reader has no
+// way to read, and the lead a member has chosen would be knowable only by saving
+// and reopening the event.
 function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={
         'rounded-md border px-3 py-1.5 text-sm font-semibold ' +
