@@ -327,4 +327,3 @@ func TestSameDayLeadOpensOnTheDayItself(t *testing.T) {
 		t.Errorf("pripominky_today = %v, want only today's same-day reminder", got)
 	}
 }
-

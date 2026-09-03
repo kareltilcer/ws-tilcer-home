@@ -45,10 +45,10 @@ function buildRRule(rec: Recurrence, until: string): string {
 
 // EventForm creates or edits an event (whole series). All-day date (no time
 // field), recurrence with an optional end date, and a reminder lead. Both of the
-// conditional blocks are ALWAYS LAID OUT and merely hidden, so neither reveal
-// jumps the layout and neither has a reserved height that could be guessed wrong.
-// Editing a recurring event requires confirming the series-edit warning before
-// saving.
+// conditional blocks go through `Reserved` below: ALWAYS LAID OUT and merely
+// hidden, so neither reveal jumps the layout and neither has a reserved height
+// that could be guessed wrong. Editing a recurring event requires confirming the
+// series-edit warning before saving.
 export function EventForm({
   eventId,
   open,
@@ -168,17 +168,13 @@ export function EventForm({
               </Chip>
             ))}
           </div>
-          {/* Laid out always, hidden while the event does not repeat — the same
-              trade as the lead selector below, for the same reason: a min-height
-              reserve is a guess at the height of what it hides, and the one it
-              replaces (64px) was already about 2px away from the Field it stood in
-              for. visibility:hidden keeps the date input out of the tab order and
-              the accessibility tree while it means nothing. */}
-          <div className={cn('mt-2', recurrence === 'none' && 'invisible')} aria-hidden={recurrence === 'none' || undefined}>
+          {/* An end date only means anything for a repeating event; its space is
+              held either way, so choosing a recurrence reveals it in place. */}
+          <Reserved shown={recurrence !== 'none'} className="mt-2">
             <Field label="Konec opakování (nepovinné)">
               <Input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="max-w-[220px]" />
             </Field>
-          </div>
+          </Reserved>
         </Field>
 
         <Field label="Připomínka">
@@ -186,28 +182,16 @@ export function EventForm({
             <input type="checkbox" checked={reminderEnabled} onChange={(e) => setReminderEnabled(e.target.checked)} className="h-4 w-4" />
             Připomenout
           </label>
-          {/* The lead selector is always laid out and merely hidden while the box is
-              unticked, so the space it reserves IS its own — it cannot be reserved
-              wrongly, and it costs nothing when the labels get longer or a lead is
-              added. A min-height was the reserve before, and its 44px held ONE row of
-              chips while the phone had always drawn two, so ticking the box pushed
-              everything below it down — the jump the reserve exists to prevent.
-              visibility:hidden also keeps the hidden chips out of the tab order and
-              the accessibility tree, which display:none-by-unmounting did for free
-              and opacity would not.
-
-              aria-hidden STAYS beside it rather than being trimmed as a duplicate:
-              vitest runs with css:false, so in jsdom the class is a bare name with
-              no computed style and the attribute is the ONLY half of the hiding a
-              test can assert on. The two are not interchangeable — visibility is
-              what takes the chips out of the tab order — so neither one goes. */}
-          <div className={cn('mt-2 flex flex-wrap gap-1.5', !reminderEnabled && 'invisible')} aria-hidden={!reminderEnabled || undefined}>
+          {/* The box is unticked most of the time, so this is the reserve that used
+              to be a wrong guess: 44px held ONE row of chips while the phone had
+              always drawn two, and ticking the box shoved the rest of the form down. */}
+          <Reserved shown={reminderEnabled} className="mt-2 flex flex-wrap gap-1.5">
             {LEAD_OPTIONS.map((o) => (
               <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
                 {o.label}
               </Chip>
             ))}
-          </div>
+          </Reserved>
         </Field>
 
         <Field label="Odkazy">
@@ -236,6 +220,32 @@ export function EventForm({
         <p className="text-sm text-fg">{SERIES_WARNING}</p>
       </ResponsiveModal>
     </ResponsiveModal>
+  )
+}
+
+// Reserved lays a block out whether or not it applies and merely HIDES it when it
+// does not, so the space it holds is its own. That is what a min-height reserve
+// could not be: a min-height is a guess at the height of what it hides, and both of
+// this form's guesses were wrong — 44px under the reminder checkbox held one row of
+// chips where the phone drew two, and revealing them pushed everything below down,
+// which is the jump a reserve exists to prevent. A block that reserves its own
+// height cannot be wrong about it, and stays right when a label grows or a lead is
+// added to the table.
+//
+// ⚠ THE HIDING IS TWO HALVES AND THEY MUST NOT BE SEPARATED, which is why this is
+// one component and not the same two attributes typed at each call site.
+// `invisible` (visibility:hidden) is the half that reserves the space and takes the
+// controls out of the tab order — inherited, so it reaches every descendant, which
+// opacity would not and unmounting used to do for free. `aria-hidden` is the half
+// that keeps them out of the accessibility tree, and it is also the ONLY half a
+// jsdom test can see: vitest runs with css:false, so the class is a bare name there
+// with no computed style behind it. Half of the pair is a focusable control a
+// screen reader still announces, or a reserve no test can assert on.
+function Reserved({ shown, className, children }: { shown: boolean; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={cn(className, !shown && 'invisible')} aria-hidden={!shown || undefined}>
+      {children}
+    </div>
   )
 }
 

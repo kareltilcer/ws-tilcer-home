@@ -47,9 +47,15 @@ var v10Files = []string{
 	"12002_chat_attachment_document_path.sql",
 }
 
-// preV10MigrationFS is the merged schema WITHOUT v10's four files — exactly the
-// migration set production had applied the morning v10 ships. The exclusion, and
-// the guard that fires when a name in the list is not in the set, live in
+// preV10MigrationFS is the merged schema WITHOUT v10's four files — the migration
+// set production had applied the morning v10 ships, PLUS whatever has landed in
+// another module's block since. (04002 is the first of those.) The exclusion is by
+// name and not by a version cutoff, so the set grows on one end while staying
+// pinned on the other; that costs the fixture nothing here, because what these
+// tests assert is that v10's four files apply over a database that already has
+// higher-numbered migrations in it, and a later arrival only makes that truer. The
+// exclusion, and the guard that fires when a name in the list is not in the set,
+// live in
 // migrationFSWithout (events_same_day_lead_test.go), which 04002's upgrade test
 // needs for the same reason with a different list.
 func preV10MigrationFS(t *testing.T) fs.FS {

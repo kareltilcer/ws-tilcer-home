@@ -46,7 +46,10 @@ describe('EventForm reminder lead', () => {
     expect(screen.queryByRole('button', { name: LEAD_LABELS['0d'].chip })).toBeNull()
   })
 
-  it('offers every lead in the shared table, worded as the detail view words them', async () => {
+  // Every lead, worded as the CHIPS word them — deliberately not as the detail view
+  // does. The form and the detail view share one table and read different columns of
+  // it (see reminderLead.ts); reminderLead.test.ts is what holds those two apart.
+  it('offers every lead in the shared table, worded as its chips are worded', async () => {
     const user = userEvent.setup()
     renderForm()
     await user.click(screen.getByLabelText('Připomenout'))

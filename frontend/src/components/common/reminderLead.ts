@@ -33,3 +33,15 @@ export const LEAD_LABELS: Record<ReminderLead, { chip: string; detail: string }>
 export const LEAD_OPTIONS: { value: ReminderLead; label: string }[] = (
   Object.keys(LEAD_LABELS) as ReminderLead[]
 ).map((value) => ({ value, label: LEAD_LABELS[value].chip }))
+
+// leadDetail is the detail view's line for a lead that came off the WIRE, and it
+// takes a plain string for that reason. `Record<ReminderLead, …>` types the lookup
+// as total, so `LEAD_LABELS[e.reminder_lead].detail` reads as safe and is not: the
+// argument is whatever the API sent, and a lead the server has learned before this
+// table has is `undefined.detail` — a thrown render that takes the whole event
+// detail down, where the single-string table it replaced rendered a blank. Falling
+// back to the raw code keeps that failure to the one line it belongs to, and says
+// more than the blank did.
+export function leadDetail(lead: string): string {
+  return LEAD_LABELS[lead as ReminderLead]?.detail ?? lead
+}
