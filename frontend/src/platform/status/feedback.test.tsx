@@ -48,7 +48,9 @@ describe('useFeedbackWidget', () => {
       return s!
     })
     expect(script.src).toBe('https://status.tilcer.cz/widget/v1.js')
-    expect(script.defer).toBe(true)
+    // No `defer`: an injected script is force-async by spec, so the property
+    // would pin an ordering guarantee the page does not have.
+    expect(script.defer).toBe(false)
     expect(script.dataset.site).toBe('home')
     expect(script.dataset.key).toBe('wk_widget_key')
     expect(script.dataset.lang).toBe('cs')

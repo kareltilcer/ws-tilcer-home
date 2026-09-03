@@ -262,22 +262,41 @@ func TestRecoverIsANoOpWithoutAPanic(t *testing.T) {
 	New("http://127.0.0.1:1/api/ingest/home", "ik_test").Recover()
 }
 
+// …and a REAL panic through a DISABLED client must still re-panic. This is the
+// only path `defer reporter.Recover()` in main takes until the status site
+// exists, and TestDisabledClientIsASafeNoOp only exercises the no-panic half of
+// it: a Recover that touched c before CaptureSync's nil check would replace a
+// crash's real stderr trace with a nil dereference raised from inside the panic
+// handler, on every deployment that has not configured reporting yet.
+func TestRecoverRepanicsWithReportingOff(t *testing.T) {
+	var c *Client // New("", "") — reporting disabled
+	func() {
+		defer func() {
+			if p := recover(); p != "boom" {
+				t.Errorf("re-panicked with %v, want the original value", p)
+			}
+		}()
+		defer c.Recover()
+		panic("boom")
+	}()
+}
+
 func TestPayloadIsCapped(t *testing.T) {
 	url, got := ingest(t, http.StatusAccepted)
 	c := New(url, "ik_test")
 
 	ctx := map[string]any{}
 	for i := range maxContextKeys * 2 {
-		ctx[string(rune('a'+i%26))+strings.Repeat("x", i)] = strings.Repeat("v", maxContextValueChars*2)
+		ctx[string(rune('a'+i%26))+strings.Repeat("x", i)] = strings.Repeat("v", maxContextValueBytes*2)
 	}
 	c.CaptureSync(Report{
-		Message: strings.Repeat("m", maxMessageChars*2),
+		Message: strings.Repeat("m", maxMessageBytes*2),
 		Stack:   strings.Repeat("s", maxStackBytes*2),
 		Context: ctx,
 	})
 
 	r := waitFor(t, got)
-	if len(r.body.Message) > maxMessageChars+len("…[truncated]") {
+	if len(r.body.Message) > maxMessageBytes+len("…[truncated]") {
 		t.Errorf("message not capped: %d bytes", len(r.body.Message))
 	}
 	if len(r.body.Stack) > maxStackBytes+len("…[truncated]") {
@@ -287,7 +306,7 @@ func TestPayloadIsCapped(t *testing.T) {
 		t.Errorf("context has %d keys, want at most %d", len(r.body.Context), maxContextKeys)
 	}
 	for k, v := range r.body.Context {
-		if len(v.(string)) > maxContextValueChars+len("…[truncated]") {
+		if len(v.(string)) > maxContextValueBytes+len("…[truncated]") {
 			t.Errorf("context[%q] not capped: %d bytes", k, len(v.(string)))
 		}
 	}

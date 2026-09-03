@@ -94,6 +94,24 @@ describe('initCrashReporting', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  // ⚠ A relative ingest URL is not a broken request, which is what makes it worth
+  // refusing: fetch resolves it against the PAGE, so every report would be POSTed
+  // to home's own origin, where nginx's SPA fallback answers 200 with index.html.
+  // Nothing reaches the board and no request anywhere fails. The backend refuses
+  // the same URL shape at boot; here the build arg is simply read as unset.
+  it('installs nothing when the ingest URL is not an absolute http(s) URL', async () => {
+    for (const url of [
+      'status.tilcer.cz/api/ingest/home', // the scheme left off
+      '/api/ingest/home',
+      'ftp://status.tilcer.cz/api/ingest/home',
+    ]) {
+      await load({ ...CONFIGURED, VITE_STATUS_INGEST_URL: url })
+      throwError(new Error('boom'))
+      expect(fetchMock, `${url} was accepted as an endpoint`).not.toHaveBeenCalled()
+      teardown.splice(0).forEach((fn) => fn())
+    }
+  })
+
   it('posts an uncaught error as the documented CrashReport', async () => {
     await load(CONFIGURED)
     throwError(new Error('cannot read properties of undefined'), {
@@ -217,6 +235,19 @@ describe('initCrashReporting', () => {
     // Not "[object Object]", which would file every such rejection under one
     // useless group title.
     expect(lastBody().message).toBe('{"code":418,"why":"teapot"}')
+  })
+
+  // ⚠ …and a rejection carrying NOTHING — `Promise.reject()` — must not be filed
+  // under the literal title "undefined". JSON.stringify(undefined) is undefined,
+  // so the String() fallback produces a truthy "undefined" that the empty-message
+  // drop never catches, and the board grows a permanent group naming nothing.
+  it('names a rejection that carries no reason at all', async () => {
+    await load(CONFIGURED)
+    rejectPromise(undefined)
+    expect(lastBody().message).toBe('empty error value: undefined')
+
+    rejectPromise(null)
+    expect(lastBody().message).toBe('empty error value: null')
   })
 
   it('stops after the per-window cap so a render loop cannot flood the board', async () => {

@@ -47,11 +47,16 @@ const (
 // default) with a 413 — and because the client is deliberately silent, a report
 // that trips that limit is a report nobody ever learns about. These keep an
 // event comfortably inside it without any call site having to think about it.
+//
+// All three length caps are in BYTES, which is what truncate counts and what the
+// server's limit is measured in — named accordingly, because "chars" on a service
+// whose every message is Czech would promise a reader roughly twice the room the
+// cap actually gives.
 const (
-	maxMessageChars      = 2000
+	maxMessageBytes      = 2000
 	maxStackBytes        = 8 << 10
 	maxContextKeys       = 32
-	maxContextValueChars = 512
+	maxContextValueBytes = 512
 )
 
 // sendTimeout bounds one ingest round trip, and it is ONE number rather than two
@@ -126,7 +131,7 @@ func New(url, key string, opts ...Option) *Client {
 	c := &Client{
 		url:  url,
 		key:  key,
-		http: &http.Client{Timeout: sendTimeout},
+		http: &http.Client{Timeout: sendTimeout, Transport: reporterTransport()},
 		// The server's own per-site limit is 60/min with a burst of 120, and past
 		// it events are refused with a Retry-After. Mirroring it HERE is what stops
 		// an error storm — a mirror pass failing on every object, a listener
@@ -139,6 +144,35 @@ func New(url, key string, opts ...Option) *Client {
 		o(c)
 	}
 	return c
+}
+
+// reporterTransport is the reporter's OWN connection pool, and having one is the
+// same rule as everything else in this file: the monitoring client must not be
+// able to degrade the app it monitors.
+//
+// A zero-value http.Client uses http.DefaultTransport, which this process also
+// uses for R2, Gotenberg, auth and the forecast. Its idle pool is global and
+// bounded (MaxIdleConns 100), and Capture can put 120 goroutines in flight at
+// once — the whole burst — so an error storm would open enough connections to
+// status.tilcer.cz to evict the app's idle connections to everything else, making
+// the next document upload pay a handshake it would not otherwise have paid.
+// A crash storm is exactly the moment the rest of the app must not get slower.
+//
+// Cloned rather than built from scratch so the proxy, dialer and TLS settings
+// stay whatever the runtime configured; only the pool sizes change. MaxConnsPerHost
+// bounds the burst to a handful of sockets — the excess waits, and if it waits
+// past sendTimeout it is dropped, which is what a rate-limited reporter should do
+// with the events behind a queue anyway.
+func reporterTransport() http.RoundTripper {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil // not the stdlib default: leave the client on it rather than guess
+	}
+	rt := t.Clone()
+	rt.MaxConnsPerHost = 4
+	rt.MaxIdleConns = 4
+	rt.MaxIdleConnsPerHost = 2
+	return rt
 }
 
 // Report is one event to send.
@@ -218,7 +252,7 @@ func (c *Client) event(r Report) wireEvent {
 		level = LevelError
 	}
 	return wireEvent{
-		Message:     truncate(r.Message, maxMessageChars),
+		Message:     truncate(r.Message, maxMessageBytes),
 		Level:       level,
 		Stack:       truncate(r.Stack, maxStackBytes),
 		Environment: c.environment,
@@ -307,7 +341,7 @@ func retryAfter(header string) time.Duration {
 }
 
 // boundContext caps the context block: at most maxContextKeys entries, each
-// rendered as a string of at most maxContextValueChars. Rendering rather than
+// rendered as a string of at most maxContextValueBytes. Rendering rather than
 // passing values through also removes the one way a context value could fail the
 // whole send — a type json.Marshal refuses, which would drop the event silently.
 //
@@ -327,7 +361,7 @@ func boundContext(in map[string]any) map[string]any {
 	keys = keys[:min(len(keys), maxContextKeys)]
 	out := make(map[string]any, len(keys))
 	for _, k := range keys {
-		out[k] = truncate(fmt.Sprint(in[k]), maxContextValueChars)
+		out[k] = truncate(fmt.Sprint(in[k]), maxContextValueBytes)
 	}
 	return out
 }

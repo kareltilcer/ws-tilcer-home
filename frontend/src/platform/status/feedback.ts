@@ -52,7 +52,12 @@ function ensureWidget(reporter: string): Promise<boolean> {
   loading = new Promise<boolean>((resolve) => {
     const script = document.createElement('script')
     script.src = cfg.src
-    script.defer = true
+    // ⚠ NO `defer`, BECAUSE IT WOULD BE A LIE. `defer` only means anything on a
+    // parser-inserted script; one built with createElement is force-async by
+    // spec, so setting the property changes nothing and only tells the next
+    // reader there is an ordering guarantee here. widget.md §1 recommends `defer`
+    // for the pasted <script> embed — this is the injected path, which is already
+    // non-blocking, and the load event below is what the trigger waits on.
     script.dataset.site = cfg.site
     script.dataset.key = cfg.key
     script.dataset.lang = 'cs'

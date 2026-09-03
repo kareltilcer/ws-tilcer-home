@@ -258,8 +258,8 @@ the boot line says `statusreport: DISABLED` and nothing else changes.
 | --- | --- | --- |
 | `STATUS_INGEST_URL` | the site's ingest endpoint, e.g. `https://status.tilcer.cz/api/ingest/home`. Set it and `STATUS_INGEST_KEY` together or neither — exactly one is refused at boot, because a half-configured reporter drops every event in silence | *(unset — reporting off)* |
 | `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). Keep it out of the repo and the logs like any other secret — but ⚠ it stops being one the moment the SAME key is baked into the SPA, which is the default wiring below | *(secret; unset — reporting off)* |
-| `STATUS_ENVIRONMENT` | environment tag on every event. Set it only to say something `HOME_ENV` cannot, e.g. `staging` | defaults to `HOME_ENV` mapped onto status's own vocabulary — `production`→`prod`, `development`→`dev`, which is what the SPA sends too, so one deployment reaches the board under **one** name |
-| `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
+| `STATUS_ENVIRONMENT` | environment tag on every event. Set it only to say something `HOME_ENV` cannot, e.g. `staging` — and ⚠ **never on its own**: set the frontend's `VITE_STATUS_ENVIRONMENT` to the same string in the same deploy, or the two halves file one release under two names (see below) | defaults to `HOME_ENV` mapped onto status's own vocabulary — `production`→`prod`, `development`→`dev`, which is what the SPA sends too, so one deployment reaches the board under **one** name |
+| `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1`. Same rule: set it with `VITE_STATUS_RELEASE` or with neither | *(unset)* |
 
 ### Documents converter (`home-gotenberg`, v4)
 
@@ -300,8 +300,8 @@ Static-only image — **no runtime env vars**.
 | `VITE_STATUS_INGEST_KEY` | the site's ingest key (`ik_…`). **Public by design**, like a Sentry DSN — see below | *(unset — reporting off)* |
 | `VITE_STATUS_WIDGET_KEY` | the site's widget key (`wk_…`), from **site detail → User feedback** | *(unset ⇒ no widget and no "Nahlásit problém" trigger)* |
 | `VITE_STATUS_SITE` | the site id in status | `home` |
-| `VITE_STATUS_ENVIRONMENT` | environment tag. Leave it unset: the default already agrees with the backend's, which maps `HOME_ENV` onto the same two words | `prod` in a production build, `dev` under `npm run dev` |
-| `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
+| `VITE_STATUS_ENVIRONMENT` | environment tag. Leave it unset **unless the backend's `STATUS_ENVIRONMENT` was set** — then set it to the same string. Unset on both sides, the two defaults already agree, because the backend maps `HOME_ENV` onto these same two words | `prod` in a production build, `dev` under `npm run dev` |
+| `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1`. Same rule: set it with `STATUS_RELEASE` or with neither | *(unset)* |
 | `VITE_STATUS_WIDGET_URL` | override the widget bundle (a staging status). Pin a **major**: `/widget/v1.js` | `https://status.tilcer.cz/widget/v1.js` |
 
 ⚠ **Both status keys are baked, so rotating either one needs a frontend
@@ -364,6 +364,19 @@ boot line says which state reporting is in, once.
    fail. `https://home.tilcer.cz` monitors the frontend honestly; monitoring the
    backend would mean routing a probe path to it first.
 6. Trigger a test error and confirm it appears on the board.
+
+⚠ **The `environment` and `release` tags are set in PAIRS or not at all.** Left
+unset everywhere, the two halves agree by construction: the backend maps
+`HOME_ENV` onto status's `prod`/`dev` and the SPA's default is the same two
+words. Setting one side alone breaks that, and it is the one misconfiguration
+neither half can see — `STATUS_ENVIRONMENT` is a backend runtime variable and
+`VITE_STATUS_ENVIRONMENT` is a frontend build arg, so there is no moment at which
+one process holds both. `STATUS_ENVIRONMENT=staging` without
+`VITE_STATUS_ENVIRONMENT=staging` puts one deployment of one release on one board
+under two environments — `staging` for everything the Go process reports,
+`prod` for everything the browser does. The same goes for `STATUS_RELEASE` and
+`VITE_STATUS_RELEASE`. Change them together, in the same deploy, or change
+neither.
 
 ⚠ **Leave "Send console output" OFF for this site.** It is off by default and
 must stay off. home's privacy model makes a member's private notes unreadable by

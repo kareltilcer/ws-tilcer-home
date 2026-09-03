@@ -168,6 +168,17 @@ function describe(error: unknown): { message: string; stack: string } {
     return { message: error.message || error.name || 'Error', stack: error.stack ?? '' }
   }
   if (typeof error === 'string') return { message: error, stack: '' }
+  // ⚠ A REJECTION CAN CARRY NOTHING AT ALL — `Promise.reject()`, or an abort that
+  // rejects with undefined — and the JSON path below renders that as the literal
+  // string "undefined" (JSON.stringify(undefined) is undefined, so the ?? falls
+  // through to String()). "undefined" is TRUTHY, so report()'s empty-message drop
+  // never sees it, and the board grows a permanent group titled `undefined`
+  // collecting every reasonless rejection in the app under a name that points at
+  // nothing. There is no stack to add either, so the title is all such an event
+  // will ever have: it may as well say what happened.
+  if (error === undefined || error === null) {
+    return { message: `empty error value: ${String(error)}`, stack: '' }
+  }
   // An object with no message would stringify to "[object Object]", which groups
   // every such rejection together under one useless title; JSON says more.
   try {
