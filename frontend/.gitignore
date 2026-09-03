@@ -12,6 +12,15 @@ dist
 dist-ssr
 *.local
 
+# Local build args. `.env.example` is the TEMPLATE and stays tracked; the file it
+# is copied to does not. Since the status wiring landed, that copy holds an
+# `ik_…` and a `wk_…` — both public once a bundle ships, but still deployment
+# configuration, which CLAUDE.md keeps in Coolify rather than in the repo. A
+# committed key is also one that rotation silently leaves behind.
+.env
+.env.*
+!.env.example
+
 # Playwright
 test-results
 playwright-report

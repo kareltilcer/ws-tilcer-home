@@ -358,12 +358,19 @@ boot line says which state reporting is in, once.
    (default `https://*.tilcer.cz`, so it already is). ⚠ An origin outside that
    list gets no `Access-Control-Allow-Origin`, the browser blocks the POST, and —
    because the client is fail-safe — **nothing is logged anywhere at all**.
-5. *(Optional)* Set the site's **Monitor URL**. ⚠ Not `/readyz`: only `/api` and
+5. Confirm `https://home.tilcer.cz` is in the **attachment bucket's own CORS
+   policy** (`widget.md` §8 — a Cloudflare dashboard setting on status's R2
+   bucket, not a variable in either repo). ⚠ The widget PUTs a screenshot
+   **straight to R2**, not through status, so this is a second allow-list and
+   `STATUS_ALLOWED_ORIGINS` above does not cover it. Miss it and the report still
+   arrives, the file does not, and no request reaches status to say so — while
+   the trigger's own hint has just promised *"i se snímkem obrazovky"*.
+6. *(Optional)* Set the site's **Monitor URL**. ⚠ Not `/readyz`: only `/api` and
    `/ws` are path-routed to the backend, so `home.tilcer.cz/readyz` reaches the
    SPA's catch-all and returns the shell with a 200 — a probe that can never
    fail. `https://home.tilcer.cz` monitors the frontend honestly; monitoring the
    backend would mean routing a probe path to it first.
-6. Trigger a test error and confirm it appears on the board.
+7. Trigger a test error and confirm it appears on the board.
 
 ⚠ **The `environment` and `release` tags are set in PAIRS or not at all.** Left
 unset everywhere, the two halves agree by construction: the backend maps

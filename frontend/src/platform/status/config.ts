@@ -98,13 +98,22 @@ export interface WidgetConfig {
 }
 
 /** widgetConfig returns the feedback widget's configuration, or null when this
- *  build has no widget key — in which case nothing is loaded and no trigger is
- *  rendered, rather than a button that does nothing when pressed. */
+ *  build has no widget key — or was given a bundle URL it cannot use — in which
+ *  case nothing is loaded and no trigger is rendered, rather than a button that
+ *  does nothing when pressed.
+ *
+ *  ⚠ THE BUNDLE URL IS CHECKED LIKE THE INGEST URL, and for the same reason: a
+ *  value that is not an absolute http(s) URL is not a broken request here.
+ *  `src="status.tilcer.cz/widget/v1.js"` resolves RELATIVE to the page, so the
+ *  SPA asks home.tilcer.cz for it and nginx's fallback answers 200 with
+ *  index.html — HTML executed as a script, which fails without ever reaching
+ *  status. One rule for both build args that name an endpoint. */
 export function widgetConfig(): WidgetConfig | null {
   const key = trimmed(env.VITE_STATUS_WIDGET_KEY)
   if (!key) return null
   // The widget calls back to the origin its own src came from, so a staging copy
   // talks to staging and the API host is never named twice.
   const src = trimmed(env.VITE_STATUS_WIDGET_URL) || 'https://status.tilcer.cz/widget/v1.js'
+  if (!isAbsoluteHttpURL(src)) return null
   return { src, site: STATUS_SITE, key, release: STATUS_RELEASE }
 }

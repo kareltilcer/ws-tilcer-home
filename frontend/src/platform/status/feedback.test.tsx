@@ -93,6 +93,22 @@ describe('useFeedbackWidget', () => {
     expect(document.querySelectorAll('script[data-site]')).toHaveLength(1)
   })
 
+  // ⚠ …but only an ABSOLUTE http(s) one. A relative bundle URL resolves against
+  // the PAGE, so the SPA asks home.tilcer.cz for it and nginx's fallback answers
+  // 200 with index.html — HTML executed as a script, failing without a single
+  // request reaching status. The ingest URL is refused for the same reason; this
+  // is the same rule applied to the other build arg that names an endpoint.
+  it('loads nothing when the bundle URL is not an absolute http(s) URL', async () => {
+    for (const src of ['status.tilcer.cz/widget/v1.js', '/widget/v1.js', 'javascript:void 0']) {
+      document.head.innerHTML = ''
+      const { useFeedbackWidget } = await load({ ...CONFIGURED, VITE_STATUS_WIDGET_URL: src })
+      const { result } = renderHook(() => useFeedbackWidget('Kája'))
+
+      await waitFor(() => expect(result.current).toBe(false))
+      expect(injected(), `${src} was accepted as a bundle URL`).toBeNull()
+    }
+  })
+
   it('honours an overridden bundle URL so a staging copy talks to staging', async () => {
     const { useFeedbackWidget } = await load({
       ...CONFIGURED,

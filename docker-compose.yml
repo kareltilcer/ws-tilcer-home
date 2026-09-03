@@ -101,10 +101,20 @@ services:
       # rotating it never touches crash reporting.)
       STATUS_INGEST_URL: ${STATUS_INGEST_URL:-}
       STATUS_INGEST_KEY: ${STATUS_INGEST_KEY:-}
-      # Tags on every event. The environment defaults to HOME_ENV mapped onto
-      # status's prod/dev convention — the same string the SPA sends — so one
-      # deployment cannot reach the board under two names.
-      STATUS_ENVIRONMENT: ${STATUS_ENVIRONMENT:-}
+      # Tags on every event. In a REAL deploy both halves agree with neither
+      # variable set: the backend maps HOME_ENV onto status's prod/dev
+      # convention, and a production `npm run build` of the SPA defaults to the
+      # same "prod".
+      #
+      # ⚠ THIS HARNESS IS THE ONE PLACE THAT IS NOT TRUE, which is why both sides
+      # are PINNED below instead of defaulted. HOME_ENV is "development" here, so
+      # the backend's default would be "dev" — but the frontend image always runs
+      # `npm run build`, and a production build says "prod" whatever HOME_ENV is.
+      # Left to their defaults the two halves of ONE harness run would reach one
+      # board under two names, which is exactly the failure the mapping exists to
+      # prevent. Change HOME_ENV and change this and VITE_STATUS_ENVIRONMENT with
+      # it — the README's pairing rule applies here too.
+      STATUS_ENVIRONMENT: ${STATUS_ENVIRONMENT:-dev}
       STATUS_RELEASE: ${STATUS_RELEASE:-}
     volumes:
       - home-data:/data
@@ -151,7 +161,11 @@ services:
         # served locally (widget.md §11). Unset ⇒ status.tilcer.cz/widget/v1.js.
         VITE_STATUS_WIDGET_URL: ${VITE_STATUS_WIDGET_URL:-}
         VITE_STATUS_SITE: ${VITE_STATUS_SITE:-}
-        VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-}
+        # ⚠ PINNED TO MATCH THE BACKEND'S STATUS_ENVIRONMENT ABOVE, not left to
+        # this half's default. This image always production-builds, so its default
+        # is "prod" while the harness backend is HOME_ENV=development ⇒ "dev" —
+        # one run, one board, two names. Set in PAIRS or not at all.
+        VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-dev}
         VITE_STATUS_RELEASE: ${VITE_STATUS_RELEASE:-}
         # No Traefik locally, so bake the config that proxies /api + /ws to the
         # `backend` service — keeps the SPA same-origin on :7001. (Baked, not

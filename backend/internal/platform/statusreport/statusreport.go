@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Level values accepted by the ingest API. A group tracks the highest level it
@@ -374,15 +375,11 @@ func truncate(s string, n int) string {
 		return s
 	}
 	cut := n
-	for cut > 0 && !utf8Start(s[cut]) {
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut] + "…[truncated]"
 }
-
-// utf8Start reports whether b starts a UTF-8 rune (i.e. is not a continuation
-// byte 0b10xxxxxx).
-func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
 
 // bucket is a token bucket: `rate` tokens per second up to `burst`.
 type bucket struct {

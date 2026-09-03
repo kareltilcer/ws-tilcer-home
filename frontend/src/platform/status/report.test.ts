@@ -300,6 +300,34 @@ describe('initCrashReporting', () => {
     expect(lastBody().message).toBe('third')
   })
 
+  // ⚠ …and the back-off is CLAMPED, exactly as the Go client clamps its own: a
+  // header this client cannot verify must not be able to silence it for a day.
+  // It matters more here than on the server — home is an installed PWA whose tab
+  // is not reloaded for days, so an unclamped mute is the permanently-deaf device
+  // the per-window cap exists to prevent, arriving through the other door.
+  it('clamps an oversized Retry-After rather than going deaf for a day', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(null, { status: 429, headers: { 'Retry-After': '86400' } }),
+    )
+    await load(CONFIGURED)
+
+    throwError(new Error('first'))
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    throwError(new Error('while muted'))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // Five minutes and a second: past the clamp, nowhere near the 24 hours asked
+    // for. Without the clamp this tab would still be silent.
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000)
+    fetchMock.mockResolvedValue(new Response(null, { status: 202 }))
+    throwError(new Error('after the clamp'))
+    vi.useRealTimers()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastBody().message).toBe('after the clamp')
+  })
+
   it('never throws into the page when the request fails', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     await load(CONFIGURED)

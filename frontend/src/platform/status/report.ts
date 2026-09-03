@@ -45,6 +45,18 @@ const REPORT_WINDOW_MS = 60 * 60 * 1000
 const MAX_MESSAGE_CHARS = 2000
 const MAX_STACK_CHARS = 8000
 
+/** The 429 back-off, in the same two numbers the Go client carries.
+ *
+ *  DEFAULT_MUTE_MS is what runs today, because `Retry-After` is not readable
+ *  cross-origin (see the 429 branch below). MAX_MUTE_MS is the clamp, and it is
+ *  here for the same reason it is in `statusreport.maxMute`: a header this client
+ *  cannot verify must not be able to silence it for a day. It matters MORE in the
+ *  browser than on the server — home is an installed PWA whose tab is not
+ *  reloaded for days, so an unclamped back-off is the permanently-deaf device the
+ *  per-window cap above is written to avoid, arriving through the other door. */
+const DEFAULT_MUTE_MS = 60 * 1000
+const MAX_MUTE_MS = 5 * 60 * 1000
+
 interface ReportOptions {
   stack?: string
   context?: Record<string, unknown>
@@ -221,7 +233,9 @@ async function post(cfg: CrashConfig, payload: CrashPayload): Promise<void> {
       // and becomes correct the day status exposes it; the default is what
       // actually runs.
       const retryAfter = Number(res.headers.get('Retry-After'))
-      mutedUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60) * 1000
+      const asked =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : DEFAULT_MUTE_MS
+      mutedUntil = Date.now() + Math.min(asked, MAX_MUTE_MS)
     }
   } catch {
     // Network failure, a CSP that blocked the connection, an origin missing from
