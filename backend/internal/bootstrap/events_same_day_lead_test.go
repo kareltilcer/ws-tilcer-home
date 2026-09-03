@@ -18,6 +18,7 @@ package bootstrap_test
 import (
 	"database/sql"
 	"io/fs"
+	"sort"
 	"testing"
 	"testing/fstest"
 
@@ -68,9 +69,17 @@ func migrationFSWithout(t *testing.T, exclude []string) fs.FS {
 		}
 		out[name] = &fstest.MapFile{Data: b}
 	}
+	// Every missing name at once, in a fixed order: a t.Fatalf inside the range
+	// would Goexit on the first one, and which one that is would be whatever the map
+	// happened to iterate first — two renames reported one at a time, at random.
+	var missing []string
 	for name := range skip {
-		t.Fatalf("migration %q is not in the merged migration set — was it renamed? "+
-			"The exclusion list must be kept in step or this test stops testing the upgrade at all", name)
+		missing = append(missing, name)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Fatalf("migration(s) %v are not in the merged migration set — were they renamed? "+
+			"The exclusion list must be kept in step or this test stops testing the upgrade at all", missing)
 	}
 	return out
 }
@@ -107,12 +116,21 @@ func seedEventWithChildren(t *testing.T, sqldb *sql.DB, id, title, lead string) 
 	}
 }
 
+// eventFingerprint names EVERY column the rebuild copies, not just the ones the
+// widening is about. Seven of the twelve would still catch a lost or reordered
+// ROW; it is the other five — description, timezone, created_by, created_at,
+// updated_at — that a mis-ordered INSERT ... SELECT rewrites while every row count
+// stays right, which is the failure 04002's header says naming the columns exists
+// to prevent. deliveryFingerprint covers all nine of its columns for the same
+// reason.
 func eventFingerprint(t *testing.T, sqldb *sql.DB) []string {
 	t.Helper()
 	return fingerprint(t, sqldb, `
-		SELECT id || '|' || title || '|' || starts_on || '|' || COALESCE(rrule, '<null>') ||
+		SELECT id || '|' || title || '|' || COALESCE(description, '<null>') ||
+		       '|' || starts_on || '|' || COALESCE(rrule, '<null>') || '|' || timezone ||
 		       '|' || reminder_enabled || '|' || COALESCE(reminder_lead, '<null>') ||
-		       '|' || archived
+		       '|' || COALESCE(created_by, '<null>') || '|' || created_at ||
+		       '|' || updated_at || '|' || archived
 		  FROM events ORDER BY id`)
 }
 

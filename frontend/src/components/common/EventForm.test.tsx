@@ -46,6 +46,23 @@ describe('EventForm reminder lead', () => {
     expect(screen.queryByRole('button', { name: LEAD_LABELS['0d'].chip })).toBeNull()
   })
 
+  // The OTHER Reserved, and the only call site that hides a FOCUSABLE control: the
+  // recurrence end date. That is the case Reserved's doc names — an input a screen
+  // reader would still announce for an event that does not repeat — and it is the
+  // half of the pairing jsdom can see, so it is asserted here and the class beside
+  // it by name, exactly as the chips above are.
+  it('lays the recurrence end date out while the event does not repeat, hidden rather than unmounted', async () => {
+    const user = userEvent.setup()
+    renderForm()
+    const untilInput = () => document.querySelectorAll('input[type="date"]')[1]
+    expect(document.querySelectorAll('input[type="date"]')).toHaveLength(2)
+
+    expect(untilInput().closest('div[aria-hidden="true"]')).toHaveClass('invisible')
+
+    await user.click(screen.getByRole('button', { name: 'týdně' }))
+    expect(untilInput().closest('div[aria-hidden="true"]')).toBeNull()
+  })
+
   // Every lead, worded as the CHIPS word them — deliberately not as the detail view
   // does. The form and the detail view share one table and read different columns of
   // it (see reminderLead.ts); reminderLead.test.ts is what holds those two apart.

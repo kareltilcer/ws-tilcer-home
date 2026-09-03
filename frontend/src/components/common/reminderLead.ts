@@ -34,14 +34,39 @@ export const LEAD_OPTIONS: { value: ReminderLead; label: string }[] = (
   Object.keys(LEAD_LABELS) as ReminderLead[]
 ).map((value) => ({ value, label: LEAD_LABELS[value].chip }))
 
-// leadDetail is the detail view's line for a lead that came off the WIRE, and it
-// takes a plain string for that reason. `Record<ReminderLead, …>` types the lookup
-// as total, so `LEAD_LABELS[e.reminder_lead].detail` reads as safe and is not: the
-// argument is whatever the API sent, and a lead the server has learned before this
-// table has is `undefined.detail` — a thrown render that takes the whole event
-// detail down, where the single-string table it replaced rendered a blank. Falling
-// back to the raw code keeps that failure to the one line it belongs to, and says
-// more than the blank did.
+// DEFAULT_LEAD is the lead the form opens on for a new event, and the one it falls
+// back to for a stored lead this build cannot draw a chip for.
+export const DEFAULT_LEAD: ReminderLead = '1w'
+
+// knownLead is the ONE guarded read of the table and both accessors below go
+// through it. `Record<ReminderLead, …>` types the lookup as total and it is not:
+// the key is whatever the API sent, so `LEAD_LABELS[e.reminder_lead].detail` reads
+// as safe while being `undefined.detail` for a lead the server has learned first.
+//
+// ⚠ `lead in LEAD_LABELS` IS NOT THE GUARD. `in` walks the prototype chain, so it
+// would admit 'toString' and 'constructor' as leads. Reading a field off the result
+// is what separates a real entry from an inherited member.
+function knownLead(lead: string | null | undefined): { chip: string; detail: string } | undefined {
+  const hit = lead == null ? undefined : LEAD_LABELS[lead as ReminderLead]
+  return typeof hit?.detail === 'string' ? hit : undefined
+}
+
+// leadDetail is the DETAIL VIEW's line for a lead that came off the wire, and it
+// takes a plain string for that reason. An unknown lead falls back to the raw code
+// rather than throwing: `🔔 3d` keeps the failure to the one line it belongs to,
+// where `undefined.detail` took the whole event detail behind the error boundary
+// and the single-string table before it printed a blank.
 export function leadDetail(lead: string): string {
-  return LEAD_LABELS[lead as ReminderLead]?.detail ?? lead
+  return knownLead(lead)?.detail ?? lead
+}
+
+// asLead is the FORM's answer to the same hazard, and it is deliberately a
+// DIFFERENT one. The form is a chip selector: a lead it has no chip for is a lead
+// it cannot show as chosen, and casting the wire value through `as ReminderLead`
+// left every chip unpressed under a ticked checkbox with nothing naming the
+// setting. Falling back to DEFAULT_LEAD keeps what the form SHOWS and what it SAVES
+// the same value — the detail view can afford to echo a code it does not
+// understand, a picker cannot.
+export function asLead(lead: string | null | undefined): ReminderLead {
+  return knownLead(lead) ? (lead as ReminderLead) : DEFAULT_LEAD
 }

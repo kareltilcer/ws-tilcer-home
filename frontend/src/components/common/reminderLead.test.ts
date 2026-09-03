@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ReminderLead } from '@/api/types'
-import { LEAD_LABELS, LEAD_OPTIONS, leadDetail } from './reminderLead'
+import { asLead, DEFAULT_LEAD, LEAD_LABELS, LEAD_OPTIONS, leadDetail } from './reminderLead'
 
 // ⚠ THE TWO REGISTERS ARE THE POINT OF THIS TABLE, AND ONLY THIS FILE HOLDS THEM
 // APART. EventForm.test.tsx asserts the chips because chips are what the form draws;
@@ -14,11 +13,6 @@ import { LEAD_LABELS, LEAD_OPTIONS, leadDetail } from './reminderLead'
 // silently loses the direction it never spelled out.
 
 describe('LEAD_LABELS', () => {
-  it('labels every lead the union admits, and no others', () => {
-    const leads: ReminderLead[] = ['0d', '1d', '2d', '1w', '2w', '1m']
-    expect(Object.keys(LEAD_LABELS).sort()).toEqual([...leads].sort())
-  })
-
   it('spells the direction in every detail except the same-day one, and in no chip', () => {
     for (const [lead, { chip, detail }] of Object.entries(LEAD_LABELS)) {
       expect(chip).not.toContain('předem')
@@ -32,6 +26,12 @@ describe('LEAD_LABELS', () => {
 })
 
 describe('LEAD_OPTIONS', () => {
+  // LEAD_OPTIONS is `Object.keys(LEAD_LABELS).map(…)`, so this one literal pins the
+  // table's KEY SET as well as the order it is read in. Asserting the keys
+  // separately would be a third hand-kept copy of the same list — in the file whose
+  // whole point is that there is one — and it could not fail without this failing
+  // first. The compiler covers the direction neither can: `Record<ReminderLead, …>`
+  // refuses a lead added to the union and not labelled here.
   it('opens with the same-day lead, then runs outwards to a month', () => {
     expect(LEAD_OPTIONS.map((o) => o.value)).toEqual(['0d', '1d', '2d', '1w', '2w', '1m'])
   })
@@ -55,5 +55,30 @@ describe('leadDetail', () => {
   it('falls back to the raw code for a lead this build has never heard of', () => {
     expect(() => leadDetail('3d')).not.toThrow()
     expect(leadDetail('3d')).toBe('3d')
+  })
+})
+
+// asLead is the same guard for the FORM, and it answers differently on purpose: a
+// picker that cannot draw a chip for a lead must not report that lead as chosen, so
+// what the form shows and what it saves stay one value.
+describe('asLead', () => {
+  it('keeps a lead the table knows', () => {
+    expect(asLead('0d')).toBe('0d')
+    expect(asLead('2w')).toBe('2w')
+  })
+
+  it('falls back to the default for null, empty and a lead this build has never heard of', () => {
+    expect(asLead(null)).toBe(DEFAULT_LEAD)
+    expect(asLead(undefined)).toBe(DEFAULT_LEAD)
+    expect(asLead('')).toBe(DEFAULT_LEAD)
+    expect(asLead('3d')).toBe(DEFAULT_LEAD)
+  })
+
+  // Both accessors read a FIELD off the lookup rather than testing `in`, which
+  // walks the prototype chain and would make 'toString' a reminder lead.
+  it('does not mistake an inherited object property for a lead', () => {
+    expect(asLead('toString')).toBe(DEFAULT_LEAD)
+    expect(asLead('constructor')).toBe(DEFAULT_LEAD)
+    expect(leadDetail('toString')).toBe('toString')
   })
 })

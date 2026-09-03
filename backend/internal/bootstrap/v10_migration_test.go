@@ -48,16 +48,24 @@ var v10Files = []string{
 }
 
 // preV10MigrationFS is the merged schema WITHOUT v10's four files — the migration
-// set production had applied the morning v10 ships, PLUS whatever has landed in
-// another module's block since. (04002 is the first of those.) The exclusion is by
-// name and not by a version cutoff, so the set grows on one end while staying
-// pinned on the other; that costs the fixture nothing here, because what these
-// tests assert is that v10's four files apply over a database that already has
-// higher-numbered migrations in it, and a later arrival only makes that truer. The
-// exclusion, and the guard that fires when a name in the list is not in the set,
-// live in
-// migrationFSWithout (events_same_day_lead_test.go), which 04002's upgrade test
-// needs for the same reason with a different list.
+// set production had applied the morning v10 ships, PLUS everything that has landed
+// since in a block this list does not name. The exclusion is by name and not by a
+// version cutoff, so the set grows on one end while staying pinned on the other.
+//
+// ⚠ THAT IS FREE FOR A LATE ARRIVAL IN ANOTHER MODULE'S BLOCK AND NOT FREE FOR ONE
+// IN 12. 04002 (events, the same-day reminder lead) is the harmless kind: what
+// these tests assert is that v10's four files apply over a database that already
+// holds higher-numbered migrations, and an unrelated later arrival only makes that
+// truer. 12003_chat_reactions.sql is the other kind, and it got here first — it
+// landed after v10 but inside v10's OWN block, and it declares
+// REFERENCES chat_messages, a table the excluded 12001 creates. SQLite resolves a
+// foreign key at DML rather than at CREATE, so the fixture still builds and every
+// assertion below still holds; what it is not any more is a schema production ever
+// had. Weigh the next one against that rather than against 04002.
+//
+// The exclusion, and the guard that fires when a name in the list is not in the
+// set, live in migrationFSWithout (events_same_day_lead_test.go), which 04002's
+// upgrade test needs for the same reason with a different list.
 func preV10MigrationFS(t *testing.T) fs.FS {
 	t.Helper()
 	return migrationFSWithout(t, v10Files)

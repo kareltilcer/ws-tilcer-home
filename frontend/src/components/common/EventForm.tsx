@@ -8,7 +8,7 @@ import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Input, Textarea } from '@/components/ui/ui'
 import { cn } from '@/lib/utils'
 import { LinksEditor, type EditableLink } from './LinksEditor'
-import { LEAD_OPTIONS } from './reminderLead'
+import { asLead, DEFAULT_LEAD, LEAD_OPTIONS } from './reminderLead'
 
 type Recurrence = 'none' | 'weekly' | 'monthly' | 'yearly'
 
@@ -68,7 +68,7 @@ export function EventForm({
   const [recurrence, setRecurrence] = useState<Recurrence>('none')
   const [until, setUntil] = useState('')
   const [reminderEnabled, setReminderEnabled] = useState(false)
-  const [reminderLead, setReminderLead] = useState<ReminderLead>('1w')
+  const [reminderLead, setReminderLead] = useState<ReminderLead>(DEFAULT_LEAD)
   const [links, setLinks] = useState<EditableLink[]>([])
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState(false)
@@ -83,7 +83,7 @@ export function EventForm({
     setRecurrence(rruleToRecurrence(e?.rrule ?? null))
     setUntil(rruleUntil(e?.rrule ?? null))
     setReminderEnabled(e?.reminder_enabled ?? false)
-    setReminderLead((e?.reminder_lead as ReminderLead) ?? '1w')
+    setReminderLead(asLead(e?.reminder_lead))
     setLinks(e?.links.map((l) => ({ id: l.id, url: l.url, title: l.title })) ?? [])
     setError('')
     setConfirming(false)
@@ -119,10 +119,10 @@ export function EventForm({
     if (!title.trim()) return setError('Zadejte název.')
     if (!startsOn) return setError('Zadejte datum.')
     // No "pick a lead" check: there is no state that needs one. reminderLead is a
-    // non-nullable union seeded with '1w', an event without a reminder comes back
-    // as reminder_lead null (the store maps the NULL column to null, never ""), so
-    // the ?? fallback always lands on a real lead. The check that used to stand
-    // here could not fire, and its message could not be read.
+    // non-nullable union, and asLead lands it on a real member for every stored
+    // value there is — null for an event with no reminder, and any code this build
+    // does not know. The check that used to stand here could not fire, and its
+    // message could not be read.
     // Editing a recurring event affects the whole series — confirm first.
     if (editing && wasRecurring && !confirming) {
       setConfirming(true)
@@ -182,9 +182,8 @@ export function EventForm({
             <input type="checkbox" checked={reminderEnabled} onChange={(e) => setReminderEnabled(e.target.checked)} className="h-4 w-4" />
             Připomenout
           </label>
-          {/* The box is unticked most of the time, so this is the reserve that used
-              to be a wrong guess: 44px held ONE row of chips while the phone had
-              always drawn two, and ticking the box shoved the rest of the form down. */}
+          {/* A lead only means anything once the box is ticked; its space is held
+              either way, so ticking it reveals the chips in place. */}
           <Reserved shown={reminderEnabled} className="mt-2 flex flex-wrap gap-1.5">
             {LEAD_OPTIONS.map((o) => (
               <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
