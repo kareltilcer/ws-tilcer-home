@@ -15,6 +15,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -163,10 +164,18 @@ func (s *Scheduler) runJob(ctx context.Context, j *job, now time.Time) {
 	}
 }
 
+// callJob runs one job with its panic contained.
+//
+// ⚠ THE STACK IS PART OF THE LINE. This Error is also what the crash board
+// receives (platform/statusreport lifts a `stack` attr into the report's own
+// stack field, whose first frame is what the server groups on), and "scheduler:
+// job panicked" plus a job name says which job died and nothing about where.
+// httpx.Recover and the preview worker log theirs the same way.
 func (s *Scheduler) callJob(ctx context.Context, j *job, now time.Time) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.Error("scheduler: job panicked", "job", j.name, "panic", r)
+			s.logger.Error("scheduler: job panicked", "job", j.name, "panic", r,
+				"stack", string(debug.Stack()))
 		}
 	}()
 	return j.fn(ctx, now)

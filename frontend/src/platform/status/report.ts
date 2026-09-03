@@ -18,11 +18,19 @@
 
 import { crashConfig, type CrashConfig } from '@/platform/status/config'
 
-/** The reports one page load may send. status allows 60/min per site with a
+/** The reports one tab may send per hour. status allows 60/min per site with a
  *  burst of 120; a browser is one of several reporters against that budget and a
  *  render loop can produce thousands of identical errors in a second, so the tab
- *  keeps a much tighter cap of its own and simply stops. */
-const MAX_REPORTS_PER_LOAD = 20
+ *  keeps a much tighter cap of its own.
+ *
+ *  ⚠ IT IS A ROLLING WINDOW, NOT A PER-LOAD COUNTER, because home is an installed
+ *  PWA whose tab is not reloaded for days. A counter that only went up would make
+ *  a device permanently deaf after twenty errors accumulated across a week — with
+ *  nothing anywhere saying it had stopped — while doing nothing extra about the
+ *  case the cap exists for: a render loop spends the whole allowance in one
+ *  second and then waits out the hour either way. */
+const MAX_REPORTS_PER_WINDOW = 20
+const REPORT_WINDOW_MS = 60 * 60 * 1000
 
 /** Message caps, well inside the server's 64 KB body limit — which it enforces
  *  with a 413 that this client, being silent, would never surface. */
@@ -35,8 +43,10 @@ interface ReportOptions {
 }
 
 let config: CrashConfig | null = null
+/** Reports sent in the window that opened at windowStart. */
 let sent = 0
-/** Epoch ms before which nothing is sent, set from a 429's Retry-After. */
+let windowStart = 0
+/** Epoch ms before which nothing is sent, set when a 429 comes back. */
 let mutedUntil = 0
 
 /**
@@ -70,8 +80,13 @@ export function initCrashReporting(): void {
 function report(error: unknown, options: ReportOptions = {}): void {
   try {
     if (!config) return
-    if (sent >= MAX_REPORTS_PER_LOAD) return
-    if (Date.now() < mutedUntil) return
+    const now = Date.now()
+    if (now - windowStart >= REPORT_WINDOW_MS) {
+      windowStart = now
+      sent = 0
+    }
+    if (sent >= MAX_REPORTS_PER_WINDOW) return
+    if (now < mutedUntil) return
 
     const { message, stack } = describe(error)
     if (!message) return
@@ -128,9 +143,17 @@ async function post(cfg: CrashConfig, payload: CrashPayload): Promise<void> {
     if (res.status === 429) {
       // Back off and DROP. The documented alternative is one retry after the
       // delay, and a queue is explicitly ruled out — a monitoring client must
-      // never build an unbounded backlog. Holding the event would mean holding
-      // it across a navigation that may never come back, so this tab simply goes
-      // quiet for the window it was given.
+      // never build an unbounded backlog. Holding the event would mean holding it
+      // across a navigation that may never come back, so this tab simply goes
+      // quiet.
+      //
+      // ⚠ IN A BROWSER THE 60 s FALLBACK IS THE NORMAL PATH, not the exception.
+      // `Retry-After` is not a CORS-safelisted response header, and status's
+      // documented CORS surface (integration.md, "Cross-origin reporting") lists
+      // no Access-Control-Expose-Headers — so `headers.get` returns null here even
+      // though the server sent the header. The read stays because it costs nothing
+      // and becomes correct the day status exposes it; the default is what
+      // actually runs.
       const retryAfter = Number(res.headers.get('Retry-After'))
       mutedUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 60) * 1000
     }

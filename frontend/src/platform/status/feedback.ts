@@ -73,6 +73,17 @@ function ensureWidget(reporter: string): Promise<boolean> {
  * be rendered. False means: this build has no widget key, or the script did not
  * load — and in both cases the shell shows nothing rather than a control that
  * fails when pressed.
+ *
+ * ⚠ `reporter` IS READ ONCE PER PAGE LOAD, whatever the dependency array below
+ * suggests. The label reaches the widget as an attribute on its script element,
+ * which the bundle parses when it executes; there is no API for changing it
+ * afterwards, and re-injecting the script would put a second widget on the page.
+ * So the effect re-running on a new label is a no-op, and the one case that
+ * leaves is a second member signing in without a reload — their reports carry the
+ * first member's label. It is a display label status never verifies, the sign-out
+ * path a household of three actually takes is closing the tab, and the two
+ * alternatives (a second widget, or dropping the dependency and lying to the
+ * linter instead of to the reader) are both worse than saying so here.
  */
 export function useFeedbackWidget(reporter: string): boolean {
   const [ready, setReady] = useState(false)

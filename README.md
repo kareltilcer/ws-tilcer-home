@@ -227,10 +227,6 @@ rest of the app is untouched.
 | `HOME_PUSH_ENDPOINT_HOSTS` | **extra** push-service hostnames a subscription endpoint may name, on top of the built-in list (Google, Mozilla, Apple, WNS). A subscription's endpoint is what decides where this server POSTs, and every push route is open to every role, so it is allowlisted rather than taken on trust. Bare hostnames, comma-separated — **never URLs**. Matched exactly or as a subdomain | *(unset)* |
 | `HOME_SCHED_TICK_SECONDS` | scheduler granularity. Bounded to 1–60: slots are wall-clock **minutes**, so a longer tick steps over them | `60` |
 | `HOME_SCHED_CATCHUP_GRACE` | fire a slot missed while the process was down, if it is back within this many minutes; older misses are skipped rather than delivered as stale news | `120` |
-| `STATUS_INGEST_URL` | crash reporting: the site's ingest endpoint on status.tilcer.cz. Set it and `STATUS_INGEST_KEY` together or neither — exactly one is refused at boot | `https://status.tilcer.cz/api/ingest/home` |
-| `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). **A real secret**, unlike the browser key baked into the SPA | *(secret)* |
-| `STATUS_ENVIRONMENT` | environment tag on every event | defaults to `HOME_ENV` |
-| `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
 
 A device subscribes with an endpoint URL its browser mints, and that URL is where
 this server POSTs for every notification it sends to that device — so it is
@@ -249,6 +245,21 @@ rule — "the 31st" fires on 28/29 February rather than skipping the month.
 > **Do not** set `HOME_DEV_AUTH_BYPASS` in production — with `HOME_ENV=production`
 > the server refuses to start if it is enabled (fake auth in prod is a security
 > hole). `/readyz` also reports `insecure_auth` whenever the bypass is active.
+
+**Crash reporting to `status.tilcer.cz`.** These four are the backend half; the
+browser half is a separate key in the frontend's build args, and both are
+explained together under
+[Crash reporting and feedback](#crash-reporting-and-feedback-statustilcercz)
+below. Not `HOME_`-prefixed on purpose: they are the fleet-wide names every
+`ws-tilcer-*` service reads. Leave all four unset and reporting is cleanly off —
+the boot line says `statusreport: DISABLED` and nothing else changes.
+
+| Var | Purpose | Value |
+| --- | --- | --- |
+| `STATUS_INGEST_URL` | the site's ingest endpoint, e.g. `https://status.tilcer.cz/api/ingest/home`. Set it and `STATUS_INGEST_KEY` together or neither — exactly one is refused at boot, because a half-configured reporter drops every event in silence | *(unset — reporting off)* |
+| `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). **A real secret**, unlike the browser key baked into the SPA | *(secret; unset — reporting off)* |
+| `STATUS_ENVIRONMENT` | environment tag on every event | defaults to `HOME_ENV` |
+| `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
 
 ### Documents converter (`home-gotenberg`, v4)
 
@@ -282,14 +293,14 @@ Static-only image — **no runtime env vars**.
 
 **Build args** (baked into the SPA at image build time)
 
-| Arg                  | Value                       |
-| -------------------- | --------------------------- |
-| `VITE_AUTH_BASE_URL` | `https://auth.tilcer.cz` (only for the "Zapomněli jste heslo?" / MFA out-links; Mode B carries no browser token) |
-| `VITE_STATUS_INGEST_URL` | `https://status.tilcer.cz/api/ingest/home` — browser crash reporting. Unset ⇒ the SPA installs no error listeners |
-| `VITE_STATUS_INGEST_KEY` | the site's ingest key (`ik_…`). **Public by design**, like a Sentry DSN — see below |
-| `VITE_STATUS_WIDGET_KEY` | the site's widget key (`wk_…`), from **site detail → User feedback**. Unset ⇒ no widget and no "Nahlásit problém" trigger |
-| `VITE_STATUS_SITE` | the site id in status | `home` (the default) |
-| `VITE_STATUS_ENVIRONMENT` | environment tag | defaults to `prod` in a production build |
+| Arg                  | Purpose                     | Value |
+| -------------------- | --------------------------- | ----- |
+| `VITE_AUTH_BASE_URL` | the "Zapomněli jste heslo?" / MFA out-links, and nothing else — Mode B carries no browser token | `https://auth.tilcer.cz` |
+| `VITE_STATUS_INGEST_URL` | browser crash reporting. Unset ⇒ the SPA installs no error listeners | e.g. `https://status.tilcer.cz/api/ingest/home`; *(unset — reporting off)* |
+| `VITE_STATUS_INGEST_KEY` | the site's ingest key (`ik_…`). **Public by design**, like a Sentry DSN — see below | *(unset — reporting off)* |
+| `VITE_STATUS_WIDGET_KEY` | the site's widget key (`wk_…`), from **site detail → User feedback** | *(unset ⇒ no widget and no "Nahlásit problém" trigger)* |
+| `VITE_STATUS_SITE` | the site id in status | `home` |
+| `VITE_STATUS_ENVIRONMENT` | environment tag | `prod` in a production build, `dev` under `npm run dev` |
 | `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
 | `VITE_STATUS_WIDGET_URL` | override the widget bundle (a staging status). Pin a **major**: `/widget/v1.js` | `https://status.tilcer.cz/widget/v1.js` |
 

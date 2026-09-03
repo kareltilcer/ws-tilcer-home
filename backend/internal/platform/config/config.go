@@ -179,11 +179,19 @@ func (s StatusConfig) Enabled() bool { return s.IngestURL != "" && s.IngestKey !
 // that a configuration error or a failed migration is itself reportable, and two
 // spellings of one variable would be a feature that is simply off with nothing
 // anywhere saying so.
+//
+// EnvHomeEnv and DefaultEnv are exported for the same reason and no other: the
+// pre-config reporter has to reproduce the environment tag this file would have
+// given it, and a second literal spelling of either is how one deployment ends
+// up on the board under two names.
 const (
 	EnvStatusIngestURL   = "STATUS_INGEST_URL"
 	EnvStatusIngestKey   = "STATUS_INGEST_KEY"
 	EnvStatusEnvironment = "STATUS_ENVIRONMENT"
 	EnvStatusRelease     = "STATUS_RELEASE"
+
+	EnvHomeEnv = "HOME_ENV"
+	DefaultEnv = "development"
 )
 
 // GardenConfig configures the ONE external dependency v7 adds (PRD §V7-9).
@@ -461,9 +469,9 @@ func maskPair(id, secret string) string {
 // injected in tests.
 type Getenv func(key string) (string, bool)
 
-// Defaults for optional variables.
+// Defaults for optional variables. HOME_ENV's default is DefaultEnv, up beside
+// the status keys, because cmd/home needs it too.
 const (
-	defaultEnv                  = "development"
 	defaultAddr                 = ":8080"
 	defaultSiteKey              = "home"
 	defaultTimezone             = "Europe/Prague"
@@ -563,7 +571,7 @@ func Load(getenv Getenv) (*Config, error) {
 	l := &loader{getenv: getenv}
 	c := &Config{}
 
-	c.Env = l.strDefault("HOME_ENV", defaultEnv)
+	c.Env = l.strDefault(EnvHomeEnv, DefaultEnv)
 	if c.Env != "development" && c.Env != "production" {
 		l.errf("HOME_ENV must be \"development\" or \"production\" (got %q)", c.Env)
 	}

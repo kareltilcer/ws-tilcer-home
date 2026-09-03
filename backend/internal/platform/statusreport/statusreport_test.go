@@ -2,7 +2,9 @@ package statusreport
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -264,4 +266,72 @@ func TestCaptureIsRateLimited(t *testing.T) {
 	if c.limiter.tokens != 0 {
 		t.Errorf("tokens = %v, want 0 — the second event should have been dropped, not queued", c.limiter.tokens)
 	}
+}
+
+// A Coolify variable pasted with a trailing newline is the most ordinary way this
+// client is misconfigured, and it is the one misconfiguration nothing would ever
+// report: url.Parse refuses the request inside send, which drops in silence, while
+// config — which trims — has already logged "crash reporting ready". Trimming in
+// New is what keeps the two readers of one environment agreeing.
+func TestNewTrimsItsArguments(t *testing.T) {
+	url, got := ingest(t, http.StatusAccepted)
+	c := New(" "+url+"\n", "\tik_test\n", WithEnvironment(" prod\n"), WithRelease("\thome@1.2.3 "))
+	if c == nil {
+		t.Fatal("New returned nil for a value that only needed trimming")
+	}
+	c.CaptureSync(Report{Message: "boom"})
+
+	r := waitFor(t, got)
+	if r.key != "ik_test" {
+		t.Errorf("X-Ingest-Key = %q, want the trimmed key", r.key)
+	}
+	if r.body.Environment != "prod" || r.body.Release != "home@1.2.3" {
+		t.Errorf("tags = %q/%q, want prod/home@1.2.3", r.body.Environment, r.body.Release)
+	}
+}
+
+// …and a variable that is nothing BUT whitespace is unset, exactly as config's
+// strDefault reads it — not a client pointed at an unusable endpoint.
+func TestNewTreatsWhitespaceOnlyAsUnset(t *testing.T) {
+	if c := New("  \n", "ik_test"); c != nil {
+		t.Errorf("New with a whitespace-only url = %v, want nil", c)
+	}
+	if c := New("https://status.tilcer.cz/api/ingest/home", " \t "); c != nil {
+		t.Errorf("New with a whitespace-only key = %v, want nil", c)
+	}
+}
+
+// Which keys survive the cap is a property of the EVENT, not of Go's randomised
+// map order: a group collects many events of one error, and a context block whose
+// membership changes per occurrence reads as a difference that means something.
+func TestBoundContextKeepsTheSameKeysEveryTime(t *testing.T) {
+	in := map[string]any{}
+	for i := range maxContextKeys * 3 {
+		in[fmt.Sprintf("k%03d", i)] = i
+	}
+	first := boundContext(in)
+	if len(first) != maxContextKeys {
+		t.Fatalf("kept %d keys, want %d", len(first), maxContextKeys)
+	}
+	for range 20 {
+		again := boundContext(in)
+		if !maps.Equal(toStrings(first), toStrings(again)) {
+			t.Fatalf("the kept keys changed between calls:\n%v\n%v", first, again)
+		}
+	}
+	// Sorted, so the surviving set is the one a reader can predict.
+	if _, ok := first["k000"]; !ok {
+		t.Errorf("the lowest key was dropped: %v", first)
+	}
+	if _, ok := first[fmt.Sprintf("k%03d", maxContextKeys)]; ok {
+		t.Errorf("a key past the cap survived: %v", first)
+	}
+}
+
+func toStrings(m map[string]any) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = fmt.Sprint(v)
+	}
+	return out
 }

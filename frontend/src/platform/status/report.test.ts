@@ -150,12 +150,33 @@ describe('initCrashReporting', () => {
     expect(lastBody().message).toBe('{"code":418,"why":"teapot"}')
   })
 
-  it('stops after the per-load cap so a render loop cannot flood the board', async () => {
+  it('stops after the per-window cap so a render loop cannot flood the board', async () => {
     await load(CONFIGURED)
     for (let i = 0; i < 60; i++) throwError(new Error(`boom ${i}`))
     expect(fetchMock).toHaveBeenCalledTimes(20)
   })
 
+  // …and the allowance comes back. home is an installed PWA whose tab is not
+  // reloaded for days, so a counter that only went up would make a device
+  // permanently deaf after twenty errors spread across a week, with nothing
+  // anywhere saying it had stopped listening.
+  it('reopens the allowance an hour later', async () => {
+    await load(CONFIGURED)
+    for (let i = 0; i < 60; i++) throwError(new Error(`boom ${i}`))
+    expect(fetchMock).toHaveBeenCalledTimes(20)
+
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + 61 * 60_000)
+    throwError(new Error('an hour later'))
+    vi.useRealTimers()
+
+    expect(fetchMock).toHaveBeenCalledTimes(21)
+    expect(lastBody().message).toBe('an hour later')
+  })
+
+  // ⚠ This exercises the parsing, not production: `Retry-After` is not a
+  // CORS-safelisted response header and status exposes none, so a real
+  // cross-origin read returns null and the 60 s default is what actually runs.
   it('goes quiet for Retry-After on a 429 and drops rather than queueing', async () => {
     fetchMock.mockResolvedValue(
       new Response(null, { status: 429, headers: { 'Retry-After': '120' } }),

@@ -140,6 +140,10 @@ services:
         VITE_STATUS_INGEST_URL: ${VITE_STATUS_INGEST_URL:-}
         VITE_STATUS_INGEST_KEY: ${VITE_STATUS_INGEST_KEY:-}
         VITE_STATUS_WIDGET_KEY: ${VITE_STATUS_WIDGET_KEY:-}
+        # The one arg whose whole purpose is pointing the harness somewhere other
+        # than production — a staging status, or a `npm run build` of the widget
+        # served locally (widget.md §11). Unset ⇒ status.tilcer.cz/widget/v1.js.
+        VITE_STATUS_WIDGET_URL: ${VITE_STATUS_WIDGET_URL:-}
         VITE_STATUS_SITE: ${VITE_STATUS_SITE:-}
         VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-}
         VITE_STATUS_RELEASE: ${VITE_STATUS_RELEASE:-}

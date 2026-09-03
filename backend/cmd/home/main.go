@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,15 +59,27 @@ func main() {
 	// The crash reporter is built BEFORE anything else, from the environment
 	// directly, because the two crashes it most needs to see both happen before
 	// there is a config: a database that will not migrate and a bad variable. It
-	// re-reads the same three names config validates below — the duplication buys
+	// re-reads the same four names config validates below — the duplication buys
 	// coverage of the boot itself, and config remains the only thing that can
 	// refuse a half-configured one.
+	//
+	// Every name and the environment default are config's own exported constants,
+	// not literals: two readers of one variable that spell it differently, or that
+	// disagree about what unset means, is the failure this whole arrangement is
+	// meant to avoid. statusreport.New trims what it is given for the same reason.
 	reporter := statusreport.New(
 		os.Getenv(config.EnvStatusIngestURL),
 		os.Getenv(config.EnvStatusIngestKey),
 		// The same fallback config applies, spelled with cmp.Or because there is no
 		// validated Config to read it off yet.
-		statusreport.WithEnvironment(cmp.Or(os.Getenv(config.EnvStatusEnvironment), os.Getenv("HOME_ENV"), "development")),
+		// Trimmed before cmp.Or, not after: a variable set to whitespace is unset as
+		// far as config's strDefault is concerned, and picking it here would tag the
+		// boot's events with an empty environment while every later event carries
+		// the real one.
+		statusreport.WithEnvironment(cmp.Or(
+			strings.TrimSpace(os.Getenv(config.EnvStatusEnvironment)),
+			strings.TrimSpace(os.Getenv(config.EnvHomeEnv)),
+			config.DefaultEnv)),
 		statusreport.WithRelease(os.Getenv(config.EnvStatusRelease)),
 	)
 	// Every logger.Error in the process now also lands on the crash board; the

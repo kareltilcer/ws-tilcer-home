@@ -24,6 +24,17 @@ import (
 // is `error`, including a recovered panic: the request died, the process did
 // not. The only `fatal` this service sends is written by hand in main, for the
 // two crashes that really do end it.
+//
+// ⚠ AND IT IS WHERE Report.Context's "NOT USER CONTENT" RULE IS ACTUALLY DECIDED.
+// Every attr of every Error record is forwarded verbatim, so the rule cannot be
+// applied here — the only place it can be applied is the `logger.Error` call, and
+// the person writing one is not reading this file. The rule, spelled out where it
+// bites: an Error line's attrs travel to a board read by Karel's ADMIN session,
+// which is a different lock from the one on a member's private note (widget.md
+// §5). Log the id, the key, the count, the route — never the title, the body, the
+// filename or the message. Audited at the time of writing: all 54 sites carry ids
+// and opaque object keys, and home has no API path with a user-authored segment,
+// so `path` on a recovered panic is safe too.
 func NewLogHandler(next slog.Handler, c *Client) slog.Handler {
 	if c == nil {
 		return next

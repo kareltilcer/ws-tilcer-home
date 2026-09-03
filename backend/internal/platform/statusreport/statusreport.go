@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -64,16 +66,28 @@ type Client struct {
 type Option func(*Client)
 
 // WithEnvironment sets the environment tag sent on every event ("prod"/"dev").
-func WithEnvironment(env string) Option { return func(c *Client) { c.environment = env } }
+func WithEnvironment(env string) Option {
+	return func(c *Client) { c.environment = strings.TrimSpace(env) }
+}
 
 // WithRelease sets the release tag sent on every event ("home@2026.36.1").
-func WithRelease(rel string) Option { return func(c *Client) { c.release = rel } }
+func WithRelease(rel string) Option { return func(c *Client) { c.release = strings.TrimSpace(rel) } }
 
 // New builds a client for a fully-qualified ingest URL and per-site key. An
 // empty url or key returns nil, which every method below treats as "reporting is
 // off" — so the composition root wires the same call whether or not the
 // deployment configured status.
+//
+// ⚠ EVERY ARGUMENT IS TRIMMED HERE, and that is a correctness rule rather than a
+// courtesy. A Coolify variable pasted with a trailing newline makes url.Parse
+// refuse the request inside send, which — this client being silent by contract —
+// drops every event forever with nothing anywhere saying so; a key with the same
+// contamination is an invalid header value and fails the same way. config.status
+// trims the same two variables before it validates them, so without this the two
+// readers of one environment disagree and the boot line says "crash reporting
+// ready" about a client that cannot send.
 func New(url, key string, opts ...Option) *Client {
+	url, key = strings.TrimSpace(url), strings.TrimSpace(key)
 	if url == "" || key == "" {
 		return nil
 	}
@@ -110,6 +124,11 @@ type Report struct {
 	// ⚠ NOT USER CONTENT. status is read by Karel's admin session, which is a
 	// different lock from the one on a member's private note, and a value that
 	// travels here has left home's privacy model behind (widget.md §5).
+	//
+	// Nothing here can enforce that, because almost every Report this service
+	// sends is built by the slog forwarder out of a log line's attrs — so the rule
+	// belongs at the `logger.Error` call, and loghandler.go's NewLogHandler doc is
+	// where it is written for the person making one.
 	Context map[string]any
 }
 
@@ -211,16 +230,24 @@ func (c *Client) send(e wireEvent) {
 // rendered as a string of at most maxContextValueChars. Rendering rather than
 // passing values through also removes the one way a context value could fail the
 // whole send — a type json.Marshal refuses, which would drop the event silently.
+//
+// The keys are SORTED before the cut, so which ones survive is a property of the
+// event rather than of Go's randomised map order. A group collects many events of
+// one error, and a context block whose membership changes per occurrence is the
+// kind of difference an operator reads as meaningful when it is noise.
 func boundContext(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]any, min(len(in), maxContextKeys))
-	for k, v := range in {
-		if len(out) >= maxContextKeys {
-			break
-		}
-		out[k] = truncate(fmt.Sprint(v), maxContextValueChars)
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	keys = keys[:min(len(keys), maxContextKeys)]
+	out := make(map[string]any, len(keys))
+	for _, k := range keys {
+		out[k] = truncate(fmt.Sprint(in[k]), maxContextValueChars)
 	}
 	return out
 }

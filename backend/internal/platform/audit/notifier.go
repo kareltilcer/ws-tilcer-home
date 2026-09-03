@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"runtime/debug"
 	"time"
 )
 
@@ -297,10 +298,16 @@ func (n *Notifier) scanOnce(ctx context.Context) (int, error) {
 // The tailer is a single long-lived goroutine shared by every listener: an
 // unrecovered panic in one would take down the whole outbox and silently end all
 // notifications, so it is contained and logged like any other failure.
+//
+// ⚠ THE STACK IS PART OF THE LINE. The Error below is also what the crash board
+// receives (platform/statusreport lifts a `stack` attr into the report's own
+// stack field, whose first frame is what the server groups on), and the event id
+// names the message, never the listener frame that could not handle it.
 func (n *Notifier) deliver(ctx context.Context, l Listener, e Entry, changes []Change) {
 	defer func() {
 		if p := recover(); p != nil {
-			n.logger.Error("audit notifier: listener panicked", "panic", p, "event_id", e.ID, "action", e.Qualified())
+			n.logger.Error("audit notifier: listener panicked", "panic", p, "event_id", e.ID,
+				"action", e.Qualified(), "stack", string(debug.Stack()))
 		}
 	}()
 	if err := l.OnEvent(ctx, e, changes); err != nil {
