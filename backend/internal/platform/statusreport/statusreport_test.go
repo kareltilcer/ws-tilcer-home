@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -154,6 +155,77 @@ func TestIngestFailuresAreSwallowed(t *testing.T) {
 	}
 	// An endpoint that is not listening at all — the network-failure case.
 	New("http://127.0.0.1:1/api/ingest/home", "ik_test").CaptureSync(Report{Message: "boom"})
+}
+
+// …but a 429 is the one status worth reading, because it is the server talking
+// about the events STILL TO COME. Its rate limit is per SITE and this process
+// shares that site with every browser tab home has open, so it can be refused
+// while comfortably inside its own bucket — and then the bucket alone would have
+// it keep posting one report per second into the refusal for the whole storm.
+// integration.md: honour Retry-After, back off, then drop.
+func TestA429BacksOffTheAsyncPath(t *testing.T) {
+	var hits int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	count := func() int { mu.Lock(); defer mu.Unlock(); return hits }
+
+	c := New(srv.URL, "ik_test")
+	c.CaptureSync(Report{Message: "the storm starts"})
+	if count() != 1 {
+		t.Fatalf("the first event did not reach the endpoint: %d requests", count())
+	}
+	if !c.muted(time.Now()) {
+		t.Fatal("a 429 did not silence the client — it would keep posting into the refusal")
+	}
+	if c.muted(time.Now().Add(121 * time.Second)) {
+		t.Error("the back-off outlasted the Retry-After the server asked for")
+	}
+
+	// Dropped BEFORE the bucket: an event the server has already refused must not
+	// spend the allowance the events after the back-off will need.
+	before := c.limiter.tokens
+	c.Capture(Report{Message: "and continues"})
+	if c.limiter.tokens != before {
+		t.Errorf("a muted event spent a token: %v → %v", before, c.limiter.tokens)
+	}
+	if count() != 1 {
+		t.Errorf("a muted event was still posted: %d requests", count())
+	}
+
+	// CaptureSync ignores the back-off. Its only callers are a dying process's,
+	// and a back-off that swallowed those would be the one drop that matters.
+	c.CaptureSync(Report{Message: "home failed to start: boom"})
+	if count() != 2 {
+		t.Errorf("the back-off swallowed a dying process's report: %d requests", count())
+	}
+}
+
+// Retry-After is documented as whole seconds. Anything else falls back, and a
+// header this client cannot verify may not silence the process for a day.
+func TestRetryAfterIsHonouredAndClamped(t *testing.T) {
+	for _, tc := range []struct {
+		header string
+		want   time.Duration
+	}{
+		{"120", 120 * time.Second},
+		{" 30 ", 30 * time.Second},
+		{"", defaultMute},
+		{"Wed, 21 Oct 2026 07:28:00 GMT", defaultMute}, // the HTTP-date form, unused by status
+		{"0", defaultMute},
+		{"-5", defaultMute},
+		{"86400", maxMute},
+	} {
+		if got := retryAfter(tc.header); got != tc.want {
+			t.Errorf("retryAfter(%q) = %v, want %v", tc.header, got, tc.want)
+		}
+	}
 }
 
 func TestRecoverReportsFatalThenRepanics(t *testing.T) {

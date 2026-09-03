@@ -92,11 +92,17 @@ services:
       # identical to a working one until the first crash nobody hears about.
       # Empty here, so the harness reports nothing and the boot line says so.
       #
-      # ⚠ This key is the BACKEND's and is a real secret — not the public browser
-      # key baked into the SPA below. Rotating one never touches the other.
+      # ⚠ status issues ONE INGEST KEY PER SITE, so this is normally the SAME
+      # value as the SPA's VITE_STATUS_INGEST_KEY below — which is baked into a
+      # bundle anyone can read, and makes this copy public from that build on.
+      # Hold it like a secret here, but do not reason about it as one afterwards:
+      # a genuinely private backend key means a second status SITE, not a second
+      # key. (The WIDGET key below IS a different key on a different endpoint;
+      # rotating it never touches crash reporting.)
       STATUS_INGEST_URL: ${STATUS_INGEST_URL:-}
       STATUS_INGEST_KEY: ${STATUS_INGEST_KEY:-}
-      # Tags on every event. The environment defaults to HOME_ENV, so one
+      # Tags on every event. The environment defaults to HOME_ENV mapped onto
+      # status's prod/dev convention — the same string the SPA sends — so one
       # deployment cannot reach the board under two names.
       STATUS_ENVIRONMENT: ${STATUS_ENVIRONMENT:-}
       STATUS_RELEASE: ${STATUS_RELEASE:-}

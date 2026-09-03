@@ -160,6 +160,43 @@ describe('initCrashReporting', () => {
     expect((lastBody().context as Record<string, unknown>).url).toBe(`${location.origin}/`)
   })
 
+  // ⚠ context.source is the SCRIPT a crash came from, and only ever that. The
+  // browser fills ErrorEvent.filename from the topmost JS stack frame and falls
+  // back to the DOCUMENT when there is no frame to name — and home's documents
+  // are the slugged titles the test above keeps off the board. One rule, both
+  // fields, rather than a rule about the field somebody thought of first.
+  it('drops a source that is the page rather than a script', async () => {
+    await load(CONFIGURED)
+    window.history.pushState({}, '', '/poznamky/soukrome/rozvod-s-manzelkou?edit=1')
+    throwError(new Error('boom'), { filename: location.href })
+
+    const context = lastBody().context as Record<string, unknown>
+    expect(context.source).toBeUndefined()
+    expect(JSON.stringify(context)).not.toContain('rozvod')
+
+    // A real script URL is reported whole — the query and hash are stripped for
+    // the comparison only.
+    throwError(new Error('boom'), { filename: `${location.origin}/assets/index-a1b2.js?v=3` })
+    expect((lastBody().context as Record<string, unknown>).source).toBe(
+      `${location.origin}/assets/index-a1b2.js?v=3`,
+    )
+  })
+
+  // ⚠ THE TWO HALVES OF ONE DEPLOYMENT MUST REACH ONE BOARD UNDER ONE NAME. The
+  // Go process maps HOME_ENV onto status's prod/dev convention (config.StatusEnv)
+  // precisely so that it sends the same word this default does; pinning it here
+  // is the other half of that agreement.
+  it('tags events with status\'s own environment vocabulary when unconfigured', async () => {
+    await load({
+      VITE_STATUS_INGEST_URL: CONFIGURED.VITE_STATUS_INGEST_URL,
+      VITE_STATUS_INGEST_KEY: CONFIGURED.VITE_STATUS_INGEST_KEY,
+    })
+    throwError(new Error('boom'))
+    // `dev` under vitest, `prod` in a production build — never Vite's own
+    // "development"/"production", and never home's HOME_ENV spelling.
+    expect(lastBody().environment).toBe('dev')
+  })
+
   it('reports an unhandled rejection', async () => {
     await load(CONFIGURED)
     rejectPromise(new Error('network request failed'))

@@ -16,9 +16,10 @@
 // Access-Control-Allow-Credentials header status never sends — turning every
 // report into a CORS failure with nothing logged anywhere.
 //
-// ⚠ AND IT NEVER SENDS `location.href`. See pageRef below: home's URLs carry
-// SLUGGED TITLES, private ones included, and a crash report is not a place a
-// member's note title may travel to.
+// ⚠ AND IT NEVER SENDS `location.href`, from EITHER of the two fields that could
+// carry it: see pageRef and scriptRef below. home's URLs carry SLUGGED TITLES,
+// private ones included, and a crash report is not a place a member's note title
+// may travel to.
 
 import { crashConfig, type CrashConfig } from '@/platform/status/config'
 
@@ -72,7 +73,7 @@ export function initCrashReporting(): void {
 
   window.addEventListener('error', (e: ErrorEvent) => {
     report(e.error ?? e.message, {
-      context: { source: e.filename, line: e.lineno, column: e.colno },
+      context: { source: scriptRef(e.filename), line: e.lineno, column: e.colno },
     })
   })
 
@@ -138,6 +139,25 @@ function pageRef(): string {
   if (segments.length === 0) return `${location.origin}/`
   const head = `${location.origin}/${segments[0]}`
   return segments.length > 1 ? `${head}/…` : head
+}
+
+/** scriptRef is the SOURCE FILE a crash came from — and it exists because
+ *  `ErrorEvent.filename` is not always one. The browser fills it from the topmost
+ *  JavaScript stack frame; with no frame to attribute the error to, it falls back
+ *  to the DOCUMENT, and home's documents are the slugged titles pageRef() above
+ *  exists to keep off the board. One rule, applied to both places a URL can leave
+ *  this file, rather than a rule about the field somebody happened to think of.
+ *
+ *  home ships every line of itself in `/assets` modules and index.html carries no
+ *  inline script, so the fallback should never fire here — this is the guard, not
+ *  a fix for something observed. Dropping the field when it does costs nothing:
+ *  it would be naming the page a second time, and `context.url` already names the
+ *  module. The query and hash are stripped only for the COMPARISON; a real script
+ *  URL is reported whole. */
+function scriptRef(filename: string | undefined): string | undefined {
+  if (!filename) return undefined
+  const bare = filename.split(/[?#]/)[0]
+  return bare === location.origin + location.pathname ? undefined : filename
 }
 
 /** describe pulls a message and a stack out of whatever was thrown — which, in a

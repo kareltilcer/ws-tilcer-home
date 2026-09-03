@@ -156,12 +156,16 @@ type StatusConfig struct {
 	// https://status.tilcer.cz/api/ingest/home.
 	IngestURL string
 
-	// IngestKey is that site's ingest key (ik_…), sent as X-Ingest-Key. It is a
-	// secret on the SERVER side — the browser has its own, deliberately public
-	// one baked into the SPA — so it is never logged.
+	// IngestKey is that site's ingest key (ik_…), sent as X-Ingest-Key. It is
+	// held like a secret here and Redacted() never prints it in full — but status
+	// issues ONE ingest key per site, so this is normally the SAME value the SPA
+	// bakes into its bundle as VITE_STATUS_INGEST_KEY, and from that build on it
+	// is public. Keeping a genuinely private backend key means a second status
+	// SITE, not a second key on this one, which status does not offer.
 	IngestKey string
 
-	// Environment tags every event ("prod" / "dev"). Defaults to HOME_ENV.
+	// Environment tags every event. Defaults to HOME_ENV mapped onto status's own
+	// prod/dev vocabulary — see StatusEnv.
 	Environment string
 
 	// Release tags every event, e.g. "home@2026.36.1". Free-form; empty is fine
@@ -193,6 +197,32 @@ const (
 	EnvHomeEnv = "HOME_ENV"
 	DefaultEnv = "development"
 )
+
+// StatusEnv maps HOME_ENV onto the environment tag status expects on an event.
+//
+// ⚠ THE TWO HALVES OF ONE DEPLOYMENT MUST REACH ONE BOARD UNDER ONE NAME, and
+// without this they do not. home's own vocabulary is "development"/"production"
+// (validated in Load); status's convention is prod/dev/staging, and the SPA —
+// which posts to the SAME site from the SAME deployment — defaults to prod/dev
+// because that is what the convention says. Defaulting this side to HOME_ENV
+// verbatim therefore produced exactly the failure the HOME_ENV default was
+// chosen to avoid: the Go process filed under "production" and the browser under
+// "prod", on one board, for one release.
+//
+// An explicitly set STATUS_ENVIRONMENT is NOT mapped. The field is free-form on
+// the wire, and a deployment that wants to call itself "staging" has to be able
+// to say so; anything this function does not recognise is passed through for the
+// same reason.
+func StatusEnv(homeEnv string) string {
+	switch env := strings.TrimSpace(homeEnv); env {
+	case "production":
+		return "prod"
+	case DefaultEnv: // "development"
+		return "dev"
+	default:
+		return env
+	}
+}
 
 // GardenConfig configures the ONE external dependency v7 adds (PRD §V7-9).
 //
@@ -1051,15 +1081,18 @@ func (l *loader) status(c *Config) StatusConfig {
 		}
 	}
 	// The environment tag defaults to the one this service already knows about
-	// rather than to a literal: two names for one deployment is how a board ends
-	// up with the same crash filed under "prod" and "production".
+	// rather than to a literal — through StatusEnv, which is what makes "the one
+	// it already knows about" and "the one the SPA sends" the same string. Two
+	// names for one deployment is how a board ends up with the same release filed
+	// under "prod" and "production", and that is not avoided by both halves
+	// deriving their tag honestly from different vocabularies.
 	//
 	// Trimmed like its three neighbours, and for the same reason one step further
 	// on: statusreport.WithEnvironment trims what it is given, so an untrimmed
 	// value here would make the boot line and Redacted() print an environment tag
 	// no event actually carries — the one place this configuration is ever read
 	// back disagreeing with the wire.
-	s.Environment = strings.TrimSpace(l.strDefault(EnvStatusEnvironment, c.Env))
+	s.Environment = strings.TrimSpace(l.strDefault(EnvStatusEnvironment, StatusEnv(c.Env)))
 	s.Release = strings.TrimSpace(l.strDefault(EnvStatusRelease, ""))
 	return s
 }

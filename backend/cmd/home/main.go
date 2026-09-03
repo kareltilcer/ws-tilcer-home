@@ -70,16 +70,19 @@ func main() {
 	reporter := statusreport.New(
 		os.Getenv(config.EnvStatusIngestURL),
 		os.Getenv(config.EnvStatusIngestKey),
-		// The same fallback config applies, spelled with cmp.Or because there is no
-		// validated Config to read it off yet.
+		// The same fallback config applies — including config.StatusEnv, which is
+		// what keeps HOME_ENV's "production" from reaching the board beside the
+		// SPA's "prod" for the same release — spelled with cmp.Or because there is
+		// no validated Config to read it off yet.
 		// Trimmed before cmp.Or, not after: a variable set to whitespace is unset as
 		// far as config's strDefault is concerned, and picking it here would tag the
 		// boot's events with an empty environment while every later event carries
 		// the real one.
 		statusreport.WithEnvironment(cmp.Or(
 			strings.TrimSpace(os.Getenv(config.EnvStatusEnvironment)),
-			strings.TrimSpace(os.Getenv(config.EnvHomeEnv)),
-			config.DefaultEnv)),
+			config.StatusEnv(cmp.Or(
+				strings.TrimSpace(os.Getenv(config.EnvHomeEnv)),
+				config.DefaultEnv)))),
 		statusreport.WithRelease(os.Getenv(config.EnvStatusRelease)),
 	)
 	// Every logger.Error in the process now also lands on the crash board; the

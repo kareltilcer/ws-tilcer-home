@@ -661,9 +661,10 @@ func TestStatus_EnabledAndTagged(t *testing.T) {
 		t.Fatalf("Status.Enabled() = false: %+v", c.Status)
 	}
 	// The environment tag follows HOME_ENV rather than a literal, so one
-	// deployment cannot appear on the board under two names.
-	if c.Status.Environment != "production" {
-		t.Errorf("Status.Environment = %q, want production", c.Status.Environment)
+	// deployment cannot appear on the board under two names — through StatusEnv,
+	// which is what makes it the same word the SPA sends.
+	if c.Status.Environment != "prod" {
+		t.Errorf("Status.Environment = %q, want prod", c.Status.Environment)
 	}
 	if c.Status.Release != "" {
 		t.Errorf("Status.Release = %q, want empty by default", c.Status.Release)
@@ -677,6 +678,47 @@ func TestStatus_EnabledAndTagged(t *testing.T) {
 	}
 	if c.Status.Environment != "staging" || c.Status.Release != "home@2026.36.1" {
 		t.Errorf("explicit tags were not honoured: %+v", c.Status)
+	}
+}
+
+// ⚠ THE TWO HALVES OF ONE DEPLOYMENT MUST REACH ONE BOARD UNDER ONE NAME. The
+// SPA posts to the SAME site from the SAME release and tags its events "prod" /
+// "dev" (frontend/src/platform/status/config.ts, which follows status's own
+// prod|dev|staging convention), so a backend that tagged its own "production"
+// would put one release on one board under two environments — which is exactly
+// the failure the HOME_ENV default was chosen to avoid, arriving through the
+// door the default itself opened. Nothing pinned either side's vocabulary before
+// this test, which is why both halves could be honest and still disagree.
+func TestStatus_EnvironmentUsesStatusVocabulary(t *testing.T) {
+	for _, tc := range []struct{ homeEnv, want string }{
+		{"production", "prod"},
+		{"development", "dev"},
+	} {
+		t.Run(tc.homeEnv, func(t *testing.T) {
+			env := validBase()
+			env["HOME_ENV"] = tc.homeEnv
+			if tc.homeEnv == "production" {
+				env["HOME_DOCS_R2_BUCKET"] = "home-docs"
+				env["HOME_DOCS_R2_ENDPOINT"] = "https://acc.r2.cloudflarestorage.com"
+				env["HOME_DOCS_R2_ACCESS_KEY_ID"] = "ak"
+				env["HOME_DOCS_R2_SECRET_ACCESS_KEY"] = "sk"
+			}
+			env["STATUS_INGEST_URL"] = "https://status.tilcer.cz/api/ingest/home"
+			env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+			c, err := Load(envMap(env))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.Status.Environment != tc.want {
+				t.Errorf("Status.Environment = %q, want %q — the SPA sends %q for this deployment",
+					c.Status.Environment, tc.want, tc.want)
+			}
+		})
+	}
+	// An explicit STATUS_ENVIRONMENT is free-form on the wire and is NOT mapped:
+	// a deployment that wants to call itself "staging" has to be able to.
+	if got := StatusEnv("staging"); got != "staging" {
+		t.Errorf("StatusEnv(%q) = %q, want it passed through", "staging", got)
 	}
 }
 

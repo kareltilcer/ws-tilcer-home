@@ -132,7 +132,10 @@ export function AppShell() {
    * belongs to the app and has to be caught before anything renders, including on
    * the login screen. A report belongs to a PERSON: it is signed with a display
    * label, and there is nobody to sign it with until somebody is signed in. It
-   * also keeps the widget key off the one page an unauthenticated visitor sees.
+   * also keeps the widget key out of the page a fresh unauthenticated visitor is
+   * SERVED — which is the visit that matters, and is all it is: a logout in the
+   * same tab leaves the script element in the head while the login screen
+   * renders, and the widget key is public by design either way.
    *
    * `false` means the script did not load, or this build has no key — either way
    * the two triggers below are not rendered at all, because a "Nahlásit problém"

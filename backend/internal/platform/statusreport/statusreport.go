@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,18 @@ const sendTimeout = 5 * time.Second
 // turn a dropped failure into work.
 const maxDrainBytes = 4 << 10
 
+// The 429 back-off. status's rate limit is per SITE, and this process shares
+// that site with every browser tab home has open — so it can be refused while
+// still comfortably inside its own bucket, and the bucket alone cannot get it to
+// stop. defaultMute is what integration.md's Retry-After carries in practice and
+// what is used when the header is missing or unreadable; maxMute is there
+// because a header this client cannot verify must not be able to silence the
+// process for a day.
+const (
+	defaultMute = 60 * time.Second
+	maxMute     = 5 * time.Minute
+)
+
 // Client posts events to one site's ingest endpoint.
 type Client struct {
 	url         string // full ingest URL, e.g. https://status.tilcer.cz/api/ingest/home
@@ -74,6 +87,11 @@ type Client struct {
 	release     string
 	http        *http.Client
 	limiter     *bucket
+
+	// mu guards mutedUntil, which send writes from its own goroutine and Capture
+	// reads from the caller's.
+	mu         sync.Mutex
+	mutedUntil time.Time
 }
 
 // Option configures a Client.
@@ -152,6 +170,12 @@ func (c *Client) Capture(r Report) {
 	if c == nil || r.Message == "" {
 		return
 	}
+	// Checked BEFORE the bucket: an event the server has already told us it will
+	// refuse must not also spend the allowance that the events after the back-off
+	// will need.
+	if c.muted(time.Now()) {
+		return
+	}
 	if !c.limiter.allow(time.Now()) {
 		return
 	}
@@ -161,8 +185,8 @@ func (c *Client) Capture(r Report) {
 
 // CaptureSync sends one event on the calling goroutine, for the moments where
 // returning first means never sending at all — the process is about to exit.
-// It is deliberately NOT rate-limited: a bucket that swallowed a process's
-// dying report would be the one drop that matters.
+// It is deliberately NOT rate-limited AND NOT MUTED: a bucket or a back-off that
+// swallowed a process's dying report would be the one drop that matters.
 func (c *Client) CaptureSync(r Report) {
 	if c == nil || r.Message == "" {
 		return
@@ -242,6 +266,44 @@ func (c *Client) send(e wireEvent) {
 	// paying a handshake per report is worst.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
 	_ = resp.Body.Close()
+	// The one status worth reading. Every other failure is dropped and forgotten,
+	// but a 429 is the server saying "not yet" about the events still to come, and
+	// the documented client behaviour is to honour Retry-After and drop rather
+	// than keep posting into a refusal (integration.md, "Responses & error
+	// handling"). Server-side there is no CORS to hide the header behind, so
+	// unlike the browser half this really does read what the server asked for.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		c.mute(retryAfter(resp.Header.Get("Retry-After")))
+	}
+}
+
+// muted reports whether a 429 has silenced the asynchronous path.
+func (c *Client) muted(now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return now.Before(c.mutedUntil)
+}
+
+// mute silences Capture for d. The longest standing deadline wins, so a short
+// Retry-After arriving from a request that was already in flight cannot shorten
+// a longer back-off the server has since asked for.
+func (c *Client) mute(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if until := time.Now().Add(d); until.After(c.mutedUntil) {
+		c.mutedUntil = until
+	}
+}
+
+// retryAfter reads a 429's Retry-After (documented as whole seconds), falling
+// back to defaultMute for anything missing or unreadable and clamping to
+// maxMute.
+func retryAfter(header string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || secs <= 0 {
+		return defaultMute
+	}
+	return min(time.Duration(secs)*time.Second, maxMute)
 }
 
 // boundContext caps the context block: at most maxContextKeys entries, each

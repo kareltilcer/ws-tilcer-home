@@ -258,7 +258,7 @@ the boot line says `statusreport: DISABLED` and nothing else changes.
 | --- | --- | --- |
 | `STATUS_INGEST_URL` | the site's ingest endpoint, e.g. `https://status.tilcer.cz/api/ingest/home`. Set it and `STATUS_INGEST_KEY` together or neither — exactly one is refused at boot, because a half-configured reporter drops every event in silence | *(unset — reporting off)* |
 | `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). Keep it out of the repo and the logs like any other secret — but ⚠ it stops being one the moment the SAME key is baked into the SPA, which is the default wiring below | *(secret; unset — reporting off)* |
-| `STATUS_ENVIRONMENT` | environment tag on every event | defaults to `HOME_ENV` |
+| `STATUS_ENVIRONMENT` | environment tag on every event. Set it only to say something `HOME_ENV` cannot, e.g. `staging` | defaults to `HOME_ENV` mapped onto status's own vocabulary — `production`→`prod`, `development`→`dev`, which is what the SPA sends too, so one deployment reaches the board under **one** name |
 | `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
 
 ### Documents converter (`home-gotenberg`, v4)
@@ -300,7 +300,7 @@ Static-only image — **no runtime env vars**.
 | `VITE_STATUS_INGEST_KEY` | the site's ingest key (`ik_…`). **Public by design**, like a Sentry DSN — see below | *(unset — reporting off)* |
 | `VITE_STATUS_WIDGET_KEY` | the site's widget key (`wk_…`), from **site detail → User feedback** | *(unset ⇒ no widget and no "Nahlásit problém" trigger)* |
 | `VITE_STATUS_SITE` | the site id in status | `home` |
-| `VITE_STATUS_ENVIRONMENT` | environment tag | `prod` in a production build, `dev` under `npm run dev` |
+| `VITE_STATUS_ENVIRONMENT` | environment tag. Leave it unset: the default already agrees with the backend's, which maps `HOME_ENV` onto the same two words | `prod` in a production build, `dev` under `npm run dev` |
 | `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
 | `VITE_STATUS_WIDGET_URL` | override the widget bundle (a staging status). Pin a **major**: `/widget/v1.js` | `https://status.tilcer.cz/widget/v1.js` |
 
