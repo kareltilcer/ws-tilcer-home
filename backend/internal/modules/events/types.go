@@ -93,5 +93,6 @@ type EventLinkCreate struct {
 	Title string `json:"title"`
 }
 
-// validLeads is the reminder lead-time whitelist (FR-E4).
-var validLeads = map[string]bool{"1d": true, "2d": true, "1w": true, "2w": true, "1m": true}
+// validLeads is the reminder lead-time whitelist (FR-E4). "0d" is the same-day
+// reminder — a lead of nothing, which the widget opens on the event's own date.
+var validLeads = map[string]bool{"0d": true, "1d": true, "2d": true, "1w": true, "2w": true, "1m": true}

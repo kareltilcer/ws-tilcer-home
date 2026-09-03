@@ -367,10 +367,10 @@ func (s *Service) Uncomplete(ctx context.Context, eventID, occurrenceOn string) 
 func validateReminder(enabled bool, lead string) error {
 	if enabled {
 		if !validLeads[lead] {
-			return httpx.ErrUnprocessable("reminder_lead must be one of 1d,2d,1w,2w,1m when the reminder is enabled")
+			return httpx.ErrUnprocessable("reminder_lead must be one of 0d,1d,2d,1w,2w,1m when the reminder is enabled")
 		}
 	} else if lead != "" && !validLeads[lead] {
-		return httpx.ErrUnprocessable("reminder_lead must be one of 1d,2d,1w,2w,1m")
+		return httpx.ErrUnprocessable("reminder_lead must be one of 0d,1d,2d,1w,2w,1m")
 	}
 	return nil
 }

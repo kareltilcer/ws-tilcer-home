@@ -69,6 +69,31 @@ func TestBadRRuleRejected(t *testing.T) {
 	}
 }
 
+// "0d" — the same-day reminder — is a lead like any other: it stores and reads
+// back. The neighbour that is NOT a lead is what makes this test worth writing:
+// widening the whitelist by one member must not widen it by any other, and
+// "0w" is exactly the shape a permissive check would have let through.
+func TestSameDayLeadAcceptedButNotAnyZero(t *testing.T) {
+	f := newFixture(t)
+	ev, err := f.svc.CreateEvent(f.ctx, events.EventCreate{
+		Title: "Vynést koš", StartsOn: "2026-07-15", ReminderEnabled: true, ReminderLead: "0d",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.ReminderLead == nil || *ev.ReminderLead != "0d" {
+		t.Errorf("reminder_lead = %v, want 0d", ev.ReminderLead)
+	}
+
+	_, err = f.svc.CreateEvent(f.ctx, events.EventCreate{
+		Title: "Y", StartsOn: "2026-07-01", ReminderEnabled: true, ReminderLead: "0w",
+	})
+	var apiErr *httpx.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 422 {
+		t.Fatalf("err = %v, want 422 — only 0d joined the whitelist", err)
+	}
+}
+
 func TestOccurrences_GroupedByMonth(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.svc.CreateEvent(f.ctx, events.EventCreate{

@@ -1,10 +1,11 @@
 package bootstrap_test
 
-// v10's three migrations, and the one of them that rewrites live rows.
+// v10's four migrations, and the one of them that rewrites live rows.
 //
 // ⚠ `08003` IS THE ONLY v10 MIGRATION THAT TOUCHES AN EXISTING TABLE WITH DATA IN
-// IT. `12001` creates a new block and `02004` is an ALTER TABLE ADD COLUMN plus a
-// CREATE TABLE — neither can lose anything. 08003 widens two CHECK constraints on
+// IT. `12001` creates a new block, `02004` is an ALTER TABLE ADD COLUMN plus a
+// CREATE TABLE, and `12002` adds a column to a table `12001` had just created —
+// none of the three can lose anything. 08003 widens two CHECK constraints on
 // `notification_deliveries`, and SQLite cannot alter a CHECK, so it is a full table
 // rebuild: create wide, copy every row, drop, rename, re-create four indexes.
 //
@@ -19,11 +20,8 @@ import (
 	"io/fs"
 	"os"
 	"sort"
-	"strings"
 	"testing"
-	"testing/fstest"
 
-	"github.com/kareltilcer/ws-tilcer-home/backend/internal/bootstrap"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 )
 
@@ -49,41 +47,28 @@ var v10Files = []string{
 	"12002_chat_attachment_document_path.sql",
 }
 
-// preV10MigrationFS is the merged schema WITHOUT v10's three files — exactly the
-// migration set production had applied the morning v10 ships.
+// preV10MigrationFS is the merged schema WITHOUT v10's four files — the migration
+// set production had applied the morning v10 ships, PLUS everything that has landed
+// since in a block this list does not name. The exclusion is by name and not by a
+// version cutoff, so the set grows on one end while staying pinned on the other.
+//
+// ⚠ THAT IS FREE FOR A LATE ARRIVAL IN ANOTHER MODULE'S BLOCK AND NOT FREE FOR ONE
+// IN 12. 04002 (events, the same-day reminder lead) is the harmless kind: what
+// these tests assert is that v10's four files apply over a database that already
+// holds higher-numbered migrations, and an unrelated later arrival only makes that
+// truer. 12003_chat_reactions.sql is the other kind, and it got here first — it
+// landed after v10 but inside v10's OWN block, and it declares
+// REFERENCES chat_messages, a table the excluded 12001 creates. SQLite resolves a
+// foreign key at DML rather than at CREATE, so the fixture still builds and every
+// assertion below still holds; what it is not any more is a schema production ever
+// had. Weigh the next one against that rather than against 04002.
+//
+// The exclusion, and the guard that fires when a name in the list is not in the
+// set, live in migrationFSWithout (events_same_day_lead_test.go), which 04002's
+// upgrade test needs for the same reason with a different list.
 func preV10MigrationFS(t *testing.T) fs.FS {
 	t.Helper()
-	full, err := bootstrap.MigrationFS()
-	if err != nil {
-		t.Fatalf("assemble migrations: %v", err)
-	}
-	names, err := fs.Glob(full, "*.sql")
-	if err != nil {
-		t.Fatalf("glob migrations: %v", err)
-	}
-	skip := map[string]bool{}
-	for _, f := range v10Files {
-		skip[f] = true
-	}
-	out := fstest.MapFS{}
-	for _, name := range names {
-		if skip[name] {
-			delete(skip, name)
-			continue
-		}
-		b, err := fs.ReadFile(full, name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		out[name] = &fstest.MapFile{Data: b}
-	}
-	// A renamed v10 migration would silently turn this into "migrate everything,
-	// twice" — a test that proves nothing while staying green.
-	for name := range skip {
-		t.Fatalf("v10 migration %q is not in the merged migration set — was it renamed? "+
-			"v10Files must be kept in step or this test stops testing the upgrade at all", name)
-	}
-	return out
+	return migrationFSWithout(t, v10Files)
 }
 
 // ---- the out-of-order claim, verified rather than assumed ----
@@ -91,7 +76,7 @@ func preV10MigrationFS(t *testing.T) fs.FS {
 // TestV10OutOfOrderMigrationsApplyOverAnUpgradedDatabase is the claim
 // 02004_chat_platform.sql makes in its own header, tested.
 //
-// Two of v10's three files are numerically BELOW `11001`, which production applied
+// Two of v10's four files are numerically BELOW `11001`, which production applied
 // when v8 shipped. HANDOFF-12 §9.3 says "the runner tolerates it — verify that
 // before writing them, not after", and this is that verification: migrate to the
 // pre-v10 set, then migrate again with the full one, and require both to succeed.
@@ -424,26 +409,17 @@ func indexesOn(t *testing.T, sqldb *sql.DB, table string) []string {
 
 // deliveryFingerprint is every delivery row as one comparable list. Comparing it
 // before and after the rebuild turns "did we lose or reorder anything?" into a
-// single assertion.
+// single assertion. It goes through the package's one fingerprint helper
+// (events_same_day_lead_test.go) rather than scanning its own rows, so both
+// rebuild tests report a lost row the same way — and both check rows.Err().
 func deliveryFingerprint(t *testing.T, sqldb *sql.DB) []string {
 	t.Helper()
-	rows, err := sqldb.Query(`
-		SELECT id, ts, kind, category, COALESCE(rule_id, '<null>'), user_id,
-		       COALESCE(subscription_id, '<null>'), status, COALESCE(error, '<null>')
+	return fingerprint(t, sqldb, `
+		SELECT id || '|' || ts || '|' || kind || '|' || category || '|' ||
+		       COALESCE(rule_id, '<null>') || '|' || user_id || '|' ||
+		       COALESCE(subscription_id, '<null>') || '|' || status || '|' ||
+		       COALESCE(error, '<null>')
 		  FROM notification_deliveries ORDER BY id`)
-	if err != nil {
-		t.Fatalf("fingerprint deliveries: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var f [9]string
-		if err := rows.Scan(&f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8]); err != nil {
-			t.Fatalf("scan delivery: %v", err)
-		}
-		out = append(out, strings.Join(f[:], "|"))
-	}
-	return out
 }
 
 func ftsCount(t *testing.T, sqldb *sql.DB, term string) int {

@@ -2,20 +2,12 @@ import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, Check, Repeat } from 'lucide-react'
 import { qk } from '@/api/keys'
 import * as api from '@/modules/events/api/endpoints'
-import type { ReminderLead } from '@/api/types'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Spinner } from '@/components/ui/ui'
 import { fmtDateISO } from '@/i18n/format'
 import { MarkdownView } from './MarkdownView'
 import { LinksEditor } from './LinksEditor'
-
-const LEAD_LABEL: Record<ReminderLead, string> = {
-  '1d': '1 den předem',
-  '2d': '2 dny předem',
-  '1w': 'týden předem',
-  '2w': '2 týdny předem',
-  '1m': 'měsíc předem',
-}
+import { leadDetail } from './reminderLead'
 
 function recurrenceLabel(rrule: string | null): string {
   if (!rrule) return 'Neopakuje se'
@@ -81,7 +73,7 @@ export function EventDetail({
               {recurrenceLabel(e.rrule)}
             </span>
             {e.reminder_enabled && e.reminder_lead && (
-              <span className="text-muted">🔔 {LEAD_LABEL[e.reminder_lead]}</span>
+              <span className="text-muted">🔔 {leadDetail(e.reminder_lead)}</span>
             )}
           </div>
 

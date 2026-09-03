@@ -1,11 +1,24 @@
 openapi: 3.1.0
 info:
   title: Home API
-  version: 0.13.1
+  version: 0.14.0
   description: >-
     API for the `home` household-management service. **0.13.0 IS v10.1 — CHAT'S SECOND
     PASS.** 0.12.0 was the v10 spec, 0.12.1 reconciled it against the shipped code after
     PR 3, and 0.12.2 made four list cursors one encoding.
+
+    **0.14.0 adds ONE enum member and nothing else: `reminder_lead: "0d"`,** the same-day
+    reminder. Every event surface that names a lead takes it — `Event`, `EventCreate`,
+    `EventUpdate`, `Occurrence` and `DashboardReminder` — because a lead the creator can
+    choose is a lead every reader of that event has to be able to render. It is additive:
+    no stored value changes meaning and no existing client sends it, but a client that
+    validates responses against a pinned 0.13.x copy will reject an event the household
+    creates with it, which is why it is a minor and not a patch. The math is the identity
+    — `occurrence − 0d = occurrence` — so the reminder ENTERS the Připomínky widget on the
+    event's own morning, where a "1d" lead would have entered a day earlier. Only the entry
+    moves: overdue is `occurrence_on` in the past, which no lead touches, so a same-day
+    reminder turns overdue the morning after the event exactly as every other lead does.
+    `HOME_DASHBOARD_LOOKBACK_DAYS` is what still bounds how long it stays.
 
     **0.13.1 changes no shape at all.** It reconciles the two descriptions of the member
     directory against the shipped code: both said the identity behind it was cached "at
@@ -5921,8 +5934,10 @@ components:
         reminder_enabled: { type: boolean, default: false }
         reminder_lead:
           type: [string, "null"]
-          enum: ["1d", "2d", "1w", "2w", "1m", null]
-          description: Required when reminder_enabled is true.
+          enum: ["0d", "1d", "2d", "1w", "2w", "1m", null]
+          description: >-
+            Required when reminder_enabled is true. "0d" is the same-day reminder — a
+            lead of nothing, so the reminder opens on the occurrence date itself.
         archived: { type: boolean, default: false }
         created_by: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
@@ -5936,7 +5951,7 @@ components:
         starts_on: { type: string, format: date }
         rrule: { type: string }
         reminder_enabled: { type: boolean, default: false }
-        reminder_lead: { type: string, enum: ["1d", "2d", "1w", "2w", "1m"] }
+        reminder_lead: { type: string, enum: ["0d", "1d", "2d", "1w", "2w", "1m"] }
     EventUpdate:
       type: object
       description: Applies to the whole series — no per-occurrence exceptions (PRD D14).
@@ -5946,7 +5961,7 @@ components:
         starts_on: { type: string, format: date }
         rrule: { type: [string, "null"] }
         reminder_enabled: { type: boolean }
-        reminder_lead: { type: [string, "null"], enum: ["1d", "2d", "1w", "2w", "1m", null] }
+        reminder_lead: { type: [string, "null"], enum: ["0d", "1d", "2d", "1w", "2w", "1m", null] }
         archived: { type: boolean }
     EventWithLinks:
       allOf:
@@ -5984,7 +5999,7 @@ components:
         description: { type: [string, "null"] }
         recurring: { type: boolean, description: True when the parent event has an rrule. }
         reminder_enabled: { type: boolean }
-        reminder_lead: { type: [string, "null"], enum: ["1d", "2d", "1w", "2w", "1m", null] }
+        reminder_lead: { type: [string, "null"], enum: ["0d", "1d", "2d", "1w", "2w", "1m", null] }
         reminder_completed:
           type: boolean
           description: Whether this specific occurrence's reminder has been completed.
@@ -6671,7 +6686,7 @@ components:
         occurrence_on: { type: string, format: date }
         title: { type: string }
         recurring: { type: boolean }
-        reminder_lead: { type: string, enum: ["1d", "2d", "1w", "2w", "1m"] }
+        reminder_lead: { type: string, enum: ["0d", "1d", "2d", "1w", "2w", "1m"] }
         overdue:
           type: boolean
           description: True when occurrence_on is in the past and still uncompleted.

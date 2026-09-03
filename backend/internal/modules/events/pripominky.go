@@ -221,11 +221,14 @@ func lessByDayThenCzechTitle(czech *collate.Collator, onI, onJ dates.Date, title
 }
 
 // subtractLead returns occurrence − lead in calendar space (month leads clamp to
-// the target month's last day, mirroring D19). This is the date a reminder
+// the target month's last day, mirroring D19). A "0d" lead subtracts nothing, so the
+// same-day reminder enters on the day itself. This is the date a reminder
 // ENTERS the Připomínky widget — and from then until its day passes it is one
 // of the rows events.pripominky_today names (D99).
 func subtractLead(occ dates.Date, lead string) dates.Date {
 	switch lead {
+	case "0d":
+		return occ // same-day reminder: the lead opens on the event's own date
 	case "1d":
 		return occ.AddDays(-1)
 	case "2d":

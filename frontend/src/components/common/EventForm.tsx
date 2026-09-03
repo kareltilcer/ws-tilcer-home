@@ -6,7 +6,9 @@ import type { EventInput } from '@/modules/events/api/endpoints'
 import type { ReminderLead } from '@/api/types'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { Button, Input, Textarea } from '@/components/ui/ui'
+import { cn } from '@/lib/utils'
 import { LinksEditor, type EditableLink } from './LinksEditor'
+import { asLead, DEFAULT_LEAD, LEAD_OPTIONS } from './reminderLead'
 
 type Recurrence = 'none' | 'weekly' | 'monthly' | 'yearly'
 
@@ -15,14 +17,6 @@ const RECURRENCE_OPTIONS: { value: Recurrence; label: string }[] = [
   { value: 'weekly', label: 'týdně' },
   { value: 'monthly', label: 'měsíčně' },
   { value: 'yearly', label: 'ročně' },
-]
-
-const LEAD_OPTIONS: { value: ReminderLead; label: string }[] = [
-  { value: '1d', label: '1 den' },
-  { value: '2d', label: '2 dny' },
-  { value: '1w', label: '1 týden' },
-  { value: '2w', label: '2 týdny' },
-  { value: '1m', label: '1 měsíc' },
 ]
 
 const SERIES_WARNING =
@@ -50,9 +44,11 @@ function buildRRule(rec: Recurrence, until: string): string {
 }
 
 // EventForm creates or edits an event (whole series). All-day date (no time
-// field), recurrence with an optional end date, and a conditional reminder lead
-// whose space is reserved so revealing it never jumps the layout. Editing a
-// recurring event requires confirming the series-edit warning before saving.
+// field), recurrence with an optional end date, and a reminder lead. Both of the
+// conditional blocks go through `Reserved` below: ALWAYS LAID OUT and merely
+// hidden, so neither reveal jumps the layout and neither has a reserved height
+// that could be guessed wrong. Editing a recurring event requires confirming the
+// series-edit warning before saving.
 export function EventForm({
   eventId,
   open,
@@ -72,7 +68,7 @@ export function EventForm({
   const [recurrence, setRecurrence] = useState<Recurrence>('none')
   const [until, setUntil] = useState('')
   const [reminderEnabled, setReminderEnabled] = useState(false)
-  const [reminderLead, setReminderLead] = useState<ReminderLead>('1w')
+  const [reminderLead, setReminderLead] = useState<ReminderLead>(DEFAULT_LEAD)
   const [links, setLinks] = useState<EditableLink[]>([])
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState(false)
@@ -87,7 +83,7 @@ export function EventForm({
     setRecurrence(rruleToRecurrence(e?.rrule ?? null))
     setUntil(rruleUntil(e?.rrule ?? null))
     setReminderEnabled(e?.reminder_enabled ?? false)
-    setReminderLead((e?.reminder_lead as ReminderLead) ?? '1w')
+    setReminderLead(asLead(e?.reminder_lead))
     setLinks(e?.links.map((l) => ({ id: l.id, url: l.url, title: l.title })) ?? [])
     setError('')
     setConfirming(false)
@@ -122,7 +118,11 @@ export function EventForm({
     setError('')
     if (!title.trim()) return setError('Zadejte název.')
     if (!startsOn) return setError('Zadejte datum.')
-    if (reminderEnabled && !reminderLead) return setError('Vyberte předstih připomínky.')
+    // No "pick a lead" check: there is no state that needs one. reminderLead is a
+    // non-nullable union, and asLead lands it on a real member for every stored
+    // value there is — null for an event with no reminder, and any code this build
+    // does not know. The check that used to stand here could not fire, and its
+    // message could not be read.
     // Editing a recurring event affects the whole series — confirm first.
     if (editing && wasRecurring && !confirming) {
       setConfirming(true)
@@ -168,33 +168,29 @@ export function EventForm({
               </Chip>
             ))}
           </div>
-          {/* Reserve space so the end-date reveal doesn't jump the layout. */}
-          <div className="mt-2 min-h-[64px]">
-            {recurrence !== 'none' && (
-              <Field label="Konec opakování (nepovinné)">
-                <Input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="max-w-[220px]" />
-              </Field>
-            )}
-          </div>
+          {/* An end date only means anything for a repeating event; its space is
+              held either way, so choosing a recurrence reveals it in place. */}
+          <Reserved shown={recurrence !== 'none'} className="mt-2">
+            <Field label="Konec opakování (nepovinné)">
+              <Input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="max-w-[220px]" />
+            </Field>
+          </Reserved>
         </Field>
 
         <Field label="Připomínka">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={reminderEnabled} onChange={(e) => setReminderEnabled(e.target.checked)} className="h-4 w-4" />
-            Připomenout předem
+            Připomenout
           </label>
-          {/* Reserve space for the conditional lead selector. */}
-          <div className="mt-2 min-h-[44px]">
-            {reminderEnabled && (
-              <div className="flex flex-wrap gap-1.5">
-                {LEAD_OPTIONS.map((o) => (
-                  <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
-                    {o.label}
-                  </Chip>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* A lead only means anything once the box is ticked; its space is held
+              either way, so ticking it reveals the chips in place. */}
+          <Reserved shown={reminderEnabled} className="mt-2 flex flex-wrap gap-1.5">
+            {LEAD_OPTIONS.map((o) => (
+              <Chip key={o.value} active={reminderLead === o.value} onClick={() => setReminderLead(o.value)}>
+                {o.label}
+              </Chip>
+            ))}
+          </Reserved>
         </Field>
 
         <Field label="Odkazy">
@@ -226,6 +222,32 @@ export function EventForm({
   )
 }
 
+// Reserved lays a block out whether or not it applies and merely HIDES it when it
+// does not, so the space it holds is its own. That is what a min-height reserve
+// could not be: a min-height is a guess at the height of what it hides, and both of
+// this form's guesses were wrong — 44px under the reminder checkbox held one row of
+// chips where the phone drew two, and revealing them pushed everything below down,
+// which is the jump a reserve exists to prevent. A block that reserves its own
+// height cannot be wrong about it, and stays right when a label grows or a lead is
+// added to the table.
+//
+// ⚠ THE HIDING IS TWO HALVES AND THEY MUST NOT BE SEPARATED, which is why this is
+// one component and not the same two attributes typed at each call site.
+// `invisible` (visibility:hidden) is the half that reserves the space and takes the
+// controls out of the tab order — inherited, so it reaches every descendant, which
+// opacity would not and unmounting used to do for free. `aria-hidden` is the half
+// that keeps them out of the accessibility tree, and it is also the ONLY half a
+// jsdom test can see: vitest runs with css:false, so the class is a bare name there
+// with no computed style behind it. Half of the pair is a focusable control a
+// screen reader still announces, or a reserve no test can assert on.
+function Reserved({ shown, className, children }: { shown: boolean; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={cn(className, !shown && 'invisible')} aria-hidden={!shown || undefined}>
+      {children}
+    </div>
+  )
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -235,10 +257,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+// Chip is one option in a single-select row. aria-pressed is what carries the
+// selection: the active state is otherwise a colour, which a screen reader has no
+// way to read, and the lead a member has chosen would be knowable only by saving
+// and reopening the event.
 function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={
         'rounded-md border px-3 py-1.5 text-sm font-semibold ' +
