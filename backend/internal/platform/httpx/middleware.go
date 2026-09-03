@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -179,6 +180,13 @@ func Logger(l *slog.Logger) func(http.Handler) http.Handler {
 
 // Recover converts a panic into a 500 and logs it with the request id, so one
 // bad handler cannot take the process down.
+//
+// ⚠ THE STACK IS PART OF THE LINE, not an extra nobody reads. "panic recovered"
+// plus a path names the request and not the bug — and this line is now also what
+// the crash board receives (platform/statusreport lifts a `stack` attr into the
+// report's own stack field), where a report whose first frame is missing is a
+// report that cannot even be GROUPED correctly. The preview worker's panic
+// handler has logged its stack the same way since v4.
 func Recover(l *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +196,8 @@ func Recover(l *slog.Logger) func(http.Handler) http.Handler {
 					if info, ok := reqctx.RequestFrom(r.Context()); ok {
 						id = info.RequestID
 					}
-					l.Error("panic recovered", "panic", p, "path", r.URL.Path, "request_id", id)
+					l.Error("panic recovered", "panic", p, "path", r.URL.Path, "request_id", id,
+						"stack", string(debug.Stack()))
 					WriteError(w, ErrInternal(""))
 				}
 			}()
