@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime/debug"
 	"slices"
@@ -51,6 +52,19 @@ const (
 	maxContextKeys       = 32
 	maxContextValueChars = 512
 )
+
+// sendTimeout bounds one ingest round trip, and it is ONE number rather than two
+// that have to agree: http.Client.Timeout and the request context both cover the
+// whole exchange, so a pair of different values means the larger one can never
+// fire and is read by the next person as a bound that does something.
+const sendTimeout = 5 * time.Second
+
+// maxDrainBytes is how much of an ingest response is read before the body is
+// closed. A body left undrained cannot be reused, so every report after the first
+// would pay a fresh TCP + TLS handshake; the documented 202 body is a two-field
+// JSON object, and the cap is there so an unexpectedly chatty error page cannot
+// turn a dropped failure into work.
+const maxDrainBytes = 4 << 10
 
 // Client posts events to one site's ingest endpoint.
 type Client struct {
@@ -94,7 +108,7 @@ func New(url, key string, opts ...Option) *Client {
 	c := &Client{
 		url:  url,
 		key:  key,
-		http: &http.Client{Timeout: 5 * time.Second},
+		http: &http.Client{Timeout: sendTimeout},
 		// The server's own per-site limit is 60/min with a burst of 120, and past
 		// it events are refused with a Retry-After. Mirroring it HERE is what stops
 		// an error storm — a mirror pass failing on every object, a listener
@@ -211,7 +225,7 @@ func (c *Client) send(e wireEvent) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {
@@ -223,6 +237,10 @@ func (c *Client) send(e wireEvent) {
 	if err != nil {
 		return
 	}
+	// Drained, then closed: net/http only returns a connection to the idle pool
+	// once its body has been read to EOF, and an error storm is exactly when
+	// paying a handshake per report is worst.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
 	_ = resp.Body.Close()
 }
 

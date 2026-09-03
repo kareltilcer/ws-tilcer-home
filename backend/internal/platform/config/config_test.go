@@ -680,6 +680,25 @@ func TestStatus_EnabledAndTagged(t *testing.T) {
 	}
 }
 
+// The environment tag is trimmed like the three variables beside it. A Coolify
+// value pasted with a trailing newline would otherwise make the boot line and
+// Redacted() print a tag no event carries — statusreport.WithEnvironment trims
+// what it is handed — so the one place this value is ever read back would
+// disagree with the wire.
+func TestStatus_EnvironmentIsTrimmed(t *testing.T) {
+	env := validBase()
+	env["STATUS_INGEST_URL"] = "https://status.tilcer.cz/api/ingest/home"
+	env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+	env["STATUS_ENVIRONMENT"] = " staging\n"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Status.Environment != "staging" {
+		t.Errorf("Status.Environment = %q, want %q", c.Status.Environment, "staging")
+	}
+}
+
 // TestStatus_HalfConfiguredIsRefused. Reporting fails safe — every ingest error
 // is dropped in silence — so a key set against an unset endpoint looks exactly
 // like a working install until the first crash nobody hears about. Boot is the

@@ -66,6 +66,9 @@ afterEach(() => {
   teardown.splice(0).forEach((fn) => fn())
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+  // jsdom's location outlives a test, so a pushState below would otherwise leak
+  // its path into whatever runs next.
+  window.history.pushState({}, '', '/')
 })
 
 function throwError(error: unknown, init: Partial<ErrorEventInit> = {}) {
@@ -126,6 +129,35 @@ describe('initCrashReporting', () => {
       column: 7,
       url: expect.stringContaining('http') as unknown as string,
     })
+  })
+
+  // ⚠ home's URLs carry SLUGGED TITLES — /poznamky/soukrome/<a private note's
+  // title> — and status is read by Karel's admin session, a different lock from
+  // the one on a member's private note. The module is what a crash report needs;
+  // the page is not something a crash gets to decide to send.
+  it('names the module, never the page — a private note title must not travel', async () => {
+    await load(CONFIGURED)
+    window.history.pushState({}, '', '/poznamky/soukrome/rozvod-s-manzelkou?edit=1#nadpis')
+    throwError(new Error('boom'))
+
+    const url = (lastBody().context as Record<string, unknown>).url as string
+    expect(url).toBe(`${location.origin}/poznamky/…`)
+    expect(url).not.toContain('rozvod')
+    expect(url).not.toContain('soukrome')
+    // No query and no hash either: both are page state, and neither is worth a
+    // second place a title could hide.
+    expect(url).not.toContain('?')
+    expect(url).not.toContain('#')
+
+    // A one-segment route keeps its whole path — there is nothing to elide.
+    window.history.pushState({}, '', '/nastenka')
+    throwError(new Error('boom again'))
+    expect((lastBody().context as Record<string, unknown>).url).toBe(`${location.origin}/nastenka`)
+
+    // …and the root is the root, not a bare origin with no slash.
+    window.history.pushState({}, '', '/')
+    throwError(new Error('boom at the root'))
+    expect((lastBody().context as Record<string, unknown>).url).toBe(`${location.origin}/`)
   })
 
   it('reports an unhandled rejection', async () => {

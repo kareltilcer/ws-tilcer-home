@@ -1053,7 +1053,13 @@ func (l *loader) status(c *Config) StatusConfig {
 	// The environment tag defaults to the one this service already knows about
 	// rather than to a literal: two names for one deployment is how a board ends
 	// up with the same crash filed under "prod" and "production".
-	s.Environment = l.strDefault(EnvStatusEnvironment, c.Env)
+	//
+	// Trimmed like its three neighbours, and for the same reason one step further
+	// on: statusreport.WithEnvironment trims what it is given, so an untrimmed
+	// value here would make the boot line and Redacted() print an environment tag
+	// no event actually carries — the one place this configuration is ever read
+	// back disagreeing with the wire.
+	s.Environment = strings.TrimSpace(l.strDefault(EnvStatusEnvironment, c.Env))
 	s.Release = strings.TrimSpace(l.strDefault(EnvStatusRelease, ""))
 	return s
 }

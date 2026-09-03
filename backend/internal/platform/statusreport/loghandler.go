@@ -1,6 +1,7 @@
 package statusreport
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"slices"
@@ -33,8 +34,19 @@ import (
 // which is a different lock from the one on a member's private note (widget.md
 // §5). Log the id, the key, the count, the route — never the title, the body, the
 // filename or the message. Audited at the time of writing: all 54 sites carry ids
-// and opaque object keys, and home has no API path with a user-authored segment,
-// so `path` on a recovered panic is safe too.
+// and opaque object keys.
+//
+// ⚠ WITH ONE KNOWN EDGE, WRITTEN DOWN RATHER THAN ROUNDED OFF. httpx.Recover's
+// `path` attr is safe for every /api route — every one of them addresses by id —
+// but Recover is mounted at the router root (httpx/router.go), above chi's
+// NotFound, so it also covers the SPA catch-all. A panic THERE would report a
+// browser path, and home's browser paths carry slugged titles:
+// /poznamky/soukrome/<a private note's title>. It takes a panic inside a static
+// file handler to reach, which is why the line is left as it is rather than
+// blinded for every API panic that needs it — but it is the reason
+// frontend/src/platform/status/report.ts does not send location.href, where the
+// same data would travel on every uncaught error instead of on a panic that has
+// never happened.
 func NewLogHandler(next slog.Handler, c *Client) slog.Handler {
 	if c == nil {
 		return next
@@ -145,7 +157,7 @@ func (h *logHandler) forward(r slog.Record) {
 	// collapse every distinct failure of that call into one group, while its
 	// normalisation still folds the variants of one cause back together.
 	message := r.Message
-	if cause := firstNonEmpty(errText, panicText); cause != "" {
+	if cause := cmp.Or(errText, panicText); cause != "" {
 		message += ": " + cause
 	}
 
@@ -191,13 +203,4 @@ func flattenAttr(dst []kv, groups []string, a slog.Attr) []kv {
 		key = strings.Join(groups, ".") + "." + key
 	}
 	return append(dst, kv{key: key, value: a.Value.String(), top: len(groups) == 0})
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

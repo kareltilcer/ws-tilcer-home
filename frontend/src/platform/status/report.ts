@@ -15,6 +15,10 @@
 // `credentials: "include"` would make the browser demand an
 // Access-Control-Allow-Credentials header status never sends — turning every
 // report into a CORS failure with nothing logged anywhere.
+//
+// ⚠ AND IT NEVER SENDS `location.href`. See pageRef below: home's URLs carry
+// SLUGGED TITLES, private ones included, and a crash report is not a place a
+// member's note title may travel to.
 
 import { crashConfig, type CrashConfig } from '@/platform/status/config'
 
@@ -23,12 +27,15 @@ import { crashConfig, type CrashConfig } from '@/platform/status/config'
  *  render loop can produce thousands of identical errors in a second, so the tab
  *  keeps a much tighter cap of its own.
  *
- *  ⚠ IT IS A ROLLING WINDOW, NOT A PER-LOAD COUNTER, because home is an installed
- *  PWA whose tab is not reloaded for days. A counter that only went up would make
- *  a device permanently deaf after twenty errors accumulated across a week — with
- *  nothing anywhere saying it had stopped — while doing nothing extra about the
- *  case the cap exists for: a render loop spends the whole allowance in one
- *  second and then waits out the hour either way. */
+ *  ⚠ IT IS A WINDOW THAT REOPENS, NOT A PER-LOAD COUNTER, because home is an
+ *  installed PWA whose tab is not reloaded for days. A counter that only went up
+ *  would make a device permanently deaf after twenty errors accumulated across a
+ *  week — with nothing anywhere saying it had stopped — while doing nothing extra
+ *  about the case the cap exists for: a render loop spends the whole allowance in
+ *  one second and then waits out the hour either way. (It is a tumbling window,
+ *  not a sliding one: the hour starts at the first report of a quiet period and
+ *  the whole allowance comes back at once. Cheaper by twenty timestamps, and
+ *  indistinguishable for the burst it is here to stop.) */
 const MAX_REPORTS_PER_WINDOW = 20
 const REPORT_WINDOW_MS = 60 * 60 * 1000
 
@@ -98,11 +105,39 @@ function report(error: unknown, options: ReportOptions = {}): void {
       stack: cut(options.stack ?? stack, MAX_STACK_CHARS) || undefined,
       environment: config.environment || undefined,
       release: config.release || undefined,
-      context: { ...options.context, url: location.href, viewport: `${innerWidth}x${innerHeight}` },
+      context: { ...options.context, url: pageRef(), viewport: `${innerWidth}x${innerHeight}` },
     })
   } catch {
     // The reporter must never be the thing that throws.
   }
+}
+
+/** pageRef is the page a report names, and it is deliberately NOT
+ *  `location.href`.
+ *
+ *  ⚠ HOME'S URLs CARRY SLUGGED TITLES. `/poznamky/soukrome/rozvod` is one
+ *  member's PRIVATE note, slugged from its title by the backend; `/dokumenty/…`
+ *  is the same for a filename. home's privacy model makes a private note
+ *  unreadable by anyone, admins included — and status is read by Karel's ADMIN
+ *  session, which is a different lock. Sending the full URL would be exactly the
+ *  side door this feature keeps "Send console output" switched off to avoid, and
+ *  it would open on every uncaught error rather than on an opt-in.
+ *
+ *  So: the origin and the FIRST path segment only — the module, which is what a
+ *  crash report needs — with an ellipsis when anything was dropped, and no query
+ *  or hash. First segment only rather than a list of the modules that slug their
+ *  paths, because a module added later would not be on that list. What is lost is
+ *  which sub-page of Zahrada or Elektřina it was; the stack trace names the
+ *  component, which is the better answer to that question anyway.
+ *
+ *  The feedback WIDGET does send the whole URL (widget.md §3) and home cannot
+ *  change that — but it shows the reporter everything before they press send, so
+ *  it is a member's own decision about their own page. A crash report is not. */
+function pageRef(): string {
+  const segments = location.pathname.split('/').filter(Boolean)
+  if (segments.length === 0) return `${location.origin}/`
+  const head = `${location.origin}/${segments[0]}`
+  return segments.length > 1 ? `${head}/…` : head
 }
 
 /** describe pulls a message and a stack out of whatever was thrown — which, in a

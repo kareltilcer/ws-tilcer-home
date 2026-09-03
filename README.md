@@ -257,7 +257,7 @@ the boot line says `statusreport: DISABLED` and nothing else changes.
 | Var | Purpose | Value |
 | --- | --- | --- |
 | `STATUS_INGEST_URL` | the site's ingest endpoint, e.g. `https://status.tilcer.cz/api/ingest/home`. Set it and `STATUS_INGEST_KEY` together or neither — exactly one is refused at boot, because a half-configured reporter drops every event in silence | *(unset — reporting off)* |
-| `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). **A real secret**, unlike the browser key baked into the SPA | *(secret; unset — reporting off)* |
+| `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). Keep it out of the repo and the logs like any other secret — but ⚠ it stops being one the moment the SAME key is baked into the SPA, which is the default wiring below | *(secret; unset — reporting off)* |
 | `STATUS_ENVIRONMENT` | environment tag on every event | defaults to `HOME_ENV` |
 | `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1` | *(unset)* |
 
@@ -310,8 +310,16 @@ runtime sees no environment — and is the same trade `VITE_AUTH_BASE_URL` makes
 
 ⚠ **The browser ingest key is public and that is the design.** Anyone who loads
 the page can read it; all it can do is POST crashes for one site into a
-rate-limited, size-capped endpoint. It is **not** the backend's
-`STATUS_INGEST_KEY`, which is a real secret and belongs only to the backend app.
+rate-limited, size-capped endpoint — exactly a Sentry DSN.
+
+⚠ **And status issues ONE ingest key per site**, so by default this is the *same*
+value as the backend's `STATUS_INGEST_KEY` — which means the backend's copy is
+public too, whatever it is called in the table above. That is the trade, and it
+is fine: the key's whole authority is "POST a crash for site `home`". If it ever
+needs to stop being fine, the fix is a **second status site** for the browser
+half with its own key and its own board — not a second key on this one, which
+status does not offer. The **widget** key (`wk_…`) is a genuinely different key
+on a different endpoint: rotating it never touches crash reporting.
 
 ### Crash reporting and feedback (`status.tilcer.cz`)
 
@@ -340,8 +348,10 @@ boot line says which state reporting is in, once.
 1. In the status dashboard, **Add site** with the id `home` and copy the ingest
    key (shown once). Put it in the backend app's `STATUS_INGEST_KEY` and set
    `STATUS_INGEST_URL`.
-2. Same key, or a second site-scoped one, goes into the frontend build args as
-   `VITE_STATUS_INGEST_URL` + `VITE_STATUS_INGEST_KEY` — public by design.
+2. The **same** key and URL go into the frontend build args as
+   `VITE_STATUS_INGEST_URL` + `VITE_STATUS_INGEST_KEY`, which puts both halves of
+   `home` on one board. ⚠ It is public from that moment — see the warning above;
+   a separate status **site** is the only way to keep a private backend key.
 3. **site detail → User feedback → Feedback enabled** issues the widget key
    (`wk_…`, also shown once). It goes in `VITE_STATUS_WIDGET_KEY`.
 4. Confirm `https://home.tilcer.cz` is inside status's `STATUS_ALLOWED_ORIGINS`
@@ -360,6 +370,14 @@ must stay off. home's privacy model makes a member's private notes unreadable by
 anyone, admins included — and a console line carrying a note title into status
 would be read by Karel's admin session, which is a side door with a different
 lock. That is a dashboard setting; nothing in this repository can enforce it.
+
+⚠ **For the same reason a crash report names the module, not the page.** home's
+URLs carry slugged titles — `/poznamky/soukrome/<a private note's title>`,
+`/dokumenty/<a filename>` — so the browser reporter sends the origin and the
+first path segment only, never `location.href`. The **widget** does send the
+whole URL (it is in `widget.md` §3 and home cannot change it), but it shows the
+reporter everything before they press send: a member deciding about their own
+page is not the same as a crash deciding for them.
 
 ⚠ **The feedback trigger is home's own, not the widget's floating launcher**
 (`data-launcher="none"`). The launcher sits 16 px from a corner and does not

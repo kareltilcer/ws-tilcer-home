@@ -9,8 +9,12 @@
 //
 // ⚠ THE INGEST KEY IS PUBLIC AND THAT IS THE DESIGN, like a Sentry DSN. Anyone
 // who loads the page can read it, and all it can do is POST crashes for one
-// site into a rate-limited, size-capped endpoint. The BACKEND's key is a
-// different key and a real secret; the two are never the same value.
+// site into a rate-limited, size-capped endpoint. status issues ONE ingest key
+// per site, so this is normally the SAME value the backend app holds in
+// STATUS_INGEST_KEY — baking it here is what makes that copy public too, and a
+// backend key that has to stay private needs a second status SITE rather than a
+// second key. The WIDGET key below is a genuinely different key on a different
+// endpoint: rotating it never touches crash reporting.
 //
 // Everything here returns null rather than a half-filled object when a variable
 // is missing, so an unconfigured build — every local `npm run dev` — is off
