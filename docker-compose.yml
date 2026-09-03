@@ -85,6 +85,21 @@ services:
       # slot missed during a restart may still fire.
       HOME_SCHED_TICK_SECONDS: ${HOME_SCHED_TICK_SECONDS:-60}
       HOME_SCHED_CATCHUP_GRACE: ${HOME_SCHED_CATCHUP_GRACE:-120}
+
+      # --- Crash reporting to status.tilcer.cz ---------------------------------
+      # Both or neither: exactly one set is REFUSED at boot, because reporting
+      # drops every ingest error in silence and a half-configured client looks
+      # identical to a working one until the first crash nobody hears about.
+      # Empty here, so the harness reports nothing and the boot line says so.
+      #
+      # ⚠ This key is the BACKEND's and is a real secret — not the public browser
+      # key baked into the SPA below. Rotating one never touches the other.
+      STATUS_INGEST_URL: ${STATUS_INGEST_URL:-}
+      STATUS_INGEST_KEY: ${STATUS_INGEST_KEY:-}
+      # Tags on every event. The environment defaults to HOME_ENV, so one
+      # deployment cannot reach the board under two names.
+      STATUS_ENVIRONMENT: ${STATUS_ENVIRONMENT:-}
+      STATUS_RELEASE: ${STATUS_RELEASE:-}
     volumes:
       - home-data:/data
     ports:
@@ -115,6 +130,19 @@ services:
       args:
         VITE_REAL_AUTH: ${VITE_REAL_AUTH:-false}
         VITE_AUTH_BASE_URL: ${VITE_AUTH_BASE_URL:-}
+        # Browser crash reporting + the feedback widget. Empty by default, so the
+        # harness installs no error listeners, loads no widget and renders no
+        # "Nahlásit problém" trigger. Cross-origin reporting cannot be exercised
+        # from localhost anyway: the page's origin has to be inside status's
+        # STATUS_ALLOWED_ORIGINS (default https://*.tilcer.cz) or the browser
+        # blocks the POST and — the client being fail-safe — nothing is logged
+        # anywhere at all.
+        VITE_STATUS_INGEST_URL: ${VITE_STATUS_INGEST_URL:-}
+        VITE_STATUS_INGEST_KEY: ${VITE_STATUS_INGEST_KEY:-}
+        VITE_STATUS_WIDGET_KEY: ${VITE_STATUS_WIDGET_KEY:-}
+        VITE_STATUS_SITE: ${VITE_STATUS_SITE:-}
+        VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-}
+        VITE_STATUS_RELEASE: ${VITE_STATUS_RELEASE:-}
         # No Traefik locally, so bake the config that proxies /api + /ws to the
         # `backend` service — keeps the SPA same-origin on :7001. (Baked, not
         # mounted: a Coolify compose deploy can't bind-mount repo files.)
