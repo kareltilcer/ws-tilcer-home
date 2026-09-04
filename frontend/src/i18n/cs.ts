@@ -887,26 +887,24 @@ export const cs = {
   // The feedback trigger. The dialog itself is the status widget's, in its own
   // Czech (data-lang="cs") — this is only the door into it, so the label has to
   // say what pressing it does rather than name the tool behind it.
-  // ⚠ The two strings divide the work and must not overlap: `open` is the ACTION
-  // ("what does pressing this do"), `hint` is the SCOPE ("what will the thing
-  // behind it take"). A hint that re-says the label spends the sheet's only
-  // description slot on nothing — every other one beside it (`logDesc`,
-  // `dokumentyDesc`, `financeDesc`) adds a fact its label lacks, and this row
-  // must clear the same bar. `hint` is also the desktop button's `title`, where
-  // it is the ONLY text besides the label, so a restatement leaves the tooltip
-  // empty of content.
-  // ⚠ `Chyba nebo nápad` is the widget's own vocabulary, not a paraphrase — its
-  // kind picker is exactly ['Chyba', 'Nápad', 'Něco jiného'], so the trigger
-  // promises no more than the dialog offers. Keep them in step if it changes.
+  // ⚠ THE HINT IS KAREL'S OWN WORDING, asked for in as many words, and it is not
+  // a reviewer's to improve. Two things about it are true and were weighed and
+  // kept: it repeats the label's noun ("problém" under "Nahlásit problém"), and
+  // as the desktop button's `title` it is the only text beside a label it partly
+  // restates. What it buys is the half the label cannot say — that an IDEA for an
+  // improvement belongs here too, which is what the dialog's own kind picker
+  // ('Chyba', 'Nápad', 'Něco jiného') actually offers. Changing it is his call.
+  // ⚠ The spelling is `Nahlaste`. `nahlásit` takes the same imperative as
+  // `přihlásit`, which this file already spells `Přihlaste se` (line 12).
   // ⚠ The hint is kept to one line at 375 px, like every description beside it in
   // the sheet. A row half again as tall as its neighbours reads as a different
   // KIND of thing, and this one already is one — the sheet's only action among
   // its destinations — so it must not also look like a mistake. The budget is
   // 267 px (375 − 32 sheet `p-4` − 2 border − 28 row `px-3.5` − 34 icon − 12
-  // gap); this string measures 248 px in Hanken Grotesk at 12 px.
+  // gap); this string measures 214 px in Hanken Grotesk at 12 px.
   feedback: {
     open: 'Nahlásit problém',
-    hint: 'Chyba nebo nápad — i se snímkem obrazovky',
+    hint: 'Nahlaste problém či nápad na vylepšení',
   },
 
   // v8 — Elektřina (PRD §V8-7). The vocabulary in `word` is FIXED by the spec and
