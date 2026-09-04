@@ -362,9 +362,13 @@ boot line says which state reporting is in, once.
    policy** (`widget.md` §8 — a Cloudflare dashboard setting on status's R2
    bucket, not a variable in either repo). ⚠ The widget PUTs a screenshot
    **straight to R2**, not through status, so this is a second allow-list and
-   `STATUS_ALLOWED_ORIGINS` above does not cover it. Miss it and the report still
-   arrives, the file does not, and no request reaches status to say so — while
-   the dialog has just shown the reporter their screenshot going with the report.
+   `STATUS_ALLOWED_ORIGINS` above does not cover it. Miss it and the report
+   arrives without its file. That much is *not* silent, in either direction: the
+   widget names the file it could not upload (*"Tohle se nahrát nepovedlo…"*) and
+   the claim call still reaches status, which marks the attachment `missing` on
+   the board — `widget.md` §10 sends you from that word straight back to this
+   step. What it costs is the screenshot itself, once per reporter, until someone
+   reads the board.
 6. *(Optional)* Set the site's **Monitor URL**. ⚠ Not `/readyz`: only `/api` and
    `/ws` are path-routed to the backend, so `home.tilcer.cz/readyz` reaches the
    SPA's catch-all and returns the shell with a 200 — a probe that can never
