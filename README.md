@@ -364,7 +364,7 @@ boot line says which state reporting is in, once.
    **straight to R2**, not through status, so this is a second allow-list and
    `STATUS_ALLOWED_ORIGINS` above does not cover it. Miss it and the report still
    arrives, the file does not, and no request reaches status to say so — while
-   the trigger's own hint has just promised *"i se snímkem obrazovky"*.
+   the dialog has just shown the reporter their screenshot going with the report.
 6. *(Optional)* Set the site's **Monitor URL**. ⚠ Not `/readyz`: only `/api` and
    `/ws` are path-routed to the backend, so `home.tilcer.cz/readyz` reaches the
    SPA's catch-all and returns the shell with a 200 — a probe that can never

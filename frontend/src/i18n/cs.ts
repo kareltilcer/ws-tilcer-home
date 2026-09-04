@@ -893,7 +893,7 @@ export const cs = {
   // its destinations — so it must not also look like a mistake.
   feedback: {
     open: 'Nahlásit problém',
-    hint: 'Napište Kájovi — i se snímkem obrazovky',
+    hint: 'Nahlaste problém či nápad na vylepšení',
   },
 
   // v8 — Elektřina (PRD §V8-7). The vocabulary in `word` is FIXED by the spec and
