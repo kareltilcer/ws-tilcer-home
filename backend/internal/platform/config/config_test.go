@@ -626,3 +626,170 @@ func TestRedacted_MasksVAPIDKeys(t *testing.T) {
 		t.Errorf("Redacted should report push on: %s", s)
 	}
 }
+
+// TestStatus_OffByDefault. The crash reporter is an optional outbound dependency
+// on the garden-forecast pattern: with nothing set the app boots and reports
+// nothing, and no variable is required anywhere.
+func TestStatus_OffByDefault(t *testing.T) {
+	c, err := Load(envMap(validBase()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Status.Enabled() {
+		t.Errorf("Status.Enabled() = true with nothing configured: %+v", c.Status)
+	}
+	if !strings.Contains(c.Redacted(), "status_report=off") {
+		t.Errorf("Redacted should say reporting is off: %s", c.Redacted())
+	}
+}
+
+func TestStatus_EnabledAndTagged(t *testing.T) {
+	env := validBase()
+	env["HOME_ENV"] = "production"
+	env["HOME_DOCS_R2_BUCKET"] = "home-docs"
+	env["HOME_DOCS_R2_ENDPOINT"] = "https://acc.r2.cloudflarestorage.com"
+	env["HOME_DOCS_R2_ACCESS_KEY_ID"] = "ak"
+	env["HOME_DOCS_R2_SECRET_ACCESS_KEY"] = "sk"
+	env["STATUS_INGEST_URL"] = "https://status.tilcer.cz/api/ingest/home"
+	env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !c.Status.Enabled() {
+		t.Fatalf("Status.Enabled() = false: %+v", c.Status)
+	}
+	// The environment tag follows HOME_ENV rather than a literal, so one
+	// deployment cannot appear on the board under two names — through StatusEnv,
+	// which is what makes it the same word the SPA sends.
+	if c.Status.Environment != "prod" {
+		t.Errorf("Status.Environment = %q, want prod", c.Status.Environment)
+	}
+	if c.Status.Release != "" {
+		t.Errorf("Status.Release = %q, want empty by default", c.Status.Release)
+	}
+
+	env["STATUS_ENVIRONMENT"] = "staging"
+	env["STATUS_RELEASE"] = "home@2026.36.1"
+	c, err = Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Status.Environment != "staging" || c.Status.Release != "home@2026.36.1" {
+		t.Errorf("explicit tags were not honoured: %+v", c.Status)
+	}
+}
+
+// ⚠ THE TWO HALVES OF ONE DEPLOYMENT MUST REACH ONE BOARD UNDER ONE NAME. The
+// SPA posts to the SAME site from the SAME release and tags its events "prod" /
+// "dev" (frontend/src/platform/status/config.ts, which follows status's own
+// prod|dev|staging convention), so a backend that tagged its own "production"
+// would put one release on one board under two environments — which is exactly
+// the failure the HOME_ENV default was chosen to avoid, arriving through the
+// door the default itself opened. Nothing pinned either side's vocabulary before
+// this test, which is why both halves could be honest and still disagree.
+func TestStatus_EnvironmentUsesStatusVocabulary(t *testing.T) {
+	for _, tc := range []struct{ homeEnv, want string }{
+		{"production", "prod"},
+		{"development", "dev"},
+	} {
+		t.Run(tc.homeEnv, func(t *testing.T) {
+			env := validBase()
+			env["HOME_ENV"] = tc.homeEnv
+			if tc.homeEnv == "production" {
+				env["HOME_DOCS_R2_BUCKET"] = "home-docs"
+				env["HOME_DOCS_R2_ENDPOINT"] = "https://acc.r2.cloudflarestorage.com"
+				env["HOME_DOCS_R2_ACCESS_KEY_ID"] = "ak"
+				env["HOME_DOCS_R2_SECRET_ACCESS_KEY"] = "sk"
+			}
+			env["STATUS_INGEST_URL"] = "https://status.tilcer.cz/api/ingest/home"
+			env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+			c, err := Load(envMap(env))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.Status.Environment != tc.want {
+				t.Errorf("Status.Environment = %q, want %q — the SPA sends %q for this deployment",
+					c.Status.Environment, tc.want, tc.want)
+			}
+		})
+	}
+	// An explicit STATUS_ENVIRONMENT is free-form on the wire and is NOT mapped:
+	// a deployment that wants to call itself "staging" has to be able to.
+	if got := StatusEnv("staging"); got != "staging" {
+		t.Errorf("StatusEnv(%q) = %q, want it passed through", "staging", got)
+	}
+}
+
+// The environment tag is trimmed like the three variables beside it. A Coolify
+// value pasted with a trailing newline would otherwise make the boot line and
+// Redacted() print a tag no event carries — statusreport.WithEnvironment trims
+// what it is handed — so the one place this value is ever read back would
+// disagree with the wire.
+func TestStatus_EnvironmentIsTrimmed(t *testing.T) {
+	env := validBase()
+	env["STATUS_INGEST_URL"] = "https://status.tilcer.cz/api/ingest/home"
+	env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+	env["STATUS_ENVIRONMENT"] = " staging\n"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Status.Environment != "staging" {
+		t.Errorf("Status.Environment = %q, want %q", c.Status.Environment, "staging")
+	}
+}
+
+// TestStatus_HalfConfiguredIsRefused. Reporting fails safe — every ingest error
+// is dropped in silence — so a key set against an unset endpoint looks exactly
+// like a working install until the first crash nobody hears about. Boot is the
+// last moment anything can say so.
+func TestStatus_HalfConfiguredIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, url, key string }{
+		{"url without key", "https://status.tilcer.cz/api/ingest/home", ""},
+		{"key without url", "", "ik_abcdef0123456789"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := validBase()
+			env["STATUS_INGEST_URL"] = tc.url
+			env["STATUS_INGEST_KEY"] = tc.key
+			_, err := Load(envMap(env))
+			if err == nil || !strings.Contains(err.Error(), "STATUS_INGEST_URL") {
+				t.Fatalf("expected a half-configured reporter to be refused, got: %v", err)
+			}
+		})
+	}
+}
+
+// A malformed endpoint is refused for the same reason: net/http would fail every
+// send, forever, without a word.
+func TestStatus_MalformedURLIsRefused(t *testing.T) {
+	for _, bad := range []string{"status.tilcer.cz/api/ingest/home", "ftp://status.tilcer.cz/x", "/api/ingest/home", "https://"} {
+		env := validBase()
+		env["STATUS_INGEST_URL"] = bad
+		env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+		if _, err := Load(envMap(env)); err == nil || !strings.Contains(err.Error(), "STATUS_INGEST_URL") {
+			t.Errorf("Load(%q) error = %v, want a refusal naming STATUS_INGEST_URL", bad, err)
+		}
+	}
+}
+
+func TestRedacted_MasksTheIngestKey(t *testing.T) {
+	env := validBase()
+	env["STATUS_INGEST_URL"] = "https://status.tilcer.cz/api/ingest/home"
+	env["STATUS_INGEST_KEY"] = "ik_abcdef0123456789"
+	c, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := c.Redacted()
+	if strings.Contains(s, env["STATUS_INGEST_KEY"]) {
+		t.Errorf("Redacted leaked the ingest key: %s", s)
+	}
+	// The endpoint is NOT a secret and is the first thing to check when nothing
+	// arrives on the board, so it stays legible.
+	if !strings.Contains(s, "status_report=on(https://status.tilcer.cz/api/ingest/home") {
+		t.Errorf("Redacted should name the ingest endpoint: %s", s)
+	}
+}

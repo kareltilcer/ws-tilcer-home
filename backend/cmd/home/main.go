@@ -5,6 +5,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,16 +48,68 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/scheduler"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/statusreport"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/ws"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	stdout := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+
+	// The crash reporter is built BEFORE anything else, from the environment
+	// directly, because the two crashes it most needs to see both happen before
+	// there is a config: a database that will not migrate and a bad variable. It
+	// re-reads the same four names config validates below — the duplication buys
+	// coverage of the boot itself, and config remains the only thing that can
+	// refuse a half-configured one.
+	//
+	// Every name and the environment default are config's own exported constants,
+	// not literals: two readers of one variable that spell it differently, or that
+	// disagree about what unset means, is the failure this whole arrangement is
+	// meant to avoid. statusreport.New trims what it is given for the same reason.
+	reporter := statusreport.New(
+		os.Getenv(config.EnvStatusIngestURL),
+		os.Getenv(config.EnvStatusIngestKey),
+		// The same fallback config applies — including config.StatusEnv, which is
+		// what keeps HOME_ENV's "production" from reaching the board beside the
+		// SPA's "prod" for the same release — spelled with cmp.Or because there is
+		// no validated Config to read it off yet.
+		// Trimmed before cmp.Or, not after: a variable set to whitespace is unset as
+		// far as config's strDefault is concerned, and picking it here would tag the
+		// boot's events with an empty environment while every later event carries
+		// the real one.
+		statusreport.WithEnvironment(cmp.Or(
+			strings.TrimSpace(os.Getenv(config.EnvStatusEnvironment)),
+			config.StatusEnv(cmp.Or(
+				strings.TrimSpace(os.Getenv(config.EnvHomeEnv)),
+				config.DefaultEnv)))),
+		statusreport.WithRelease(os.Getenv(config.EnvStatusRelease)),
+	)
+	// Every logger.Error in the process now also lands on the crash board; the
+	// wrapper is a no-op when reporting is off. slog.SetDefault matters as much as
+	// the argument to run: nine constructors fall back to slog.Default() when they
+	// are given no logger, and a module holding the unwrapped one would log its
+	// faults to Coolify alone.
+	logger := slog.New(statusreport.NewLogHandler(stdout, reporter))
 	slog.SetDefault(logger)
 
+	// A panic that unwinds this goroutine ends the process, so it is reported
+	// synchronously and re-raised. It is one of exactly two `fatal` events home
+	// sends; every panic something recovers from is an `error`.
+	defer reporter.Recover()
+
 	if err := run(logger); err != nil {
-		logger.Error("fatal", "err", err)
+		// The other one. It is captured explicitly rather than through the log
+		// forwarder for two reasons: the level is fatal (the process is about to
+		// exit, and this is the crash-loop a failed migration produces), and the
+		// send must finish before os.Exit — which skips both defers and in-flight
+		// goroutines. The line itself is written through the UNWRAPPED handler so
+		// the same failure is not also filed as an `error`.
+		reporter.CaptureSync(statusreport.Report{
+			Message: "home failed to start: " + err.Error(),
+			Level:   statusreport.LevelFatal,
+		})
+		slog.New(stdout).Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
@@ -166,6 +220,17 @@ func loadConfig(logger *slog.Logger) (*config.Config, error) {
 	if cfg.DevAuthBypass {
 		logger.Warn("AUTH BYPASS ACTIVE — ALL REQUESTS ARE FAKE-AUTHENTICATED — DO NOT DEPLOY",
 			"dev_actor", cfg.DevActorID, "dev_roles", cfg.DevActorRoles)
+	}
+	// Crash reporting says its state ONCE, here, because it will never say
+	// anything again: the client drops every ingest failure in silence, which is
+	// the property that keeps it from taking the app down and also the reason a
+	// wrong key looks exactly like a quiet week. This line is the confirmation.
+	if cfg.Status.Enabled() {
+		logger.Info("statusreport: crash reporting ready", "ingest", cfg.Status.IngestURL,
+			"environment", cfg.Status.Environment, "release", cfg.Status.Release)
+	} else {
+		logger.Info("statusreport: DISABLED — no ingest endpoint configured; errors and panics stay in these logs " +
+			"(set STATUS_INGEST_URL + STATUS_INGEST_KEY from the status.tilcer.cz dashboard)")
 	}
 	return cfg, nil
 }

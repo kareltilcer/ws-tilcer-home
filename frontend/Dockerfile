@@ -19,8 +19,40 @@ COPY . .
 # for a real build leave these unset (VITE_REAL_AUTH on, real auth base URL set).
 ARG VITE_REAL_AUTH=""
 ARG VITE_AUTH_BASE_URL=""
+# Crash reporting + the feedback widget (status.tilcer.cz). All optional: with
+# none of them set the SPA installs no error listeners, loads no widget and
+# renders no "Nahlásit problém" trigger — which is what every local build gets.
+#
+# ⚠ THE INGEST KEY HERE IS PUBLIC BY DESIGN, like a Sentry DSN: it is baked into
+# a bundle anyone can read, and all it can do is POST crashes for one site into a
+# rate-limited, size-capped endpoint.
+#
+# ⚠ AND STATUS ISSUES ONE INGEST KEY PER SITE, so this is normally the SAME value
+# as the backend app's STATUS_INGEST_KEY — which is therefore public as well, and
+# should not be reasoned about as a secret once it has been baked here. Keeping a
+# private backend key means a second status SITE for the browser half, not a
+# second key on this one. (The widget key is a different key on a different
+# endpoint; rotating it never touches crash reporting.)
+#
+# ⚠ AND BOTH KEYS ARE BAKED, so rotating either one needs a frontend REBUILD, not
+# a variable change. That is inherent to a static Nginx image — the runtime sees
+# no environment at all — and is the same trade VITE_AUTH_BASE_URL already makes.
+ARG VITE_STATUS_INGEST_URL=""
+ARG VITE_STATUS_INGEST_KEY=""
+ARG VITE_STATUS_WIDGET_KEY=""
+ARG VITE_STATUS_WIDGET_URL=""
+ARG VITE_STATUS_SITE=""
+ARG VITE_STATUS_ENVIRONMENT=""
+ARG VITE_STATUS_RELEASE=""
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
-    VITE_AUTH_BASE_URL=$VITE_AUTH_BASE_URL
+    VITE_AUTH_BASE_URL=$VITE_AUTH_BASE_URL \
+    VITE_STATUS_INGEST_URL=$VITE_STATUS_INGEST_URL \
+    VITE_STATUS_INGEST_KEY=$VITE_STATUS_INGEST_KEY \
+    VITE_STATUS_WIDGET_KEY=$VITE_STATUS_WIDGET_KEY \
+    VITE_STATUS_WIDGET_URL=$VITE_STATUS_WIDGET_URL \
+    VITE_STATUS_SITE=$VITE_STATUS_SITE \
+    VITE_STATUS_ENVIRONMENT=$VITE_STATUS_ENVIRONMENT \
+    VITE_STATUS_RELEASE=$VITE_STATUS_RELEASE
 RUN npm run build            # emits /app/dist
 
 # ── Stage 2: serve with Nginx ──────────────────────────────────────────

@@ -22,6 +22,13 @@ import '@fontsource/ibm-plex-mono/latin-ext-600.css'
 import './theme/globals.css'
 import App from './App.tsx'
 import { registerServiceWorker } from '@/platform/pwa/register'
+import { initCrashReporting } from '@/platform/status/report'
+
+// BEFORE the first render, and it has to be: a crash while the app is still
+// booting is the one nobody can report by hand, and it is also the one that
+// leaves a member on the login screen with nothing to describe. Off entirely in
+// a build with no VITE_STATUS_INGEST_* args.
+initCrashReporting()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

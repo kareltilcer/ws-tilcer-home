@@ -7,6 +7,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -137,6 +138,90 @@ type Config struct {
 	// Garden is the v7 garden module's configuration: the outbound forecast, and
 	// nothing else. The module runs with none of these set.
 	Garden GardenConfig
+
+	// Status is the outbound crash-reporting configuration (status.tilcer.cz).
+	// It is the second external dependency this service has, and — like the
+	// garden's forecast — it is soft: with none of it set the app runs exactly as
+	// before and reports nothing.
+	Status StatusConfig
+}
+
+// StatusConfig points the crash reporter at one site's ingest endpoint on
+// status.tilcer.cz. The variable NAMES are not HOME_-prefixed on purpose: they
+// are the fleet-wide convention every ws-tilcer-* service reads (the status
+// integration guide's wiring checklist), so a second service is configured from
+// the same muscle memory.
+type StatusConfig struct {
+	// IngestURL is the full per-site endpoint, e.g.
+	// https://status.tilcer.cz/api/ingest/home.
+	IngestURL string
+
+	// IngestKey is that site's ingest key (ik_…), sent as X-Ingest-Key. It is
+	// held like a secret here and Redacted() never prints it in full — but status
+	// issues ONE ingest key per site, so this is normally the SAME value the SPA
+	// bakes into its bundle as VITE_STATUS_INGEST_KEY, and from that build on it
+	// is public. Keeping a genuinely private backend key means a second status
+	// SITE, not a second key on this one, which status does not offer.
+	IngestKey string
+
+	// Environment tags every event. Defaults to HOME_ENV mapped onto status's own
+	// prod/dev vocabulary — see StatusEnv.
+	Environment string
+
+	// Release tags every event, e.g. "home@2026.36.1". Free-form; empty is fine
+	// and simply leaves the field off.
+	Release string
+}
+
+// Enabled reports whether crash reporting is configured. Both halves are needed:
+// the endpoint says which site, the key authenticates it.
+func (s StatusConfig) Enabled() bool { return s.IngestURL != "" && s.IngestKey != "" }
+
+// The crash reporter's environment variables, named here rather than written
+// inline like every other key in this file — because these four are the only
+// ones read TWICE. cmd/home builds the reporter from them before Load runs, so
+// that a configuration error or a failed migration is itself reportable, and two
+// spellings of one variable would be a feature that is simply off with nothing
+// anywhere saying so.
+//
+// EnvHomeEnv and DefaultEnv are exported for the same reason and no other: the
+// pre-config reporter has to reproduce the environment tag this file would have
+// given it, and a second literal spelling of either is how one deployment ends
+// up on the board under two names.
+const (
+	EnvStatusIngestURL   = "STATUS_INGEST_URL"
+	EnvStatusIngestKey   = "STATUS_INGEST_KEY"
+	EnvStatusEnvironment = "STATUS_ENVIRONMENT"
+	EnvStatusRelease     = "STATUS_RELEASE"
+
+	EnvHomeEnv = "HOME_ENV"
+	DefaultEnv = "development"
+)
+
+// StatusEnv maps HOME_ENV onto the environment tag status expects on an event.
+//
+// ⚠ THE TWO HALVES OF ONE DEPLOYMENT MUST REACH ONE BOARD UNDER ONE NAME, and
+// without this they do not. home's own vocabulary is "development"/"production"
+// (validated in Load); status's convention is prod/dev/staging, and the SPA —
+// which posts to the SAME site from the SAME deployment — defaults to prod/dev
+// because that is what the convention says. Defaulting this side to HOME_ENV
+// verbatim therefore produced exactly the failure the HOME_ENV default was
+// chosen to avoid: the Go process filed under "production" and the browser under
+// "prod", on one board, for one release.
+//
+// An explicitly set STATUS_ENVIRONMENT is NOT mapped. The field is free-form on
+// the wire, and a deployment that wants to call itself "staging" has to be able
+// to say so; anything this function does not recognise is passed through for the
+// same reason.
+func StatusEnv(homeEnv string) string {
+	switch env := strings.TrimSpace(homeEnv); env {
+	case "production":
+		return "prod"
+	case DefaultEnv: // "development"
+		return "dev"
+	default:
+		return env
+	}
 }
 
 // GardenConfig configures the ONE external dependency v7 adds (PRD §V7-9).
@@ -321,12 +406,28 @@ func (c *Config) Redacted() string {
 	return fmt.Sprintf(
 		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
-			"session_ttl_days=%d role_refresh_min=%d ws_revalidate_min=%d origins=%v dev_auth_bypass=%t %s %s",
+			"session_ttl_days=%d role_refresh_min=%d ws_revalidate_min=%d origins=%v dev_auth_bypass=%t %s %s %s",
 		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
 		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.WSRevalidateMinutes, c.AllowedOrigins, c.DevAuthBypass,
-		c.Docs.redacted(), c.Notif.redacted(),
+		c.Docs.redacted(), c.Notif.redacted(), c.Status.redacted(),
 	)
+}
+
+// redacted summarises the crash reporter. The URL is not a secret — it names the
+// site and is the first thing to check when nothing arrives on the board — but
+// the ingest key is, so only its prefix is printed, which is enough to tell a
+// paste error from a rotation without putting the key in Coolify's log.
+func (s StatusConfig) redacted() string {
+	if !s.Enabled() {
+		return "status_report=off"
+	}
+	release := s.Release
+	if release == "" {
+		release = "unset"
+	}
+	return fmt.Sprintf("status_report=on(%s env=%s release=%s key=%s)",
+		s.IngestURL, s.Environment, release, redactKey(s.IngestKey))
 }
 
 // redacted summarises the notification configuration. The VAPID keys are secrets;
@@ -398,9 +499,9 @@ func maskPair(id, secret string) string {
 // injected in tests.
 type Getenv func(key string) (string, bool)
 
-// Defaults for optional variables.
+// Defaults for optional variables. HOME_ENV's default is DefaultEnv, up beside
+// the status keys, because cmd/home needs it too.
 const (
-	defaultEnv                  = "development"
 	defaultAddr                 = ":8080"
 	defaultSiteKey              = "home"
 	defaultTimezone             = "Europe/Prague"
@@ -500,7 +601,7 @@ func Load(getenv Getenv) (*Config, error) {
 	l := &loader{getenv: getenv}
 	c := &Config{}
 
-	c.Env = l.strDefault("HOME_ENV", defaultEnv)
+	c.Env = l.strDefault(EnvHomeEnv, DefaultEnv)
 	if c.Env != "development" && c.Env != "production" {
 		l.errf("HOME_ENV must be \"development\" or \"production\" (got %q)", c.Env)
 	}
@@ -601,6 +702,7 @@ func Load(getenv Getenv) (*Config, error) {
 	c.Docs = l.docs(c)
 	c.Notif = l.notif()
 	c.Garden = l.garden()
+	c.Status = l.status(c)
 
 	// Security hard-stop: the dev bypass must never be active in production.
 	if c.DevAuthBypass && c.IsProduction() {
@@ -947,6 +1049,52 @@ func (l *loader) garden() GardenConfig {
 		g.WeatherPollHours = defaultGardenWeatherPoll
 	}
 	return g
+}
+
+// status loads the crash reporter's configuration, on the VAPID pattern above:
+// neither variable set means the feature is OFF and the boot line says so, and
+// exactly one set is a REFUSAL rather than a default.
+//
+// ⚠ Half-configured is refused because the alternative is invisible. Reporting
+// fails safe by design — a rejected event is dropped in silence, with no log
+// line anywhere — so a key set against an unset URL would look exactly like a
+// working install right up until the first crash nobody hears about. The other
+// direction of the same rule is why a malformed URL is refused rather than
+// tried: net/http would fail every send, silently, forever.
+func (l *loader) status(c *Config) StatusConfig {
+	s := StatusConfig{
+		IngestURL: strings.TrimSpace(l.strDefault(EnvStatusIngestURL, "")),
+		IngestKey: strings.TrimSpace(l.strDefault(EnvStatusIngestKey, "")),
+	}
+	switch {
+	case s.IngestURL == "" && s.IngestKey == "":
+		// Crash reporting disabled. main.go logs this once, loudly, at boot.
+	case s.IngestURL == "" || s.IngestKey == "":
+		l.errf("%s and %s must be set together "+
+			"(set neither to disable crash reporting, both to enable it)",
+			EnvStatusIngestURL, EnvStatusIngestKey)
+	default:
+		if u, err := url.Parse(s.IngestURL); err != nil || !u.IsAbs() || u.Host == "" ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			l.errf("%s must be an absolute http(s) URL such as "+
+				"https://status.tilcer.cz/api/ingest/home (got %q)", EnvStatusIngestURL, s.IngestURL)
+		}
+	}
+	// The environment tag defaults to the one this service already knows about
+	// rather than to a literal — through StatusEnv, which is what makes "the one
+	// it already knows about" and "the one the SPA sends" the same string. Two
+	// names for one deployment is how a board ends up with the same release filed
+	// under "prod" and "production", and that is not avoided by both halves
+	// deriving their tag honestly from different vocabularies.
+	//
+	// Trimmed like its three neighbours, and for the same reason one step further
+	// on: statusreport.WithEnvironment trims what it is given, so an untrimmed
+	// value here would make the boot line and Redacted() print an environment tag
+	// no event actually carries — the one place this configuration is ever read
+	// back disagreeing with the wire.
+	s.Environment = strings.TrimSpace(l.strDefault(EnvStatusEnvironment, StatusEnv(c.Env)))
+	s.Release = strings.TrimSpace(l.strDefault(EnvStatusRelease, ""))
+	return s
 }
 
 // StorageConfig is the Úložiště page's whole configuration (v9, §V9-9).

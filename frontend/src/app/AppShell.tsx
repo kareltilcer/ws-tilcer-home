@@ -4,6 +4,7 @@ import {
   CalendarClock,
   Files,
   LayoutDashboard,
+  LifeBuoy,
   ListTodo,
   LogOut,
   Megaphone,
@@ -30,6 +31,7 @@ import { DESKTOP_NAV_ORDER, isFullBleedRoute, routes, type ShellLayout } from '@
 import { useLiveSync } from '@/api/ws'
 import { useOnline } from '@/platform/pwa/offline'
 import { usePushKeepalive } from '@/platform/push/usePush'
+import { openFeedback, useFeedbackWidget } from '@/platform/status/feedback'
 import { useUnreadTotal } from '@/modules/chat/api/hooks'
 import { useSoftKeyboard } from '@/hooks/useSoftKeyboard'
 
@@ -124,6 +126,23 @@ export function AppShell() {
    */
   const keyboard = useSoftKeyboard()
 
+  /**
+   * ⚠ THE WIDGET LOADS INSIDE THE AUTHENTICATED SHELL, not from main.tsx beside
+   * crash reporting — and the two placements are a deliberate pair. A crash
+   * belongs to the app and has to be caught before anything renders, including on
+   * the login screen. A report belongs to a PERSON: it is signed with a display
+   * label, and there is nobody to sign it with until somebody is signed in. It
+   * also keeps the widget key out of the page a fresh unauthenticated visitor is
+   * SERVED — which is the visit that matters, and is all it is: a logout in the
+   * same tab leaves the script element in the head while the login screen
+   * renders, and the widget key is public by design either way.
+   *
+   * `false` means the script did not load, or this build has no key — either way
+   * the two triggers below are not rendered at all, because a "Nahlásit problém"
+   * that does nothing when pressed is worse than no button.
+   */
+  const feedbackReady = useFeedbackWidget(identity.label)
+
   const unread = useUnreadTotal()
   // ⚠ THE BADGE IS ATTACHED HERE RATHER THAN DECLARED IN PRIMARY, because PRIMARY is
   // a module-level constant and the count is a live query. Matching on the route
@@ -186,6 +205,17 @@ export function AppShell() {
             {identity.label}
           </div>
           <ThemeToggle theme={theme} onToggle={toggle} />
+          {feedbackReady && (
+            <button
+              type="button"
+              onClick={openFeedback}
+              title={cs.feedback.hint}
+              className="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-s2 text-sm font-semibold text-fg hover:bg-s3"
+            >
+              <LifeBuoy size={16} aria-hidden />
+              <span>{cs.feedback.open}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={logout}
@@ -319,6 +349,29 @@ export function AppShell() {
                   </NavLink>
                 )
               })}
+              {/* The sheet's one ACTION among its destinations — row-shaped so it
+                  is the same 52 px target under a thumb, and last so it never
+                  moves when a module is added above it. The sheet closes first:
+                  the widget's dialog is its own fixed layer, and leaving a z-40
+                  overlay under it would darken the thing it just opened. */}
+              {feedbackReady && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    openFeedback()
+                  }}
+                  className="flex min-h-[52px] w-full items-center gap-3 rounded-xl border border-border bg-s2 px-3.5 text-left text-fg"
+                >
+                  <span className="grid h-[34px] w-[34px] flex-none place-items-center rounded-lg bg-s3 text-muted">
+                    <LifeBuoy size={16} aria-hidden />
+                  </span>
+                  <span className="flex-1">
+                    <span className="block text-[14.5px] font-bold">{cs.feedback.open}</span>
+                    <span className="block text-[12px] text-subtle">{cs.feedback.hint}</span>
+                  </span>
+                </button>
+              )}
             </div>
             <p className="mt-3 text-center text-[11.5px] text-subtle text-pretty">{cs.nav.moreHint}</p>
           </div>

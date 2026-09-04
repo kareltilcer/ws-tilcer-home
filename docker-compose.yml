@@ -85,6 +85,37 @@ services:
       # slot missed during a restart may still fire.
       HOME_SCHED_TICK_SECONDS: ${HOME_SCHED_TICK_SECONDS:-60}
       HOME_SCHED_CATCHUP_GRACE: ${HOME_SCHED_CATCHUP_GRACE:-120}
+
+      # --- Crash reporting to status.tilcer.cz ---------------------------------
+      # Both or neither: exactly one set is REFUSED at boot, because reporting
+      # drops every ingest error in silence and a half-configured client looks
+      # identical to a working one until the first crash nobody hears about.
+      # Empty here, so the harness reports nothing and the boot line says so.
+      #
+      # ⚠ status issues ONE INGEST KEY PER SITE, so this is normally the SAME
+      # value as the SPA's VITE_STATUS_INGEST_KEY below — which is baked into a
+      # bundle anyone can read, and makes this copy public from that build on.
+      # Hold it like a secret here, but do not reason about it as one afterwards:
+      # a genuinely private backend key means a second status SITE, not a second
+      # key. (The WIDGET key below IS a different key on a different endpoint;
+      # rotating it never touches crash reporting.)
+      STATUS_INGEST_URL: ${STATUS_INGEST_URL:-}
+      STATUS_INGEST_KEY: ${STATUS_INGEST_KEY:-}
+      # Tags on every event. In a REAL deploy both halves agree with neither
+      # variable set: the backend maps HOME_ENV onto status's prod/dev
+      # convention, and a production `npm run build` of the SPA defaults to the
+      # same "prod".
+      #
+      # ⚠ THIS HARNESS IS THE ONE PLACE THAT IS NOT TRUE, which is why both sides
+      # are PINNED below instead of defaulted. HOME_ENV is "development" here, so
+      # the backend's default would be "dev" — but the frontend image always runs
+      # `npm run build`, and a production build says "prod" whatever HOME_ENV is.
+      # Left to their defaults the two halves of ONE harness run would reach one
+      # board under two names, which is exactly the failure the mapping exists to
+      # prevent. Change HOME_ENV and change this and VITE_STATUS_ENVIRONMENT with
+      # it — the README's pairing rule applies here too.
+      STATUS_ENVIRONMENT: ${STATUS_ENVIRONMENT:-dev}
+      STATUS_RELEASE: ${STATUS_RELEASE:-}
     volumes:
       - home-data:/data
     ports:
@@ -115,6 +146,27 @@ services:
       args:
         VITE_REAL_AUTH: ${VITE_REAL_AUTH:-false}
         VITE_AUTH_BASE_URL: ${VITE_AUTH_BASE_URL:-}
+        # Browser crash reporting + the feedback widget. Empty by default, so the
+        # harness installs no error listeners, loads no widget and renders no
+        # "Nahlásit problém" trigger. Cross-origin reporting cannot be exercised
+        # from localhost anyway: the page's origin has to be inside status's
+        # STATUS_ALLOWED_ORIGINS (default https://*.tilcer.cz) or the browser
+        # blocks the POST and — the client being fail-safe — nothing is logged
+        # anywhere at all.
+        VITE_STATUS_INGEST_URL: ${VITE_STATUS_INGEST_URL:-}
+        VITE_STATUS_INGEST_KEY: ${VITE_STATUS_INGEST_KEY:-}
+        VITE_STATUS_WIDGET_KEY: ${VITE_STATUS_WIDGET_KEY:-}
+        # The one arg whose whole purpose is pointing the harness somewhere other
+        # than production — a staging status, or a `npm run build` of the widget
+        # served locally (widget.md §11). Unset ⇒ status.tilcer.cz/widget/v1.js.
+        VITE_STATUS_WIDGET_URL: ${VITE_STATUS_WIDGET_URL:-}
+        VITE_STATUS_SITE: ${VITE_STATUS_SITE:-}
+        # ⚠ PINNED TO MATCH THE BACKEND'S STATUS_ENVIRONMENT ABOVE, not left to
+        # this half's default. This image always production-builds, so its default
+        # is "prod" while the harness backend is HOME_ENV=development ⇒ "dev" —
+        # one run, one board, two names. Set in PAIRS or not at all.
+        VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-dev}
+        VITE_STATUS_RELEASE: ${VITE_STATUS_RELEASE:-}
         # No Traefik locally, so bake the config that proxies /api + /ws to the
         # `backend` service — keeps the SPA same-origin on :7001. (Baked, not
         # mounted: a Coolify compose deploy can't bind-mount repo files.)

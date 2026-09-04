@@ -246,6 +246,21 @@ rule — "the 31st" fires on 28/29 February rather than skipping the month.
 > the server refuses to start if it is enabled (fake auth in prod is a security
 > hole). `/readyz` also reports `insecure_auth` whenever the bypass is active.
 
+**Crash reporting to `status.tilcer.cz`.** These four are the backend half; the
+browser half is a separate key in the frontend's build args, and both are
+explained together under
+[Crash reporting and feedback](#crash-reporting-and-feedback-statustilcercz)
+below. Not `HOME_`-prefixed on purpose: they are the fleet-wide names every
+`ws-tilcer-*` service reads. Leave all four unset and reporting is cleanly off —
+the boot line says `statusreport: DISABLED` and nothing else changes.
+
+| Var | Purpose | Value |
+| --- | --- | --- |
+| `STATUS_INGEST_URL` | the site's ingest endpoint, e.g. `https://status.tilcer.cz/api/ingest/home`. Set it and `STATUS_INGEST_KEY` together or neither — exactly one is refused at boot, because a half-configured reporter drops every event in silence | *(unset — reporting off)* |
+| `STATUS_INGEST_KEY` | that site's ingest key (`ik_…`). Keep it out of the repo and the logs like any other secret — but ⚠ it stops being one the moment the SAME key is baked into the SPA, which is the default wiring below | *(secret; unset — reporting off)* |
+| `STATUS_ENVIRONMENT` | environment tag on every event. Set it only to say something `HOME_ENV` cannot, e.g. `staging` — and ⚠ **never on its own**: set the frontend's `VITE_STATUS_ENVIRONMENT` to the same string in the same deploy, or the two halves file one release under two names (see below) | defaults to `HOME_ENV` mapped onto status's own vocabulary — `production`→`prod`, `development`→`dev`, which is what the SPA sends too, so one deployment reaches the board under **one** name |
+| `STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1`. Same rule: set it with `VITE_STATUS_RELEASE` or with neither | *(unset)* |
+
 ### Documents converter (`home-gotenberg`, v4)
 
 Office→PDF previews run in a **Gotenberg** sidecar rather than a LibreOffice binary
@@ -278,9 +293,129 @@ Static-only image — **no runtime env vars**.
 
 **Build args** (baked into the SPA at image build time)
 
-| Arg                  | Value                       |
-| -------------------- | --------------------------- |
-| `VITE_AUTH_BASE_URL` | `https://auth.tilcer.cz` (only for the "Zapomněli jste heslo?" / MFA out-links; Mode B carries no browser token) |
+| Arg                  | Purpose                     | Value |
+| -------------------- | --------------------------- | ----- |
+| `VITE_AUTH_BASE_URL` | the "Zapomněli jste heslo?" / MFA out-links, and nothing else — Mode B carries no browser token | `https://auth.tilcer.cz` |
+| `VITE_STATUS_INGEST_URL` | browser crash reporting. Unset ⇒ the SPA installs no error listeners | e.g. `https://status.tilcer.cz/api/ingest/home`; *(unset — reporting off)* |
+| `VITE_STATUS_INGEST_KEY` | the site's ingest key (`ik_…`). **Public by design**, like a Sentry DSN — see below | *(unset — reporting off)* |
+| `VITE_STATUS_WIDGET_KEY` | the site's widget key (`wk_…`), from **site detail → User feedback** | *(unset ⇒ no widget and no "Nahlásit problém" trigger)* |
+| `VITE_STATUS_SITE` | the site id in status | `home` |
+| `VITE_STATUS_ENVIRONMENT` | environment tag. Leave it unset **unless the backend's `STATUS_ENVIRONMENT` was set** — then set it to the same string. Unset on both sides, the two defaults already agree, because the backend maps `HOME_ENV` onto these same two words | `prod` in a production build, `dev` under `npm run dev` |
+| `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1`. Same rule: set it with `STATUS_RELEASE` or with neither | *(unset)* |
+| `VITE_STATUS_WIDGET_URL` | override the widget bundle (a staging status). Pin a **major**: `/widget/v1.js` | `https://status.tilcer.cz/widget/v1.js` |
+
+⚠ **Both status keys are baked, so rotating either one needs a frontend
+REBUILD**, not a variable change. That is inherent to a static Nginx image — the
+runtime sees no environment — and is the same trade `VITE_AUTH_BASE_URL` makes.
+
+⚠ **The browser ingest key is public and that is the design.** Anyone who loads
+the page can read it; all it can do is POST crashes for one site into a
+rate-limited, size-capped endpoint — exactly a Sentry DSN.
+
+⚠ **And status issues ONE ingest key per site**, so by default this is the *same*
+value as the backend's `STATUS_INGEST_KEY` — which means the backend's copy is
+public too, whatever it is called in the table above. That is the trade, and it
+is fine: the key's whole authority is "POST a crash for site `home`". If it ever
+needs to stop being fine, the fix is a **second status site** for the browser
+half with its own key and its own board — not a second key on this one, which
+status does not offer. The **widget** key (`wk_…`) is a genuinely different key
+on a different endpoint: rotating it never touches crash reporting.
+
+### Crash reporting and feedback (`status.tilcer.cz`)
+
+Two separate things, two separate keys, both optional. The contract lives in
+`ws-tilcer-status/docs/integration.md` (crashes) and `docs/widget.md` (feedback).
+
+**What reports.** On the backend, every `logger.Error(...)` — a mirror pass that
+cannot list its bucket, a recovered panic, a failed session revoke — plus two
+`fatal` events written by hand: a panic that unwinds `main`, and a boot that
+returns an error (the crash-loop a failed migration produces). Errors reach the
+board because the codebase already reserves `Error` for a fault that should not
+happen and logs everything soft at `Warn`; `internal/platform/statusreport` wraps
+the slog handler in `main` and inherits that curation whole. In the browser,
+uncaught errors and unhandled rejections — React 19 routes an uncaught render
+error through `window.reportError`, so the white screen arrives too.
+
+**What it costs when status is down: nothing.** Every path fails safe. An ingest
+error — 401, 404, 413, 429, a dead socket — is dropped in silence on both sides,
+`Capture` never blocks a request path, and the client carries the server's own
+60/min-burst-120 limit so an error storm cannot become a socket per log line.
+The price is that a wrong key looks exactly like a quiet week, which is why the
+boot line says which state reporting is in, once.
+
+**Wiring it up.**
+
+1. In the status dashboard, **Add site** with the id `home` and copy the ingest
+   key (shown once). Put it in the backend app's `STATUS_INGEST_KEY` and set
+   `STATUS_INGEST_URL`.
+2. The **same** key and URL go into the frontend build args as
+   `VITE_STATUS_INGEST_URL` + `VITE_STATUS_INGEST_KEY`, which puts both halves of
+   `home` on one board. ⚠ It is public from that moment — see the warning above;
+   a separate status **site** is the only way to keep a private backend key.
+3. **site detail → User feedback → Feedback enabled** issues the widget key
+   (`wk_…`, also shown once). It goes in `VITE_STATUS_WIDGET_KEY`.
+4. Confirm `https://home.tilcer.cz` is inside status's `STATUS_ALLOWED_ORIGINS`
+   (default `https://*.tilcer.cz`, so it already is). ⚠ An origin outside that
+   list gets no `Access-Control-Allow-Origin`, the browser blocks the POST, and —
+   because the client is fail-safe — **nothing is logged anywhere at all**.
+5. Confirm `https://home.tilcer.cz` is in the **attachment bucket's own CORS
+   policy** (`widget.md` §8 — a Cloudflare dashboard setting on status's R2
+   bucket, not a variable in either repo). ⚠ The widget PUTs a screenshot
+   **straight to R2**, not through status, so this is a second allow-list and
+   `STATUS_ALLOWED_ORIGINS` above does not cover it. Miss it and the report still
+   arrives, the file does not, and no request reaches status to say so — while
+   the trigger's own hint has just promised *"i se snímkem obrazovky"*.
+6. *(Optional)* Set the site's **Monitor URL**. ⚠ Not `/readyz`: only `/api` and
+   `/ws` are path-routed to the backend, so `home.tilcer.cz/readyz` reaches the
+   SPA's catch-all and returns the shell with a 200 — a probe that can never
+   fail. `https://home.tilcer.cz` monitors the frontend honestly; monitoring the
+   backend would mean routing a probe path to it first.
+7. Trigger a test error and confirm it appears on the board.
+
+⚠ **The `environment` and `release` tags are set in PAIRS or not at all.** Left
+unset everywhere, the two halves agree by construction: the backend maps
+`HOME_ENV` onto status's `prod`/`dev` and the SPA's default is the same two
+words. Setting one side alone breaks that, and it is the one misconfiguration
+neither half can see — `STATUS_ENVIRONMENT` is a backend runtime variable and
+`VITE_STATUS_ENVIRONMENT` is a frontend build arg, so there is no moment at which
+one process holds both. `STATUS_ENVIRONMENT=staging` without
+`VITE_STATUS_ENVIRONMENT=staging` puts one deployment of one release on one board
+under two environments — `staging` for everything the Go process reports,
+`prod` for everything the browser does. The same goes for `STATUS_RELEASE` and
+`VITE_STATUS_RELEASE`. Change them together, in the same deploy, or change
+neither.
+
+⚠ **Leave "Send console output" OFF for this site.** It is off by default and
+must stay off. home's privacy model makes a member's private notes unreadable by
+anyone, admins included — and a console line carrying a note title into status
+would be read by Karel's admin session, which is a side door with a different
+lock. That is a dashboard setting; nothing in this repository can enforce it.
+
+⚠ **For the same reason a crash report names the module, not the page.** home's
+URLs carry slugged titles — `/poznamky/soukrome/<a private note's title>`,
+`/dokumenty/<a filename>` — so the browser reporter sends the origin and the
+first path segment only, never `location.href`. The **widget** does send the
+whole URL (it is in `widget.md` §3 and home cannot change it), but it shows the
+reporter everything before they press send: a member deciding about their own
+page is not the same as a crash deciding for them.
+
+⚠ **The feedback trigger is home's own, not the widget's floating launcher**
+(`data-launcher="none"`). The launcher sits 16 px from a corner and does not
+account for a host app's bottom navigation, and home has a 56 px thumb-tab bar
+under every width below 768. The cost of supplying our own: the widget's launcher
+renders only when feedback is actually enabled server-side, while ours is shown
+on the strength of the script having *loaded* — so if feedback is switched off in
+the dashboard after a build shipped with a key, the trigger opens nothing.
+Rotating the widget key is the fix, and it needs a frontend rebuild either way.
+
+⚠ **A document CSP would need three directives** and home sends none today, so
+this is a tripwire rather than a task. If one is ever added:
+`script-src https://status.tilcer.cz`, `style-src 'unsafe-inline'`, and — on ONE
+`connect-src` line, because a repeated directive is ignored — both
+`https://status.tilcer.cz` and the R2 account origin the widget PUTs attachments
+to. `require-trusted-types-for 'script'` is not supported by the widget at all.
+(The `Content-Security-Policy: sandbox` home already sends on served images, PDFs
+and chat content is a per-response sandbox on a served file and is unrelated.)
 
 ### Prerequisites before the first deploy (Karel)
 
@@ -307,6 +442,10 @@ Static-only image — **no runtime env vars**.
 5. **Verify the Litestream image tag** in `backend/Dockerfile`
    (`litestream/litestream:0.3.13`) resolves and its config format matches; bump
    if needed.
+6. **status.tilcer.cz** — see the section above. Until it is done, nothing is
+   broken and nothing is reported: the boot line reads
+   `statusreport: DISABLED`, the SPA installs no error listeners, and no
+   "Nahlásit problém" trigger is rendered.
 
 ### Fresh-build restore test (must actually run, not assume — HANDOFF F7)
 

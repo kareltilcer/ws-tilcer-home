@@ -884,6 +884,18 @@ export const cs = {
     needsConnection: 'Vyžaduje připojení',
   },
 
+  // The feedback trigger. The dialog itself is the status widget's, in its own
+  // Czech (data-lang="cs") — this is only the door into it, so the label has to
+  // say what pressing it does rather than name the tool behind it.
+  // ⚠ The hint is kept to one line at 375 px, like every description beside it in
+  // the sheet. A row half again as tall as its neighbours reads as a different
+  // KIND of thing, and this one already is one — the sheet's only action among
+  // its destinations — so it must not also look like a mistake.
+  feedback: {
+    open: 'Nahlásit problém',
+    hint: 'Napište Kájovi — i se snímkem obrazovky',
+  },
+
   // v8 — Elektřina (PRD §V8-7). The vocabulary in `word` is FIXED by the spec and
   // is used verbatim on the pages, in the forms and in the Log, so a person reads
   // the same noun everywhere.
