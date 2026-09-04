@@ -366,9 +366,11 @@ boot line says which state reporting is in, once.
    arrives without its file. That much is *not* silent, in either direction: the
    widget names the file it could not upload (*"Tohle se nahrát nepovedlo…"*) and
    the claim call still reaches status, which marks the attachment `missing` on
-   the board — `widget.md` §10 sends you from that word straight back to this
-   step. What it costs is the screenshot itself, once per reporter, until someone
-   reads the board.
+   the board. The cost runs until the policy is fixed, not until someone notices
+   it: every attachment of every report, up to three a report, clips as well as
+   screenshots. Only the text still arrives. `widget.md` §10 pairs that word
+   with this step **and** with the CSP tripwire below — home sends no CSP today,
+   so this is the half to check first.
 6. *(Optional)* Set the site's **Monitor URL**. ⚠ Not `/readyz`: only `/api` and
    `/ws` are path-routed to the backend, so `home.tilcer.cz/readyz` reaches the
    SPA's catch-all and returns the shell with a 200 — a probe that can never

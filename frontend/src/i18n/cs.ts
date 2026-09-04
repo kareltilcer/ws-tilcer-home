@@ -893,15 +893,19 @@ export const cs = {
   // as the desktop button's `title` it is the only text beside a label it partly
   // restates. What it buys is the half the label cannot say — that an IDEA for an
   // improvement belongs here too, which is what the dialog's own kind picker
-  // ('Chyba', 'Nápad', 'Něco jiného') actually offers. Changing it is his call.
-  // ⚠ The spelling is `Nahlaste`. `nahlásit` takes the same imperative as
-  // `přihlásit`, which this file already spells `Přihlaste se` (line 12).
+  // offers ('Chyba', 'Nápad', 'Něco jiného' — status's own `widget/i18n.ts`, and
+  // status can rename them without touching this build). Changing it is his call.
+  // ⚠ The spelling is `Nahlaste`, not `Nahlašte`. `nahlásit` takes the same
+  // imperative as `přihlásit`, which this file already spells `Přihlaste se` in
+  // `login.subtitle`.
   // ⚠ The hint is kept to one line at 375 px, like every description beside it in
   // the sheet. A row half again as tall as its neighbours reads as a different
   // KIND of thing, and this one already is one — the sheet's only action among
   // its destinations — so it must not also look like a mistake. The budget is
-  // 267 px (375 − 32 sheet `p-4` − 2 border − 28 row `px-3.5` − 34 icon − 12
-  // gap); this string measures 214 px in Hanken Grotesk at 12 px.
+  // 267 px (375 − 32 sheet `p-4` − 2 ROW border, the sheet's is `border-t` only
+  // − 28 row `px-3.5` − 34 icon − 12 `gap-3`); this string measures 214 px at
+  // 12 px/400 in Hanken Grotesk. No test can hold that line — jsdom has no font
+  // metrics — so re-measure in a browser after any edit.
   feedback: {
     open: 'Nahlásit problém',
     hint: 'Nahlaste problém či nápad na vylepšení',
