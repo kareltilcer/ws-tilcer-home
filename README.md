@@ -371,8 +371,8 @@ If the commit is still missing after a rebuild, in this order:
    echoed build script shows the key-only `--build-arg 'SOURCE_COMMIT'` and never what it
    carries, because the `cat` of `/artifacts/build-time.env` that would is gated on
    Coolify's own dev mode rather than on this toggle. Neither present, and nothing is being
-   supplied: check the toggle, and check *Build arguments* in the advanced settings, where
-   ARG injection can be switched off wholesale.
+   supplied: check the toggle, and check *Inject Build Args to Dockerfile* in the advanced
+   settings, where ARG injection can be switched off wholesale.
 3. **The baked bundle settles it either way** —
    `docker run --rm --entrypoint sh <image> -c 'grep -o "VITE_APP_COMMIT:.\{0,45\}" /usr/share/nginx/html/assets/index-*.js'`.
 
