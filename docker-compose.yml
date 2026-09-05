@@ -167,6 +167,12 @@ services:
         # one run, one board, two names. Set in PAIRS or not at all.
         VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-dev}
         VITE_STATUS_RELEASE: ${VITE_STATUS_RELEASE:-}
+        # The commit half of the app's version label (v10.2, D271). Coolify defaults
+        # it from its own SOURCE_COMMIT; compose has no such variable, so the harness
+        # passes whatever is in the environment and the label falls back to the bare
+        # version when that is empty. `VITE_APP_COMMIT=$(git rev-parse HEAD) docker
+        # compose up --build` is how to see the full label locally.
+        VITE_APP_COMMIT: ${VITE_APP_COMMIT:-}
         # No Traefik locally, so bake the config that proxies /api + /ws to the
         # `backend` service — keeps the SPA same-origin on :7001. (Baked, not
         # mounted: a Coolify compose deploy can't bind-mount repo files.)

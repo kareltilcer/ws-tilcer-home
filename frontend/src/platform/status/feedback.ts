@@ -7,9 +7,11 @@
 // and home's shell supplies the trigger instead. The launcher sits 16 px from a
 // corner and does not try to guess the height of a host app's bottom
 // navigation — and home has one: a 56 px thumb-tab bar across the whole width at
-// every width below 768. Moving it to a top corner only trades that collision
-// for the mobile header's theme and sign-out buttons. `StatusFeedback.open()` is
-// unaffected by the suppression and is the documented public API.
+// every width below 768. A top corner is not the escape either: the first row of
+// every phone screen is that screen's own header since v10.2 took the app bar away
+// (D272), so the launcher would land on a title, a back arrow or a ＋ instead.
+// `StatusFeedback.open()` is unaffected by the suppression and is the documented
+// public API.
 //
 // ⚠ WHAT THAT COSTS, since it is the one thing this arrangement gives up. The
 // widget renders no launcher when feedback is switched OFF for the site, so its

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import shell from './AppShell.tsx?raw'
-import { DESKTOP_NAV_ORDER, isFullBleedRoute, routes } from './routes'
+import { DESKTOP_FOOTER_ROUTES, DESKTOP_NAV_ORDER, isFullBleedRoute, routes } from './routes'
 
 // D260 — the first demotion in this app's history, asserted against the source.
 //
@@ -98,21 +98,40 @@ describe('the desktop side nav leads with Chat', () => {
       routes.elektrina,
       routes.log,
       routes.administrace,
-      routes.nastaveni,
+      // ⚠ NASTAVENÍ IS NOT LAST HERE ANY MORE, IT IS NOT HERE AT ALL. v10.2 moved it
+      // into the sidebar's user row as a ⚙ (D273); DESKTOP_FOOTER_ROUTES is where it
+      // went, and the block below is what makes that a move rather than a deletion.
     ])
   })
 
-  // ⚠ THE ORDER HAS TO NAME EVERY NAV ENTRY. AppShell sorts by it and ranks anything
-  // unnamed last, so a module added to PRIMARY or OVERFLOW and forgotten here would
-  // land silently at the bottom of the sidebar rather than where it belongs. This is
-  // where that gets caught.
+  // ⚠ THE FOOTER IS THE ONE EXCEPTION TO "EVERY NAV ENTRY IS IN THE LIST", so it is
+  // written down as a list of its own rather than as an absence. An entry in neither
+  // is a module that fell out of the sidebar, which is what the coverage block below
+  // still catches.
+  it('draws Nastavení in the footer instead, and only there', () => {
+    expect([...DESKTOP_FOOTER_ROUTES]).toEqual([routes.nastaveni])
+    expect(DESKTOP_NAV_ORDER).not.toContain(routes.nastaveni)
+    expect(shell).toContain('DESKTOP_FOOTER_ROUTES.includes(item.to)')
+  })
+
+  // The phone is untouched: a sheet is a list of destinations with nowhere to hang an
+  // icon, so Nastavení keeps its full row with its description there.
+  it('keeps Nastavení an ordinary row in the phone overflow', () => {
+    expect(block('OVERFLOW')).toContain('routes.nastaveni')
+  })
+
+  // ⚠ THE TWO LISTS TOGETHER HAVE TO NAME EVERY NAV ENTRY. AppShell sorts by the
+  // order and ranks anything unnamed last, so a module added to PRIMARY or OVERFLOW
+  // and forgotten in both would land silently at the bottom of the sidebar rather
+  // than where it belongs. This is where that gets caught.
   it('covers every entry in both nav tables', () => {
     const keys = [...(block('PRIMARY') + block('OVERFLOW')).matchAll(/\{ to: routes\.(\w+)/g)].map(
       (m) => m[1] as keyof typeof routes,
     )
-    expect(keys.length, 'no nav entries found in AppShell').toBe(DESKTOP_NAV_ORDER.length)
+    const drawn = [...DESKTOP_NAV_ORDER, ...DESKTOP_FOOTER_ROUTES]
+    expect(keys.length, 'no nav entries found in AppShell').toBe(drawn.length)
     for (const key of keys) {
-      expect(DESKTOP_NAV_ORDER, `routes.${key} is missing from DESKTOP_NAV_ORDER`).toContain(routes[key])
+      expect(drawn, `routes.${key} is drawn nowhere in the side nav`).toContain(routes[key])
     }
   })
 })

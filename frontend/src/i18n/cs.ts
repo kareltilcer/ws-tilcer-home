@@ -6,6 +6,16 @@ export const cs = {
     name: 'home',
     redirecting: 'Ověřování přihlášení…',
     signOut: 'Odhlásit se',
+    // v10.2 (D271): the accessible name of the version label in the side nav's foot
+    // and at the bottom of the "Více" sheet. `v10.2 · a3f9c2e` announced on its own
+    // is noise; this is the word that makes it a sentence.
+    version: 'Verze aplikace',
+    // v10.2 (D273): the side nav's user row says what this member may DO here, which
+    // is what the three gates in auth.tsx already answer. It is a label, never a
+    // permission — nothing reads these strings back.
+    roleAdmin: 'admin',
+    roleEditor: 'editor',
+    roleReader: 'reader',
   },
   login: {
     heading: 'Přihlášení',
@@ -30,11 +40,17 @@ export const cs = {
     dokumenty: 'Dokumenty',
     log: 'Log',
     more: 'Více',
+    // The sheet's own heading. v4 (D49): with Dokumenty there are five member
+    // destinations, so the overflow sheet is no longer admin-only — the four daily
+    // modules stay on the bar and everyone finds Dokumenty (and admins the Log) here.
+    //
+    // ⚠ v10.2 (D271) DELETED THE HINT THAT USED TO SIT UNDER THE LIST, and this is
+    // where its explanation lived, so the removal is recorded here rather than
+    // nowhere. "Čtyři denní moduly zůstávají v dosahu palce. Zbytek je tady."
+    // explained the sheet to somebody who had already opened it and found what they
+    // came for; the version label took the line, because that is the one thing on
+    // this screen a member can do something with.
     moreHeading: 'Další',
-    // v4 (D49): with Dokumenty there are five member destinations, so the overflow
-    // sheet is no longer admin-only — the four daily modules stay on the bar and
-    // everyone finds Dokumenty (and admins the Log) here.
-    moreHint: 'Čtyři denní moduly zůstávají v dosahu palce. Zbytek je tady.',
     logDesc: 'Auditní historie — jen pro správce',
     dokumentyDesc: 'Soubory — náhled, stažení, připnutí',
     // v6 (D84): Finance joins the overflow for EVERYONE — no admin gate, unlike
@@ -367,8 +383,23 @@ export const cs = {
     selfTest: 'Poslat zkušební oznámení',
     selfTestSent: 'Zkušební oznámení odesláno na toto zařízení.',
     selfTestFailed: 'Zkušební oznámení se nepodařilo doručit. Zkuste oznámení vypnout a znovu zapnout.',
-    appearance: 'Vzhled',
-    theme: 'Motiv',
+    // v10.2 (D273): the section grew the account's one action, so its name says so.
+    // Odhlásit se used to be a button in the side nav and a second one in the phone's
+    // top bar; it is a settings action that is taken twice a year, and this is where
+    // settings live.
+    appearanceAccount: 'Vzhled a účet',
+    themeDefaultHint: 'Tmavý motiv je výchozí.',
+    // ⚠ THE VISIBLE WORD IS THE THEME THE BUTTON SWITCHES TO, and the accessible name
+    // is the whole sentence. The artboards label this control with the theme that is
+    // currently ON ("Motiv: Tmavý"), which reads identically to the target and means
+    // the opposite; the shipped control has meant the target since v5, and a label
+    // that changes meaning without changing shape is the one thing worse than a
+    // difference from the mock. These four strings were hardcoded Czech inside
+    // AppShell's theme toggle until v10.2 deleted it — D20 says they live here.
+    themeLight: 'Světlý',
+    themeDark: 'Tmavý',
+    themeToLight: 'Přepnout na světlý motiv',
+    themeToDark: 'Přepnout na tmavý motiv',
     app: 'Aplikace',
     install: 'Nainstalovat aplikaci',
     installHint:

@@ -303,6 +303,15 @@ Static-only image — **no runtime env vars**.
 | `VITE_STATUS_ENVIRONMENT` | environment tag. Leave it unset **unless the backend's `STATUS_ENVIRONMENT` was set** — then set it to the same string. Unset on both sides, the two defaults already agree, because the backend maps `HOME_ENV` onto these same two words | `prod` in a production build, `dev` under `npm run dev` |
 | `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1`. Same rule: set it with `STATUS_RELEASE` or with neither | *(unset)* |
 | `VITE_STATUS_WIDGET_URL` | override the widget bundle (a staging status). Pin a **major**: `/widget/v1.js` | `https://status.tilcer.cz/widget/v1.js` |
+| `VITE_APP_COMMIT` | the commit half of the version label the app prints in the side nav's foot and at the bottom of the mobile *Více* sheet. Defaults to Coolify's own `SOURCE_COMMIT` — but see below | *(unset ⇒ the label reads `v10.2` with no commit)* |
+
+⚠ **`SOURCE_COMMIT` is excluded from the build by default**, because it changes on
+every commit and would invalidate Docker's layer cache each time. The label works
+without it — it prints the version alone — but to get the full `v10.2 · a3f9c2e`,
+turn on **Include Source Commit in Build** in the application's advanced settings
+(or set `VITE_APP_COMMIT` by hand, which costs the same cache). A value that is not
+a sha is dropped rather than printed, so a misconfigured build loses the commit
+rather than showing a `$SOURCE_COMMIT` nobody can act on.
 
 ⚠ **Both status keys are baked, so rotating either one needs a frontend
 REBUILD**, not a variable change. That is inherent to a static Nginx image — the

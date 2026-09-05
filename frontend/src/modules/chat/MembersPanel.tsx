@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Plus, X } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, initial } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { fmtDate } from '@/i18n/format'
@@ -224,11 +224,6 @@ export function MembersPanel({
       />
     </>
   )
-}
-
-/** The row's mark. Not a photo — Home has no user table and no avatars (D230). */
-function initial(name: string): string {
-  return [...name.trim()].slice(0, 1).join('').toUpperCase()
 }
 
 /**

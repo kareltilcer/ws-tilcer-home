@@ -72,8 +72,10 @@ test('a11y: no serious/critical axe violations (both themes × 375/1440)', async
       { width: 1440, height: 900 },
     ]) {
       await page.setViewportSize(vp)
-      // '/' (dashboard) and '/okno' (has a primary accent button + form controls).
-      for (const path of ['/', '/okno']) {
+      // '/' (dashboard), '/okno' (a primary accent button + form controls) and
+      // '/nastaveni' — the screen v10.2 moved sign-out onto, and the one that now
+      // carries the app's only destructive-looking control (D273).
+      for (const path of ['/', '/okno', '/nastaveni']) {
         await page.goto(path)
         await page.evaluate((t) => localStorage.setItem('home-theme', t), theme)
         await page.reload()
