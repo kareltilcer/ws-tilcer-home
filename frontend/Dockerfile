@@ -79,10 +79,8 @@ ARG VITE_STATUS_RELEASE=""
 # instead arrive by the spliced ARG alone, which `=""` beats.
 #
 # ⚠ WHY THE DEPLOY THAT BROKE TOOK THAT ROUTE IS NOT ESTABLISHED, and do not let this
-# comment read as if it were. One KNOWN way is an application variable of the same name,
-# which makes Coolify drop its own value from that flag's environment while the splice
-# carries it unguarded — but nobody checked before the fix shipped. Bare is right under
-# every route either way; the README has both paths and the open question.
+# comment read as if it were. Bare is right under every route either way; the README has
+# both paths and the open question.
 #
 # ⚠ WHAT BARE DOES NOT SURVIVE IS AN EXPLICIT EMPTY VALUE — `--build-arg SOURCE_COMMIT=`,
 # or a key-only `--build-arg SOURCE_COMMIT` with the name exported empty. That beats bare

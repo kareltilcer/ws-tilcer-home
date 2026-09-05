@@ -365,12 +365,14 @@ If the commit is still missing after a rebuild, in this order:
    Dockerfile: its presence makes Coolify drop its own value from `build-time.env`, and
    if the row is empty and build-time, path 1 fires with an empty value and beats bare
    `ARG` and the splice alike (measured). Same for a row named `VITE_APP_COMMIT`.
-2. **Turn on Show Debug Logs and compare the two dumps the deploy prints.** `SOURCE_COMMIT`
-   in the `cat` of `/artifacts/build-time.env` means path 1 is live; an `ARG SOURCE_COMMIT=`
-   line in the echoed *Final Dockerfile* — under each `FROM` on current Coolify, at the top
-   on versions predating the #7118 fix — means path 2 is. Neither present, and nothing is
-   being supplied: check the toggle, and check *Build arguments* in the advanced settings,
-   where ARG injection can be switched off wholesale.
+2. **Turn on Show Debug Logs and read the echoed *Final Dockerfile*.** An
+   `ARG SOURCE_COMMIT=<sha>` line under each `FROM` — at the top on versions predating the
+   #7118 fix — is path 2 firing, with its value. ⚠ **Path 1 is only half visible**: the
+   echoed build script shows the key-only `--build-arg 'SOURCE_COMMIT'` and never what it
+   carries, because the `cat` of `/artifacts/build-time.env` that would is gated on
+   Coolify's own dev mode rather than on this toggle. Neither present, and nothing is being
+   supplied: check the toggle, and check *Build arguments* in the advanced settings, where
+   ARG injection can be switched off wholesale.
 3. **The baked bundle settles it either way** —
    `docker run --rm --entrypoint sh <image> -c 'grep -o "VITE_APP_COMMIT:.\{0,45\}" /usr/share/nginx/html/assets/index-*.js'`.
 

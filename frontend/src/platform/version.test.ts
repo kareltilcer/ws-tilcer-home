@@ -166,10 +166,13 @@ describe('frontend/Dockerfile keeps the commit arg inheritable', () => {
       1,
     )
     // `ARG SOURCE_COMMIT=""`, `ARG SOURCE_COMMIT=` and `ARG SOURCE_COMMIT=x` all lose.
+    // Extra spacing and a trailing `# comment` do NOT — measured, they build to the same
+    // instruction, and this line gets the same tolerance as `viteArg` above for the same
+    // reason: a guard that reddens on an edit Docker cannot see is a guard that gets cut.
     expect(
       declarations[0],
       'ARG SOURCE_COMMIT must stay BARE — a default here beats what Coolify injects and blanks the label',
-    ).toBe('ARG SOURCE_COMMIT')
+    ).toMatch(/^ARG\s+SOURCE_COMMIT(\s+#.*)?$/)
   })
 
   it('still chains VITE_APP_COMMIT off it, which is what reaches the bundle', () => {
