@@ -303,7 +303,7 @@ Static-only image — **no runtime env vars**.
 | `VITE_STATUS_ENVIRONMENT` | environment tag. Leave it unset **unless the backend's `STATUS_ENVIRONMENT` was set** — then set it to the same string. Unset on both sides, the two defaults already agree, because the backend maps `HOME_ENV` onto these same two words | `prod` in a production build, `dev` under `npm run dev` |
 | `VITE_STATUS_RELEASE` | free-form release tag, e.g. `home@2026.36.1`. Same rule: set it with `STATUS_RELEASE` or with neither | *(unset)* |
 | `VITE_STATUS_WIDGET_URL` | override the widget bundle (a staging status). Pin a **major**: `/widget/v1.js` | `https://status.tilcer.cz/widget/v1.js` |
-| `VITE_APP_COMMIT` | the commit half of the version label the app prints in the side nav's foot and at the bottom of the mobile *Více* sheet. Defaults to Coolify's own `SOURCE_COMMIT` — but see below | *(unset ⇒ the label reads `v1.10.2` with no commit)* |
+| `VITE_APP_COMMIT` | the commit half of the version label the app prints in the side nav's foot and at the bottom of the mobile *Více* sheet. Defaults to Coolify's own `SOURCE_COMMIT` — but see below. ⚠ **Do not create this variable in Coolify at all**: an empty value here is not "unset", it is an explicit empty `--build-arg` that beats the Dockerfile's default and blanks the commit | *(leave it undefined ⇒ the Dockerfile takes it from `SOURCE_COMMIT`; with the toggle off too, the label reads `v1.10.2` with no commit)* |
 
 ⚠ **`SOURCE_COMMIT` is excluded from the build by default**, and getting the commit
 half of the label means turning on **Include Source Commit in Build** in the
@@ -311,24 +311,34 @@ application's advanced settings. The version half comes from `frontend/package.j
 and the Dockerfile defaults `VITE_APP_COMMIT` from `SOURCE_COMMIT`.
 
 ⚠ **The toggle alone was not enough, and the reason is worth knowing before you edit
-`frontend/Dockerfile`.** Coolify does **not** pass `SOURCE_COMMIT` as a `--build-arg`
-the way it passes the `VITE_*` variables you define yourself. For the Dockerfile build
-pack it **splices `ARG SOURCE_COMMIT=<sha>` into the Dockerfile at line index 1**,
-assuming line 0 is a `FROM`. Line 0 of `frontend/Dockerfile` is
-`# syntax=docker/dockerfile:1`, so the injected line lands **before the first `FROM`**
-— which in Docker is *global* scope, invisible inside a build stage unless the stage
-re-declares the name **without** a default. The file used to say `ARG SOURCE_COMMIT=""`,
-which is a re-declaration *with* one, so it shadowed the injected sha with an empty
-string; the first deploy with the toggle on still shipped a commit-less label. It now
-reads **`ARG SOURCE_COMMIT`**, bare, and **that bare form is load-bearing — do not add
-a default to it.** The other `VITE_*` args keep theirs, because a real `--build-arg`
-beats an in-stage default; that asymmetry is exactly why every other value reached the
-bundle and only the commit was empty.
+`frontend/Dockerfile`.** The first deploy with it on shipped a commit-less label anyway,
+because the file said `ARG SOURCE_COMMIT=""` — and **a default written in the Dockerfile
+beats the value Coolify injects**. It now reads **`ARG SOURCE_COMMIT`**, bare, and
+**that bare form is load-bearing — do not add a default to it.** `version.test.ts`
+asserts it, so a tidy-up fails the suite rather than the next deploy.
 
-If the commit is still missing after a rebuild, the next thing to check is the Coolify
-build log for an injected `ARG SOURCE_COMMIT=` line near the top of the echoed
-Dockerfile. If it is not there, Coolify is not injecting it at all and the problem is
-upstream of this repo.
+Coolify supplies build variables **two ways at once**: it passes `--build-arg 'KEY'`
+(key only — Docker reads the value out of the environment Coolify exports first), and
+it also **splices `ARG KEY=<value>` lines into the Dockerfile**. Where the spliced line
+lands has moved between Coolify versions — older builds used a hardcoded line index 1
+([coollabsio/coolify#7118](https://github.com/coollabsio/coolify/issues/7118)), which
+puts it *before* the first `FROM` whenever line 0 is a comment, as it is here; current
+builds insert after *every* `FROM`. Both positions break the same way against a default
+in this file: before the `FROM` the in-stage `=""` **shadows** the global, after the
+`FROM` it **resets** the injected value. Bare survives both, and survives `--build-arg`
+and nothing-at-all as well — all four were built and read out of `dist/assets/*.js`.
+
+⚠ **`SOURCE_COMMIT` is not special to Coolify.** It rides the same two paths as the
+`VITE_*` variables you define yourself, so the `=""` those args still carry is not a
+structural guarantee either — they survive because the `--build-arg` also fires, which
+beats an in-stage default. They are left alone because they are not what broke.
+
+If the commit is still missing after a rebuild, turn on **Show Debug Logs** and read the
+echoed final Dockerfile for an `ARG SOURCE_COMMIT=` line — expect one under *each*
+`FROM`, not at the top. Absence is not proof the platform is at fault: the value can
+still arrive as a key-only `--build-arg`, and ARG injection can be switched off wholesale
+in the application's advanced settings. The thing that settles it is the baked bundle —
+`docker run --rm --entrypoint sh <image> -c 'grep -o "VITE_APP_COMMIT:.\{0,45\}" /usr/share/nginx/html/assets/index-*.js'`.
 
 ⚠ **The cache argument for leaving it off does not survive a look at the
 Dockerfile.** The reason Coolify excludes it is that it changes on every commit and

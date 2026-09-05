@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import changelog from '../../../handoff/v10/CHANGELOG.md?raw'
+import dockerfile from '../../Dockerfile?raw'
 import lockfileRaw from '../../package-lock.json?raw'
 import { version as packageVersion } from '../../package.json'
 import { APP_VERSION, shortCommit, versionLabel } from './version'
@@ -135,5 +136,35 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
     expect(lock.packages?.['']?.version, 'package-lock.json packages[""] version').toBe(
       packageVersion,
     )
+  })
+})
+
+// ⚠ THE COMMIT HALF HAS AN INVARIANT WITH NO READER TOO, and it is one line of a
+// Dockerfile that looks like a typo. `ARG SOURCE_COMMIT` is BARE on purpose: a default
+// written in the Dockerfile beats the value Coolify injects, so `ARG SOURCE_COMMIT=""`
+// — the spelling the nine args above it use — silently blanks the commit on every
+// deploy. That shipped once already. The comment above the line says so in capitals,
+// which is exactly the kind of rule an editor normalising a file does not read, so it
+// is asserted here for the same reason the CHANGELOG mapping and the lockfile are.
+describe('frontend/Dockerfile keeps the commit arg inheritable', () => {
+  const lines = dockerfile.split('\n').map((line) => line.trim())
+
+  it('declares SOURCE_COMMIT bare, with no default to beat the injected value', () => {
+    const declarations = lines.filter((line) => /^ARG\s+SOURCE_COMMIT\b/.test(line))
+    expect(declarations, 'no `ARG SOURCE_COMMIT` line in frontend/Dockerfile').toHaveLength(
+      1,
+    )
+    // `ARG SOURCE_COMMIT=""`, `ARG SOURCE_COMMIT=` and `ARG SOURCE_COMMIT=x` all lose.
+    expect(
+      declarations[0],
+      'ARG SOURCE_COMMIT must stay BARE — a default here beats what Coolify injects and blanks the label',
+    ).toBe('ARG SOURCE_COMMIT')
+  })
+
+  it('still chains VITE_APP_COMMIT off it, which is what reaches the bundle', () => {
+    expect(
+      lines,
+      'frontend/Dockerfile no longer defaults VITE_APP_COMMIT from SOURCE_COMMIT',
+    ).toContain('ARG VITE_APP_COMMIT=$SOURCE_COMMIT')
   })
 })

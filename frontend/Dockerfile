@@ -66,22 +66,34 @@ ARG VITE_STATUS_RELEASE=""
 # `COPY . .` has already invalidated the build layer and the arg costs nothing on top.
 #
 # ⚠⚠ THE NEXT LINE HAS NO `=""` AND THAT IS THE WHOLE POINT — DO NOT "TIDY" IT.
-# Coolify does NOT pass SOURCE_COMMIT as `--build-arg`. For the Dockerfile build pack
-# it SPLICES `ARG SOURCE_COMMIT=<sha>` into this file at line index 1, assuming line 0
-# is a FROM. Line 0 here is `# syntax=docker/dockerfile:1`, so the injected line lands
-# BEFORE the first FROM — which in Docker is GLOBAL scope, invisible inside a build
-# stage unless the stage re-declares the name WITHOUT a default. `ARG SOURCE_COMMIT=""`
-# is a re-declaration WITH one, so it shadowed the injected value with an empty string
-# and the label shipped commit-less even with the toggle on. Measured, not reasoned:
-# the two spellings were built side by side against a spliced global ARG, and `=""`
-# yields `[]` where the bare form yields the sha.
+# `ARG SOURCE_COMMIT=""` here is a re-declaration WITH a default, and a default written
+# in this file BEATS the value Coolify injects: the label shipped commit-less even with
+# the toggle on. Bare, the name inherits whatever the platform supplied and falls back
+# to an empty string when nothing did. `frontend/src/platform/version.test.ts` asserts
+# this line is bare, because prose is not a reader.
 #
-# ⚠ THE OTHER VITE_* ARGS ABOVE KEEP THEIR `=""` ON PURPOSE — they are user-defined
-# build variables, which Coolify DOES pass as `--build-arg`, and a `--build-arg` beats
-# an in-stage default. That asymmetry is exactly why every other value reached the
-# bundle and only the commit was empty. Bare is safe either way (a `--build-arg` still
-# wins over no default), so this line works under both mechanisms and degrades to an
-# empty string when nothing supplies it at all.
+# ⚠ IT HAS TO BE BARE UNDER EVERY PATH A VALUE CAN ARRIVE BY, which is the reason not
+# to reason about which one Coolify uses. Coolify supplies build variables TWO ways at
+# once: it passes `--build-arg 'KEY'` (key only — Docker reads the value out of the
+# environment Coolify exports first), AND it splices `ARG KEY=<value>` lines into this
+# file. Where the spliced line lands has MOVED between Coolify versions — older builds
+# used a hardcoded line index 1 (coollabsio/coolify#7118), which puts it BEFORE the
+# first FROM whenever line 0 is a comment, as it is here; current builds insert after
+# EVERY FROM. All four cases were built and read out of `dist/assets/*.js`:
+#
+#   ARG spliced before the first FROM (global scope) → bare inherits it; `=""` shadows
+#     it and yields empty.
+#   ARG spliced after the FROM (in-stage)            → bare inherits it; `=""` RESETS it
+#     and yields empty — the same bug from the other side.
+#   `--build-arg` (with or without a value)          → bare takes it.
+#   nothing supplied at all                          → bare degrades to "".
+#
+# ⚠ SOURCE_COMMIT IS NOT SPECIAL TO COOLIFY — it rides the same two paths as the
+# VITE_* variables above (`generate_env_variables` puts it in the same collection the
+# user's build variables go into, and every one of them becomes a `--build-arg`). So
+# the `=""` those args still carry is NOT a structural guarantee; they survive because
+# the `--build-arg` also fires, which beats an in-stage default. They are left alone
+# here because they are not what broke, not because they are safe by construction.
 ARG SOURCE_COMMIT
 ARG VITE_APP_COMMIT=$SOURCE_COMMIT
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
