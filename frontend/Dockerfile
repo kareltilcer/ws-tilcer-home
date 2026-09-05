@@ -64,7 +64,25 @@ ARG VITE_STATUS_RELEASE=""
 # toggle adds nothing on top of it.) The only builds that pay for the toggle are
 # commits that touch NOTHING under frontend/; on any commit that touches something,
 # `COPY . .` has already invalidated the build layer and the arg costs nothing on top.
-ARG SOURCE_COMMIT=""
+#
+# ⚠⚠ THE NEXT LINE HAS NO `=""` AND THAT IS THE WHOLE POINT — DO NOT "TIDY" IT.
+# Coolify does NOT pass SOURCE_COMMIT as `--build-arg`. For the Dockerfile build pack
+# it SPLICES `ARG SOURCE_COMMIT=<sha>` into this file at line index 1, assuming line 0
+# is a FROM. Line 0 here is `# syntax=docker/dockerfile:1`, so the injected line lands
+# BEFORE the first FROM — which in Docker is GLOBAL scope, invisible inside a build
+# stage unless the stage re-declares the name WITHOUT a default. `ARG SOURCE_COMMIT=""`
+# is a re-declaration WITH one, so it shadowed the injected value with an empty string
+# and the label shipped commit-less even with the toggle on. Measured, not reasoned:
+# the two spellings were built side by side against a spliced global ARG, and `=""`
+# yields `[]` where the bare form yields the sha.
+#
+# ⚠ THE OTHER VITE_* ARGS ABOVE KEEP THEIR `=""` ON PURPOSE — they are user-defined
+# build variables, which Coolify DOES pass as `--build-arg`, and a `--build-arg` beats
+# an in-stage default. That asymmetry is exactly why every other value reached the
+# bundle and only the commit was empty. Bare is safe either way (a `--build-arg` still
+# wins over no default), so this line works under both mechanisms and degrades to an
+# empty string when nothing supplies it at all.
+ARG SOURCE_COMMIT
 ARG VITE_APP_COMMIT=$SOURCE_COMMIT
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
     VITE_AUTH_BASE_URL=$VITE_AUTH_BASE_URL \

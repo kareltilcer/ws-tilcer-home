@@ -307,9 +307,28 @@ Static-only image — **no runtime env vars**.
 
 ⚠ **`SOURCE_COMMIT` is excluded from the build by default**, and getting the commit
 half of the label means turning on **Include Source Commit in Build** in the
-application's advanced settings. There is nothing else to do: the version half comes
-from `frontend/package.json` and the Dockerfile already defaults `VITE_APP_COMMIT`
-from `SOURCE_COMMIT`.
+application's advanced settings. The version half comes from `frontend/package.json`
+and the Dockerfile defaults `VITE_APP_COMMIT` from `SOURCE_COMMIT`.
+
+⚠ **The toggle alone was not enough, and the reason is worth knowing before you edit
+`frontend/Dockerfile`.** Coolify does **not** pass `SOURCE_COMMIT` as a `--build-arg`
+the way it passes the `VITE_*` variables you define yourself. For the Dockerfile build
+pack it **splices `ARG SOURCE_COMMIT=<sha>` into the Dockerfile at line index 1**,
+assuming line 0 is a `FROM`. Line 0 of `frontend/Dockerfile` is
+`# syntax=docker/dockerfile:1`, so the injected line lands **before the first `FROM`**
+— which in Docker is *global* scope, invisible inside a build stage unless the stage
+re-declares the name **without** a default. The file used to say `ARG SOURCE_COMMIT=""`,
+which is a re-declaration *with* one, so it shadowed the injected sha with an empty
+string; the first deploy with the toggle on still shipped a commit-less label. It now
+reads **`ARG SOURCE_COMMIT`**, bare, and **that bare form is load-bearing — do not add
+a default to it.** The other `VITE_*` args keep theirs, because a real `--build-arg`
+beats an in-stage default; that asymmetry is exactly why every other value reached the
+bundle and only the commit was empty.
+
+If the commit is still missing after a rebuild, the next thing to check is the Coolify
+build log for an injected `ARG SOURCE_COMMIT=` line near the top of the echoed
+Dockerfile. If it is not there, Coolify is not injecting it at all and the problem is
+upstream of this repo.
 
 ⚠ **The cache argument for leaving it off does not survive a look at the
 Dockerfile.** The reason Coolify excludes it is that it changes on every commit and
