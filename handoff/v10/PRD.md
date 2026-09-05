@@ -3872,7 +3872,7 @@ Run against the branch from scratch rather than against the first round's list, 
 
 ## V10-15. As built — v10.2, the shell's own chrome (built 2026-09-05, no API change)
 
-The `design/v10_2` bundle plus three requests from Karel, all of them about the frame rather than about a module. **No endpoint, no migration, no schema**: OpenAPI stays at 0.13.0. `design/v10_1/Home.dc.html` and `design/v10_2/Home.dc.html` differ by **161 diff lines once CR is stripped**, and most of those are v10.1's as-built corrections being folded back into the bundle rather than anything new to build — the new work is the side nav's foot, the version label, and a header that had to be deleted. (`CardTile`, `DocumentView`, `NoteView` and `support.js` are unchanged in content between the two snapshots; v10_2 was written with LF where v10_1 has CRLF, which is the only reason they are not byte-identical.)
+The `design/v10_2` bundle plus three requests from Karel, all of them about the frame rather than about a module. **No endpoint, no migration, no schema**: OpenAPI stays at 0.14.0 — the version `backend/openapi.yaml` has served since the `"0d"` reminder lead, not the 0.13.0 §V10-14 left off at. `design/v10_1/Home.dc.html` and `design/v10_2/Home.dc.html` differ by **161 diff lines once CR is stripped**, and most of those are v10.1's as-built corrections being folded back into the bundle rather than anything new to build — the new work is the side nav's foot, the version label, and a header that had to be deleted. (`CardTile`, `DocumentView`, `NoteView` and `support.js` are unchanged in content between the two snapshots; v10_2 was written with LF where v10_1 has CRLF, which is the only reason they are not byte-identical.)
 
 ### The drift was the biggest of the three
 

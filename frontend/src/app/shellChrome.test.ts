@@ -75,9 +75,13 @@ describe('D271 — the version is printed where a bug report can find it', () =>
   // ⚠ IT IS A LABEL, NOT A CONTROL, and it says what it is. `v10.2 · a3f9c2e` on its
   // own is a token; the accessible name is what makes it a sentence, and a `title`
   // alone is not announced on a non-interactive element.
+  // ⚠ MATCHED, NOT QUOTED. The first spelling of this asserted the whole JSX line
+  // verbatim, which is a test that fails when Prettier rewraps an attribute and
+  // passes when the name is deleted from some OTHER element — the two ways an
+  // assertion can be wrong at once. What has to hold is that the string is rendered
+  // inside an sr-only span, and nothing about how that span is formatted.
   it('names the string for a screen reader', () => {
-    expect(shell).toContain('cs.app.version')
-    expect(shell).toContain('<span className="sr-only">{cs.app.version}: </span>')
+    expect(shell).toMatch(/className="sr-only"[^>]*>\s*\{cs\.app\.version\}/)
   })
 
   it('leads with the version this bundle is', () => {

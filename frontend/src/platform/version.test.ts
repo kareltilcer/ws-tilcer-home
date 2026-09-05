@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { shortCommit, versionLabel } from './version'
+import changelog from '../../../handoff/v10/CHANGELOG.md?raw'
+import { APP_VERSION, shortCommit, versionLabel } from './version'
 
 // ⚠ THE MODULE-LEVEL LABEL IS NOT WHAT IS TESTED HERE, and cannot usefully be:
 // APP_VERSION_LABEL is composed once at import time out of `import.meta.env`, which
@@ -48,5 +49,20 @@ describe('versionLabel — the version alone is still a label', () => {
   // value: the alternative is a blank line where the label should be.
   it('falls back to the version when the build was given no commit', () => {
     expect(versionLabel('v10.2', '')).toBe('v10.2')
+  })
+})
+
+// ⚠ THE ONE THING version.ts CALLS AN INVARIANT WAS THE ONE THING NOTHING READ BACK.
+// Its comment says APP_VERSION is bumped with the CHANGELOG's newest heading and that
+// "a label that disagrees with the changelog is worse than no label at all, because it
+// is the string a bug report gets filed under" — which is a rule a release forgets in
+// exactly the way nav.test.ts exists to catch for the nav order. Same idiom: read the
+// other file and assert against it, so the release that forgets fails here rather than
+// on a screenshot from Karel six weeks later.
+describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
+  it('equals the newest version heading', () => {
+    const newest = changelog.match(/^## (v[\d.]+)/m)
+    expect(newest, 'no "## vX.Y" heading found in handoff/v10/CHANGELOG.md').not.toBeNull()
+    expect(APP_VERSION).toBe(newest?.[1])
   })
 })

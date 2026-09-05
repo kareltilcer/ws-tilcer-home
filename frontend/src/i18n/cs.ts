@@ -40,15 +40,16 @@ export const cs = {
     dokumenty: 'Dokumenty',
     log: 'Log',
     more: 'Více',
-    // v4 (D49): with Dokumenty there are five member destinations, so the overflow
-    // sheet is no longer admin-only — the four daily modules stay on the bar and
-    // everyone finds Dokumenty (and admins the Log) here.
+    // The sheet's own heading. v4 (D49): with Dokumenty there are five member
+    // destinations, so the overflow sheet is no longer admin-only — the four daily
+    // modules stay on the bar and everyone finds Dokumenty (and admins the Log) here.
     //
-    // ⚠ v10.2 (D271) REMOVED THE HINT THAT USED TO SIT UNDER THIS LIST. "Čtyři denní
-    // moduly zůstávají v dosahu palce. Zbytek je tady." explained the sheet to
-    // somebody who had already opened it and found what they came for; the version
-    // label took the line, because that is the one thing on this screen a member can
-    // do something with.
+    // ⚠ v10.2 (D271) DELETED THE HINT THAT USED TO SIT UNDER THE LIST, and this is
+    // where its explanation lived, so the removal is recorded here rather than
+    // nowhere. "Čtyři denní moduly zůstávají v dosahu palce. Zbytek je tady."
+    // explained the sheet to somebody who had already opened it and found what they
+    // came for; the version label took the line, because that is the one thing on
+    // this screen a member can do something with.
     moreHeading: 'Další',
     logDesc: 'Auditní historie — jen pro správce',
     dokumentyDesc: 'Soubory — náhled, stažení, připnutí',

@@ -6,7 +6,7 @@ Version history for the `home` service. Full detail lives in `PRD.md` (§10 Deci
 
 ## v10.2 — 2026-09-05 · The shell's own chrome (`app shell` · `settings`)
 
-> **No API change** — OpenAPI stays at **0.13.0** and no migration ships. Decisions **D271–D273** (`PRD.md` §V10-10), as-built record in **§V10-15**. From the `design/v10_2` bundle plus three requests from Karel, all of them about the frame around the modules rather than about any module.
+> **No API change** — OpenAPI stays at **0.14.0** and no migration ships. (0.13.0 was v10.1; `backend/openapi.yaml` has carried **0.14.0** since the same-day reminder lead `"0d"` was added to the event surfaces, which this file never got an entry for.) Decisions **D271–D273** (`PRD.md` §V10-10), as-built record in **§V10-15**. From the `design/v10_2` bundle plus three requests from Karel, all of them about the frame around the modules rather than about any module.
 
 **The phone had a header the design never drew** (D272). A 61 px strip carrying the word *home*, a theme toggle and a sign-out button sat above every screen at 375 px from v1 onwards, and it appears in **no artboard of any version** — drift that outlived nine releases because nobody had put the mock and the screen side by side. The name is on the icon that was tapped to get here and the other two are settings; the first row under the status bar now belongs to the screen somebody is standing on. ⚠ **The arithmetic had to follow it out**: `--chat-chrome-top` was that header measured, and chat's one height calc subtracts it — left at 61 px the thread would have ended 61 px above the tab bar with a dead strip under the composer. Measured in a browser at 375 × 812: the box is 755 px against a 57 px tab bar, and the page does not scroll.
 

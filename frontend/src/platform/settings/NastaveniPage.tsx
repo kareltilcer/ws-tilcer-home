@@ -254,7 +254,12 @@ function DeviceState({
         <Smartphone size={16} aria-hidden />
         <span className="ml-2">{cs.settings.enable}</span>
       </Button>
-      {state.dismissed && <p className="text-[12.5px] text-subtle">{cs.settings.dismissed}</p>}
+      {/* ⚠ --muted, AND THE AXE SWEEP DID NOT FIND THIS ONE. It is the same 4.29:1
+          pairing the two tags above were swapped for, on the same screen the sweep
+          now covers — it survived only because this line renders after the browser
+          prompt has been dismissed, a state no e2e run reaches. A green suite is
+          evidence about the states it visited, never about a screen. */}
+      {state.dismissed && <p className="text-[12.5px] text-muted">{cs.settings.dismissed}</p>}
       {!online && <p className="text-[12.5px] text-muted">{cs.settings.offlineHint}</p>}
       {state.error && <p className="text-[12.5px] text-danger">{state.error}</p>}
     </div>

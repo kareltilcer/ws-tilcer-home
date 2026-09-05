@@ -240,9 +240,18 @@ export function AppShell() {
             {/* Not a photo — home has no user table and no avatars (D230), so the
                 mark is the initial, in the same label blue the artboards use.
                 ⚠ aria-hidden BECAUSE IT SAYS NOTHING THE NEXT ELEMENT DOES NOT.
-                It is decorative, which is also what lets it keep the mock's tint:
-                the initial measures 4.09:1 on it in the light theme, below the bar
-                that would apply if this were the only place the name appeared. */}
+                It is decoration under WCAG 1.4.3 — it abbreviates the name printed
+                beside it and carries nothing of its own — which is what lets it keep
+                the mock's tint at 4.09:1 light / 4.44:1 dark, under the bar that
+                would apply if this were the only place the name appeared.
+                ⚠ AND aria-hidden IS NOT WHAT EXEMPTS IT FROM THE SWEEP, so do not
+                reach for that reasoning again: axe's color-contrast rule matches on
+                isVisibleOnScreen and reads aria-hidden text like any other — the
+                `admin` tags below are aria-hidden too and failed it. Measured on this
+                branch: putting --subtle back on that tag turns the run red with
+                `color-contrast [2]` at light/1440. This span escapes as `incomplete`
+                ("content is too short to determine if it is actual text"), which is
+                axe declining to judge one character, not axe passing it. */}
             <span
               className="grid h-8 w-8 flex-none place-items-center rounded-full bg-l-byt/25 text-[13px] font-bold text-l-byt"
               aria-hidden
