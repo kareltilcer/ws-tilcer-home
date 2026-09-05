@@ -6,28 +6,32 @@ import {
   LayoutDashboard,
   LifeBuoy,
   ListTodo,
-  LogOut,
   Megaphone,
   MessageSquare,
   MoreHorizontal,
-  Moon,
   NotebookText,
   ScrollText,
   Sprout,
   Settings,
-  Sun,
   Wallet,
   WifiOff,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { Toaster } from 'sonner'
-import { cn } from '@/lib/utils'
+import { cn, initial } from '@/lib/utils'
 import { cs } from '@/i18n/cs'
 import { count, PLURAL } from '@/i18n/plural'
 import { useTheme } from '@/theme/theme'
 import { useAuth } from '@/app/auth'
-import { DESKTOP_NAV_ORDER, isFullBleedRoute, routes, type ShellLayout } from '@/app/routes'
+import {
+  DESKTOP_FOOTER_ROUTES,
+  DESKTOP_NAV_ORDER,
+  isFullBleedRoute,
+  routes,
+  type ShellLayout,
+} from '@/app/routes'
+import { APP_VERSION_LABEL } from '@/platform/version'
 import { useLiveSync } from '@/api/ws'
 import { useOnline } from '@/platform/pwa/offline'
 import { usePushKeepalive } from '@/platform/push/usePush'
@@ -108,8 +112,12 @@ function desktopRank(to: string): number {
 }
 
 export function AppShell() {
-  const { theme, toggle } = useTheme()
-  const { isAdmin, identity, logout } = useAuth()
+  // ⚠ ONLY THE TOASTER READS THE THEME HERE. The toggle itself lives in Nastavení
+  // (D273) — the shell used to carry a second copy in the side nav and a third in the
+  // mobile header, which is three controls for one preference somebody changes twice
+  // a year.
+  const { theme } = useTheme()
+  const { isAdmin, identity, canWrite } = useAuth()
   const [moreOpen, setMoreOpen] = useState(false)
   const location = useLocation()
   useLiveSync()
@@ -143,6 +151,12 @@ export function AppShell() {
    */
   const feedbackReady = useFeedbackWidget(identity.label)
 
+  // ⚠ THE ROLE LINE IS DERIVED FROM WHAT THE APP GRANTS, not from the roles array it
+  // was granted out of. `roles` can carry `*`, several names, or a name this build
+  // has never heard of, and a second vocabulary for it would be free to disagree with
+  // the one every gate in the app actually reads. This says what you can do here.
+  const roleLabel = isAdmin ? cs.app.roleAdmin : canWrite ? cs.app.roleEditor : cs.app.roleReader
+
   const unread = useUnreadTotal()
   // ⚠ THE BADGE IS ATTACHED HERE RATHER THAN DECLARED IN PRIMARY, because PRIMARY is
   // a module-level constant and the count is a live query. Matching on the route
@@ -156,9 +170,14 @@ export function AppShell() {
   // artboards draw Chat at the top of the sidebar and third of five on the phone.
   // Concatenating the two nav tables is what had Chat fourth and Okno fifth; a list
   // that states the order is also a list a test can read back.
-  const desktopItems = [...primaryItems, ...overflowItems].sort(
-    (a, b) => desktopRank(a.to) - desktopRank(b.to),
-  )
+  //
+  // ⚠ AND THE FOOTER'S ENTRIES ARE TAKEN OUT OF IT RATHER THAN LEFT OUT OF THE TABLES
+  // (D273). Nastavení is still an ordinary nav destination — it keeps its row in the
+  // phone's sheet — so it stays in OVERFLOW, and the sidebar is the one surface that
+  // draws it somewhere else.
+  const desktopItems = [...primaryItems, ...overflowItems]
+    .filter((item) => !DESKTOP_FOOTER_ROUTES.includes(item.to))
+    .sort((a, b) => desktopRank(a.to) - desktopRank(b.to))
   const fullBleed = isFullBleedRoute(location.pathname)
   // The "Více" tab lights up when the open route lives behind it.
   const overflowActive = overflowItems.some(
@@ -171,10 +190,11 @@ export function AppShell() {
        --chat-chrome-bottom drops the thumb bar's 57 px, because the bar is hidden
        for the same span (theme/globals.css carries the arithmetic, ChatPage the one
        formula that reads it). Below 768 that leaves the chat box exactly as tall as
-       the strip between the app header and the keyboard: the thread header stays at
-       the top of the screen, the composer sits on the keyboard's edge, and nothing
-       is left for the browser to scroll the page for. Nothing else in the app reads
-       either token, and every width from 768 up ignores both. */
+       the strip between the top of the screen and the keyboard: the thread's own
+       header stays at the top, the composer sits on the keyboard's edge, and nothing
+       is left for the browser to scroll the page for. There is no app header above it
+       to allow for since v10.2 (D272). Nothing else in the app reads either token,
+       and every width from 768 up ignores both. */
     <div
       className="min-h-full md:flex md:h-screen md:overflow-hidden"
       style={
@@ -200,51 +220,76 @@ export function AppShell() {
             <SideLink key={item.to} item={item} admin={item.adminOnly} />
           ))}
         </nav>
-        <div className="space-y-2 p-3">
-          <div className="truncate px-1 text-[12px] text-muted" title={identity.email}>
-            {identity.label}
-          </div>
-          <ThemeToggle theme={theme} onToggle={toggle} />
+        {/* The foot of the side nav (design/v10_2, D273). It used to be four stacked
+            full-width buttons under a bare email; it is now one row that says WHO you
+            are and one ⚙ that goes where you change it, with the version underneath.
+            The theme toggle and Odhlásit se moved into Nastavení itself. */}
+        <div className="p-3">
           {feedbackReady && (
             <button
               type="button"
               onClick={openFeedback}
               title={cs.feedback.hint}
-              className="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-s2 text-sm font-semibold text-fg hover:bg-s3"
+              className="mb-2 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-s2 text-sm font-semibold text-fg hover:bg-s3"
             >
               <LifeBuoy size={16} aria-hidden />
               <span>{cs.feedback.open}</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={logout}
-            className="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-s2 text-sm font-semibold text-fg hover:bg-s3"
-          >
-            <LogOut size={16} aria-hidden />
-            <span>{cs.app.signOut}</span>
-          </button>
+          <div className="flex items-center gap-2.5 border-t border-border pt-3">
+            {/* Not a photo — home has no user table and no avatars (D230), so the
+                mark is the initial, in the same label blue the artboards use.
+                ⚠ aria-hidden BECAUSE IT SAYS NOTHING THE NEXT ELEMENT DOES NOT.
+                It is decorative, which is also what lets it keep the mock's tint:
+                the initial measures 4.09:1 on it in the light theme, below the bar
+                that would apply if this were the only place the name appeared. */}
+            <span
+              className="grid h-8 w-8 flex-none place-items-center rounded-full bg-l-byt/25 text-[13px] font-bold text-l-byt"
+              aria-hidden
+            >
+              {initial(identity.label)}
+            </span>
+            {/* ⚠ min-w-0 ON THE BOX THE WIDTH HAS TO STOP AT. A display name is
+                arbitrary text in a 240 px column, and a truncating child cannot
+                shrink a flex parent whose min-width is still auto — the v10.1 list
+                pane clipped for exactly this reason. */}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12.5px] font-semibold" title={identity.email}>
+                {identity.label}
+              </span>
+              <span className="block font-mono text-[11px] text-muted">{roleLabel}</span>
+            </span>
+            <NavLink
+              to={routes.nastaveni}
+              title={cs.settings.title}
+              aria-label={cs.settings.title}
+              className={({ isActive }) =>
+                cn(
+                  'grid h-8 w-8 flex-none place-items-center rounded-md border transition-colors',
+                  isActive
+                    ? 'border-accent bg-accent-soft text-accent'
+                    : 'border-border bg-s2 text-muted hover:bg-s3 hover:text-fg',
+                )
+              }
+            >
+              <Settings size={16} aria-hidden />
+            </NavLink>
+          </div>
+          <VersionLabel className="px-0.5 pt-2.5" />
         </div>
       </aside>
 
-      {/* Content */}
+      {/* Content.
+
+          ⚠ THERE IS NO APP HEADER ON THE PHONE, AND THERE NEVER WAS ONE IN THE DESIGN
+          (D272). A 61 px strip carrying the word "home", a theme toggle and a sign-out
+          button sat above every screen at 375 px: the name is on the icon that was
+          tapped to get here, and the other two are settings, not daily work. The first
+          row under the status bar belongs to the screen somebody is standing on —
+          which is what the artboards draw. The desktop side nav is unaffected, and
+          --chat-chrome-top in theme/globals.css is the arithmetic that had to follow. */}
       <div className="flex min-w-0 flex-1 flex-col">
         <OfflineBanner />
-        <header className="flex items-center justify-between border-b border-border px-4 py-3 md:hidden">
-          <span className="text-base font-extrabold tracking-tight">{cs.app.name}</span>
-          <div className="flex items-center gap-2">
-            <ThemeToggle theme={theme} onToggle={toggle} compact />
-            <button
-              type="button"
-              onClick={logout}
-              aria-label={cs.app.signOut}
-              title={cs.app.signOut}
-              className="grid h-9 w-9 place-items-center rounded-md border border-border bg-s2 text-fg hover:bg-s3"
-            >
-              <LogOut size={16} aria-hidden />
-            </button>
-          </div>
-        </header>
         <main
           className={cn(
             'flex-1 md:min-h-0',
@@ -337,7 +382,7 @@ export function AppShell() {
                       {item.desc && <span className="block text-[12px] text-subtle">{item.desc}</span>}
                     </span>
                     {item.adminOnly && (
-                      <span className="font-mono text-[9.5px] uppercase tracking-wide text-subtle" aria-hidden>
+                      <span className="font-mono text-[9.5px] uppercase tracking-wide text-muted" aria-hidden>
                         admin
                       </span>
                     )}
@@ -373,7 +418,11 @@ export function AppShell() {
                 </button>
               )}
             </div>
-            <p className="mt-3 text-center text-[11.5px] text-subtle text-pretty">{cs.nav.moreHint}</p>
+            {/* ⚠ THE HINT THAT USED TO SIT HERE IS GONE, and the version has its place
+                (D271). "Čtyři denní moduly zůstávají v dosahu palce. Zbytek je tady."
+                described the sheet to somebody who had already opened it; the version
+                is the one line on this screen that a member can do something with. */}
+            <VersionLabel className="mt-3.5 text-center" />
           </div>
         </div>
       )}
@@ -421,8 +470,14 @@ function SideLink({ item, admin }: { item: NavItem; admin?: boolean }) {
           <UnreadBadge count={item.badge} />
         </span>
       )}
+      {/* ⚠ --muted, NOT --subtle, AND THE E2E SWEEP IS WHY. axe has been failing on
+          this tag at light/1440 since the day the Log entry got it: --subtle on --s1
+          is 4.29:1 in the light theme, under the 4.5:1 AA bar, and 9.5 px is nowhere
+          near the large-text exemption. Same swap and same measurement as the
+          foreign bubble's author label in theme/globals.css. The pairing is wider
+          than these two tags and belongs to the design bundle's tokens. */}
       {admin && (
-        <span className="ml-auto font-mono text-[9.5px] uppercase tracking-wide text-subtle" aria-hidden>
+        <span className="ml-auto font-mono text-[9.5px] uppercase tracking-wide text-muted" aria-hidden>
           admin
         </span>
       )}
@@ -480,30 +535,35 @@ function UnreadBadge({ count: n }: { count: number }) {
   )
 }
 
-function ThemeToggle({
-  theme,
-  onToggle,
-  compact = false,
-}: {
-  theme: 'dark' | 'light'
-  onToggle: () => void
-  compact?: boolean
-}) {
-  const Icon = theme === 'dark' ? Sun : Moon
-  const label = theme === 'dark' ? 'Přepnout na světlý motiv' : 'Přepnout na tmavý motiv'
+/**
+ * The deployed version, in the two places the artboards put it: the foot of the side
+ * nav and the bottom of the phone's "Více" sheet (D271).
+ *
+ * ⚠ IT IS A LABEL, NOT A CONTROL. Mono, subtle, no border, nothing to press — it is
+ * read once, when something has gone wrong and a bug report needs to name a build.
+ * It is not an update notice either: the service worker updates the app on its own
+ * and D26 has always said nobody is asked to act on a new version.
+ *
+ * ⚠ THE ACCESSIBLE NAME SAYS WHAT THE STRING IS. `v10.2 · a3f9c2e` read out on its
+ * own is noise; a `title` alone would not be announced at all, since this is not an
+ * interactive element and title is only surfaced on some of those.
+ *
+ * ⚠ --muted, NOT THE --subtle THE ARTBOARDS SPECIFY, and it is the same measurement
+ * theme/globals.css already made for the foreign bubble's author label: --subtle on
+ * --s1 is 4.29:1 in the LIGHT theme, under the 4.5:1 AA bar for text this size, and
+ * 10.5 px is nowhere near the large-text exemption. --muted is 6.81:1 light and
+ * 7.88:1 dark. The label is quiet either way; the hierarchy it loses to the role
+ * line above it is a step of grey, and the alternative is a line the person who
+ * needs it most cannot read.
+ */
+function VersionLabel({ className }: { className?: string }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-label={label}
-      title={label}
-      className={cn(
-        'flex items-center gap-2 rounded-md border border-border bg-s2 text-sm font-semibold text-fg hover:bg-s3',
-        compact ? 'h-9 w-9 justify-center' : 'h-9 w-full justify-center px-3',
-      )}
+    <p
+      title={cs.app.version}
+      className={cn('font-mono text-[10.5px] tracking-[0.04em] text-muted', className)}
     >
-      <Icon size={16} aria-hidden />
-      {!compact && <span>{theme === 'dark' ? 'Světlý' : 'Tmavý'}</span>}
-    </button>
+      <span className="sr-only">{cs.app.version}: </span>
+      {APP_VERSION_LABEL}
+    </p>
   )
 }

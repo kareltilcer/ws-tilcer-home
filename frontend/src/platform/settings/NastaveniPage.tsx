@@ -9,12 +9,13 @@
 // no cross-device console to fall back on.
 
 import { useMutation, type UseMutationResult } from '@tanstack/react-query'
-import { BellRing, Check, Download, Moon, Smartphone, Sun, TriangleAlert } from 'lucide-react'
+import { BellRing, Check, Download, LogOut, Moon, Smartphone, Sun, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { cs } from '@/i18n/cs'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/ui'
 import { ScreenHeader } from '@/components/common/states'
+import { useAuth } from '@/app/auth'
 import { useTheme } from '@/theme/theme'
 import { usePushDevice, usePushPreferences } from '@/platform/push/usePush'
 import { useInstallPrompt, useOnline } from '@/platform/pwa/offline'
@@ -24,6 +25,11 @@ import type { PushCategories, PushTestResult } from '@/api/types'
 
 export function NastaveniPage() {
   const { theme, toggle } = useTheme()
+  // v10.2 (D273): sign-out is a settings action and this is the settings screen. It
+  // used to be a button in the desktop side nav AND an icon in the phone's top bar —
+  // two permanent controls for something a household member does about as often as
+  // they change the theme, both of them one mis-tap from losing what was on screen.
+  const { logout } = useAuth()
   const online = useOnline()
   const { canInstall, install } = useInstallPrompt()
   const { state, subscribe, unsubscribe } = usePushDevice()
@@ -56,10 +62,18 @@ export function NastaveniPage() {
       <section className="rounded-xl border border-border bg-s1 p-4 md:p-5">
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <h2 className="text-base font-extrabold">{cs.settings.notifications}</h2>
-          <span className="inline-flex h-6 items-center rounded-full border border-border px-2.5 font-mono text-[10px] uppercase tracking-wide text-subtle">
+          {/* ⚠ --muted, NOT --subtle, ON BOTH OF THESE. v10.2 put /nastaveni into the
+              axe sweep (e2e/app.spec.ts) and it came back with two serious
+              color-contrast violations that had been on this screen since v5:
+              --subtle on --s1 measures 4.29:1 in the LIGHT theme, under the 4.5:1 AA
+              bar, and neither 10 px nor 11.5 px is anywhere near the large-text
+              exemption. Same swap, same reason, as the foreign bubble's author label
+              in theme/globals.css. The pairing itself is wider than this screen and
+              belongs to the design bundle's tokens, not to a per-usage fix here. */}
+          <span className="inline-flex h-6 items-center rounded-full border border-border px-2.5 font-mono text-[10px] uppercase tracking-wide text-muted">
             {cs.settings.thisDevice}
           </span>
-          <span className="ml-auto text-[11.5px] text-subtle">{cs.settings.thisDeviceHint}</span>
+          <span className="ml-auto text-[11.5px] text-muted">{cs.settings.thisDeviceHint}</span>
         </div>
 
         <DeviceState
@@ -117,14 +131,32 @@ export function NastaveniPage() {
         </div>
       </section>
 
-      {/* ---- Vzhled ---- */}
+      {/* ---- Vzhled a účet (design/v10_2, D273) ---- */}
       <section className="rounded-xl border border-border bg-s1 p-4 md:p-5">
-        <h2 className="mb-3 text-base font-extrabold">{cs.settings.appearance}</h2>
-        <div className="flex items-center gap-3">
-          <span className="flex-1 text-sm">{cs.settings.theme}</span>
-          <Button variant="secondary" onClick={toggle}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-[180px] flex-1">
+            <h2 className="text-base font-extrabold">{cs.settings.appearanceAccount}</h2>
+            <p className="text-[12.5px] text-muted">{cs.settings.themeDefaultHint}</p>
+          </div>
+          {/* ⚠ THE WORD ON THE BUTTON IS THE THEME IT SWITCHES TO, and the accessible
+              name is the whole sentence. The artboards label it with the theme that is
+              currently ON ("Motiv: Tmavý"), which reads identically to the target and
+              means the opposite; this control has meant the target since v5, so the
+              mock is not followed here on purpose. */}
+          <Button
+            variant="secondary"
+            onClick={toggle}
+            title={theme === 'dark' ? cs.settings.themeToLight : cs.settings.themeToDark}
+            aria-label={theme === 'dark' ? cs.settings.themeToLight : cs.settings.themeToDark}
+          >
             {theme === 'dark' ? <Sun size={16} aria-hidden /> : <Moon size={16} aria-hidden />}
-            <span className="ml-2">{theme === 'dark' ? 'Světlý' : 'Tmavý'}</span>
+            <span className="ml-2">
+              {theme === 'dark' ? cs.settings.themeLight : cs.settings.themeDark}
+            </span>
+          </Button>
+          <Button variant="danger" onClick={logout}>
+            <LogOut size={16} aria-hidden />
+            <span className="ml-2">{cs.app.signOut}</span>
           </Button>
         </div>
       </section>

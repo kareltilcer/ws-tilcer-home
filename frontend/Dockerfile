@@ -44,6 +44,19 @@ ARG VITE_STATUS_WIDGET_URL=""
 ARG VITE_STATUS_SITE=""
 ARG VITE_STATUS_ENVIRONMENT=""
 ARG VITE_STATUS_RELEASE=""
+# The commit half of the version label in the app's chrome (v10.2, D271). The
+# VERSION half is a constant in the repo (frontend/src/platform/version.ts); this is
+# the part only the build knows, and it is what tells two deploys of one release
+# apart in a bug report.
+#
+# ⚠ IT DEFAULTS TO COOLIFY'S OWN SOURCE_COMMIT, so a normal deploy needs nothing set
+# — but Coolify EXCLUDES that variable from the build by default to keep Docker's
+# layer cache warm (it changes on every commit), and the toggle is "Include Source
+# Commit in Build" in the application's advanced settings. With it off the label
+# simply reads "v10.2" with no commit: version.ts prints the version alone rather
+# than printing an unexpanded variable.
+ARG SOURCE_COMMIT=""
+ARG VITE_APP_COMMIT=$SOURCE_COMMIT
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
     VITE_AUTH_BASE_URL=$VITE_AUTH_BASE_URL \
     VITE_STATUS_INGEST_URL=$VITE_STATUS_INGEST_URL \
@@ -52,7 +65,8 @@ ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
     VITE_STATUS_WIDGET_URL=$VITE_STATUS_WIDGET_URL \
     VITE_STATUS_SITE=$VITE_STATUS_SITE \
     VITE_STATUS_ENVIRONMENT=$VITE_STATUS_ENVIRONMENT \
-    VITE_STATUS_RELEASE=$VITE_STATUS_RELEASE
+    VITE_STATUS_RELEASE=$VITE_STATUS_RELEASE \
+    VITE_APP_COMMIT=$VITE_APP_COMMIT
 RUN npm run build            # emits /app/dist
 
 # ── Stage 2: serve with Nginx ──────────────────────────────────────────

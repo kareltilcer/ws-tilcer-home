@@ -259,9 +259,17 @@
      is what stops the two panes growing to their content. Three terms — the viewport
      chat is measured against, and the app chrome above and below it. That chrome
      exists BELOW 768 only, the only widths where the shell has any, and it is a
-     MEASUREMENT OF AppShell rather than a round number: the mobile header is py-3
-     twice over a 36 px button plus its border (61 px), and the thumb-tab bar is a
-     56 px minimum plus its border (57 px).
+     MEASUREMENT OF AppShell rather than a round number: the thumb-tab bar is a 56 px
+     minimum plus its border (57 px), and above the thread there is now nothing.
+
+     ⚠ THE TOP TERM IS ZERO BECAUSE THE HEADER IS GONE (v10.2, D272), and it is kept
+     as a term rather than deleted because this is the ONE place the shell's chrome is
+     counted — ChatPage subtracts what it is given. It was 61 px: the mobile header's
+     py-3 twice over a 36 px button plus its border, carrying "home", a theme toggle
+     and a sign-out button that the artboards never drew. Leaving it at 61 with the
+     header removed does not push the composer under the fold, it does the opposite —
+     a 61 px strip of dead page above the tab bar, which is the same bug the 8rem below
+     caused from the other side.
 
      ⚠ IT IS THE WHOLE CHROME, WHICH 8rem NEVER WAS. 128 px was tuned while
      `<main>` still put px-4 py-5 pb-24 around chat, so the viewport was being
@@ -304,7 +312,7 @@
      wrap. Nothing that uses these tokens renders underneath it — ChatLayout is
      replaced by the offline screen, which deliberately sizes itself with no
      viewport arithmetic at all (ChatPage). */
-  --chat-chrome-top: 61px;
+  --chat-chrome-top: 0px;
   --chat-chrome-bottom: 57px;
   --chat-viewport: 100dvh;
 

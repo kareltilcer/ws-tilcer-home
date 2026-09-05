@@ -53,14 +53,17 @@ describe('the chat viewport tokens — overridden in one file, read in another',
     expect(shell).toContain("'--chat-viewport': `${keyboard.viewport}px`")
   })
 
-  // ⚠ AND THE HEADER'S TERM IS LEFT ALONE, because the header itself is: 61 px of
-  // "home / theme / sign out" stays above the thread while a keyboard is up. Zeroing
-  // it here without hiding it there is the same drift as the bar, in the other file.
+  // ⚠ AND THE HEADER'S TERM IS STILL NEVER OVERRIDDEN HERE, for a stronger reason
+  // than before: v10.2 deleted the phone's app header outright (D272), so the term is
+  // 0 in theme/globals.css and there is nothing above the thread for a keyboard to
+  // change. It stays declared because that stylesheet is where the shell's chrome is
+  // counted; a shell that started zeroing it would be a shell hiding something it no
+  // longer renders.
   // ⚠ EITHER QUOTE, because the assertion is a NEGATIVE one and a negative that names
   // one spelling is a guard the next writer walks past without noticing. The quotes
   // stay in the pattern all the same: unquoted, it would also fire on the prose above
   // the style object, which names the token on purpose.
-  it('never overrides the header term, which is never hidden', () => {
+  it('never overrides the header term, which is not there to hide', () => {
     expect(shell).not.toMatch(/['"]--chat-chrome-top['"]/)
   })
 })

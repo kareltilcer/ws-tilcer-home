@@ -73,9 +73,11 @@ function ChatLayout() {
        artboards draw on both frames: the panes reach the shell's edges, the list
        pane's own border-right is the only line between them, and there is no rounded
        frame to inset. From 768 up that box IS the viewport minus nothing, so
-       `h-full` is the whole answer; below it the shell still has a header above and
-       thumb tabs below, which is what --chat-chrome-top and --chat-chrome-bottom
-       measure (theme/globals.css).
+       `h-full` is the whole answer; below it the shell still has thumb tabs beneath
+       the thread, which is what --chat-chrome-bottom measures (theme/globals.css).
+       --chat-chrome-top is the strip ABOVE it and has been 0 since v10.2 took the
+       phone's app header away (D272) — kept as a term because the shell's chrome is
+       counted in that one file, and this calc subtracts whatever it is handed.
        The old `lg:h-[calc(100dvh-4rem)]` was the md:py-8 that is now gone.
 
        ⚠ AND ALL THREE TERMS ARE TOKENS BECAUSE TWO OF THEM MOVE. --chat-viewport

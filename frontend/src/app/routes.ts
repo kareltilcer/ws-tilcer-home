@@ -44,8 +44,8 @@ export const routes = {
 // bypass that setting. The route itself is registered in App.tsx.
 
 /**
- * The order the DESKTOP side nav lists its destinations in (design/v10, the side
- * nav at lines 828–842 of Home.dc.html).
+ * The order the DESKTOP side nav lists its destinations in (design/v10_2, the side
+ * nav at lines 830–844 of Home.dc.html).
  *
  * ⚠ IT IS NOT THE THUMB BAR'S ORDER, AND THE DIFFERENCE IS THE POINT. The phone bar
  * is ordered by REACH — four tabs plus *Více*, with the one entry carrying an unread
@@ -56,10 +56,10 @@ export const routes = {
  * list that has room for everything. Deriving this list from the two nav tables is
  * what had Chat fourth and Okno fifth.
  *
- * ⚠ EVERY NAV ENTRY HAS TO APPEAR HERE. AppShell sorts by this list and appends
- * whatever it does not name, so a module added to the nav and forgotten here lands
- * at the bottom of the sidebar rather than vanishing from it — and nav.test.ts
- * fails, which is the intended way to find that out.
+ * ⚠ EVERY NAV ENTRY HAS TO APPEAR HERE OR IN DESKTOP_FOOTER_ROUTES BELOW. AppShell
+ * sorts by this list and appends whatever it does not name, so a module added to the
+ * nav and forgotten in both lands at the bottom of the sidebar rather than vanishing
+ * from it — and nav.test.ts fails, which is the intended way to find that out.
  */
 export const DESKTOP_NAV_ORDER: readonly string[] = [
   routes.chat,
@@ -73,8 +73,26 @@ export const DESKTOP_NAV_ORDER: readonly string[] = [
   routes.elektrina,
   routes.log,
   routes.administrace,
-  routes.nastaveni,
 ]
+
+/**
+ * The destinations the desktop side nav draws in its FOOTER instead of in the list
+ * above (design/v10_2, the side nav's user row — D273).
+ *
+ * ⚠ NASTAVENÍ IS NOT MISSING FROM THE SIDEBAR, IT MOVED DOWN A BLOCK. It is the one
+ * nav entry that is about the person rather than about the household's data, so the
+ * artboards hang it off the row that already names them — a ⚙ beside the avatar,
+ * carrying the same active state the list rows carry. That is also what made room to
+ * delete the theme toggle and the sign-out button that used to sit under the list:
+ * both live inside Nastavení now, and a second copy of each in the nav was two ways
+ * to do one thing.
+ *
+ * ⚠ THE PHONE IS UNAFFECTED. Nastavení keeps its full row in the "Více" sheet with
+ * its description, because a sheet is a list of destinations and has no user row to
+ * hang an icon off — which is why this is a DESKTOP_ constant and OVERFLOW still
+ * carries the entry.
+ */
+export const DESKTOP_FOOTER_ROUTES: readonly string[] = [routes.nastaveni]
 
 /** What AppShell hands down through its `<Outlet>`: the layout it already decided. */
 export interface ShellLayout {
