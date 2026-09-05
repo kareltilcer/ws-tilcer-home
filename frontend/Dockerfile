@@ -67,33 +67,41 @@ ARG VITE_STATUS_RELEASE=""
 #
 # ⚠⚠ THE NEXT LINE HAS NO `=""` AND THAT IS THE WHOLE POINT — DO NOT "TIDY" IT.
 # `ARG SOURCE_COMMIT=""` here is a re-declaration WITH a default, and a default written
-# in this file BEATS the value Coolify injects: the label shipped commit-less even with
-# the toggle on. Bare, the name inherits whatever the platform supplied and falls back
-# to an empty string when nothing did. `frontend/src/platform/version.test.ts` asserts
-# this line is bare, because prose is not a reader.
+# in this file BEATS THE `ARG` LINE COOLIFY SPLICES IN: the label shipped commit-less
+# even with the toggle on. Bare, the name inherits whatever the platform supplied and
+# falls back to an empty string when nothing did. `frontend/src/platform/version.test.ts`
+# asserts this line is bare, and asserts its POSITION too — because a default is not the
+# only edit that breaks it — since prose is not a reader.
 #
-# ⚠ IT HAS TO BE BARE UNDER EVERY PATH A VALUE CAN ARRIVE BY, which is the reason not
-# to reason about which one Coolify uses. Coolify supplies build variables TWO ways at
-# once: it passes `--build-arg 'KEY'` (key only — Docker reads the value out of the
-# environment Coolify exports first), AND it splices `ARG KEY=<value>` lines into this
-# file. Where the spliced line lands has MOVED between Coolify versions — older builds
-# used a hardcoded line index 1 (coollabsio/coolify#7118), which puts it BEFORE the
-# first FROM whenever line 0 is a comment, as it is here; current builds insert after
-# EVERY FROM. All four cases were built and read out of `dist/assets/*.js`:
+# ⚠ COOLIFY SUPPLIES BUILD VARIABLES TWO WAYS AT ONCE, AND THE TWO ARE NOT EQUALLY
+# STRONG. That inequality is the whole bug, so it is worth the lines:
 #
-#   ARG spliced before the first FROM (global scope) → bare inherits it; `=""` shadows
-#     it and yields empty.
-#   ARG spliced after the FROM (in-stage)            → bare inherits it; `=""` RESETS it
-#     and yields empty — the same bug from the other side.
-#   `--build-arg` (with or without a value)          → bare takes it.
-#   nothing supplied at all                          → bare degrades to "".
+#   1. A KEY-ONLY `--build-arg 'KEY'` (`generateDockerBuildArgs` emits the key and
+#      nothing else). Docker takes the value from the environment of the process running
+#      the build, which Coolify fills by sourcing `/artifacts/build-time.env`. When the
+#      key IS in that file this path beats EVERY default in this file, `=""` included.
+#      When it is NOT, the flag carries nothing at all and the Dockerfile's own default
+#      decides — measured: `--build-arg SOURCE_COMMIT` with the name unset in the
+#      environment is indistinguishable from passing nothing.
+#   2. A SPLICED `ARG KEY=<value>` LINE, inserted after every FROM (older Coolify used a
+#      hardcoded line index 1 — coollabsio/coolify#7118 — which lands BEFORE the first
+#      FROM whenever line 0 is a comment, as it is here). This path is the WEAK one: a
+#      later `ARG KEY=""` in the same stage RESETS it, and an in-stage `ARG KEY=""`
+#      SHADOWS a global one. Both were built against this file and read back out of
+#      `dist/assets/*.js`; bare inherits under both, `=""` yields empty under both.
 #
-# ⚠ SOURCE_COMMIT IS NOT SPECIAL TO COOLIFY — it rides the same two paths as the
-# VITE_* variables above (`generate_env_variables` puts it in the same collection the
-# user's build variables go into, and every one of them becomes a `--build-arg`). So
-# the `=""` those args still carry is NOT a structural guarantee; they survive because
-# the `--build-arg` also fires, which beats an in-stage default. They are left alone
-# here because they are not what broke, not because they are safe by construction.
+# ⚠ AND THAT IS THE ASYMMETRY THE VITE_* ARGS ABOVE ARE LIVING ON. `SOURCE_COMMIT` does
+# go into the same `env_args` collection they do (`generate_env_variables`), so it does
+# get a `--build-arg` — but a key-only flag is only as good as the environment behind it.
+# User build-time variables are written into `build-time.env` unconditionally, so path 1
+# always fires for them and their `=""` never gets the chance to lose. `SOURCE_COMMIT`
+# reaches that file only through `generate_coolify_env_variables(forBuildTime: true)`,
+# which is gated on the toggle AND skipped outright when the application defines its own
+# variable named `SOURCE_COMMIT` — while the splice carries it with no such guard. So it
+# can arrive by path 2 ALONE, which `ARG SOURCE_COMMIT=""` beats. That is the failure.
+# The other args keep their `=""` because they are not what broke, not because they are
+# safe by construction: put an empty `SOURCE_COMMIT` or `VITE_APP_COMMIT` in the Coolify
+# UI and path 1 fires with an empty value, which beats bare and the splice alike.
 ARG SOURCE_COMMIT
 ARG VITE_APP_COMMIT=$SOURCE_COMMIT
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \

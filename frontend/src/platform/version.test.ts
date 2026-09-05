@@ -148,6 +148,9 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
 // is asserted here for the same reason the CHANGELOG mapping and the lockfile are.
 describe('frontend/Dockerfile keeps the commit arg inheritable', () => {
   const lines = dockerfile.split('\n').map((line) => line.trim())
+  const firstFrom = lines.findIndex((line) => /^FROM\s/i.test(line))
+  const sourceArg = lines.findIndex((line) => /^ARG\s+SOURCE_COMMIT\b/.test(line))
+  const viteArg = lines.indexOf('ARG VITE_APP_COMMIT=$SOURCE_COMMIT')
 
   it('declares SOURCE_COMMIT bare, with no default to beat the injected value', () => {
     const declarations = lines.filter((line) => /^ARG\s+SOURCE_COMMIT\b/.test(line))
@@ -166,5 +169,33 @@ describe('frontend/Dockerfile keeps the commit arg inheritable', () => {
       lines,
       'frontend/Dockerfile no longer defaults VITE_APP_COMMIT from SOURCE_COMMIT',
     ).toContain('ARG VITE_APP_COMMIT=$SOURCE_COMMIT')
+  })
+
+  // ⚠ A DEFAULT IS NOT THE ONLY EDIT THAT BLANKS THE LABEL, and the other two leave both
+  // lines spelled exactly the way the assertions above want them.
+  //
+  // Moved ABOVE the first FROM, a bare `ARG SOURCE_COMMIT` is a GLOBAL, and a global is
+  // not inherited by a stage that never re-declares it: measured, that shape bakes an
+  // empty commit even under `--build-arg SOURCE_COMMIT=<sha>` — it breaks the STRONGEST
+  // supply path, not the weakest.
+  //
+  // Moved BELOW the line that reads it, `$SOURCE_COMMIT` expands before the name is
+  // declared and yields empty — measured, again even under `--build-arg`. ⚠ THAT ONE IS
+  // INVISIBLE ON A COOLIFY DEPLOY, because the `ARG SOURCE_COMMIT=<sha>` line Coolify
+  // splices in after the FROM declares the name first and the expansion then works
+  // (measured both ways). It breaks local builds and the `--build-arg`-only path instead,
+  // which is precisely why it is asserted here: the next deploy would not notice.
+  it('keeps both args inside the build stage, in the order the expansion needs', () => {
+    expect(firstFrom, 'no FROM instruction in frontend/Dockerfile').toBeGreaterThanOrEqual(
+      0,
+    )
+    expect(
+      sourceArg,
+      'ARG SOURCE_COMMIT must sit AFTER the first FROM — above it, it is a global no stage inherits',
+    ).toBeGreaterThan(firstFrom)
+    expect(
+      viteArg,
+      'ARG VITE_APP_COMMIT=$SOURCE_COMMIT must come AFTER ARG SOURCE_COMMIT, or it expands to nothing',
+    ).toBeGreaterThan(sourceArg)
   })
 })
