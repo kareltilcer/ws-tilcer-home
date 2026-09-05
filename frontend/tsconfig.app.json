@@ -14,6 +14,15 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    /* `platform/version.ts` reads the release out of package.json (D274). Vite resolves
+       that import either way; this is what lets `tsc -b` see the named `version` export
+       rather than failing the build. ⚠ It is NOT the only JSON import in src/ —
+       `components/common/emojiData.ts` carried one long before this, typed by hand in
+       `src/types/unicode-emoji-json.d.ts` because the file behind it is 422 KB. That
+       ambient declaration still wins over this flag, so its type is unchanged, but the
+       flag does pull the file into the tsc program: measured inside noise (~7.0 s of
+       `tsc -b --force` either way), and the reason that .d.ts stays. */
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,

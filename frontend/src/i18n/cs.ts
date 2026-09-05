@@ -7,7 +7,7 @@ export const cs = {
     redirecting: 'Ověřování přihlášení…',
     signOut: 'Odhlásit se',
     // v10.2 (D271): the accessible name of the version label in the side nav's foot
-    // and at the bottom of the "Více" sheet. `v10.2 · a3f9c2e` announced on its own
+    // and at the bottom of the "Více" sheet. `v1.10.2 · a3f9c2e` announced on its own
     // is noise; this is the word that makes it a sentence.
     version: 'Verze aplikace',
     // v10.2 (D273): the side nav's user row says what this member may DO here, which

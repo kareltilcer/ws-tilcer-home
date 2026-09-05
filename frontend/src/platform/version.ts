@@ -3,23 +3,40 @@
 //
 // ⚠ IT EXISTS SO A BUG CAN BE REPORTED, and that is the whole of its job. A member
 // who says "it broke" has told us nothing a rebuild can be checked against; a member
-// who copies `v10.2 · a3f9c2e` into the feedback widget has named the exact bundle
+// who copies `v1.10.2 · a3f9c2e` into the feedback widget has named the exact bundle
 // that broke. It is NOT a changelog and NOT an update notice — D26 still holds: the
 // service worker updates the app on its own and nobody is asked to do anything about
 // a new version.
 //
 // ⚠ THE TWO HALVES HAVE TWO DIFFERENT SOURCES, on purpose. The VERSION is a property
-// of the CODE, so it lives here in the repo and is bumped with
+// of the CODE, so it is read out of `frontend/package.json` and is bumped with
 // `handoff/v10/CHANGELOG.md`; the COMMIT is a property of the BUILD, which the repo
 // cannot know, so it arrives as a Vite build arg (frontend/Dockerfile). That is why a
 // build given no commit prints the version alone rather than printing nothing.
 
+import { version as packageVersion } from '../../package.json'
+
 const env = import.meta.env as Record<string, string | undefined>
 
-/** The release this bundle is. ⚠ Bump it with the CHANGELOG's newest heading — the
- *  two are one fact, and a label that disagrees with the changelog is worse than no
- *  label at all, because it is the string a bug report gets filed under. */
-export const APP_VERSION = 'v10.2'
+/**
+ * The release this bundle is, taken verbatim from `frontend/package.json` so the
+ * manifest and the label cannot say two different things (D274).
+ *
+ * ⚠ IT IS NOT THE CHANGELOG'S NUMBER, and the difference is a leading `1.`. npm
+ * demands three-part semver, and the releases here are numbered `v10`, `v10.1`,
+ * `v10.2` — so the RELEASE is carried in `minor.patch` and the major is a constant
+ * `1` that means nothing. `1.10.2` is release v10.2; `1.11.0` will be v11. The label
+ * prints the package version as it stands rather than reconstructing the changelog's
+ * spelling, because a string that is copied into a bug report should be findable in
+ * the one file a release actually bumps.
+ *
+ * ⚠ THERE IS NOTHING TO BUMP HERE. A release bumps `frontend/package.json` with the
+ * CHANGELOG's newest heading — the two are one fact, and a label that disagrees with
+ * the changelog is worse than no label at all, because it is the string a bug report
+ * gets filed under. `version.test.ts` reads both and fails when a release moves one
+ * without the other.
+ */
+export const APP_VERSION = `v${packageVersion}`
 
 /**
  * shortCommit reduces a build arg to the seven characters the label shows.

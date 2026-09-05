@@ -72,7 +72,7 @@ describe('D271 — the version is printed where a bug report can find it', () =>
     expect(shell).toContain('{APP_VERSION_LABEL}')
   })
 
-  // ⚠ IT IS A LABEL, NOT A CONTROL, and it says what it is. `v10.2 · a3f9c2e` on its
+  // ⚠ IT IS A LABEL, NOT A CONTROL, and it says what it is. `v1.10.2 · a3f9c2e` on its
   // own is a token; the accessible name is what makes it a sentence, and a `title`
   // alone is not announced on a non-interactive element.
   // ⚠ MATCHED, NOT QUOTED. The first spelling of this asserted the whole JSX line
