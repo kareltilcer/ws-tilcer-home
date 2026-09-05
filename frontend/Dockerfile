@@ -44,17 +44,26 @@ ARG VITE_STATUS_WIDGET_URL=""
 ARG VITE_STATUS_SITE=""
 ARG VITE_STATUS_ENVIRONMENT=""
 ARG VITE_STATUS_RELEASE=""
-# The commit half of the version label in the app's chrome (v10.2, D271). The
-# VERSION half is a constant in the repo (frontend/src/platform/version.ts); this is
-# the part only the build knows, and it is what tells two deploys of one release
-# apart in a bug report.
+# The commit half of the version label in the app's chrome (D271/D274). The VERSION
+# half is read out of package.json, which is already in this image two COPY lines up;
+# this is the part only the build knows, and it is what tells two deploys of one
+# release apart in a bug report.
 #
 # ⚠ IT DEFAULTS TO COOLIFY'S OWN SOURCE_COMMIT, so a normal deploy needs nothing set
-# — but Coolify EXCLUDES that variable from the build by default to keep Docker's
-# layer cache warm (it changes on every commit), and the toggle is "Include Source
-# Commit in Build" in the application's advanced settings. With it off the label
-# simply reads "v10.2" with no commit: version.ts prints the version alone rather
-# than printing an unexpanded variable.
+# — but Coolify EXCLUDES that variable from the build by default, and the toggle is
+# "Include Source Commit in Build" in the application's advanced settings. With it
+# off the label simply reads "v1.10.2" with no commit: version.ts prints the version
+# alone rather than printing an unexpanded variable.
+#
+# ⚠ AND THE REASON COOLIFY GIVES FOR EXCLUDING IT DOES NOT APPLY TO THIS FILE. The
+# concern is that a value changing every commit invalidates every layer below it —
+# true, but the layer below it here is `RUN npm run build`, and `RUN npm ci` sits
+# ABOVE `COPY . .`, keyed only on package.json + package-lock.json — which this arg
+# cannot reach, so it never re-runs the install. (⚠ A RELEASE commit does re-run it,
+# since D274 moved the version into package.json. That is D274's own cost and the
+# toggle adds nothing on top of it.) The only builds that pay for the toggle are
+# commits that touch NOTHING under frontend/; on any commit that touches something,
+# `COPY . .` has already invalidated the build layer and the arg costs nothing on top.
 ARG SOURCE_COMMIT=""
 ARG VITE_APP_COMMIT=$SOURCE_COMMIT
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
