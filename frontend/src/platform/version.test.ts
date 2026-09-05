@@ -77,11 +77,20 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
     expect(packageVersion).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
-  it('carries the newest CHANGELOG release in minor.patch', () => {
-    const newest = changelog.match(/^## v(\d+)(?:\.(\d+))?/m)
+  it('carries the newest CHANGELOG release in minor.patch, under a constant major', () => {
+    const newest = changelog.match(/^## v(\d+)(?:\.(\d+))?(\.\d+)?/m)
     expect(newest, 'no "## vX[.Y]" heading found in handoff/v10/CHANGELOG.md').not.toBeNull()
+    // ⚠ A THIRD COMPONENT IS REFUSED, NOT DROPPED. `minor.patch` has nowhere to put it,
+    // so a `## v10.2.1` heading would be satisfied by `1.10.2` — a label naming a release
+    // that was never cut, which is the one thing this whole chain exists to prevent.
+    expect(newest?.[3], 'a "## vX.Y.Z" heading has nowhere to go in minor.patch').toBeUndefined()
 
-    const [, minor, patch] = packageVersion.split('.')
+    const [major, minor, patch] = packageVersion.split('.')
+    // ⚠ THE MAJOR IS ASSERTED TOO, and it is the half a release gets wrong: `2.10.2` is
+    // three-part semver whose minor.patch still matches this heading, and it prints
+    // `v2.10.2` in the side nav. The `1` is npm's demand for a third number and nothing
+    // else — it carries no release meaning and it never moves.
+    expect(major, 'the major is a constant 1, and no release ever bumps it').toBe('1')
     expect(minor, `package.json minor should be the CHANGELOG's ${newest?.[0]}`).toBe(
       newest?.[1],
     )
