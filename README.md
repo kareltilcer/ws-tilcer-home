@@ -307,11 +307,15 @@ Static-only image — **no runtime env vars**.
 
 ⚠ **`SOURCE_COMMIT` is excluded from the build by default**, and getting the commit
 half of the label means turning on **Include Source Commit in Build** in the
-application's advanced settings. The version half comes from `frontend/package.json`
-and the Dockerfile defaults `VITE_APP_COMMIT` from `SOURCE_COMMIT`. ⚠ **Do not create a
-variable named `SOURCE_COMMIT` either** — Coolify skips its own value when the
-application defines that name, and an empty **build-time** one wins over everything the
-Dockerfile can do about it.
+application's advanced settings. ⚠ **That control has two names, and everything here
+uses the older one** — Coolify's *Shadow UI redesign* of 2026-08-03 replaced the
+checkbox with a **Source commit availability** dropdown whose **Available during build**
+is the same setting, so read the panel you actually have before deciding the toggle is
+gone. The version half comes from `frontend/package.json` and the Dockerfile defaults
+`VITE_APP_COMMIT` from `SOURCE_COMMIT`. ⚠ **Do not create a variable named
+`SOURCE_COMMIT` either** — Coolify skips its own value when the application defines that
+name, and an empty **build-time** one wins over everything the Dockerfile can do about
+it.
 
 ⚠ **The toggle alone was not enough, and the reason is worth knowing before you edit
 `frontend/Dockerfile`.** The first deploy with it on shipped a commit-less label anyway,
@@ -372,7 +376,8 @@ If the commit is still missing after a rebuild, in this order:
    carries, because the `cat` of `/artifacts/build-time.env` that would is gated on
    Coolify's own dev mode rather than on this toggle. Neither present, and nothing is being
    supplied: check the toggle, and check *Inject Build Args to Dockerfile* in the advanced
-   settings, where ARG injection can be switched off wholesale.
+   settings — *Build arguments*, set to *Inject build args automatically*, on a
+   post-redesign panel — where ARG injection can be switched off wholesale.
 3. **The baked bundle settles it either way** —
    `docker run --rm --entrypoint sh <image> -c 'grep -o "VITE_APP_COMMIT:.\{0,45\}" /usr/share/nginx/html/assets/index-*.js'`.
 

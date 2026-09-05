@@ -51,9 +51,11 @@ ARG VITE_STATUS_RELEASE=""
 #
 # ⚠ IT DEFAULTS TO COOLIFY'S OWN SOURCE_COMMIT, so a normal deploy needs nothing set
 # — but Coolify EXCLUDES that variable from the build by default, and the toggle is
-# "Include Source Commit in Build" in the application's advanced settings. With it
-# off the label simply reads "v1.10.2" with no commit: version.ts prints the version
-# alone rather than printing an unexpanded variable.
+# "Include Source Commit in Build" in the application's advanced settings — renamed to a
+# "Source commit availability" dropdown ⇒ "Available during build" by Coolify's
+# 2026-08-03 UI redesign, one setting under two names. With it off the label simply
+# reads "v1.10.2" with no commit: version.ts prints the version alone rather than
+# printing an unexpanded variable.
 #
 # ⚠ AND THE REASON COOLIFY GIVES FOR EXCLUDING IT DOES NOT APPLY TO THIS FILE. The
 # concern is that a value changing every commit invalidates every layer below it —
