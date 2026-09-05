@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import changelog from '../../../handoff/v10/CHANGELOG.md?raw'
+import lockfileRaw from '../../package-lock.json?raw'
 import { version as packageVersion } from '../../package.json'
 import { APP_VERSION, shortCommit, versionLabel } from './version'
 
@@ -96,5 +97,43 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
     )
     // A heading with no second number is a `.0` release: `## v11` ⇔ `1.11.0`.
     expect(patch).toBe(newest?.[2] ?? '0')
+  })
+
+  // ⚠ `match` TAKES THE FIRST HEADING, NOT THE NEWEST, and those are the same fact only
+  // while this file stays newest-first. Nothing else in the repo enforces that order, so
+  // a reordered CHANGELOG would leave the assertion above reading an OLDER entry and
+  // saying nothing about it. Asserted rather than assumed, for the same reason the
+  // mapping is.
+  it('reads the newest release, because the CHANGELOG is newest-first', () => {
+    const releases = [...changelog.matchAll(/^## v(\d+)(?:\.(\d+))?/gm)].map((m) => [
+      Number(m[1]),
+      Number(m[2] ?? '0'),
+    ])
+    expect(
+      releases.length,
+      'no "## vX[.Y]" heading found in handoff/v10/CHANGELOG.md',
+    ).toBeGreaterThan(0)
+    const highest = [...releases].sort((a, b) => b[0] - a[0] || b[1] - a[1])[0]
+    expect(
+      releases[0],
+      'the first "## vX[.Y]" heading is not the newest release the file names',
+    ).toEqual(highest)
+  })
+
+  // ⚠ THE LOCKFILE IS THE THIRD FILE CARRYING THIS NUMBER, and it is the one with no
+  // reader: D274 measured that `npm ci` ignores the lock's root `version` outright, so
+  // a release that bumps the manifest and skips `npm install --package-lock-only` gets
+  // a green suite, a green build and a correct label — and leaves the stale line to
+  // surface in somebody else's diff about something else. That is the whole reason the
+  // lock moved with the manifest, so it is asserted instead of written down.
+  it('was bumped with package-lock.json, which nothing in npm checks', () => {
+    const lock = JSON.parse(lockfileRaw) as {
+      version?: string
+      packages?: Record<string, { version?: string }>
+    }
+    expect(lock.version, 'package-lock.json root version').toBe(packageVersion)
+    expect(lock.packages?.['']?.version, 'package-lock.json packages[""] version').toBe(
+      packageVersion,
+    )
   })
 })

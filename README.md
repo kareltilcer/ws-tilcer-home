@@ -315,10 +315,12 @@ from `SOURCE_COMMIT`.
 Dockerfile.** The reason Coolify excludes it is that it changes on every commit and
 therefore invalidates every layer below it — but in `frontend/Dockerfile` the layer
 below it is `RUN npm run build`, and `npm ci` sits **above** `COPY . .`, keyed only
-on `package.json` + `package-lock.json`. So the dependency install is never re-run
-either way, and the only commits that pay anything are the ones that touch **nothing
-under `frontend/`** — on any commit that does, `COPY . .` has already invalidated the
-build layer and the toggle costs exactly nothing.
+on `package.json` + `package-lock.json`, which the arg cannot reach. So the toggle
+never re-runs the dependency install — a **release** commit does, because the version
+lives in `package.json` now, but that cost belongs to the release and the toggle adds
+nothing to it — and the only commits that pay anything **for the toggle** are the ones
+that touch **nothing under `frontend/`**; on any commit that does, `COPY . .` has
+already invalidated the build layer and the toggle costs exactly nothing.
 
 Setting `VITE_APP_COMMIT` by hand instead is worse than leaving it unset: a value
 that does not change per commit is a label that confidently names the wrong bundle,

@@ -30,10 +30,11 @@ const env = import.meta.env as Record<string, string | undefined>
  * spelling, because a string that is copied into a bug report should be findable in
  * the one file a release actually bumps.
  *
- * ⚠ Bump it with the CHANGELOG's newest heading — the two are one fact, and a label
- * that disagrees with the changelog is worse than no label at all, because it is the
- * string a bug report gets filed under. `version.test.ts` reads both and fails when
- * a release moves one without the other.
+ * ⚠ THERE IS NOTHING TO BUMP HERE. A release bumps `frontend/package.json` with the
+ * CHANGELOG's newest heading — the two are one fact, and a label that disagrees with
+ * the changelog is worse than no label at all, because it is the string a bug report
+ * gets filed under. `version.test.ts` reads both and fails when a release moves one
+ * without the other.
  */
 export const APP_VERSION = `v${packageVersion}`
 
