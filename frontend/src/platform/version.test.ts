@@ -43,13 +43,13 @@ describe('shortCommit — a sha, or nothing at all', () => {
 
 describe('versionLabel — the version alone is still a label', () => {
   it('joins the two halves the way the design writes them', () => {
-    expect(versionLabel('v10.2', 'a3f9c2e')).toBe('v10.2 · a3f9c2e')
+    expect(versionLabel('v1.10.2', 'a3f9c2e')).toBe('v1.10.2 · a3f9c2e')
   })
 
   // A build with no commit arg still says WHICH RELEASE it is, which is most of the
   // value: the alternative is a blank line where the label should be.
   it('falls back to the version when the build was given no commit', () => {
-    expect(versionLabel('v10.2', '')).toBe('v10.2')
+    expect(versionLabel('v1.10.2', '')).toBe('v1.10.2')
   })
 })
 

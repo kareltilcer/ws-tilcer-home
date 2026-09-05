@@ -167,7 +167,7 @@ services:
         # one run, one board, two names. Set in PAIRS or not at all.
         VITE_STATUS_ENVIRONMENT: ${VITE_STATUS_ENVIRONMENT:-dev}
         VITE_STATUS_RELEASE: ${VITE_STATUS_RELEASE:-}
-        # The commit half of the app's version label (v10.2, D271). Coolify defaults
+        # The commit half of the app's version label (D271/D274). Coolify defaults
         # it from its own SOURCE_COMMIT; compose has no such variable, so the harness
         # passes whatever is in the environment and the label falls back to the bare
         # version when that is empty. `VITE_APP_COMMIT=$(git rev-parse HEAD) docker
