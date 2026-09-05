@@ -176,11 +176,10 @@ services:
         # `ARG VITE_APP_COMMIT=$SOURCE_COMMIT` default — an explicit empty build arg
         # beats an in-stage default (measured) — so under a compose-based Coolify
         # deploy this line would blank the commit no matter what the Dockerfile says.
-        # ⚠ The fallback only RECOVERS that if Coolify exports SOURCE_COMMIT into the
-        # environment compose interpolates from; if it only splices the Dockerfile,
-        # this line still wins and still blanks it. Unverified — this app deploys on
-        # the Dockerfile build pack, not compose — but the chain costs nothing offline
-        # and can only help, which is why it is here rather than a bare `:-`.
+        # The fallback recovers it because Coolify runs the compose build as
+        # `SOURCE_COMMIT=<sha> docker compose ... build`, which is exactly the
+        # environment compose interpolates from. Offline it costs nothing: nothing
+        # sets either name, so the label falls back to the bare version.
         VITE_APP_COMMIT: ${VITE_APP_COMMIT:-${SOURCE_COMMIT:-}}
         # No Traefik locally, so bake the config that proxies /api + /ws to the
         # `backend` service — keeps the SPA same-origin on :7001. (Baked, not

@@ -316,14 +316,16 @@ do about it.
 ⚠ **The toggle alone was not enough, and the reason is worth knowing before you edit
 `frontend/Dockerfile`.** The first deploy with it on shipped a commit-less label anyway,
 because the file said `ARG SOURCE_COMMIT=""` — and **a default written in the Dockerfile
-beats the `ARG` line Coolify splices in**. It now reads **`ARG SOURCE_COMMIT`**, bare,
-and **that bare form is load-bearing — do not add a default to it, and do not move it.**
-`version.test.ts` asserts the spelling and the position (above the first `FROM` it is a
-global no stage inherits, measured), so a tidy-up fails the suite rather than the next
+beats the `ARG SOURCE_COMMIT=<sha>` line Coolify splices in**. It now reads
+**`ARG SOURCE_COMMIT`**, bare, and **that bare form is load-bearing — do not add a default
+to it, and do not move it.** `version.test.ts` asserts the spelling and the position:
+moved above the first `FROM` this declaration becomes a global that nothing here
+re-declares, so the build stage never sees it — measured, that shape blanks the commit
+even under an explicit `--build-arg`. A tidy-up fails the suite rather than the next
 deploy.
 
 Coolify supplies build variables **two ways at once, and the two are not equally
-strong** — which is the whole of this bug:
+strong**:
 
 1. **A key-only `--build-arg 'KEY'`.** `generateDockerBuildArgs()` emits the key and
    nothing else; Docker takes the value from the environment of the process running the
@@ -336,22 +338,25 @@ strong** — which is the whole of this bug:
    used a hardcoded line index 1
    ([coollabsio/coolify#7118](https://github.com/coollabsio/coolify/issues/7118)), which
    lands *before* the first `FROM` whenever line 0 is a comment, as it is here. This is
-   the **weak** path: in-stage, a later `ARG KEY=""` **resets** it; above the `FROM`, the
-   in-stage `ARG KEY=""` **shadows** it. Both positions were built against the real
-   Dockerfile and read back out of `dist/assets/*.js` — bare inherits under both, `=""`
-   comes out empty under both.
+   the **weak** path, and a default in this file beats it from either side: in-stage a
+   later `ARG KEY=""` **resets** it; above the `FROM` the in-stage `ARG KEY=""`
+   **shadows** it. A *bare* in-stage `ARG KEY` inherits it instead — which is the
+   difference the fix turns on. Both positions were built against the real Dockerfile
+   and read back out of `dist/assets/*.js`: bare gets the sha under both, `=""` comes
+   out empty under both.
 
-⚠ **`SOURCE_COMMIT` and the `VITE_*` variables are not delivered the same way, and that
-asymmetry is why one broke and the others did not.** `SOURCE_COMMIT` does go into the
-same `env_args` collection (`generate_env_variables()`), so it does get a `--build-arg` —
-but a key-only flag is only as good as the environment behind it. Build-time variables
-you define are written into `build-time.env` unconditionally, so path 1 always fires for
-them and their `=""` never gets the chance to lose. `SOURCE_COMMIT` reaches that file
-only through `generate_coolify_env_variables(forBuildTime: true)`, which is gated on the
-toggle **and skipped outright when the application defines its own variable named
-`SOURCE_COMMIT`** — while the splice carries it with no such guard. So it can arrive by
-path 2 alone, which `ARG SOURCE_COMMIT=""` beats. The other args keep their `=""` because
-they are not what broke, not because they are safe by construction.
+⚠ **What is NOT established is why path 1 stayed silent on that deploy.** `SOURCE_COMMIT`
+goes into the same `env_args` collection the `VITE_*` variables do
+(`generate_env_variables()`), so it gets a `--build-arg` too — and had that flag carried a
+value it would have beaten `ARG SOURCE_COMMIT=""` and the label would have been right. So
+something also kept `SOURCE_COMMIT` out of `build-time.env`, and there is one known way
+that happens: it reaches that file only through
+`generate_coolify_env_variables(forBuildTime: true)`, which is gated on the toggle **and
+skipped outright when the application defines its own variable named `SOURCE_COMMIT`** —
+while the splice carries it with no such guard. The `VITE_*` args keep their `=""` safely
+because build-time variables *you* define are written into that file unconditionally, so
+path 1 always fires for them. **The bare `ARG` is right either way**; the list below is
+how to find out which it was.
 
 If the commit is still missing after a rebuild, in this order:
 
