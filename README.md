@@ -310,8 +310,8 @@ half of the label means turning on **Include Source Commit in Build** in the
 application's advanced settings. The version half comes from `frontend/package.json`
 and the Dockerfile defaults `VITE_APP_COMMIT` from `SOURCE_COMMIT`. ⚠ **Do not create a
 variable named `SOURCE_COMMIT` either** — Coolify skips its own value when the
-application defines that name, and an empty one wins over everything the Dockerfile can
-do about it.
+application defines that name, and an empty **build-time** one wins over everything the
+Dockerfile can do about it.
 
 ⚠ **The toggle alone was not enough, and the reason is worth knowing before you edit
 `frontend/Dockerfile`.** The first deploy with it on shipped a commit-less label anyway,

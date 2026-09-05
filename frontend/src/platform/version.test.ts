@@ -152,9 +152,12 @@ describe('frontend/Dockerfile keeps the commit arg inheritable', () => {
   const firstFrom = lines.findIndex((line) => /^FROM\s/i.test(line))
   const buildStep = lines.findIndex((line) => /^RUN\s+npm\s+run\s+build\b/.test(line))
   const sourceArg = lines.findIndex((line) => /^ARG\s+SOURCE_COMMIT\b/.test(line))
-  // `${SOURCE_COMMIT}` is the same instruction to Docker, so it is the same to this.
+  // `${SOURCE_COMMIT}`, surrounding quotes, and a trailing `# comment` — which that file's
+  // own `RUN npm run build` line already carries — are all the SAME INSTRUCTION to Docker,
+  // measured. A guard that reddens on an edit Docker cannot tell apart is a guard the next
+  // person deletes, and then the line it was protecting is unprotected.
   const viteArg = lines.findIndex((line) =>
-    /^ARG\s+VITE_APP_COMMIT=\$\{?SOURCE_COMMIT\}?$/.test(line),
+    /^ARG\s+VITE_APP_COMMIT="?\$\{?SOURCE_COMMIT\}?"?(\s+#.*)?$/.test(line),
   )
 
   it('declares SOURCE_COMMIT bare, with no default to beat the injected value', () => {
