@@ -553,7 +553,7 @@ function UnreadBadge({ count: n }: { count: number }) {
  * It is not an update notice either: the service worker updates the app on its own
  * and D26 has always said nobody is asked to act on a new version.
  *
- * ⚠ THE ACCESSIBLE NAME SAYS WHAT THE STRING IS. `v10.2 · a3f9c2e` read out on its
+ * ⚠ THE ACCESSIBLE NAME SAYS WHAT THE STRING IS. `v1.10.2 · a3f9c2e` read out on its
  * own is noise; a `title` alone would not be announced at all, since this is not an
  * interactive element and title is only surfaced on some of those.
  *

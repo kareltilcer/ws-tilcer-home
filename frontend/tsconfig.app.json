@@ -14,6 +14,10 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    /* `platform/version.ts` reads the release out of package.json (D274), which is
+       the one JSON import in src/ — Vite resolves it either way, this is what lets
+       `tsc -b` see the named `version` export rather than failing the build. */
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,

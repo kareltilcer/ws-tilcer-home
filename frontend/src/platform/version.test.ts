@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import changelog from '../../../handoff/v10/CHANGELOG.md?raw'
+import { version as packageVersion } from '../../package.json'
 import { APP_VERSION, shortCommit, versionLabel } from './version'
 
 // ⚠ THE MODULE-LEVEL LABEL IS NOT WHAT IS TESTED HERE, and cannot usefully be:
@@ -59,10 +60,32 @@ describe('versionLabel — the version alone is still a label', () => {
 // exactly the way nav.test.ts exists to catch for the nav order. Same idiom: read the
 // other file and assert against it, so the release that forgets fails here rather than
 // on a screenshot from Karel six weeks later.
+//
+// ⚠ THE CHAIN IS TWO HOPS LONG SINCE D274, and each one can break on its own: the label
+// is `package.json`'s version, and `package.json`'s version is the CHANGELOG's newest
+// release. The second hop is NOT string equality — npm demands three-part semver and
+// the releases are numbered `v10`, `v10.1`, `v10.2`, so the release lives in
+// `minor.patch` and the major is a constant `1` carrying no meaning. `1.10.2` is v10.2;
+// `1.11.0` is v11. That mapping is exactly the kind of rule a release applies wrongly
+// at 11pm, which is why it is asserted rather than written down.
 describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
-  it('equals the newest version heading', () => {
-    const newest = changelog.match(/^## (v[\d.]+)/m)
-    expect(newest, 'no "## vX.Y" heading found in handoff/v10/CHANGELOG.md').not.toBeNull()
-    expect(APP_VERSION).toBe(newest?.[1])
+  it('prints the package version verbatim, under the v the design writes', () => {
+    expect(APP_VERSION).toBe(`v${packageVersion}`)
+  })
+
+  it('is three-part semver, because that is the whole reason for the leading 1', () => {
+    expect(packageVersion).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  it('carries the newest CHANGELOG release in minor.patch', () => {
+    const newest = changelog.match(/^## v(\d+)(?:\.(\d+))?/m)
+    expect(newest, 'no "## vX[.Y]" heading found in handoff/v10/CHANGELOG.md').not.toBeNull()
+
+    const [, minor, patch] = packageVersion.split('.')
+    expect(minor, `package.json minor should be the CHANGELOG's ${newest?.[0]}`).toBe(
+      newest?.[1],
+    )
+    // A heading with no second number is a `.0` release: `## v11` ⇔ `1.11.0`.
+    expect(patch).toBe(newest?.[2] ?? '0')
   })
 })
