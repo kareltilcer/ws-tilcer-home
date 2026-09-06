@@ -1,0 +1,1314 @@
+{
+  "manifest_version": 1,
+  "protocol_version": "2025-06-18",
+  "tools": [
+    {
+      "name": "home_activity",
+      "module": "",
+      "title": "Recent household activity",
+      "description": "Returns a digest of recent changes from the audit log — who changed what, when, and whether it came through an assistant — redacted so another member's private notes and documents show only that something private happened; admin only, as the Log itself is.",
+      "read_only": true,
+      "admin_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "Optional bare action verb, e.g. \"card.move\".",
+            "type": "string"
+          },
+          "actor": {
+            "description": "Optional member id.",
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "module": {
+            "description": "Optional module name, e.g. \"todo\".",
+            "type": "string"
+          },
+          "since": {
+            "description": "ISO timestamp or date; only changes at or after this are returned.",
+            "type": "string"
+          },
+          "until": {
+            "description": "Optional ISO timestamp or date upper bound.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_admin_status",
+      "module": "admin",
+      "title": "Household service status",
+      "description": "Admin only. Returns how much space the household is using — database and object storage, broken down by module — and how notification delivery has been going lately.",
+      "read_only": true,
+      "admin_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh": {
+            "description": "Recompute rather than serving the cached snapshot. Costs a full storage scan.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_chat_conversations",
+      "module": "chat",
+      "title": "Chat conversations",
+      "description": "Lists the conversations the caller is in, with each one's unread count and how far back they may read; it is the only place an unread count is reported.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_chat_messages",
+      "module": "chat",
+      "title": "Read a chat thread",
+      "description": "Returns the newest messages of one conversation the caller is a member of, from their history floor onward; reading a thread is recorded in the Log as a conversation and a count, never as its contents.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "limit": {
+            "description": "Newest first.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_documents_pin",
+      "module": "documents",
+      "title": "Pin a document",
+      "description": "Pins or unpins a document on the dashboard, either for the whole household or just for the caller; a private document can only ever be pinned personally.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "household",
+              "personal"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "pinned"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_documents_tree",
+      "module": "documents",
+      "title": "Documents tree",
+      "description": "Returns the folder tree of the household's shared documents, or with scope \"private\" the caller's own; pass document for one document's metadata, and read its contents with the home://documents/ resource.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "description": "Document id. Returns that document's metadata and its path, from whichever root holds it — so send it alone, without scope or include_archived.",
+            "type": "string"
+          },
+          "include_archived": {
+            "description": "Only for a tree read. Not with document.",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "Which root to read. \"private\" is the CALLER's own; there is no way to name another member's. Not with document.",
+            "enum": [
+              "shared",
+              "private"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_documents_update",
+      "module": "documents",
+      "title": "Rename a document",
+      "description": "Changes a document's title, description or archived flag; the FILE itself is never replaced, because there is no upload tool.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_electricity_advance_add",
+      "module": "electricity",
+      "title": "Record a new advance schedule",
+      "description": "Starts a new version of the monthly advance (záloha) from a date, in Kč, with the day of the month it falls due; it governs every month from that date until the next version, and earlier months keep the version they were billed under.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_kc": {
+            "description": "The monthly advance in Kč.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "due_day": {
+            "description": "Day of the month. Stored raw and clamped when read, so 31 still means \"the last day\" in February.",
+            "maximum": 31,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "effective_from": {
+            "description": "ISO date (YYYY-MM-DD).",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "effective_from",
+          "amount_kc",
+          "due_day"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_electricity_reading_add",
+      "module": "electricity",
+      "title": "Record a meter reading",
+      "description": "Records one dated reading of both registers in kWh; both must be non-decreasing against the readings on EITHER side of the date, because with meter replacement out of scope a falling counter is always a typo.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "nt_kwh": {
+            "description": "The low-tariff (NT) register, in kWh.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "read_on": {
+            "description": "ISO date (YYYY-MM-DD). Defaults to today in the household timezone.",
+            "type": "string"
+          },
+          "vt_kwh": {
+            "description": "The high-tariff (VT) register, in kWh as the meter shows it.",
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "vt_kwh",
+          "nt_kwh"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_electricity_readings",
+      "module": "electricity",
+      "title": "Meter readings",
+      "description": "Lists the household's meter readings newest first, both registers in kWh, with how many days ago the newest one was taken.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Defaults to 24.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_electricity_summary",
+      "module": "electricity",
+      "title": "Electricity balance",
+      "description": "Returns the current billing period's consumption, cost so far, advances paid and the resulting overpayment or underpayment, all computed on read; pass period_id for an older period.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "period_id": {
+            "description": "Omit for the newest period.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_events_complete",
+      "module": "events",
+      "title": "Tick off a reminder",
+      "description": "Marks one occurrence's reminder as done, which is what removes it from the household's Připomínky; it is per occurrence, so ticking one date leaves the rest of a recurring event alone.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "occurrence_on": {
+            "description": "The occurrence's ISO date (YYYY-MM-DD), as home_events_upcoming reports it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "occurrence_on"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_events_create",
+      "module": "events",
+      "title": "Create an event",
+      "description": "Adds a household event on a date, optionally recurring by RRULE and optionally reminding — reminder_lead \"0d\" reminds on the day itself, not the day before.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "reminder_enabled": {
+            "type": "boolean"
+          },
+          "reminder_lead": {
+            "description": "\"0d\" is the day itself.",
+            "enum": [
+              "0d",
+              "1d",
+              "2d",
+              "1w",
+              "2w",
+              "1m"
+            ],
+            "type": "string"
+          },
+          "rrule": {
+            "description": "Optional iCalendar RRULE, e.g. FREQ=YEARLY.",
+            "type": "string"
+          },
+          "starts_on": {
+            "description": "ISO date (YYYY-MM-DD).",
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "starts_on"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_events_upcoming",
+      "module": "events",
+      "title": "Upcoming events",
+      "description": "Returns the household's events occurring in a date window, recurrences expanded, each with whether its reminder has been ticked off; defaults to the next 30 days.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "description": "ISO date (YYYY-MM-DD). Defaults to today.",
+            "type": "string"
+          },
+          "include_archived": {
+            "type": "boolean"
+          },
+          "to": {
+            "description": "ISO date (YYYY-MM-DD). Defaults to 30 days after from.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_events_update",
+      "module": "events",
+      "title": "Update an event",
+      "description": "Changes an event's title, date, description, recurrence, reminder or archived flag; archiving is how the household retires an event, and unlike a delete it is reversible.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reminder_enabled": {
+            "type": "boolean"
+          },
+          "reminder_lead": {
+            "enum": [
+              "0d",
+              "1d",
+              "2d",
+              "1w",
+              "2w",
+              "1m"
+            ],
+            "type": "string"
+          },
+          "rrule": {
+            "type": "string"
+          },
+          "starts_on": {
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_finance_month_create",
+      "module": "finance",
+      "title": "Record a month",
+      "description": "Records one month's two incomes and its four percentage rates, which must be whole numbers summing to 100; the split is computed from them and never sent. Call home_finance_months first — the previous month's rates are usually the ones to repeat.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "income_andy": {
+            "description": "In whole Kč.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "income_kaja": {
+            "description": "In whole Kč.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "month": {
+            "description": "YYYY-MM. Unique — one row per month.",
+            "type": "string"
+          },
+          "rates": {
+            "additionalProperties": false,
+            "description": "All four, and they must sum to 100. A month has no split without them, so there is no default.",
+            "properties": {
+              "fun": {
+                "type": "integer"
+              },
+              "no_fun": {
+                "type": "integer"
+              },
+              "operational": {
+                "type": "integer"
+              },
+              "personal": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "personal",
+              "operational",
+              "fun",
+              "no_fun"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "month",
+          "income_kaja",
+          "income_andy",
+          "rates"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_finance_month_update",
+      "module": "finance",
+      "title": "Correct a month",
+      "description": "Changes a recorded month's incomes or its whole four-value rate block; a partial rate block is refused rather than silently zeroing the other three.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "income_andy": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "income_kaja": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rates": {
+            "additionalProperties": false,
+            "properties": {
+              "fun": {
+                "type": "integer"
+              },
+              "no_fun": {
+                "type": "integer"
+              },
+              "operational": {
+                "type": "integer"
+              },
+              "personal": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "personal",
+              "operational",
+              "fun",
+              "no_fun"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_finance_months",
+      "module": "finance",
+      "title": "Monthly income split",
+      "description": "Lists the household's recorded months newest first, each with both incomes, the four rates and the DERIVED split; pass month for one month by its YYYY-MM key.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many months to list, newest first. Only for the listing — not with month.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "month": {
+            "description": "A single month as YYYY-MM. Resolved directly, so any recorded month answers however far back it is. Do not send limit beside it.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_garden_harvest_log",
+      "module": "garden",
+      "title": "Record a harvest",
+      "description": "Records what was picked from one planting, on a date, in a unit — the quantity must be strictly positive, because a zero row still flips the planting to harvesting and makes the real figure un-enterable later.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "destination": {
+            "description": "Where it went: eaten fresh, into storage, given away, or composted.",
+            "enum": [
+              "fresh",
+              "storage",
+              "gift",
+              "compost"
+            ],
+            "type": "string"
+          },
+          "harvested_on": {
+            "description": "ISO date (YYYY-MM-DD). Defaults to today.",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "planting_id": {
+            "type": "string"
+          },
+          "quality": {
+            "description": "Free text.",
+            "type": "string"
+          },
+          "quantity": {
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "unit": {
+            "description": "Defaults to the crop's own unit, which is usually the one to keep.",
+            "enum": [
+              "kg",
+              "ks",
+              "l",
+              "svazek"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "planting_id",
+          "quantity"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_garden_plan",
+      "module": "garden",
+      "title": "Season plan",
+      "description": "Returns one season's plantings — what is in which bed, with planned and actual dates — plus the season's frost anchors and status; defaults to the current year.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "bed_id": {
+            "description": "A bed id from this same tool. An id that names no bed is refused rather than answered with an empty plan.",
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "year": {
+            "description": "Defaults to the current year.",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_garden_planting_create",
+      "module": "garden",
+      "title": "Plant something",
+      "description": "Records a planting of one crop in one bed for a season, which is what generates its sowing, transplanting and harvest jobs; give its size as EITHER area_m2 OR plant_count — exactly one of the two, never both and never neither — and call home_garden_plan first for the bed and crop ids.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "area_m2"
+            ]
+          },
+          {
+            "required": [
+              "plant_count"
+            ]
+          }
+        ],
+        "properties": {
+          "area_m2": {
+            "description": "Square metres. Give this OR plant_count — never both, never neither.",
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "bed_id": {
+            "type": "string"
+          },
+          "location_label": {
+            "description": "For a planting that is not in a numbered bed.",
+            "type": "string"
+          },
+          "notes_md": {
+            "type": "string"
+          },
+          "plant_count": {
+            "description": "Number of plants. Give this OR area_m2 — never both, never neither.",
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "plant_id": {
+            "description": "The crop, from the knowledge base.",
+            "type": "string"
+          },
+          "season_year": {
+            "description": "Defaults to the current year. The season must already exist and be open.",
+            "type": "integer"
+          },
+          "variety_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plant_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_garden_task_complete",
+      "module": "garden",
+      "title": "Tick off a garden job",
+      "description": "Marks one garden job done; reopening one is deliberately not available here, because undoing somebody else's record of work they did is not an assistant's call.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_garden_task_create",
+      "module": "garden",
+      "title": "Add a garden job",
+      "description": "Adds a manual job to the current season with a Czech title and a date window; the season must be open, because a closed year is the rotation history the plan checks read.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "bed_id": {
+            "description": "A bed id from home_garden_plan — the id, not the code the work list prints. An id that names no bed is refused.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What kind of job it is. Use \"other\" when none of the rest fits.",
+            "enum": [
+              "bed_prep",
+              "sow_indoor",
+              "prick_out",
+              "harden_off",
+              "sow_direct",
+              "transplant",
+              "thin",
+              "support",
+              "feed",
+              "mulch",
+              "pest_check",
+              "prune",
+              "spray",
+              "harvest",
+              "process",
+              "store",
+              "clear",
+              "water",
+              "weed",
+              "other"
+            ],
+            "type": "string"
+          },
+          "notes_md": {
+            "type": "string"
+          },
+          "planting_id": {
+            "description": "A planting id from home_garden_plan. An id that names no planting is refused.",
+            "type": "string"
+          },
+          "season_year": {
+            "description": "Defaults to the season the window falls in.",
+            "type": "integer"
+          },
+          "title_cs": {
+            "description": "What to do, in Czech — this is what appears on the work list.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "window_from": {
+            "description": "ISO date (YYYY-MM-DD).",
+            "type": "string"
+          },
+          "window_to": {
+            "description": "ISO date (YYYY-MM-DD), on or after window_from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_cs",
+          "window_from",
+          "window_to",
+          "kind"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_garden_tasks",
+      "module": "garden",
+      "title": "Garden work",
+      "description": "Returns the garden jobs whose window overlaps a date range — sowing, transplanting, watering, harvesting — with which are overdue; defaults to the next fourteen days.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "bed_id": {
+            "description": "A bed id from home_garden_plan. An id that names no bed is refused rather than answered with an empty list.",
+            "type": "string"
+          },
+          "from": {
+            "description": "ISO date (YYYY-MM-DD). Defaults to today.",
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "description": "Filter by status. Omit for every status.",
+            "enum": [
+              "open",
+              "done",
+              "skipped"
+            ],
+            "type": "string"
+          },
+          "to": {
+            "description": "ISO date (YYYY-MM-DD). Defaults to 14 days after from.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_get",
+      "module": "",
+      "title": "Get one entity",
+      "description": "Returns one entity in full by the kind and id a search hit reported, e.g. kind \"notes.note\"; use it after home_search rather than guessing an id.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "The hit's kind, e.g. \"notes.note\" or \"todo.card\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_lists",
+      "module": "",
+      "title": "Household lists",
+      "description": "With no arguments lists every published list and what it names; with keys, resolves those lists to their items for the calling member — the WHICH behind home_metrics's HOW MANY.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "description": "Optional ISO date (YYYY-MM-DD), in the household timezone.",
+            "type": "string"
+          },
+          "keys": {
+            "description": "List keys to resolve. Omit to list the catalog instead.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_metrics",
+      "module": "",
+      "title": "Household metrics",
+      "description": "With no arguments lists every published metric and what it counts; with keys, resolves those metrics to numbers for the calling member — two jobs in one tool, deliberately, to spend one slot instead of two.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "description": "Optional ISO date (YYYY-MM-DD), in the household timezone.",
+            "type": "string"
+          },
+          "keys": {
+            "description": "Metric keys to resolve. Omit to list the catalog instead.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_notes_create",
+      "module": "notes",
+      "title": "Create a note",
+      "description": "Writes a new Markdown note into the shared tree, or with scope \"private\" into the caller's own; a note created under a folder inherits that folder's scope, and disagreeing with it is refused.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body_md": {
+            "description": "Markdown body.",
+            "type": "string"
+          },
+          "folder_id": {
+            "description": "Optional parent folder. Omit for the root of the chosen scope.",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "shared",
+              "private"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_notes_pin",
+      "module": "notes",
+      "title": "Pin a note",
+      "description": "Pins or unpins a note on the dashboard, either for the whole household or just for the caller; a private note can only ever be pinned personally.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "household",
+              "personal"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "pinned"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_notes_tree",
+      "module": "notes",
+      "title": "Notes tree",
+      "description": "Returns the folder tree of the household's shared notes, or with scope \"private\" the caller's own private notes; pass note for one note's full Markdown body.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_archived": {
+            "type": "boolean"
+          },
+          "note": {
+            "description": "Note id. Returns that note in full, including its Markdown body.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Which root to read. \"private\" is the CALLER's own; there is no way to name another member's.",
+            "enum": [
+              "shared",
+              "private"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_notes_update",
+      "module": "notes",
+      "title": "Update a note",
+      "description": "Replaces a note's title, Markdown body or archived flag; the body is replaced whole, so read it with home_notes_tree first if you mean to append rather than overwrite.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "body_md": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_search",
+      "module": "",
+      "title": "Search the household",
+      "description": "Searches notes, documents, tasks, events, garden records and chat at once and returns a MERGE ordered by exact-title-match then recency — not a relevance ranking, because scores from separate indexes are not comparable — with a per-module budget so one chatty module cannot crowd out the rest.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "in": {
+            "description": "Optional module names to restrict the search to, e.g. [\"notes\",\"documents\"].",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "description": "Maximum hits PER MODULE.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "The search terms, in Czech, as the member would type them.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_today",
+      "module": "",
+      "title": "What is due today",
+      "description": "Returns everything due or overdue for the calling member today — reminders, tasks and garden work — composed entirely from the published metric and list catalogs, so it costs no module query; it deliberately carries no chat unread count.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "description": "Optional ISO date (YYYY-MM-DD) to answer for instead of today, in the household timezone.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_todo_boards",
+      "module": "todo",
+      "title": "To-do boards",
+      "description": "Lists the to-do boards; pass board for one board's full tree of columns and cards, or card for one card with its checklist, links and labels.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "description": "Board id. Returns that board's columns and their cards.",
+            "type": "string"
+          },
+          "card": {
+            "description": "Card id. Returns that card in full, including its checklist.",
+            "type": "string"
+          },
+          "include_archived": {
+            "type": "boolean"
+          },
+          "query": {
+            "description": "Optional text filter applied to the board tree's card titles.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_todo_card_create",
+      "module": "todo",
+      "title": "Create a card",
+      "description": "Adds a card to a column; call home_todo_boards first to get the column id, because a column id is not guessable from a board id.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "column_id": {
+            "type": "string"
+          },
+          "notes": {
+            "description": "Optional Markdown body.",
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "column_id",
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_todo_card_move",
+      "module": "todo",
+      "title": "Move a card",
+      "description": "Moves a card to another column — moving it into a column of kind \"done\" is how a task is completed — optionally anchored before a named card.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "before_card_id": {
+            "description": "Optional: place it immediately before this card. Omit to append at the end.",
+            "type": "string"
+          },
+          "column_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "column_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_todo_card_update",
+      "module": "todo",
+      "title": "Update a card",
+      "description": "Changes a card's title, notes or archived flag; archiving is how a household removes a card, and it is reversible where a delete would not be.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_todo_checklist",
+      "module": "todo",
+      "title": "Change a card's checklist",
+      "description": "Adds an item to a card's checklist, or ticks and unticks an existing one, and returns the whole checklist afterwards; reading a checklist without changing it is home_todo_boards with card.",
+      "read_only": false,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "description": "Text of a new checklist item to append.",
+            "type": "string"
+          },
+          "card_id": {
+            "type": "string"
+          },
+          "done": {
+            "description": "The state to set item_id to.",
+            "type": "boolean"
+          },
+          "item_id": {
+            "description": "Existing item to tick or untick; requires done.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "card_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "home_whoami",
+      "module": "",
+      "title": "Who am I",
+      "description": "Returns the calling member's id, display name, roles, which modules this token exposes, the household timezone and today's date; call it once at the start of a session so every later date is unambiguous.",
+      "read_only": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    }
+  ],
+  "resource_templates": [
+    {
+      "module": "chat",
+      "uri_template": "home://chat/{conversation}/attachments/{id}",
+      "name": "attachment",
+      "title": "Příloha v chatu",
+      "description": "Jedna příloha z konverzace, které je volající členem."
+    },
+    {
+      "module": "documents",
+      "uri_template": "home://documents/{path}",
+      "name": "document",
+      "title": "Dokument",
+      "description": "Jeden dokument podle své cesty ve stromu; soukromé mají prefix soukrome/."
+    },
+    {
+      "module": "notes",
+      "uri_template": "home://notes/{path}",
+      "name": "note",
+      "title": "Poznámka",
+      "description": "Jedna poznámka podle své cesty ve stromu; soukromé mají prefix soukrome/.",
+      "mime_type": "text/markdown"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "co-mě-čeká",
+      "title": "Co mě čeká",
+      "description": "Přehled dneška a nejbližších dnů — připomínky, úkoly, práce na zahradě.",
+      "text": "Zjisti, co mě dnes čeká.\n\n1. Zavolej `home_whoami`, ať víš, kdo jsem a jaké je dnes datum.\n2. Zavolej `home_today` — vrátí připomínky, úkoly i zahradní práci na dnešek.\n3. Zavolej `home_events_upcoming` na příštích sedm dní.\n4. Zavolej `home_chat_conversations` a zmiň jen počet nepřečtených zpráv, ne jejich obsah.\n\nOdpověz česky, stručně, jako by mi to někdo řekl u snídaně: nejdřív to, co má termín dnes, pak zbytek týdne. Když není nic, řekni to jednou větou — nevymýšlej úkoly a nenavrhuj, co bych mohl dělat."
+    },
+    {
+      "name": "měsíční-uzávěrka",
+      "title": "Měsíční uzávěrka",
+      "description": "Projde finance a elektřinu za měsíc a řekne, co ještě chybí zapsat.",
+      "arguments": [
+        "měsíc"
+      ],
+      "text": "Projdi se mnou uzávěrku měsíce.\n\n1. Zavolej `home_whoami` kvůli dnešnímu datu; pokud jsem měsíc neuvedl, vezmi ten předchozí.\n2. Zavolej `home_finance_months` na ten měsíc. Když chybí, řekni to — nezakládej ho sám.\n3. Zavolej `home_electricity_summary` a `home_electricity_readings`.\n\nNapiš česky: jestli jsou příjmy za měsíc zapsané, jaký vyšel rozpad, jestli je odečet elektroměru čerstvý, a jestli vychází nedoplatek nebo přeplatek. Na konci uveď seznam toho, co ještě chybí zapsat — a počkej, až ti řeknu, co s tím."
+    },
+    {
+      "name": "nákup",
+      "title": "Nákupní seznam",
+      "description": "Sestaví nákupní seznam z poznámek a úkolů, se zásobami ze zahrady.",
+      "text": "Sestav nákupní seznam.\n\n1. Zavolej `home_search` s dotazem \"nákup\" — projde poznámky i úkoly.\n2. Otevři nalezené poznámky přes `home_notes_tree` s parametrem `note`.\n3. Zavolej `home_todo_boards` a projdi karty, které vypadají jako nákup.\n\nSlož z toho jeden seznam po kategoriích (pečivo, mléčné, zelenina, drogerie, ostatní). Duplicity slouč. Pokud najdeš věc, kterou máme podle zahrady doma, napiš to k položce místo toho, abys ji tiše vynechal — rozhodnutí je moje.\n\nNic nikam nezapisuj, dokud tě o to nepožádám."
+    },
+    {
+      "name": "večeře-z-toho-co-máme",
+      "title": "Večeře z toho, co máme",
+      "description": "Navrhne večeři ze zahradních zásob a poslední sklizně.",
+      "text": "Navrhni večeři z toho, co máme doma.\n\n1. Zavolej `home_search` s dotazem \"recept\" a projdi, co v poznámkách je.\n2. Zavolej `home_garden_plan` a `home_garden_tasks` — co je teď na zahradě a co se právě sklízí.\n\nO téhle domácnosti platí: vaříme spíš jednoduše a večer, maso párkrát týdně, a co je ze zahrady, to se snažíme sníst dřív, než se to zkazí. Navrhni dvě varianty, u každé napiš, co k ní chybí koupit.\n\n⚠ Zásoby ve skladu (sklad zahrady) přes MCP zatím vidět nejsou — jestli si nejsi jistý, co je doma, zeptej se místo hádání."
+    },
+    {
+      "name": "zahrada-týden",
+      "title": "Zahrada na týden",
+      "description": "Co je na zahradě potřeba udělat tento týden a co je po termínu.",
+      "text": "Řekni mi, co je tento týden potřeba na zahradě.\n\n1. Zavolej `home_whoami` kvůli datu.\n2. Zavolej `home_garden_tasks` na příštích sedm dní.\n3. Zavolej `home_garden_plan` — ať víš, co kde roste.\n\nSeřaď to podle záhonů, ne podle data: chodí se po zahradě, ne po kalendáři. Co je po termínu, dej nahoru a označ to. Když je něco hotové, můžu tě požádat o `home_garden_task_complete` — sám nic neodškrtávej."
+    }
+  ]
+}
