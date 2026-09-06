@@ -40,7 +40,7 @@ func (s *Service) GetSeason(ctx context.Context, year int) (Season, error) {
 // SeasonShift describes a rotation of bed assignments over the ordered active
 // beds (FR-G5).
 type SeasonShift struct {
-	Offset  int   `json:"offset"`
+	Offset   int   `json:"offset"`
 	ByFamily *bool `json:"by_family"`
 }
 
@@ -56,9 +56,9 @@ type SeasonCreateInput struct {
 
 // SeasonPreview is the dry_run=true response (D129). NOTHING WAS PERSISTED.
 type SeasonPreview struct {
-	Season      Season      `json:"season"`
-	Plantings   []Planting  `json:"plantings"`
-	Check       CheckResult `json:"check"`
+	Season      Season       `json:"season"`
+	Plantings   []Planting   `json:"plantings"`
+	Check       CheckResult  `json:"check"`
 	CheckBefore *CheckResult `json:"check_before,omitempty"`
 }
 

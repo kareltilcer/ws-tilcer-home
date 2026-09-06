@@ -1935,4 +1935,3 @@ func ftsQuery(q string) string {
 	}
 	return strings.Join(parts, " ")
 }
-

@@ -27,16 +27,16 @@ type PraceWidget struct {
 	// Overdue comes first and separately: work whose window has passed is a
 	// different question from work coming up, and merging them into one sorted
 	// list buries it.
-	Overdue []PraceItem  `json:"overdue,omitempty"`
-	Weeks   []PraceWeek  `json:"weeks,omitempty"`
-	Total   int          `json:"total"`
+	Overdue []PraceItem `json:"overdue,omitempty"`
+	Weeks   []PraceWeek `json:"weeks,omitempty"`
+	Total   int         `json:"total"`
 }
 
 // PraceWeek groups upcoming work by ISO week, which is how gardening is planned
 // and how the print sheet is laid out.
 type PraceWeek struct {
-	Week    string      `json:"week"`     // "12/2027"
-	FromISO string      `json:"from"`     // Monday, for the heading
+	Week    string      `json:"week"` // "12/2027"
+	FromISO string      `json:"from"` // Monday, for the heading
 	Items   []PraceItem `json:"items"`
 }
 

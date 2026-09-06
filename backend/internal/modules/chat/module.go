@@ -119,6 +119,17 @@ func (m *Module) AuditActions() []string {
 		"member.added", "member.removed",
 		"attachment.uploaded", "attachment.removed", "attachment.moved",
 		"threshold.update",
+		// v11 — the third READ in Home that writes an audit event, after v9's
+		// admin.private_items.view and v11's notes.private.read. It fires ONLY when
+		// the reader is an MCP token (D297), and it records the CONTAINER and never
+		// the content: the conversation id and a message count, no body and no
+		// snippet.
+		//
+		// ⚠ IT DOES NOT REVERSE D231. Sending, editing and deleting a message still
+		// write NOTHING to audit_events — TestChatMessagesAreNotAudited still passes —
+		// and this is a read by an assistant, which is a different fact about a
+		// different actor.
+		"read",
 	}
 }
 

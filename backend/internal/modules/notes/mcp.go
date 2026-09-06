@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -374,10 +373,7 @@ func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error
 		if err != nil {
 			return nil, err
 		}
-		for i, n := range page.Items {
-			if i >= q.Limit {
-				break
-			}
+		for _, n := range page.Items {
 			updated, _ := time.Parse(tsFormat, n.UpdatedAt)
 			hits = append(hits, mcp.Hit{
 				Kind:      "notes.note",
@@ -389,23 +385,11 @@ func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error
 			})
 		}
 	}
-	// ⚠ THE BUDGET IS PER MODULE, NOT PER ROOT (D301). notes is the one provider
-	// that reads TWO roots — the household's shared tree and the caller's own
-	// private one — so taking q.Limit from each would spend double what the host
-	// handed out and report a count the host's own budget contradicts. The trim
-	// uses the SAME order the host merges by (exact title match, then recency), so
-	// what survives here is what would have survived there: a private note is not
-	// dropped for being private, only for being older.
-	if q.Limit > 0 && len(hits) > q.Limit {
-		sort.SliceStable(hits, func(i, j int) bool {
-			if hits[i].ExactHit != hits[j].ExactHit {
-				return hits[i].ExactHit
-			}
-			return hits[i].UpdatedAt.After(hits[j].UpdatedAt)
-		})
-		hits = hits[:q.Limit]
-	}
-	return hits, nil
+	// ⚠ ONE BUDGET ACROSS THE TWO ROOTS (D301) — see mcp.TrimHits, which
+	// `documents` shares. notes and documents are twins by construction (D40),
+	// and this is the one place that mattered enough to share rather than mirror:
+	// a trim that disagreed between them would spend a different budget in each.
+	return mcp.TrimHits(hits, q.Limit), nil
 }
 
 func scopeLabel(visibility string) string {

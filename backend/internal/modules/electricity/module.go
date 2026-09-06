@@ -43,12 +43,17 @@ var MigrationsFS embed.FS
 // Everything is computed ON READ by compute.go (D152): no derived column, no
 // cache table, no periodic job. There is nothing here that can fall behind.
 type Module struct {
+	// svc is held for the v11 MCP provider and for nothing else. ⚠ Until v11 the
+	// handler was the only thing that needed it, which is why this module was a
+	// single field — a module that only mounts routes never needs the service by
+	// name. A provider does.
+	svc     *Service
 	handler *Handler
 }
 
 // NewModule builds the electricity module over svc.
 func NewModule(svc *Service) *Module {
-	return &Module{handler: NewHandler(svc)}
+	return &Module{svc: svc, handler: NewHandler(svc)}
 }
 
 func (m *Module) Name() string { return "electricity" }

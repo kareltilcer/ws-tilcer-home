@@ -19,11 +19,11 @@ import (
 // garden.frost_risk_tonight gates the frost alert entirely (D113); and
 // garden.beds_unplanned is the March version of finance.missing_months.
 const (
-	MetricTasksDue7d      = "garden.tasks_due_7d"
-	MetricTasksOverdue    = "garden.tasks_overdue"
-	MetricPlanWarnings    = "garden.plan_warnings"
-	MetricHarvestSeason   = "garden.harvest_season"
-	MetricBedsUnplanned   = "garden.beds_unplanned"
+	MetricTasksDue7d       = "garden.tasks_due_7d"
+	MetricTasksOverdue     = "garden.tasks_overdue"
+	MetricPlanWarnings     = "garden.plan_warnings"
+	MetricHarvestSeason    = "garden.harvest_season"
+	MetricBedsUnplanned    = "garden.beds_unplanned"
 	MetricFrostRiskTonight = "garden.frost_risk_tonight"
 )
 

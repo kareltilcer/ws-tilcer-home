@@ -363,8 +363,8 @@ func PlannedDates(p *Planting, eff Effective, a SeasonAnchors) {
 // planting page, the widget and any future summary say it identically.
 func ComputeDrift(p Planting) *Drift {
 	type stage struct {
-		name             string
-		actual, planned  *dates.Date
+		name            string
+		actual, planned *dates.Date
 	}
 	stages := []stage{
 		{"sow", parseDatePtr(p.SowedOn), firstNonNil(parseDatePtr(p.SowIndoorOn), parseDatePtr(p.SowDirectOn))},

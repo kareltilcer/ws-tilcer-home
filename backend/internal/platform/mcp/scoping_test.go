@@ -130,9 +130,15 @@ func TestResourceListIsNotCappedAtTheSearchBudget(t *testing.T) {
 	}
 
 	// And the search budget itself is untouched by the fix.
+	//
+	// ⚠ THE ASSERTION IS ON THE `notes` COUNT, NOT THE TOTAL. The budget is PER
+	// MODULE (D301), and creating twelve notes also writes twelve audit events —
+	// which `logging` finds, because it contributes a fifth of the search corpus.
+	// A total here would be asserting the sum of two budgets and would move every
+	// time another provider learned to answer.
 	_, result := h.call(secret, "home_search", map[string]any{"query": "Poznámka"})
-	if got := len(searchTitles(t, result)); got != 3 {
-		t.Fatalf("home_search returned %d hits, want the per-module budget of 3", got)
+	if got := searchCounts(t, result)["notes"]; got != 3 {
+		t.Fatalf("home_search returned %d notes hits, want the per-module budget of 3", got)
 	}
 }
 
@@ -154,8 +160,10 @@ func TestSearchModuleFilter(t *testing.T) {
 
 	t.Run("no filter reaches both modules", func(t *testing.T) {
 		_, result := h.call(secret, "home_search", map[string]any{"query": "Nákup"})
-		if got := len(searchTitles(t, result)); got != 2 {
-			t.Fatalf("an unfiltered search found %d hits, want 2", got)
+		counts := searchCounts(t, result)
+		if counts["notes"] != 1 || counts["todo"] != 1 {
+			t.Fatalf("an unfiltered search found notes=%d todo=%d, want 1 of each: %v",
+				counts["notes"], counts["todo"], counts)
 		}
 	})
 
@@ -165,6 +173,30 @@ func TestSearchModuleFilter(t *testing.T) {
 		})
 		if got := len(searchTitles(t, result)); got != 1 {
 			t.Fatalf("in=[notes] found %d hits, want 1", got)
+		}
+	})
+
+	// ⚠ THE LOG IS ADMIN-ONLY AND THE SEARCH HONOURS THAT. `/api/logs/**` has sat
+	// behind RequireAdmin since D5, so a member whose browser answers 403 must not
+	// be handed the same summaries by a search — the second time that hole appeared
+	// in v11, after the audit digest.
+	t.Run("logging answers admins and nobody else", func(t *testing.T) {
+		h.seedSession("user-r", "Reader", "reader")
+		readerSecret, _ := h.mintToken("user-r", "Claude", nil, time.Time{})
+
+		_, adminResult := h.call(secret, "home_search", map[string]any{"query": "Nákup"})
+		if searchCounts(t, adminResult)["logging"] == 0 {
+			t.Fatal("an ADMIN found nothing in the Log, so the assertion below proves nothing")
+		}
+		_, readerResult := h.call(readerSecret, "home_search", map[string]any{"query": "Nákup"})
+		if got := searchCounts(t, readerResult)["logging"]; got != 0 {
+			t.Fatalf("a reader's token found %d audit events through home_search, which"+
+				" their browser refuses with a 403", got)
+		}
+		// The rest of the corpus is still theirs — the gate narrows one module, not
+		// the search.
+		if searchCounts(t, readerResult)["notes"] != 1 {
+			t.Fatal("the reader's search lost the shared note as well")
 		}
 	})
 

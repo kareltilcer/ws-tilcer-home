@@ -37,6 +37,9 @@ var MigrationsFS embed.FS
 // the sibling garden/seed package as their own migration source, which only the
 // server entrypoint includes (D115) — see seed/embed.go.
 type Module struct {
+	// svc is held for the v11 MCP provider. The three catalog providers below
+	// already close over it; the MCP one is built on demand and needs it by name.
+	svc     *Service
 	handler *Handler
 	widgets []registry.WidgetProvider
 	metrics *metricProvider
@@ -46,6 +49,7 @@ type Module struct {
 // NewModule builds the garden module over svc.
 func NewModule(svc *Service) *Module {
 	return &Module{
+		svc:     svc,
 		handler: NewHandler(svc),
 		widgets: []registry.WidgetProvider{&praceProvider{svc: svc}},
 		metrics: &metricProvider{svc: svc},
