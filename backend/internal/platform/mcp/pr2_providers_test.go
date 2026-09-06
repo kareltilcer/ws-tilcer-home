@@ -3,11 +3,13 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/garden"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
@@ -454,4 +456,402 @@ func TestWriteSchemasDeclareWhatTheServiceDemands(t *testing.T) {
 			t.Errorf("%s is not in tools/list at all", name)
 		}
 	}
+}
+
+// ---- round 2 ----
+
+// ⚠ THE SIZE OF A PLANTING IS EXACTLY ONE OF area_m2 AND plant_count, AND THE
+// SCHEMA SAYING OTHERWISE MADE THE TOOL UNUSABLE. It declared only plant_id
+// required and both size fields optional with "minimum": 0, against a
+// validatePlantingShape that refuses hasArea == hasCount — so a model that
+// followed the published shape was refused EVERY time, about two fields it had
+// been told it could leave out. It is round 1's `kind` and `rates` a third time,
+// in the one write tool no test had ever called successfully.
+func TestGardenPlantingCreateWorksForItsPublishedSchema(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	ctx := testsupport.CtxUser(memberA, "editor")
+
+	year := h.elec.Today().Y
+	if _, _, err := h.garden.CreateSeason(ctx, garden.SeasonCreateInput{Year: year}, false); err != nil {
+		t.Fatalf("seed season: %v", err)
+	}
+	plantID := h.seedPlant("Rajče")
+
+	_, created := h.call(secret, "home_garden_planting_create", map[string]any{
+		"plant_id": plantID, "season_year": year, "plant_count": 6,
+	})
+	if isError(created) {
+		t.Fatalf("home_garden_planting_create refused a well-formed planting: %s",
+			resultText(t, created))
+	}
+	if !strings.Contains(resultText(t, created), "Rajče") {
+		t.Fatalf("the planting did not come back: %s", resultText(t, created))
+	}
+
+	// Neither, and both — the two shapes the old schema published as legal — are
+	// refused BY THE TOOL, naming both fields so the answer says what to send next.
+	for _, name := range []string{"neither", "both"} {
+		args := map[string]any{"plant_id": plantID, "season_year": year}
+		if name == "both" {
+			args["plant_count"] = 6
+			args["area_m2"] = 2.5
+		}
+		_, refused := h.call(secret, "home_garden_planting_create", args)
+		if !isError(refused) {
+			t.Fatalf("%s: the size rule was not enforced: %s", name, resultText(t, refused))
+		}
+		text := resultText(t, refused)
+		if !strings.Contains(text, "area_m2") || !strings.Contains(text, "plant_count") {
+			t.Fatalf("%s: the refusal does not name both size fields: %s", name, text)
+		}
+	}
+
+	// ⚠ AND THE SCHEMA CARRIES THE RULE, not only the Czech refusal. A model plans
+	// from the published shape; a tool that is right only once it has been refused
+	// is a tool that gets refused.
+	schema := toolSchema(t, h, secret, "home_garden_planting_create")
+	if !strings.Contains(schema, "oneOf") {
+		t.Errorf("the schema does not state that exactly one size field is required:\n%s", schema)
+	}
+	if strings.Count(schema, "exclusiveMinimum") < 2 {
+		t.Errorf("a size field still publishes 0 as legal, which normalizePlantingSize"+
+			" nils and validatePlantingShape then refuses:\n%s", schema)
+	}
+}
+
+// ⚠ TWO CLOSED ENUMS PUBLISHED AS FREE STRINGS ARE TWO GUESSES A MODEL CANNOT
+// WIN. CreateHarvest matches `unit` and `destination` against the enum's exact
+// CODE — Valid is strict, aliases belong to the importer — so "kilogram" and
+// "sklad" are refused, and `destination` carried no description at all while
+// accepting only four values.
+func TestGardenHarvestLogNamesItsEnums(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	ctx := testsupport.CtxUser(memberA, "editor")
+
+	year := h.elec.Today().Y
+	if _, _, err := h.garden.CreateSeason(ctx, garden.SeasonCreateInput{Year: year}, false); err != nil {
+		t.Fatalf("seed season: %v", err)
+	}
+	plantID := h.seedPlant("Rajče")
+	count := 6
+	planting, err := h.garden.CreatePlanting(ctx, garden.PlantingInput{
+		PlantID: &plantID, PlantCount: &count, SeasonYear: &year,
+	})
+	if err != nil {
+		t.Fatalf("seed planting: %v", err)
+	}
+
+	_, ok := h.call(secret, "home_garden_harvest_log", map[string]any{
+		"planting_id": planting.ID, "quantity": 1.5, "unit": "kg", "destination": "storage",
+	})
+	if isError(ok) {
+		t.Fatalf("a well-formed harvest was refused: %s", resultText(t, ok))
+	}
+
+	for _, tc := range []struct{ field, value string }{
+		{"unit", "kilogram"},
+		{"destination", "sklad"},
+	} {
+		_, refused := h.call(secret, "home_garden_harvest_log", map[string]any{
+			"planting_id": planting.ID, "quantity": 1.5, tc.field: tc.value,
+		})
+		if !isError(refused) {
+			t.Fatalf("%s=%q was accepted: %s", tc.field, tc.value, resultText(t, refused))
+		}
+		// ⚠ REFUSED BY THE TOOL, NAMING THE LEGAL VALUES — not by the service, whose
+		// answer is "Neznámá jednotka sklizně." and names none of them (§7.4).
+		text := resultText(t, refused)
+		if !strings.Contains(text, tc.field) {
+			t.Fatalf("the refusal does not name the field: %s", text)
+		}
+		if !strings.Contains(text, "svazek") && !strings.Contains(text, "compost") {
+			t.Fatalf("the refusal does not list the legal values: %s", text)
+		}
+	}
+
+	// And the published schema names both sets, so the values are discoverable
+	// before the first refusal rather than after it.
+	schema := toolSchema(t, h, secret, "home_garden_harvest_log")
+	for _, want := range []string{"svazek", "compost"} {
+		if !strings.Contains(schema, want) {
+			t.Errorf("the schema does not publish %q:\n%s", want, schema)
+		}
+	}
+}
+
+// ⚠ AN UNKNOWN BED NARROWS TO NOTHING, WHICH IS THE STATUS FILTER'S DEFECT IN ITS
+// OTHER SHAPE — the household told there is no garden work when what was wrong was
+// the filter. And a missing SEASON came back as the bare "Nenalezeno.", for a year
+// the provider itself had chosen.
+func TestGardenReadsAndWritesNameWhatIsMissing(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+
+	for _, tool := range []string{"home_garden_tasks", "home_garden_plan"} {
+		_, refused := h.call(secret, tool, map[string]any{"bed_id": "zahon-99"})
+		if !isError(refused) {
+			t.Fatalf("%s answered an empty list for a bed that does not exist: %s",
+				tool, resultText(t, refused))
+		}
+		if !strings.Contains(resultText(t, refused), "zahon-99") {
+			t.Fatalf("%s does not name the bed it refused: %s", tool, resultText(t, refused))
+		}
+	}
+
+	// No season exists at all, and the write tools default the year themselves — so
+	// the caller is being refused about a number they never typed.
+	year := h.elec.Today().Y
+	_, task := h.call(secret, "home_garden_task_create", map[string]any{
+		"title_cs":    "Zalít",
+		"window_from": dates.Date{Y: year, M: time.June, D: 1}.String(),
+		"window_to":   dates.Date{Y: year, M: time.June, D: 7}.String(),
+		"kind":        "water",
+	})
+	if !isError(task) {
+		t.Fatalf("a job was created into a season that does not exist: %s", resultText(t, task))
+	}
+	if !strings.Contains(resultText(t, task), fmt.Sprint(year)) {
+		t.Fatalf("the refusal does not name the missing season's year: %s", resultText(t, task))
+	}
+}
+
+// ⚠ THE `in` VOCABULARY IS THE REGISTRY AS THIS TOKEN SEES IT. Validated against
+// every registered provider, a name the token cannot reach passed the guard and was
+// dropped one line later: nothing ran, the counts came back empty, and the answer
+// was "0 hits" from a household that has plenty — the silence the refusal exists to
+// prevent, reached through the guard instead of around it. `logging` made it
+// permanent rather than occasional: KnownModules omits it, so no allowlist can ever
+// name it.
+func TestSearchInFilterIsTheTokensOwnVocabulary(t *testing.T) {
+	h := newHarness(t)
+	h.createSharedNoteAs(memberA, "Zahradní nůžky", "koupit")
+	scoped, _ := h.mintToken(memberA, "Claude (jen poznámky)", []string{"notes"}, time.Time{})
+
+	for _, module := range []string{"logging", "garden"} {
+		_, result := h.call(scoped, "home_search", map[string]any{
+			"query": "Zahradní", "in": []string{module},
+		})
+		if !isError(result) {
+			t.Fatalf("a token scoped to notes named %q and was answered with silence"+
+				" rather than refused: %s", module, resultText(t, result))
+		}
+		if !strings.Contains(resultText(t, result), "notes") {
+			t.Fatalf("the refusal does not name what this token may search: %s",
+				resultText(t, result))
+		}
+	}
+	// Its own module still works, and an UNSCOPED token still reaches logging.
+	_, mine := h.call(scoped, "home_search", map[string]any{
+		"query": "Zahradní", "in": []string{"notes"},
+	})
+	if isError(mine) {
+		t.Fatalf("the scoped token was refused its own module: %s", resultText(t, mine))
+	}
+	full, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	_, all := h.call(full, "home_search", map[string]any{
+		"query": "Zahradní", "in": []string{"logging"},
+	})
+	if isError(all) {
+		t.Fatalf("an unscoped token was refused logging: %s", resultText(t, all))
+	}
+}
+
+// ⚠ A TOMBSTONE IS NOT A MESSAGE THE ASSISTANT READ. `message_count` is the whole
+// of what D297's event says about how much was seen, and it counted rows the
+// renderer had skipped: a page of fifty holding ten tombstones announced "50 zpráv"
+// and then listed forty.
+func TestChatReadCountsOnlyWhatItShowed(t *testing.T) {
+	h := newHarness(t)
+	conversationID := h.seedConversation("Rodina", memberA)
+	ctx := testsupport.CtxUser(memberA, "editor")
+
+	if _, err := h.chat.SendMessage(ctx, conversationID, chat.MessageCreate{Body: "zůstává"}); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	gone, err := h.chat.SendMessage(ctx, conversationID, chat.MessageCreate{Body: "smazáno"})
+	if err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	if err := h.chat.DeleteMessage(ctx, gone.ID); err != nil {
+		t.Fatalf("delete message: %v", err)
+	}
+
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	_, result := h.call(secret, "home_chat_messages", map[string]any{"conversation_id": conversationID})
+	if isError(result) {
+		t.Fatalf("the thread read was refused: %s", resultText(t, result))
+	}
+	if !strings.Contains(resultText(t, result), "zůstává") {
+		t.Fatalf("the live message is missing: %s", resultText(t, result))
+	}
+
+	var meta string
+	if err := h.db.QueryRow("SELECT COALESCE(meta, '') FROM audit_events" +
+		" WHERE module = 'chat' AND action = 'read'").Scan(&meta); err != nil {
+		t.Fatalf("read the event: %v", err)
+	}
+	if !strings.Contains(meta, "\"message_count\":1") {
+		t.Fatalf("the read event counted a tombstone the assistant was never shown: %s", meta)
+	}
+}
+
+// ⚠ AN ARGUMENT THAT CANNOT BE HONOURED IS REFUSED, NOT DROPPED. It is the rule
+// mcp.DecodeArgs was made strict for, applied to an argument that IS known and
+// still does nothing: a caller who sent both asked for two different things, and
+// silence about which one won is how a model learns that a parameter it sent has no
+// effect.
+func TestArgumentsThatCannotBeHonouredAreRefused(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	docID := h.seedDocument(memberA, "Návod k myčce", "shared")
+
+	_, months := h.call(secret, "home_finance_months", map[string]any{"month": "2026-01", "limit": 5})
+	if !isError(months) {
+		t.Fatalf("home_finance_months silently ignored limit beside month: %s", resultText(t, months))
+	}
+	_, tree := h.call(secret, "home_documents_tree", map[string]any{"document": docID, "scope": "private"})
+	if !isError(tree) {
+		t.Fatalf("home_documents_tree answered a SHARED document for a private-root"+
+			" request, with nothing saying the scope was dropped: %s", resultText(t, tree))
+	}
+	// And each of them alone still answers.
+	if _, ok := h.call(secret, "home_documents_tree", map[string]any{"document": docID}); isError(ok) {
+		t.Fatalf("the plain document read was refused: %s", resultText(t, ok))
+	}
+	if _, ok := h.call(secret, "home_finance_months", map[string]any{"limit": 5}); isError(ok) {
+		t.Fatalf("the plain listing was refused: %s", resultText(t, ok))
+	}
+}
+
+// ⚠ `logging` PUBLISHES NO TOOL AND STILL OWES home_get AN ANSWER. It was the one
+// provider whose search hits carried an id nothing could resolve — a model handed
+// logging.event rows and told home_get turns a hit into an entity was refused for
+// the only module it had just been reading. mcp.EntityGetter is not a tool, so this
+// does not reopen FR-M2.
+func TestLoggingEventsAreResolvableByHomeGet(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	h.createSharedNoteAs(memberA, "Zahradní nůžky", "koupit")
+
+	_, search := h.call(secret, "home_search", map[string]any{
+		"query": "Zahradní", "in": []string{"logging"},
+	})
+	id := firstHitID(t, search, "logging.event")
+
+	_, got := h.call(secret, "home_get", map[string]any{"kind": "logging.event", "id": id})
+	if isError(got) {
+		t.Fatalf("home_get could not resolve a logging.event the search had just"+
+			" handed over: %s", resultText(t, got))
+	}
+
+	// ⚠ AND IT IS ADMIN-ONLY, BECAUSE /api/logs/** IS. home_get carries no per-kind
+	// role gate of its own, so an ungated event read here would be the audit spine
+	// reached by a member whose browser answers 403 — leak row 6 wearing yet another
+	// hat. A reader gets the ordinary not-found refusal.
+	h.seedSession("user-r", "Reader", "reader")
+	readerSecret, _ := h.mintToken("user-r", "Claude", nil, time.Time{})
+	_, refused := h.call(readerSecret, "home_get", map[string]any{"kind": "logging.event", "id": id})
+	if !isError(refused) {
+		t.Fatalf("a reader's token read an audit event through home_get: %s",
+			resultText(t, refused))
+	}
+	_, unknown := h.call(readerSecret, "home_get", map[string]any{"kind": "logging.event", "id": "nope"})
+	if resultText(t, refused) != resultText(t, unknown) {
+		t.Fatalf("the reader's refusal differs from an unknown id:\n%q\n%q",
+			resultText(t, refused), resultText(t, unknown))
+	}
+}
+
+// ⚠ CZECH HAS THREE PLURAL FORMS AND EVERY COUNT IN THESE PROVIDERS USED THE LAST
+// OF THEM. The strings are Czech data on their way to a household verbatim, so
+// "1 měsíců" is a sentence somebody has read to them.
+func TestCzechCountsAreGrammatical(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	h.seedConversation("Rodina", memberA)
+	_, created := h.call(secret, "home_finance_month_create", map[string]any{
+		"month": "2026-04", "income_kaja": 1000, "income_andy": 2000, "rates": evenRates()})
+	if isError(created) {
+		t.Fatalf("seed month: %s", resultText(t, created))
+	}
+
+	for _, tc := range []struct{ tool, want, wrong string }{
+		{"home_finance_months", "1 měsíc:", "1 měsíců"},
+		{"home_chat_conversations", "1 konverzace:", "1 konverzací"},
+		{"home_electricity_readings", "0 odečtů:", ""},
+	} {
+		_, result := h.call(secret, tc.tool, nil)
+		text := resultText(t, result)
+		if !strings.Contains(text, tc.want) {
+			t.Errorf("%s does not say %q:\n%s", tc.tool, tc.want, text)
+		}
+		if tc.wrong != "" && strings.Contains(text, tc.wrong) {
+			t.Errorf("%s still says %q:\n%s", tc.tool, tc.wrong, text)
+		}
+	}
+}
+
+// ---- fixtures ----
+
+// seedPlant adds one crop to the knowledge base.
+//
+// ⚠ v11 PUBLISHES NO PLANT VERB (D295), so this is the only way to put a crop in
+// front of the two garden write tools that need one — which is exactly why neither
+// had ever been called successfully.
+func (h *harness) seedPlant(nameCS string) string {
+	h.t.Helper()
+	ctx := testsupport.CtxUser(memberA, "editor")
+	family, hardiness, plantType, unit := "solanaceae", "tender", "vegetable", "kg"
+	p, err := h.garden.CreatePlant(ctx, garden.PlantInput{
+		NameCS: &nameCS, Family: &family, Hardiness: &hardiness, PlantType: &plantType,
+		PlantCore: garden.PlantCore{HarvestUnit: &unit},
+	})
+	if err != nil {
+		h.t.Fatalf("seed plant %q: %v", nameCS, err)
+	}
+	return p.ID
+}
+
+// toolSchema returns one tool's published InputSchema as raw JSON.
+//
+// ⚠ IT READS tools/list RATHER THAN THE Go LITERAL, because what a model plans
+// from is what came off the wire.
+func toolSchema(t *testing.T, h *harness, secret, tool string) string {
+	t.Helper()
+	var env struct {
+		Result struct {
+			Tools []struct {
+				Name        string          `json:"name"`
+				InputSchema json.RawMessage `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(h.rpc(secret, "tools/list", nil).Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode tools/list: %v", err)
+	}
+	for _, tl := range env.Result.Tools {
+		if tl.Name == tool {
+			return string(tl.InputSchema)
+		}
+	}
+	t.Fatalf("%s is not in tools/list", tool)
+	return ""
+}
+
+// firstHitID pulls the first hit of one kind out of a home_search result.
+func firstHitID(t *testing.T, result map[string]any, kind string) string {
+	t.Helper()
+	payload, _ := result["structuredContent"].(map[string]any)
+	hits, _ := payload["hits"].([]any)
+	for _, raw := range hits {
+		hit, _ := raw.(map[string]any)
+		if k, _ := hit["kind"].(string); k == kind {
+			id, _ := hit["id"].(string)
+			return id
+		}
+	}
+	t.Fatalf("no %s hit in the search result: %#v", kind, result)
+	return ""
 }

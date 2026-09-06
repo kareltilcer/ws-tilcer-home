@@ -63,9 +63,9 @@ func (p *mcpProvider) Tools() []mcp.Tool {
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "scope": {"type": "string", "enum": ["shared", "private"], "description": "Which root to read. \"private\" is the CALLER's own; there is no way to name another member's."},
-    "document": {"type": "string", "description": "Document id. Returns that document's metadata and its path."},
-    "include_archived": {"type": "boolean"}
+    "scope": {"type": "string", "enum": ["shared", "private"], "description": "Which root to read. \"private\" is the CALLER's own; there is no way to name another member's. Not with document."},
+    "document": {"type": "string", "description": "Document id. Returns that document's metadata and its path, from whichever root holds it — so send it alone, without scope or include_archived."},
+    "include_archived": {"type": "boolean", "description": "Only for a tree read. Not with document."}
   },
   "additionalProperties": false
 }`),
@@ -130,6 +130,17 @@ func (p *mcpProvider) tree(ctx context.Context, args json.RawMessage) (mcp.Resul
 		return mcp.Result{}, err
 	}
 	if in.Document != "" {
+		// ⚠ A ROOT NAMED BESIDE A SINGLE DOCUMENT IS REFUSED RATHER THAN DROPPED.
+		// A document resolves from whichever root holds it, so `scope: "private"`
+		// with a shared document's id was answered from the shared tree with nothing
+		// saying the scope had been ignored — the silently-accepted value
+		// mcp.DecodeArgs was made strict to refuse. `include_archived` is the same:
+		// this branch reads one document by id and an archived one is not-found
+		// either way.
+		if in.Scope != "" || in.IncludeArchived {
+			return mcp.Result{}, httpx.ErrUnprocessable(
+				"scope ani include_archived nelze zadat spolu s document — dokument se hledá podle id.")
+		}
 		return p.document(ctx, in.Document)
 	}
 	sc, err := ParseScope(ctx, in.Scope)

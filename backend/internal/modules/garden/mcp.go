@@ -59,8 +59,8 @@ func (p *mcpProvider) Tools() []mcp.Tool {
     "from": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to today."},
     "to": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to 14 days after from."},
     "status": {"type": "string", "enum": ["open", "done", "skipped"], "description": "Filter by status. Omit for every status."},
-    "bed_id": {"type": "string"},
-    "limit": {"type": "integer", "minimum": 1}
+    "bed_id": {"type": "string", "description": "A bed id from home_garden_plan. An id that names no bed is refused rather than answered with an empty list."},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
   },
   "additionalProperties": false
 }`),
@@ -111,17 +111,20 @@ func (p *mcpProvider) Tools() []mcp.Tool {
   "type": "object",
   "properties": {
     "year": {"type": "integer", "description": "Defaults to the current year."},
-    "bed_id": {"type": "string"},
-    "limit": {"type": "integer", "minimum": 1}
+    "bed_id": {"type": "string", "description": "A bed id from this same tool. An id that names no bed is refused rather than answered with an empty plan."},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
   },
   "additionalProperties": false
 }`),
 			ReadOnly: true,
 		},
 		{
-			Name:        toolPlantingCreate,
-			Title:       "Plant something",
-			Description: "Records a planting of one crop in one bed for a season, which is what generates its sowing, transplanting and harvest jobs; call home_garden_plan first for the bed and crop ids.",
+			Name:  toolPlantingCreate,
+			Title: "Plant something",
+			// ⚠ THE SIZE IS EXACTLY ONE OF area_m2 AND plant_count, AND THE
+			// DESCRIPTION SAYS SO BECAUSE THE SCHEMA ALONE IS NOT WHAT A MODEL PLANS
+			// FROM. `oneOf` below states it formally; this sentence is what gets read.
+			Description: "Records a planting of one crop in one bed for a season, which is what generates its sowing, transplanting and harvest jobs; give its size as EITHER area_m2 OR plant_count — exactly one of the two, never both and never neither — and call home_garden_plan first for the bed and crop ids.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -129,12 +132,13 @@ func (p *mcpProvider) Tools() []mcp.Tool {
     "variety_id": {"type": "string"},
     "bed_id": {"type": "string"},
     "location_label": {"type": "string", "description": "For a planting that is not in a numbered bed."},
-    "season_year": {"type": "integer", "description": "Defaults to the current year."},
-    "area_m2": {"type": "number", "minimum": 0},
-    "plant_count": {"type": "integer", "minimum": 0},
+    "season_year": {"type": "integer", "description": "Defaults to the current year. The season must already exist and be open."},
+    "area_m2": {"type": "number", "exclusiveMinimum": 0, "description": "Square metres. Give this OR plant_count — never both, never neither."},
+    "plant_count": {"type": "integer", "exclusiveMinimum": 0, "description": "Number of plants. Give this OR area_m2 — never both, never neither."},
     "notes_md": {"type": "string"}
   },
   "required": ["plant_id"],
+  "oneOf": [{"required": ["area_m2"]}, {"required": ["plant_count"]}],
   "additionalProperties": false
 }`),
 		},
@@ -147,10 +151,18 @@ func (p *mcpProvider) Tools() []mcp.Tool {
   "properties": {
     "planting_id": {"type": "string"},
     "quantity": {"type": "number", "exclusiveMinimum": 0},
-    "unit": {"type": "string", "description": "e.g. \"kg\" or \"ks\"."},
+    "unit": {
+      "type": "string",
+      "description": "Defaults to the crop's own unit, which is usually the one to keep.",
+      "enum": ["kg", "ks", "l", "svazek"]
+    },
     "harvested_on": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to today."},
-    "destination": {"type": "string"},
-    "quality": {"type": "string"},
+    "destination": {
+      "type": "string",
+      "description": "Where it went: eaten fresh, into storage, given away, or composted.",
+      "enum": ["fresh", "storage", "gift", "compost"]
+    },
+    "quality": {"type": "string", "description": "Free text."},
     "note": {"type": "string"}
   },
   "required": ["planting_id", "quantity"],
@@ -219,6 +231,9 @@ func (p *mcpProvider) tasks(ctx context.Context, args json.RawMessage) (mcp.Resu
 		return mcp.Result{}, httpx.ErrUnprocessable(
 			"status musí být jedna z hodnot: " + strings.Join(Values(EnumTaskStatus), ", ") + ".")
 	}
+	if err := p.requireBed(ctx, in.BedID); err != nil {
+		return mcp.Result{}, err
+	}
 	page, err := p.svc.ListTasks(ctx, TaskFilter{
 		From: from, To: to, Status: in.Status, BedID: in.BedID,
 	}, in.Limit, "")
@@ -226,7 +241,8 @@ func (p *mcpProvider) tasks(ctx context.Context, args json.RawMessage) (mcp.Resu
 		return mcp.Result{}, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Práce %s – %s (%d):\n", from, to, len(page.Items))
+	fmt.Fprintf(&b, "Práce %s – %s (%s):\n", from, to,
+		mcp.Plural(len(page.Items), "úkol", "úkoly", "úkolů"))
 	for _, t := range page.Items {
 		fmt.Fprintf(&b, "\n• %s (id %s) — %s až %s", t.TitleCS, t.ID, t.WindowFrom, t.WindowTo)
 		if t.BedCode != nil {
@@ -301,6 +317,9 @@ func (p *mcpProvider) taskCreate(ctx context.Context, args json.RawMessage) (mcp
 		v := y.Year()
 		year = &v
 	}
+	if err := p.requireSeason(ctx, *year); err != nil {
+		return mcp.Result{}, err
+	}
 	kind := in.Kind
 	input := TaskInput{
 		TitleCS: &title, WindowFrom: &in.WindowFrom, WindowTo: &in.WindowTo, Kind: &kind,
@@ -349,12 +368,16 @@ func (p *mcpProvider) plan(ctx context.Context, args json.RawMessage) (mcp.Resul
 		y := p.svc.today().Y
 		year = &y
 	}
+	if err := p.requireBed(ctx, in.BedID); err != nil {
+		return mcp.Result{}, err
+	}
 	page, err := p.svc.ListPlantings(ctx, PlantingFilter{Year: year, BedID: in.BedID}, in.Limit, "")
 	if err != nil {
 		return mcp.Result{}, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Plán %d (%d výsadeb):\n", *year, len(page.Items))
+	fmt.Fprintf(&b, "Plán %d (%s):\n", *year,
+		mcp.Plural(len(page.Items), "výsadba", "výsadby", "výsadeb"))
 	// The season's own row carries the frost anchors every planned date is
 	// derived from — a plan without them is a list of dates nobody can check.
 	if season, err := p.svc.GetSeason(ctx, *year); err == nil {
@@ -407,10 +430,30 @@ func (p *mcpProvider) plantingCreate(ctx context.Context, args json.RawMessage) 
 	if in.PlantCount != nil && *in.PlantCount < 0 {
 		return mcp.Result{}, httpx.ErrUnprocessable("Počet rostlin nesmí být záporný.")
 	}
+	// ⚠ THE SIZE IS EXACTLY ONE OF THE TWO, AND THE SCHEMA SAYING OTHERWISE MADE
+	// THIS TOOL UNUSABLE. `validatePlantingShape` refuses `hasArea == hasCount` —
+	// both, or neither — so a model that read `required: ["plant_id"]` and sent a
+	// crop and a season was refused EVERY time, with a message about two fields it
+	// had been told it could leave out. It is the same defect `kind` and `rates`
+	// carried, in the one write tool no test had ever called successfully.
+	//
+	// ⚠ AND ZERO IS NEITHER, NOT A SIZE. `minimum: 0` published zero as legal;
+	// `normalizePlantingSize` then nils it and the refusal lands anyway, one step
+	// further from the field that caused it. The schema now says
+	// `exclusiveMinimum`, and this says it again in Czech.
+	hasArea := in.AreaM2 != nil && *in.AreaM2 > 0
+	hasCount := in.PlantCount != nil && *in.PlantCount > 0
+	if hasArea == hasCount {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"Zadejte velikost výsadby buď jako area_m2, nebo jako plant_count — právě jedno z toho, kladné.")
+	}
 	year := in.SeasonYear
 	if year == nil {
 		y := p.svc.today().Y
 		year = &y
+	}
+	if err := p.requireSeason(ctx, *year); err != nil {
+		return mcp.Result{}, err
 	}
 	pl, err := p.svc.CreatePlanting(ctx, PlantingInput{
 		PlantID: &in.PlantID, VarietyID: in.VarietyID, BedID: in.BedID,
@@ -452,6 +495,21 @@ func (p *mcpProvider) harvestLog(ctx context.Context, args json.RawMessage) (mcp
 		if err := validGardenDate(in.HarvestedOn, "harvested_on"); err != nil {
 			return mcp.Result{}, err
 		}
+	}
+	// ⚠ TWO CLOSED ENUMS PUBLISHED AS FREE STRINGS ARE TWO GUESSES A MODEL CANNOT
+	// WIN. `CreateHarvest` matches both against the enum's exact CODE — `Valid` is
+	// strict, aliases are the importer's leniency and not this door's — so "kg" is
+	// accepted and "kilogram" is not, and `destination` had no description at all
+	// while accepting only fresh/storage/gift/compost. The schema now names both
+	// sets, and these two refusals are the half the tool can answer without a read
+	// (§7.4), in the same shape `kind` and `status` already use in this file.
+	if in.Unit != "" && !Valid(EnumHarvestUnit, in.Unit) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"unit musí být jedna z hodnot: " + strings.Join(Values(EnumHarvestUnit), ", ") + ".")
+	}
+	if in.Destination != nil && *in.Destination != "" && !Valid(EnumDestination, *in.Destination) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"destination musí být jedna z hodnot: " + strings.Join(Values(EnumDestination), ", ") + ".")
 	}
 	input := HarvestInput{
 		PlantingID: &in.PlantingID, Quantity: in.Quantity,
@@ -521,6 +579,48 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 	default:
 		return mcp.NotFoundResult(), nil
 	}
+}
+
+// requireBed refuses a bed_id that names no bed, rather than letting it narrow
+// the query to nothing.
+//
+// ⚠ IT IS THE `status` DEFECT IN ITS OTHER SHAPE. The store appends `AND bed_id =
+// ?` with whatever it is given, so a mis-copied id matched no row and the tool
+// answered "(nic v tomto okně)" or "0 výsadeb" — the household told there is no
+// garden work when what was wrong was the filter. One indexed read is what the
+// difference costs, and `Service.GetBed` is the read the detail route uses.
+func (p *mcpProvider) requireBed(ctx context.Context, bedID string) error {
+	if strings.TrimSpace(bedID) == "" {
+		return nil
+	}
+	if _, err := p.svc.GetBed(ctx, bedID); err != nil {
+		if mcp.IsNotFound(err) {
+			return httpx.ErrUnprocessable("Záhon " + bedID + " neexistuje.")
+		}
+		return err
+	}
+	return nil
+}
+
+// requireSeason refuses a year with no season row, naming it.
+//
+// ⚠ THE YEAR IS OFTEN THE PROVIDER'S OWN CHOICE — both write tools default it,
+// one from today and one from window_from — so the caller may never have typed
+// the number they are being refused about. `resolveSeason` answers a missing
+// season with httpx.ErrNotFound, which the host collapses onto the bare
+// "Nenalezeno." leak row 9 reserves for ownership and membership surfaces; the
+// garden is household-visible and hides nothing, so the year goes back in words.
+// A CLOSED season is left to the service: that refusal is a 409 and its sentence
+// already survives intact.
+func (p *mcpProvider) requireSeason(ctx context.Context, year int) error {
+	if _, err := p.svc.GetSeason(ctx, year); err != nil {
+		if mcp.IsNotFound(err) {
+			return httpx.ErrUnprocessable(fmt.Sprintf(
+				"Sezóna %d zatím neexistuje — nejdřív ji někdo musí založit.", year))
+		}
+		return err
+	}
+	return nil
 }
 
 func validGardenDate(s, field string) error {

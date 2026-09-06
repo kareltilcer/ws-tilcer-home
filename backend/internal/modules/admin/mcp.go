@@ -71,8 +71,16 @@ func (p *mcpProvider) Call(ctx context.Context, name string, args json.RawMessag
 	// PRD asks for rather than a duplicate of the first: `reqctx.IsAdmin` is the
 	// service-layer half, and it is what protects this tool if it is ever reached
 	// from anywhere but the host's dispatcher.
+	//
+	// ⚠ AND IT REFUSES IN WORDS RATHER THAN THROUGH httpx.ErrForbidden, which the
+	// host maps onto the not-found answer. That mapping is leak row 9's, and leak
+	// row 9 is about OWNERSHIP and MEMBERSHIP surfaces where the existence of the
+	// row is the secret; a ROLE refusal hides nothing — Tool.AdminOnly says so
+	// outright, the HTTP twin answers 403 out loud, and the host's own gate returns
+	// this same sentence. Handing back "Nenalezeno." here would make the one path
+	// that exists for a dispatcher-less caller the one path that lies to them.
 	if !reqctx.IsAdmin(ctx) {
-		return mcp.Result{}, httpx.ErrForbidden("admin only")
+		return mcp.Result{Text: "Tento nástroj je jen pro správce.", IsError: true}, nil
 	}
 	if p.svc.Storage() == nil {
 		return mcp.Result{}, httpx.ErrNotImplemented("storage reporting is not configured")

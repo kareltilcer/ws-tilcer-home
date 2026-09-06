@@ -49,8 +49,8 @@ func (p *mcpProvider) Tools() []mcp.Tool {
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "month": {"type": "string", "description": "A single month as YYYY-MM. Resolved directly, so any recorded month answers however far back it is."},
-    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+    "month": {"type": "string", "description": "A single month as YYYY-MM. Resolved directly, so any recorded month answers however far back it is. Do not send limit beside it."},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "How many months to list, newest first. Only for the listing — not with month."}
   },
   "additionalProperties": false
 }`),
@@ -147,6 +147,16 @@ func (p *mcpProvider) months(ctx context.Context, args json.RawMessage) (mcp.Res
 		if err := validMonth(in.Month); err != nil {
 			return mcp.Result{}, err
 		}
+		// ⚠ A PAGE SIZE BESIDE A SINGLE-ROW LOOKUP IS REFUSED RATHER THAN DROPPED.
+		// It is the rule DecodeArgs was made strict for — an unknown module is a
+		// 422, an unknown `via` is a 422, an expiry on PATCH is a 422 rather than a
+		// no-op — applied to an argument that IS known and still cannot be honoured.
+		// A caller who sent both asked for two different things, and silence about
+		// which one won is how a model learns a parameter it sent does nothing.
+		if in.Limit != 0 {
+			return mcp.Result{}, httpx.ErrUnprocessable(
+				"limit nelze zadat spolu s month — month vrací jediný měsíc.")
+		}
 		m, ok, err := p.svc.Store().ForMonth(ctx, in.Month)
 		if err != nil {
 			return mcp.Result{}, err
@@ -182,7 +192,7 @@ const monthsListMax = 200
 
 func renderMonths(items []Month) (mcp.Result, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d měsíců:\n", len(items))
+	fmt.Fprintf(&b, "%s:\n", mcp.Plural(len(items), "měsíc", "měsíce", "měsíců"))
 	for _, m := range items {
 		fmt.Fprintf(&b, "\n• %s (id %s) — Kája %d Kč, Andy %d Kč", m.Month, m.ID, m.IncomeKaja, m.IncomeAndy)
 	}

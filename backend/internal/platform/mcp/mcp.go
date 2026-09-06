@@ -337,6 +337,29 @@ func TrimHits(hits []Hit, limit int) []Hit {
 	return hits[:limit]
 }
 
+// Plural renders a Czech count with the right form of the noun after it.
+//
+// ⚠ CZECH HAS THREE FORMS, NOT TWO, AND EVERY COUNT IN THIS CATALOG WAS SPELLED
+// IN THE LAST OF THEM: "1 měsíců", "1 zpráv", "1 odečtů", "1 konverzací". These
+// strings are Czech data on their way to a household verbatim — the same rule
+// that keeps every other Czech value in this package unedited — so a count that
+// reads as broken Czech is a sentence somebody has read to them.
+//
+// ⚠ ONE (1), FEW (2–4), MANY (EVERYTHING ELSE, ZERO INCLUDED) is the whole rule
+// at these magnitudes, and it is deliberately NOT `n%10 == 1`: twenty-one takes
+// the many form in Czech ("21 měsíců"), which is exactly where the borrowed
+// English-plus-Slavic rule of thumb goes wrong.
+func Plural(n int, one, few, many string) string {
+	switch {
+	case n == 1:
+		return fmt.Sprintf("%d %s", n, one)
+	case n >= 2 && n <= 4:
+		return fmt.Sprintf("%d %s", n, few)
+	default:
+		return fmt.Sprintf("%d %s", n, many)
+	}
+}
+
 // NoTools is embedded by a provider that publishes only Search — `logging`.
 //
 // ⚠ IT IS A NAMED THING TO EMBED RATHER THAN THREE EMPTY METHODS, because "this

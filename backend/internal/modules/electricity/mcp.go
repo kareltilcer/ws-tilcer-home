@@ -54,7 +54,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
 			Description: "Lists the household's meter readings newest first, both registers in kWh, with how many days ago the newest one was taken.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
-  "properties": {"limit": {"type": "integer", "minimum": 1}},
+  "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Defaults to 24."}},
   "additionalProperties": false
 }`),
 			ReadOnly: true,
@@ -141,7 +141,7 @@ func (p *mcpProvider) readings(ctx context.Context, args json.RawMessage) (mcp.R
 		return mcp.Result{}, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d odečtů:\n", len(rows))
+	fmt.Fprintf(&b, "%s:\n", mcp.Plural(len(rows), "odečet", "odečty", "odečtů"))
 	today := p.svc.Today()
 	for i, r := range rows {
 		fmt.Fprintf(&b, "\n• %s — VT %s, NT %s (id %s)",

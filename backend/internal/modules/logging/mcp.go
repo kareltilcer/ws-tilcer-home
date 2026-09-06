@@ -95,3 +95,58 @@ func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error
 	}
 	return hits, nil
 }
+
+// Get answers home_get for one audit event.
+//
+// ⚠ A MODULE THAT PUBLISHES NO TOOL STILL OWES home_get AN ANSWER, and `logging`
+// was the one provider whose search hits carried an id nothing could resolve: a
+// model handed `logging.event` rows and told home_get turns a hit into an entity
+// was refused for the only module it had just been reading. mcp.EntityGetter is
+// not a tool — it adds nothing to tools/list and nothing to the count FR-M4 fixes
+// — so answering here does not reopen FR-M2's decision.
+//
+// ⚠ ADMIN ONLY, FOR THE THIRD TIME IN THIS FILE'S HISTORY. `/api/logs/**` has sat
+// behind httpx.RequireAdmin since D5, and home_get carries no per-kind role gate
+// of its own — so an ungated event read here would be the audit spine reached by
+// a member whose browser answers 403, which is leak row 6 wearing yet another hat.
+// A non-admin gets the ordinary not-found refusal: they cannot obtain a
+// logging.event id through this surface in the first place (Search returns nothing
+// for them), so there is nothing for the refusal to confirm.
+//
+// ⚠ AND THE REDACTION IS THE STORE'S. `Store.Get` applies redactEvent and drops a
+// redacted row's field diffs — the same rule §13.2 asks home_activity to honour —
+// so another member's private item stays a fixed phrase with a blanked id even
+// for an admin.
+func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, error) {
+	if kind != "logging.event" {
+		return mcp.NotFoundResult(), nil
+	}
+	actor, ok := reqctx.ActorFrom(ctx)
+	if !ok {
+		return mcp.Result{}, fmt.Errorf("logging: entity read without an actor")
+	}
+	if !reqctx.IsAdmin(ctx) {
+		return mcp.NotFoundResult(), nil
+	}
+	ev, err := p.store.Get(ctx, id, actor.UserID)
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	if ev == nil {
+		return mcp.NotFoundResult(), nil
+	}
+	who := ""
+	if ev.ActorLabel != nil {
+		who = *ev.ActorLabel
+	} else if ev.ActorUserID != nil {
+		who = *ev.ActorUserID
+	}
+	text := fmt.Sprintf("%s — %s.%s, %s (id %s)", ev.Summary, ev.Module, ev.Action, ev.TS, ev.ID)
+	if who != "" {
+		text += "\nKdo: " + who
+	}
+	if ev.Via != nil {
+		text += "\nPřes: " + *ev.Via
+	}
+	return mcp.TextResult(text, ev)
+}

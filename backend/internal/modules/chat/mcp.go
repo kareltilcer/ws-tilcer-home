@@ -70,7 +70,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
 			Description: "Lists the conversations the caller is in, with each one's unread count and how far back they may read; it is the only place an unread count is reported.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
-  "properties": {"limit": {"type": "integer", "minimum": 1}},
+  "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}},
   "additionalProperties": false
 }`),
 			ReadOnly: true,
@@ -86,7 +86,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
   "type": "object",
   "properties": {
     "conversation_id": {"type": "string"},
-    "limit": {"type": "integer", "minimum": 1, "description": "Newest first."}
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Newest first."}
   },
   "required": ["conversation_id"],
   "additionalProperties": false
@@ -121,7 +121,7 @@ func (p *mcpProvider) conversations(ctx context.Context, args json.RawMessage) (
 		return mcp.Result{}, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d konverzací:\n", len(page.Items))
+	fmt.Fprintf(&b, "%s:\n", mcp.Plural(len(page.Items), "konverzace", "konverzace", "konverzací"))
 	for _, c := range page.Items {
 		fmt.Fprintf(&b, "\n• %s (id %s) — %d členů", c.Name, c.ID, c.MemberCount)
 		if c.UnreadCount > 0 {
@@ -159,15 +159,25 @@ func (p *mcpProvider) messages(ctx context.Context, args json.RawMessage) (mcp.R
 		}
 		return mcp.Result{}, err
 	}
-	if err := p.svc.RecordTokenThreadRead(ctx, in.ConversationID, len(page.Items)); err != nil {
-		return mcp.Result{}, err
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d zpráv:\n", len(page.Items))
+	// ⚠ THE COUNT IS WHAT WAS ACTUALLY READ, NOT WHAT THE PAGE HELD. A tombstone
+	// carries no body — the loop below skips it — so counting one is claiming the
+	// assistant saw a message it was never shown. `message_count` is the whole of
+	// what D297's event says about how much was read, and the header is the same
+	// number said to the caller: a page of fifty holding ten tombstones announced
+	// "50 zpráv" and then listed forty.
+	var read []Message
 	for _, m := range page.Items {
 		if m.Deleted {
 			continue
 		}
+		read = append(read, m)
+	}
+	if err := p.svc.RecordTokenThreadRead(ctx, in.ConversationID, len(read)); err != nil {
+		return mcp.Result{}, err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s:\n", mcp.Plural(len(read), "zpráva", "zprávy", "zpráv"))
+	for _, m := range read {
 		fmt.Fprintf(&b, "\n[%s] %s: %s", m.CreatedAt, m.AuthorLabel, m.Body)
 		for _, a := range m.Attachments {
 			fmt.Fprintf(&b, "\n  📎 %s — %s/attachments/%s", a.OriginalFilename, uriPrefix+in.ConversationID, a.ID)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
@@ -25,18 +26,28 @@ import (
 // coreHandlerFunc is one core tool's implementation.
 type coreHandlerFunc func(ctx context.Context, s *callSession, args json.RawMessage) (Result, error)
 
-// searchableModules is the vocabulary `home_search`'s `in` filter accepts, in the
-// registration order the merge tiebreaks on.
+// searchableModules is the vocabulary `home_search`'s `in` filter accepts for
+// ONE token, in the registration order the merge tiebreaks on.
 //
 // ⚠ IT IS THE REGISTRY, NOT KnownModules, and the two differ by `logging`. That
 // list is the TOKEN allowlist's vocabulary and openapi's `McpModule` enum, where
 // a module with no tool has no business appearing; this one answers a different
 // question — what can be searched — and `logging` publishes an empty Tools() and
-// a real index over audit_events_fts (FR-M2). It is NOT the token allowlist
-// widened: a token scoped to a subset still cannot name `logging`, because
-// searchModules filters by the token first.
-func (h *Host) searchableModules() []string {
-	providers := h.deps.Registry.Providers()
+// a real index over audit_events_fts (FR-M2).
+//
+// ⚠ AND IT IS THE REGISTRY *AS THIS TOKEN SEES IT*, which is the whole reason it
+// takes the token rather than reading the catalog flat. Validating against every
+// registered provider and then fanning out through searchModules meant a name the
+// token cannot reach passed the guard and was dropped one line later: nothing ran,
+// the per-module counts came back empty, and the answer was "0 hits" from a
+// household that has plenty — the exact silence this refusal exists to prevent,
+// reached through the guard instead of around it. `logging` made it permanent
+// rather than occasional: KnownModules omits it, so NO allowlist can ever name it,
+// so for every scoped token `in: ["logging"]` was always that silence. Refusing it
+// by name is also what `lookupTool` already does with a narrowed tool — a token
+// "for the garden" is told about the garden, and about nothing else.
+func (h *Host) searchableModules(tok auth.MCPToken) []string {
+	providers := h.searchModules(tok)
 	out := make([]string, 0, len(providers))
 	for _, p := range providers {
 		out = append(out, p.Module())
@@ -279,9 +290,10 @@ func (h *Host) search(ctx context.Context, s *callSession, args json.RawMessage)
 	// It does publish a fifth of the search CORPUS, though, and its hits come back
 	// labelled `logging.event`: a model handed those rows and then refused
 	// `in: ["logging"]` has been told the module both exists and does not. What is
-	// searchable is what the registry answers, so that is what this refusal is
-	// measured against.
-	searchable := h.searchableModules()
+	// searchable is what the registry answers FOR THIS TOKEN, so that is what this
+	// refusal is measured against — see searchableModules for why the token is part
+	// of the question rather than a filter applied after it.
+	searchable := h.searchableModules(s.principal.Token)
 	wantedMods := make([]string, 0, len(in.In))
 	for _, m := range in.In {
 		name := strings.TrimSpace(m)
