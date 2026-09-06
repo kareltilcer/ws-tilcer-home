@@ -182,6 +182,37 @@ func (NoResources) Read(context.Context, string) (Content, error) {
 	return Content{}, ErrResourceNotFound
 }
 
+// KnownModules is the vocabulary a token's `modules` allowlist may name — the
+// `McpModule` enum in openapi.yaml, in the same order.
+//
+// ⚠ IT IS A STATIC LIST AND NOT THE LIVE REGISTRY, and the difference matters
+// exactly once: v11 ships as three pull requests, so between PR 1 and PR 2 six
+// of these publish no tools yet. Validating against the registry would refuse a
+// token scoped to `garden` on a server that is going to have garden tools next
+// week — a contract the served openapi.yaml says otherwise about. Naming a
+// module with nothing in it is harmless: the allowlist NARROWS and is a
+// convenience rather than an access control (D288), so the worst case is a
+// token that is offered fewer tools than its owner expected.
+//
+// ⚠ `dashboard` and `logging` are absent on purpose: the dashboard is the
+// member's screen rather than their data, and logging publishes only Search,
+// which `home_search` reaches without an allowlist entry. internal/arch's
+// completeness test pins this list to the enum and to the registry (D319).
+var KnownModules = []string{
+	"todo", "events", "notes", "documents", "finance",
+	"garden", "electricity", "chat", "admin",
+}
+
+// KnownModule reports whether name is in KnownModules.
+func KnownModule(name string) bool {
+	for _, m := range KnownModules {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ---- Registry ----
 
 // Registry is the assembled catalog. Built once at composition; read-only after.
@@ -269,18 +300,6 @@ func (r *Registry) Providers() []Provider {
 		return nil
 	}
 	return r.providers
-}
-
-// Modules returns the registered module names in order.
-func (r *Registry) Modules() []string {
-	if r == nil {
-		return nil
-	}
-	out := make([]string, 0, len(r.providers))
-	for _, p := range r.providers {
-		out = append(out, p.Module())
-	}
-	return out
 }
 
 // ToolOwner returns the module publishing name.

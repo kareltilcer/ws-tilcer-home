@@ -413,7 +413,8 @@ func (h *Host) ownedToken(ctx context.Context, id string) (auth.MCPToken, error)
 	return tok, nil
 }
 
-// normaliseModules validates a module allowlist against the live registry.
+// normaliseModules validates a module allowlist against openapi's McpModule
+// vocabulary — see mcp.KnownModules for why that and not the live registry.
 //
 // ⚠ An unknown module is a 422 rather than being dropped: a token silently scoped
 // to nothing looks identical to a broken server from the client's side, and the
@@ -422,15 +423,11 @@ func (h *Host) normaliseModules(mods []string) ([]string, error) {
 	if len(mods) == 0 {
 		return []string{}, nil
 	}
-	known := map[string]bool{}
-	for _, m := range h.deps.Registry.Modules() {
-		known[m] = true
-	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(mods))
 	for _, m := range mods {
 		m = strings.TrimSpace(m)
-		if !known[m] {
+		if !KnownModule(m) {
 			return nil, httpx.ErrUnprocessable("Neznámý modul: " + m)
 		}
 		if seen[m] {

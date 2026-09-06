@@ -51,8 +51,8 @@ func (h *Host) coreTools() []Tool {
 			ReadOnly:    true,
 		},
 		{
-			Name:  toolSearch,
-			Title: "Search the household",
+			Name:        toolSearch,
+			Title:       "Search the household",
 			Description: "Searches notes, documents, tasks, events, garden records and chat at once and returns a MERGE ordered by exact-title-match then recency — not a relevance ranking, because scores from separate indexes are not comparable — with a per-module budget so one chatty module cannot crowd out the rest.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
@@ -82,8 +82,8 @@ func (h *Host) coreTools() []Tool {
 			ReadOnly: true,
 		},
 		{
-			Name:  toolToday,
-			Title: "What is due today",
+			Name:        toolToday,
+			Title:       "What is due today",
 			Description: "Returns everything due or overdue for the calling member today — reminders, tasks and garden work — composed entirely from the published metric and list catalogs, so it costs no module query; it deliberately carries no chat unread count.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
@@ -95,8 +95,8 @@ func (h *Host) coreTools() []Tool {
 			ReadOnly: true,
 		},
 		{
-			Name:  toolMetrics,
-			Title: "Household metrics",
+			Name:        toolMetrics,
+			Title:       "Household metrics",
 			Description: "With no arguments lists every published metric and what it counts; with keys, resolves those metrics to numbers for the calling member — two jobs in one tool, deliberately, to spend one slot instead of two.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
@@ -109,8 +109,8 @@ func (h *Host) coreTools() []Tool {
 			ReadOnly: true,
 		},
 		{
-			Name:  toolLists,
-			Title: "Household lists",
+			Name:        toolLists,
+			Title:       "Household lists",
 			Description: "With no arguments lists every published list and what it names; with keys, resolves those lists to their items for the calling member — the WHICH behind home_metrics's HOW MANY.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
@@ -123,8 +123,8 @@ func (h *Host) coreTools() []Tool {
 			ReadOnly: true,
 		},
 		{
-			Name:  toolActivity,
-			Title: "Recent household activity",
+			Name:        toolActivity,
+			Title:       "Recent household activity",
 			Description: "Returns a digest of recent changes from the audit log — who changed what, when, and whether it came through an assistant — redacted so another member's private notes and documents show only that something private happened.",
 			InputSchema: json.RawMessage(`{
   "type": "object",

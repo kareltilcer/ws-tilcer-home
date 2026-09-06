@@ -571,8 +571,18 @@ func commonConds(f Filter, viewerID string) ([]string, []any, error) {
 	// could usefully do for it.
 	switch f.Via {
 	case ViaMCP:
-		conds = append(conds, "e.via IS NOT NULL")
+		// ⚠ THE VALUE IS BOUND, NOT TESTED FOR NON-NULL, AND THAT IS WHAT MAKES
+		// THE INDEX A SEEK. idx_events_via is (via, ts DESC) WHERE via IS NOT
+		// NULL: with `via IS NOT NULL` SQLite cannot know the column holds one
+		// value, so it cannot use the index for the ORDER BY and falls back to
+		// walking idx_events_ts — a scan over the largest table in the database,
+		// which is exactly what the partial index exists to avoid. With `via = ?`
+		// it seeks, and the ts ordering comes free from the second column.
+		// `mcp` is also literally what the contract says this filter returns.
+		conds = append(conds, "e.via = ?")
+		args = append(args, audit.ViaMCP)
 	case ViaUI:
+		// No index, and none would help: "in the app" is almost every row.
 		conds = append(conds, "e.via IS NULL")
 	}
 	if f.Q != "" {
