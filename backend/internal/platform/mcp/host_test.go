@@ -393,13 +393,19 @@ func TestDisabledServerIs404(t *testing.T) {
 	if strings.Contains(rr.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("the disabled endpoint fell through to the SPA: %q", rr.Header().Get("Content-Type"))
 	}
-	// ⚠ AND IT IS THE HOUSE ENVELOPE, NOT chi's BUILT-IN 404. Mount used to return
-	// before registering its own NotFound, which leaves chi an EMPTY sub-mux — and
-	// chi copies the parent's NotFound onto a subrouter only when the parent
-	// already has one at Mount() time, which httpx.NewRouter deliberately does
-	// not. So the disabled door answered text/plain "404 page not found": the
-	// right status in the wrong envelope, on the one endpoint whose clients parse
-	// nothing but JSON. "not HTML" was too weak an assertion to catch it.
+	// ⚠ AND IT IS THE HOUSE ENVELOPE, NOT chi's BUILT-IN 404 — WHICH IS THE
+	// ASSERTION A REVIEW ROUND'S FINDING WAS DECLINED AGAINST, not a bug being
+	// re-tested. The finding read: Mount returns before registering its own
+	// NotFound when the server is disabled, which leaves chi an EMPTY sub-mux, and
+	// chi's Mount() copies the parent's NotFound onto a subrouter only when the
+	// parent already has one at Mount() time — which httpx.NewRouter deliberately
+	// does not. That is all true and the conclusion still does not follow: the
+	// OTHER half of chi's contract is that Mux.NotFound walks the subroutes it has
+	// already mounted and installs the handler on any that lack one, so the empty
+	// /mcp sub-mux inherits the router's JSON 404. Mount still returns early, on
+	// purpose. This line is what holds the behaviour by TEST rather than by a
+	// reading of chi in either direction — which is why it asserts the
+	// Content-Type is JSON and not merely that it is "not HTML".
 	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Fatalf("the disabled endpoint answered %q, not JSON: %s", ct, rr.Body.String())
 	}

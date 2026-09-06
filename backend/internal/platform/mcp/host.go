@@ -588,10 +588,22 @@ func toolsWire(tools []Tool) []map[string]any {
 // twice the figure whose entire purpose is to bound what arrives in the model's
 // context. The text is served first because it is the half that is always
 // readable; the JSON gets what is left.
+//
+// ⚠ AND THE TWO NOTES ARE PAID FOR OUT OF THE BUDGET RATHER THAN ADDED TO IT.
+// They used to be appended AFTER the cut, so the one result that announced its
+// own truncation was also the one result that went over the figure — small in
+// bytes and wrong in the only place this version has been careful twice. The text
+// is therefore cut to leave room for the longest pair of sentences that can
+// follow it; a cap too small to hold them at all keeps the old behaviour, because
+// a negative budget would silently stop truncating anything.
 func resultWire(r Result, maxBytes int) map[string]any {
-	text, truncated := capText(r.Text, maxBytes)
+	room := maxBytes
+	if n := maxBytes - len(truncatedNote) - len(structuredDroppedNote); maxBytes > 0 && n > 0 {
+		room = n
+	}
+	text, truncated := capText(r.Text, room)
 	if truncated {
-		text += "\n\n[Zkráceno — výsledek byl příliš dlouhý.]"
+		text += truncatedNote
 	}
 	// Structured content is dropped rather than cut when it would not fit: half a
 	// JSON document is not a smaller JSON document, and a client that parses it
@@ -603,7 +615,7 @@ func resultWire(r Result, maxBytes int) map[string]any {
 	// too large from a tool that publishes none at all.
 	structured := len(r.JSON) > 0 && (maxBytes <= 0 || len(text)+len(r.JSON) <= maxBytes)
 	if len(r.JSON) > 0 && !structured {
-		text += "\n\n[Strukturovaná část odpovědi byla vynechána — nevešla se do limitu.]"
+		text += structuredDroppedNote
 	}
 	out := map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": text}},
@@ -644,13 +656,26 @@ func contentWire(c Content, maxBytes int) map[string]any {
 		out["blob"] = base64.StdEncoding.EncodeToString(c.Blob)
 		return out
 	}
-	text, truncated := capText(c.Text, maxBytes)
+	room := maxBytes
+	if n := maxBytes - len(contentTruncatedNote); maxBytes > 0 && n > 0 {
+		room = n
+	}
+	text, truncated := capText(c.Text, room)
 	if truncated {
-		text += "\n\n[Zkráceno — obsah byl příliš dlouhý.]"
+		text += contentTruncatedNote
 	}
 	out["text"] = text
 	return out
 }
+
+// The three sentences a cut costs on the wire. ⚠ THEY ARE CONSTANTS BECAUSE THEIR
+// LENGTHS ARE ARITHMETIC: the cap has to cover the sentence that says the answer
+// was cut, so a literal inlined at the append site is a number nothing subtracts.
+const (
+	truncatedNote         = "\n\n[Zkráceno — výsledek byl příliš dlouhý.]"
+	structuredDroppedNote = "\n\n[Strukturovaná část odpovědi byla vynechána — nevešla se do limitu.]"
+	contentTruncatedNote  = "\n\n[Zkráceno — obsah byl příliš dlouhý.]"
+)
 
 // capText cuts s to at most maxBytes, on a UTF-8 boundary.
 func capText(s string, maxBytes int) (string, bool) {

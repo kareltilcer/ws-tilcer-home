@@ -356,3 +356,108 @@ func TestPatchWithNoChangeWritesNoEvent(t *testing.T) {
 		t.Fatalf("the rename did not land: %q", h.tokenRow(tok.ID).name)
 	}
 }
+
+// ⚠ AN ARGUMENT OUTSIDE THE TOOL'S SCHEMA IS REFUSED, NOT DROPPED — the same rule
+// the module allowlist, the Log's `via` filter and PATCH's expiry all take, and
+// the one place a fourth review round found it unapplied.
+//
+// Every InputSchema in the catalog declares "additionalProperties": false, and
+// httpx.DecodeJSON has refused an unknown field on all 178 HTTP handler call
+// sites since v1 — so a lenient decode made the SECOND front door to the same
+// eleven modules accept what the FIRST one refuses. It was not theoretical and it
+// was not loud: `body` for `body_md` created a note with an EMPTY body and
+// answered "Poznámka vytvořena", and `noteId` for `note` answered with the whole
+// shared tree instead of the one note the caller asked for. A model reads both as
+// success.
+func TestUnknownToolArgumentIsRefused(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+
+	t.Run("a write tool refuses rather than writing half the input", func(t *testing.T) {
+		_, result := h.call(secret, "home_notes_create", map[string]any{
+			"title": "Probe", "body": "TENTO OBSAH SE MĚL ULOŽIT",
+		})
+		if result == nil {
+			t.Fatal("came back as a PROTOCOL error, which a model retries")
+		}
+		if !isError(result) {
+			t.Fatalf("an unknown field was ACCEPTED: %s", resultText(t, result))
+		}
+		if text := resultText(t, result); !strings.Contains(text, "body") {
+			t.Fatalf("the refusal does not name the field the caller got wrong: %s", text)
+		}
+		// ⚠ AND NOTHING WAS WRITTEN. The failure this guards against is not an
+		// error — it is a SUCCESS with the body silently missing.
+		var count int
+		if err := h.db.QueryRow(`SELECT COUNT(*) FROM notes WHERE title = 'Probe'`).Scan(&count); err != nil {
+			t.Fatalf("count notes: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("%d notes were created by a refused call", count)
+		}
+	})
+
+	t.Run("a read tool refuses rather than answering a different question", func(t *testing.T) {
+		h.createSharedNoteAs(memberA, "Recepty", "guláš")
+		_, result := h.call(secret, "home_notes_tree", map[string]any{"noteId": "cokoliv"})
+		if result == nil || !isError(result) {
+			t.Fatalf("home_notes_tree answered a mis-spelled selector with a tree: %#v", result)
+		}
+	})
+
+	// The control, and it is not optional: without it this test also passes against
+	// a decoder that refuses everything.
+	t.Run("the spelling in the schema still works", func(t *testing.T) {
+		_, result := h.call(secret, "home_notes_create", map[string]any{
+			"title": "Nákup", "body_md": "mléko",
+		})
+		if result == nil || isError(result) {
+			t.Fatalf("the correct spelling was refused: %#v", result)
+		}
+		var body string
+		if err := h.db.QueryRow(`SELECT COALESCE(body_md, '') FROM notes WHERE title = 'Nákup'`).Scan(&body); err != nil {
+			t.Fatalf("read the note: %v", err)
+		}
+		if body != "mléko" {
+			t.Fatalf("body_md is %q, want %q", body, "mléko")
+		}
+	})
+}
+
+// ⚠ A REMINDER SWITCHED ON WITH NO LEAD IS THE TOOL'S REFUSAL, NOT THE SERVICE'S
+// (D311). The lead vocabulary was checked only when a lead was actually given, so
+// `reminder_enabled: true` alone reached validateReminder and came back in the
+// service's English — on a surface whose every other refusal is Czech, and in the
+// one shape "no write tool may reach a service with an input it could have refused
+// itself" exists to prevent.
+//
+// ⚠ update IS DELIBERATELY NOT HERE. UpdateEvent validates the MERGED state, so an
+// event that already carries a lead may legitimately have its reminder switched on
+// with no lead in the patch; the tool would have to load the row to ask.
+func TestReminderEnabledWithoutALeadIsRefusedByTheTool(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+
+	_, result := h.call(secret, "home_events_create", map[string]any{
+		"title": "Popelnice", "starts_on": "2026-10-01", "reminder_enabled": true,
+	})
+	if result == nil || !isError(result) {
+		t.Fatalf("a reminder with no lead was accepted: %#v", result)
+	}
+	text := resultText(t, result)
+	if strings.Contains(text, "must be one of") {
+		t.Fatalf("the refusal is the SERVICE's English, so the tool let it through: %s", text)
+	}
+	if !strings.Contains(text, "reminder_lead") {
+		t.Fatalf("the refusal does not name the missing field: %s", text)
+	}
+
+	// The control: the same call WITH a lead goes through.
+	_, ok := h.call(secret, "home_events_create", map[string]any{
+		"title": "Popelnice", "starts_on": "2026-10-01",
+		"reminder_enabled": true, "reminder_lead": "0d",
+	})
+	if ok == nil || isError(ok) {
+		t.Fatalf("a reminder WITH a lead was refused: %#v", ok)
+	}
+}

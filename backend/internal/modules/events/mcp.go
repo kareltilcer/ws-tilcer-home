@@ -236,6 +236,22 @@ func (p *mcpProvider) create(ctx context.Context, args json.RawMessage) (mcp.Res
 	if err := validDate(in.StartsOn, "starts_on"); err != nil {
 		return mcp.Result{}, err
 	}
+	// ⚠ BOTH HALVES OF validateReminder, REFUSED HERE. The second half — a lead
+	// outside the vocabulary — was checked; the first — a reminder switched ON with
+	// no lead at all — was not, so it reached the service and came back in the
+	// service's English ("reminder_lead must be one of 0d,1d,…") on a tool surface
+	// whose every other refusal is Czech. That is D311's rule: no write tool may
+	// reach a service with an input it could have refused itself.
+	//
+	// ⚠ AND ONLY create CAN DECIDE IT. UpdateEvent validates the MERGED state —
+	// an event that already carries a lead may legitimately have its reminder
+	// switched on with no lead in the patch — so the tool would have to load the
+	// row to ask the question, and update keeps the one check it can take alone.
+	if in.ReminderEnabled && !validLeads[in.ReminderLead] {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"Při zapnuté připomínce zadejte reminder_lead, jedno z: " +
+				strings.Join(leadValues, ", ") + ".")
+	}
 	if in.ReminderLead != "" && !validLeads[in.ReminderLead] {
 		return mcp.Result{}, httpx.ErrUnprocessable(
 			"reminder_lead musí být jedno z: " + strings.Join(leadValues, ", ") + ".")

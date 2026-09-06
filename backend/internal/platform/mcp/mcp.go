@@ -19,6 +19,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -145,14 +146,21 @@ type Query struct {
 // bm25 values from five separate external-content FTS5 indexes are not
 // comparable, and a global "relevance" assembled from them is confident nonsense.
 // A provider that wanted to rank globally has nowhere to put the number.
+//
+// ⚠ THE JSON TAGS ARE NOT DECORATION. This is the ONE type in the catalog that
+// reaches a caller by being marshalled directly rather than through a module's
+// wire type, and without them home_search's structuredContent was the only
+// payload in the whole surface spelled in Go field names — "Title" beside the
+// "title" every other tool answers with. A model that has to know which tool
+// capitalises its keys is being asked to remember an accident.
 type Hit struct {
-	Kind      string    // "notes.note", "todo.card", "garden.plant" …
-	ID        string    //
-	Title     string    // Czech, verbatim
-	Snippet   string    // Czech, verbatim; may be ""
-	UpdatedAt time.Time // for the merge order — NOT a score
-	URI       string    // resource URI when the hit is addressable; "" otherwise
-	ExactHit  bool      // the module's own judgement that the title matched exactly
+	Kind      string    `json:"kind"`       // "notes.note", "todo.card", "garden.plant" …
+	ID        string    `json:"id"`         //
+	Title     string    `json:"title"`      // Czech, verbatim
+	Snippet   string    `json:"snippet"`    // Czech, verbatim; may be ""
+	UpdatedAt time.Time `json:"updated_at"` // for the merge order — NOT a score
+	URI       string    `json:"uri"`        // resource URI when the hit is addressable; "" otherwise
+	ExactHit  bool      `json:"exact_hit"`  // the module's own judgement that the title matched exactly
 }
 
 // ResourceTemplate is one URI shape a module addresses.
@@ -221,12 +229,35 @@ func (NoResources) Read(context.Context, string) (Content, error) {
 // DecodeArgs decodes one tool call's arguments, mapping a malformed body onto a
 // 422-shaped refusal rather than an internal error (D311). Absent arguments
 // leave dst untouched, which is what a tool with only optional fields wants.
+//
+// ⚠ IT IS STRICT, AND IT IS STRICT BECAUSE THE OTHER FRONT DOOR IS. Every tool's
+// InputSchema declares "additionalProperties": false, and httpx.DecodeJSON has
+// refused an unknown field on all 178 HTTP handler call sites since v1 — so a
+// lenient decode here made the SECOND door to the same eleven modules accept a
+// class of mistake the FIRST one refuses. It is not theoretical and it is not
+// loud: home_notes_create with "body" instead of "body_md" created a note with an
+// EMPTY body and answered "Poznámka vytvořena", and home_notes_tree with "noteId"
+// instead of "note" answered with the whole shared tree instead of one note. Both
+// are the silently-ignored value this version refuses everywhere else — an
+// unknown module is a 422, an unknown 'via' is a 422, an expiry on PATCH is a 422
+// rather than a no-op — applied at last to the arguments themselves.
+//
+// ⚠ The unknown field's NAME goes back verbatim, in the English encoding/json
+// spells it, exactly as the HTTP twin's 422 detail does: the model cannot fix a
+// field it is not told about, and a translated message would not name the key.
 func DecodeArgs(args json.RawMessage, dst any) error {
 	if len(args) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(args, dst); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
 		return httpx.ErrUnprocessable("Neplatné parametry: " + err.Error())
+	}
+	// Trailing content after the first value is the same class of malformed body,
+	// and httpx.DecodeJSON refuses it for the same reason.
+	if dec.More() {
+		return httpx.ErrUnprocessable("Neplatné parametry: nadbytečný obsah za argumenty.")
 	}
 	return nil
 }

@@ -145,8 +145,17 @@ func (m MCPAuth) identity(ctx context.Context, tok MCPToken, now time.Time) (Ide
 				Email:  m.Cfg.BypassActor.Label,
 			}, nil
 		}
+		// ⚠ ErrUnreachable, NOT ErrUserClosed, AND THE DIFFERENCE IS A CREDENTIAL.
+		// Resolve turns ErrUserClosed — and only ErrUserClosed — into an
+		// irreversible RevokeByID, so answering "I have no authenticator, no bypass
+		// actor and no cached row" with it would stamp `revoked_at` on the token of
+		// a member who is perfectly fine, and the remedy is minting a new one. This
+		// is the state cachedIdentity's own doc names: a `sessions` table restored
+		// from a backup predating the owner's login. It is the same "no answer, no
+		// cache" the transient branch below already spells ErrUnreachable, and
+		// classifyMint's comment is about exactly this conflation.
 		if !found {
-			return Identity{}, ErrUserClosed
+			return Identity{}, ErrUnreachable
 		}
 		return cached, nil
 	}

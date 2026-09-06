@@ -477,7 +477,7 @@ func searchTitles(t *testing.T, result map[string]any) []string {
 	out := make([]string, 0, len(hits))
 	for _, h := range hits {
 		hit, _ := h.(map[string]any)
-		title, _ := hit["Title"].(string)
+		title, _ := hit["title"].(string)
 		out = append(out, title)
 	}
 	return out
