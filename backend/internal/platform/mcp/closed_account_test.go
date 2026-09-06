@@ -25,6 +25,10 @@ type fakeAuthenticator struct {
 	mints atomic.Int32
 	err   error
 	id    auth.Identity
+	// hold is how long a Mint takes. ⚠ It is what makes the coalescing test test
+	// COALESCING: with an instantaneous Mint, twelve goroutines can each finish
+	// before the next one starts, and the singleflight has nothing to collapse.
+	hold time.Duration
 }
 
 func (f *fakeAuthenticator) Login(context.Context, string, string) (auth.Identity, error) {
@@ -33,6 +37,9 @@ func (f *fakeAuthenticator) Login(context.Context, string, string) (auth.Identit
 
 func (f *fakeAuthenticator) Mint(_ context.Context, userID string) (auth.Identity, error) {
 	f.mints.Add(1)
+	if f.hold > 0 {
+		time.Sleep(f.hold)
+	}
 	if f.err != nil {
 		return auth.Identity{}, f.err
 	}
@@ -102,7 +109,16 @@ func TestTransientAuthOutageRevokesNothing(t *testing.T) {
 // parallel calls by design; without coalescing every call in a burst past the
 // threshold puts its own Mint on the auth service.
 func TestConcurrentCallsCoalesceOneRemint(t *testing.T) {
-	authr := &fakeAuthenticator{id: auth.Identity{Email: "k@example.test", Roles: []string{"admin"}}}
+	// ⚠ THE MINT HOLDS, AND WITHOUT THAT THIS TEST PROVED NOTHING. It used to pass
+	// on a different mechanism entirely: with a zero window and an instant Mint,
+	// the first call stamped `roles_refreshed_at` and the rest read the fresh stamp
+	// and skipped the mint — so it would have stayed green with the singleflight
+	// deleted. A Mint that takes long enough for the burst to arrive is what puts
+	// the callers in flight together, which is the only state coalescing exists for.
+	authr := &fakeAuthenticator{
+		id:   auth.Identity{Email: "k@example.test", Roles: []string{"admin"}},
+		hold: 50 * time.Millisecond,
+	}
 	h := newHarness(t, withAuthenticator(authr, 0))
 	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
 
@@ -116,9 +132,10 @@ func TestConcurrentCallsCoalesceOneRemint(t *testing.T) {
 			t.Fatalf("a concurrent call got %d", code)
 		}
 	}
-	// ⚠ NOT `== 1`: the window is zero, so calls that arrive after a mint has
-	// already returned legitimately mint again. What must not happen is one per
-	// call — that is the standing stream of requests the coalescing exists to stop.
+	// ⚠ NOT `== 1`: every call is past the threshold, so one that arrives after a
+	// mint has already returned legitimately mints again. What must not happen is
+	// one per call — that is the standing stream of requests coalescing exists to
+	// stop.
 	if got := authr.mints.Load(); got >= calls {
 		t.Fatalf("%d concurrent calls produced %d mints — they were not coalesced at all",
 			calls, got)

@@ -88,7 +88,20 @@ func withLogSink(w io.Writer) harnessOpt {
 // ⚠ WITHOUT IT THE HARNESS RUNS WITH Authr NIL, which is the PRODUCTION path
 // between re-mints: the identity comes out of `sessions`. The tests that need this
 // are the ones about what a re-mint DECIDES — a closed account, an outage.
+//
+// ⚠ A ZERO WINDOW IS STORED AS A NEGATIVE ONE, AND THAT IS A BUG FIX RATHER THAN
+// A STYLE. Both doors ask `now.Sub(refreshedAt) <= RoleRefresh`, so a window of
+// exactly zero does NOT mean "every call is past the threshold": a harness seeds
+// its session rows and then calls, and when the stamp and the call land in the
+// same tick of a coarse wall clock the difference is 0, `0 <= 0` holds, and the
+// call is served from cache with no re-mint at all. It showed up as
+// TestClosedAccountRevokesTheTokenRow passing alone and failing after other tests
+// had shifted where in the tick it started — the worst shape of red there is. A
+// negative window is what "always past the threshold" actually spells.
 func withAuthenticator(a auth.Authenticator, refresh time.Duration) harnessOpt {
+	if refresh == 0 {
+		refresh = -time.Second
+	}
 	return func(o *harnessOptions) { o.authr, o.roleRefresh = a, refresh }
 }
 

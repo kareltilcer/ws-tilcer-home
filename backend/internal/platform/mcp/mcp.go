@@ -23,6 +23,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 )
 
 // Source is the optional interface a feature module implements to publish an MCP
@@ -96,6 +98,22 @@ type Tool struct {
 	// (D294). Nothing destructive is published at all, so there is nothing to
 	// annotate — and TestNoDestructiveTools asserts the annotation never appears.
 	ReadOnly bool
+	// AdminOnly marks a tool whose HTTP twin sits behind httpx.RequireAdmin.
+	//
+	// ⚠ READ-ONLY IS NOT THE SAME QUESTION AS UNGATED, and conflating them is how
+	// a token comes to out-rank its owner (leak row 6). `home_activity` reads the
+	// audit spine, whose routes have been admin-only since D5: a `reader` is
+	// refused it in the browser with a 403, so a reader's TOKEN must be refused it
+	// too — "roles gate exactly as they do over HTTP" (PRD §V11-3). The host takes
+	// this decision in one place, beside the write gate, rather than leaving each
+	// tool to remember.
+	//
+	// ⚠ An admin-only tool is HIDDEN from a non-admin's tools/list and REFUSED if
+	// called anyway — never mapped onto the not-found answer. Leak row 9's
+	// 403-reads-as-404 rule is about OWNERSHIP and MEMBERSHIP surfaces, where the
+	// existence of the row is the secret; a role refusal hides nothing, and the
+	// HTTP twin says 403 out loud.
+	AdminOnly bool
 }
 
 // Result is what a tool call returns.
@@ -154,14 +172,17 @@ type Resource struct {
 }
 
 // Content is what a resource read returns. Exactly one of Text and Blob is set.
+//
+// ⚠ THERE IS NO Truncated FIELD, and its absence is deliberate rather than an
+// omission. Truncation is the HOST's (D307) and it happens on the way to the
+// wire, in contentWire, which builds the outbound map from this value and says so
+// there — a field on the provider's return type would be a place for a provider
+// to answer a question that is not theirs, and nothing would ever read it.
 type Content struct {
 	URI      string
 	MIMEType string
 	Text     string
 	Blob     []byte
-	// Truncated is set by the HOST, never by a provider, when the payload was
-	// cut to HOME_MCP_MAX_RESULT_KB (D307).
-	Truncated bool
 }
 
 // ---- Embeddable defaults ----
@@ -180,6 +201,45 @@ func (NoResources) ListResources(context.Context, int) ([]Resource, error) { ret
 // does — never with a distinguishable "this module has no resources" (D303).
 func (NoResources) Read(context.Context, string) (Content, error) {
 	return Content{}, ErrResourceNotFound
+}
+
+// ---- Provider helpers ----
+//
+// ⚠ THEY LIVE HERE RATHER THAN ONCE PER PROVIDER, and the reason is arithmetic:
+// v11 ships three providers in PR 1 and six more in PR 2. Both of these were
+// byte-identical copies in each of the three, and DecodeArgs in particular
+// carries a RULE — D311's "a malformed body is a 422, not a 500", because an
+// agent retries a 500 and gives up on a 422 — which a tenth copy written from
+// memory is exactly how a module comes to lose.
+
+// DecodeArgs decodes one tool call's arguments, mapping a malformed body onto a
+// 422-shaped refusal rather than an internal error (D311). Absent arguments
+// leave dst untouched, which is what a tool with only optional fields wants.
+func DecodeArgs(args json.RawMessage, dst any) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(args, dst); err != nil {
+		return httpx.ErrUnprocessable("Neplatné parametry: " + err.Error())
+	}
+	return nil
+}
+
+// TextResult builds a Result carrying the Czech answer and payload as
+// structuredContent beside it.
+//
+// ⚠ A PAYLOAD THAT WILL NOT MARSHAL DEGRADES TO THE TEXT HALF RATHER THAN
+// FAILING THE CALL — the text is a complete answer on its own, and refusing a
+// read the caller could have had is the worse outcome. It is still a programming
+// error, so it does not pass unnoticed: the text carries the note, which is the
+// only channel a provider has (it holds no logger, by design — a provider is
+// reached from the host, and the host is what owns the request id).
+func TextResult(text string, payload any) (Result, error) {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return Result{Text: text + "\n\n[Strukturovaná část odpovědi se nepodařilo sestavit.]"}, nil
+	}
+	return Result{Text: text, JSON: b}, nil
 }
 
 // KnownModules is the vocabulary a token's `modules` allowlist may name — the

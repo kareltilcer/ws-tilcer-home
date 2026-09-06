@@ -79,8 +79,21 @@ type rateLimiter struct {
 	limit  int
 	window time.Duration
 	hits   map[string][]time.Time
-	now    func() time.Time
+	// lastSweep bounds how often the key eviction below runs — see sweepLocked.
+	lastSweep time.Time
+	now       func() time.Time
 }
+
+// sweepAbove is the key count past which a limiter starts evicting dead keys.
+//
+// ⚠ THIS MAP IS NOT BOUNDED BY THE HOUSEHOLD THE WAY THE SEMAPHORE MAP IS, and
+// that difference is the whole reason eviction exists here and not there. A
+// semaphore is keyed by a TOKEN ID, of which a household has tens; a limiter is
+// also keyed by a CLIENT IP, which is read from X-Forwarded-For and is therefore
+// whatever the caller says it is. `/mcp` is publicly routed, so without eviction
+// one flood with a rotating header is one permanent map entry per request until
+// the container is OOM-killed.
+const sweepAbove = 4096
 
 func newRateLimiter(limit int, window time.Duration, now func() time.Time) *rateLimiter {
 	if now == nil {
@@ -99,21 +112,87 @@ func (l *rateLimiter) allow(key string) bool {
 	if l == nil || l.limit <= 0 {
 		return true
 	}
-	now := l.now()
-	cut := now.Add(-l.window)
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := l.now()
+	if l.spentLocked(key, now) {
+		return false
+	}
+	l.recordLocked(key, now)
+	return true
+}
+
+// blocked reports whether key has already spent its budget, WITHOUT recording an
+// attempt.
+//
+// ⚠ IT EXISTS SO A LIMIT CAN BE CHECKED BEFORE THE WORK IT BOUNDS. The token
+// lookup is a query on the one connection and it happens before there is a token
+// id to key anything by, so a bearer that never resolves is keyed by the caller's
+// IP alone: `blocked` is asked first, and only a FAILED resolution then calls
+// `record`. A legitimate client therefore never spends this budget, and a flood
+// of junk bearers is capped at the same figure as everything else.
+func (l *rateLimiter) blocked(key string) bool {
+	if l == nil || l.limit <= 0 {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.spentLocked(key, l.now())
+}
+
+// record spends one unit of key's budget.
+func (l *rateLimiter) record(key string) {
+	if l == nil || l.limit <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	l.spentLocked(key, now) // prunes the window before appending
+	l.recordLocked(key, now)
+}
+
+// spentLocked prunes key's window and reports whether it is at the limit.
+func (l *rateLimiter) spentLocked(key string, now time.Time) bool {
+	cut := now.Add(-l.window)
 	kept := l.hits[key][:0]
 	for _, t := range l.hits[key] {
 		if t.After(cut) {
 			kept = append(kept, t)
 		}
 	}
-	if len(kept) >= l.limit {
+	if len(kept) == 0 {
+		// ⚠ Delete rather than store an empty slice: an idle key that is never
+		// asked about again is exactly the entry that would otherwise live forever.
+		delete(l.hits, key)
+	} else {
 		l.hits[key] = kept
-		return false
 	}
-	l.hits[key] = append(kept, now)
-	return true
+	return len(kept) >= l.limit
+}
+
+func (l *rateLimiter) recordLocked(key string, now time.Time) {
+	l.hits[key] = append(l.hits[key], now)
+	l.sweepLocked(now)
+}
+
+// sweepLocked evicts keys whose whole window has expired.
+//
+// ⚠ PRUNING ON READ IS NOT ENOUGH BY ITSELF: it only touches keys somebody asks
+// about again, and the keys that matter here are the ones nobody ever will. The
+// sweep is O(keys) and runs at most once per window, and only once the map is
+// large enough for that to be worth doing — so the ordinary household never pays
+// for it and a flood cannot outrun it by more than one window's worth of keys.
+func (l *rateLimiter) sweepLocked(now time.Time) {
+	if len(l.hits) < sweepAbove || now.Sub(l.lastSweep) < l.window {
+		return
+	}
+	l.lastSweep = now
+	cut := now.Add(-l.window)
+	for k, ts := range l.hits {
+		// Appended in time order, so the last entry is the newest.
+		if len(ts) == 0 || !ts[len(ts)-1].After(cut) {
+			delete(l.hits, k)
+		}
+	}
 }

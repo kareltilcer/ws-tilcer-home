@@ -145,20 +145,27 @@ type upcomingArgs struct {
 
 func (p *mcpProvider) upcoming(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in upcomingArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
+	// ⚠ BOTH BOUNDS ARE VALIDATED, AND UNCONDITIONALLY. The check used to live
+	// inside the branch that DEFAULTS `to`, so a malformed `from` sent together
+	// with an explicit `to` skipped it entirely and reached the service — which is
+	// the 500-instead-of-422 shape D311 exists to prevent, and an agent retries a
+	// 500 where it gives up on a 422.
 	from := in.From
 	if from == "" {
 		from = time.Now().In(p.location).Format("2006-01-02")
 	}
+	start, err := time.ParseInLocation("2006-01-02", from, p.location)
+	if err != nil {
+		return mcp.Result{}, httpx.ErrUnprocessable("from musí být ve tvaru RRRR-MM-DD.")
+	}
 	to := in.To
 	if to == "" {
-		start, err := time.ParseInLocation("2006-01-02", from, p.location)
-		if err != nil {
-			return mcp.Result{}, httpx.ErrUnprocessable("from musí být ve tvaru RRRR-MM-DD.")
-		}
 		to = start.AddDate(0, 0, 30).Format("2006-01-02")
+	} else if err := validDate(to, "to"); err != nil {
+		return mcp.Result{}, err
 	}
 	months, err := p.svc.Occurrences(ctx, from, to, in.IncludeArchived)
 	if err != nil {
@@ -183,7 +190,7 @@ func (p *mcpProvider) upcoming(ctx context.Context, args json.RawMessage) (mcp.R
 	if total == 0 {
 		b.WriteString("\n(žádné události)")
 	}
-	return jsonResult(b.String(), months)
+	return mcp.TextResult(b.String(), months)
 }
 
 type createArgs struct {
@@ -198,7 +205,7 @@ type createArgs struct {
 // create validates before the service (D311).
 func (p *mcpProvider) create(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in createArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.Title) == "" {
@@ -222,7 +229,7 @@ func (p *mcpProvider) create(ctx context.Context, args json.RawMessage) (mcp.Res
 	if err != nil {
 		return mcp.Result{}, err
 	}
-	return jsonResult(fmt.Sprintf("Událost „%s“ vytvořena na %s (id %s).", ev.Title, ev.StartsOn, ev.ID), ev)
+	return mcp.TextResult(fmt.Sprintf("Událost „%s“ vytvořena na %s (id %s).", ev.Title, ev.StartsOn, ev.ID), ev)
 }
 
 type updateArgs struct {
@@ -238,7 +245,7 @@ type updateArgs struct {
 
 func (p *mcpProvider) update(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in updateArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.ID) == "" {
@@ -275,7 +282,7 @@ func (p *mcpProvider) update(ctx context.Context, args json.RawMessage) (mcp.Res
 	if ev == nil {
 		return mcp.NotFoundResult(), nil
 	}
-	return jsonResult(fmt.Sprintf("Událost „%s“ upravena.", ev.Title), ev)
+	return mcp.TextResult(fmt.Sprintf("Událost „%s“ upravena.", ev.Title), ev)
 }
 
 type completeArgs struct {
@@ -285,7 +292,7 @@ type completeArgs struct {
 
 func (p *mcpProvider) complete(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in completeArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.EventID) == "" {
@@ -303,7 +310,7 @@ func (p *mcpProvider) complete(ctx context.Context, args json.RawMessage) (mcp.R
 	if done == nil {
 		return mcp.NotFoundResult(), nil
 	}
-	return jsonResult(fmt.Sprintf("Připomínka na %s odškrtnuta.", done.OccurrenceOn), done)
+	return mcp.TextResult(fmt.Sprintf("Připomínka na %s odškrtnuta.", done.OccurrenceOn), done)
 }
 
 // Search scans event titles.
@@ -357,7 +364,7 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 	if ev.Description != nil && *ev.Description != "" {
 		fmt.Fprintf(&b, "\n\n%s", *ev.Description)
 	}
-	return jsonResult(b.String(), ev)
+	return mcp.TextResult(b.String(), ev)
 }
 
 func validDate(s, field string) error {
@@ -368,24 +375,6 @@ func validDate(s, field string) error {
 		return httpx.ErrUnprocessable(field + " musí být ve tvaru RRRR-MM-DD.")
 	}
 	return nil
-}
-
-func unmarshal(args json.RawMessage, dst any) error {
-	if len(args) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(args, dst); err != nil {
-		return httpx.ErrUnprocessable("Neplatné parametry: " + err.Error())
-	}
-	return nil
-}
-
-func jsonResult(text string, payload any) (mcp.Result, error) {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return mcp.Result{Text: text}, nil
-	}
-	return mcp.Result{Text: text, JSON: b}, nil
 }
 
 // EventHit is one row of the cross-module search.

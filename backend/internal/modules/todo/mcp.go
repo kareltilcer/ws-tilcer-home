@@ -165,7 +165,7 @@ type boardsArgs struct {
 
 func (p *mcpProvider) boards(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in boardsArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	switch {
@@ -177,7 +177,7 @@ func (p *mcpProvider) boards(ctx context.Context, args json.RawMessage) (mcp.Res
 		if card == nil {
 			return mcp.NotFoundResult(), nil
 		}
-		return jsonResult(renderCard(*card), card)
+		return mcp.TextResult(renderCard(*card), card)
 	case in.Board != "":
 		tree, err := p.svc.Tree(ctx, in.Board, nil, in.Query, in.IncludeArchived)
 		if err != nil {
@@ -186,7 +186,7 @@ func (p *mcpProvider) boards(ctx context.Context, args json.RawMessage) (mcp.Res
 		if tree == nil {
 			return mcp.NotFoundResult(), nil
 		}
-		return jsonResult(renderTree(*tree), tree)
+		return mcp.TextResult(renderTree(*tree), tree)
 	default:
 		boards, err := p.svc.ListBoards(ctx)
 		if err != nil {
@@ -200,7 +200,7 @@ func (p *mcpProvider) boards(ctx context.Context, args json.RawMessage) (mcp.Res
 				b.WriteString(" [archivováno]")
 			}
 		}
-		return jsonResult(b.String(), boards)
+		return mcp.TextResult(b.String(), boards)
 	}
 }
 
@@ -219,7 +219,7 @@ type cardCreateArgs struct {
 // itself.
 func (p *mcpProvider) cardCreate(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in cardCreateArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.ColumnID) == "" {
@@ -232,7 +232,7 @@ func (p *mcpProvider) cardCreate(ctx context.Context, args json.RawMessage) (mcp
 	if err != nil {
 		return mcp.Result{}, err
 	}
-	return jsonResult(fmt.Sprintf("Karta „%s“ vytvořena (id %s).", card.Title, card.ID), card)
+	return mcp.TextResult(fmt.Sprintf("Karta „%s“ vytvořena (id %s).", card.Title, card.ID), card)
 }
 
 type cardUpdateArgs struct {
@@ -244,7 +244,7 @@ type cardUpdateArgs struct {
 
 func (p *mcpProvider) cardUpdate(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in cardUpdateArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.ID) == "" {
@@ -263,7 +263,7 @@ func (p *mcpProvider) cardUpdate(ctx context.Context, args json.RawMessage) (mcp
 	if card == nil {
 		return mcp.NotFoundResult(), nil
 	}
-	return jsonResult(fmt.Sprintf("Karta „%s“ upravena.", card.Title), card)
+	return mcp.TextResult(fmt.Sprintf("Karta „%s“ upravena.", card.Title), card)
 }
 
 type cardMoveArgs struct {
@@ -274,7 +274,7 @@ type cardMoveArgs struct {
 
 func (p *mcpProvider) cardMove(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in cardMoveArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.ID) == "" || strings.TrimSpace(in.ColumnID) == "" {
@@ -290,7 +290,7 @@ func (p *mcpProvider) cardMove(ctx context.Context, args json.RawMessage) (mcp.R
 	if card == nil {
 		return mcp.NotFoundResult(), nil
 	}
-	return jsonResult(fmt.Sprintf("Karta „%s“ přesunuta.", card.Title), card)
+	return mcp.TextResult(fmt.Sprintf("Karta „%s“ přesunuta.", card.Title), card)
 }
 
 type checklistArgs struct {
@@ -302,7 +302,7 @@ type checklistArgs struct {
 
 func (p *mcpProvider) checklist(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in checklistArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.CardID) == "" {
@@ -344,7 +344,7 @@ func (p *mcpProvider) checklist(ctx context.Context, args json.RawMessage) (mcp.
 		}
 		fmt.Fprintf(&b, "\n%s %s (id %s)", mark, it.Text, it.ID)
 	}
-	return jsonResult(b.String(), items)
+	return mcp.TextResult(b.String(), items)
 }
 
 // Search scans card titles across every board.
@@ -397,7 +397,7 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 	if card == nil {
 		return mcp.NotFoundResult(), nil
 	}
-	return jsonResult(renderCard(*card), card)
+	return mcp.TextResult(renderCard(*card), card)
 }
 
 // ---- rendering ----
@@ -441,24 +441,4 @@ func renderCard(c CardDetail) string {
 		fmt.Fprintf(&b, "\n\nŠtítky: %s", strings.Join(names, ", "))
 	}
 	return b.String()
-}
-
-// unmarshal decodes tool arguments, mapping a malformed body onto a 422-shaped
-// refusal rather than a 500 (D311).
-func unmarshal(args json.RawMessage, dst any) error {
-	if len(args) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(args, dst); err != nil {
-		return httpx.ErrUnprocessable("Neplatné parametry: " + err.Error())
-	}
-	return nil
-}
-
-func jsonResult(text string, payload any) (mcp.Result, error) {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return mcp.Result{Text: text}, nil
-	}
-	return mcp.Result{Text: text, JSON: b}, nil
 }

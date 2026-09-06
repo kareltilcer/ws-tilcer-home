@@ -110,13 +110,28 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	s := &callSession{}
 
+	ip := clientIP(r)
+
 	if bearer := bearerToken(r); bearer != "" || needsBearer(req.Method) {
 		// 4. Bearer. ⚠ THE SESSION COOKIE IS NOT READ HERE AT ALL, not even as a
 		// fallback (D280) — a cookie-only request is 401, never "authenticated as
 		// the cookie's owner". ⚠ And a bearer that is PRESENT must resolve even for
 		// an exempt method: a caller holding a dead credential is told so once,
 		// rather than being quietly served the anonymous answer and left to wonder.
-		principal, err := h.deps.Auth.Resolve(ctx, bearer, clientIP(r))
+		//
+		// ⚠ A BEARER THAT DOES NOT RESOLVE IS KEYED BY NOTHING BUT THE IP, so its
+		// budget is checked HERE, before the lookup, and spent only on failure.
+		// Resolve's first act is an indexed SELECT on the ONE database connection;
+		// the per-token limiter below cannot bound it, because there is no token id
+		// until it succeeds. Without this a stranger posting junk bearers holds the
+		// connection the household's browser is queued on, and the anon limiter
+		// never sees them — it is in the branch below, which a request carrying an
+		// Authorization header never reaches.
+		if bearer != "" && h.fails.blocked(ip) {
+			writeJSONError(w, http.StatusTooManyRequests, "rate_limited", "too many calls; slow down")
+			return
+		}
+		principal, err := h.deps.Auth.Resolve(ctx, bearer, ip)
 		if err != nil {
 			if !errors.Is(err, auth.ErrTokenNotFound) {
 				// A store failure is not an authentication verdict, and reporting it as
@@ -125,6 +140,9 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authentication is temporarily unavailable")
 				return
 			}
+			// Only a FAILURE spends the IP budget — a working client never touches it,
+			// so this cannot throttle the household's own assistant.
+			h.fails.record(ip)
 			writeJSONError(w, http.StatusUnauthorized, "unauthorized", "a valid MCP bearer token is required")
 			return
 		}
@@ -154,10 +172,10 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, h.deps.Config.CallTimeout)
 		defer cancel()
-	} else if !h.anon.allow(clientIP(r)) {
+	} else if !h.anon.allow(ip) {
 		// The bearer-exempt methods are cheap — `initialize` is a map literal and
-		// `ping` is an empty object — but "cheap" is not "free", so they are limited
-		// by IP rather than left unbounded.
+		// `notifications/initialized` does nothing at all — but "cheap" is not
+		// "free", so they are limited by IP rather than left unbounded.
 		writeJSONError(w, http.StatusTooManyRequests, "rate_limited", "too many calls; slow down")
 		return
 	}

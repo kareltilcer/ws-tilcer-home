@@ -88,6 +88,25 @@ func CanWrite(ctx context.Context) bool {
 	return false
 }
 
+// IsAdmin reports whether ctx's actor holds `admin`. It is the SERVICE-layer
+// half of the admin gate, exactly as CanWrite is the service-layer half of the
+// write gate, and it names the same role httpx.RequireAdmin names.
+//
+// ⚠ IT EXISTS BECAUSE v11 GAVE THE ADMIN-ONLY SURFACES A SECOND FRONT DOOR.
+// Until v11 every admin surface was an HTTP route, so httpx.RequireAdmin was the
+// whole of the gate. An MCP tool has no route and no middleware chain, so a tool
+// answering from an admin-only surface — `home_activity` reads the Log, whose
+// routes are behind RequireAdmin since D5 — has to take the decision itself. One
+// helper, so the two doors cannot come to disagree about what `admin` means.
+//
+// No actor is not an admin, for the reason CanWrite gives.
+func IsAdmin(ctx context.Context) bool {
+	if a, ok := ActorFrom(ctx); ok {
+		return HasRole(a.Roles, "admin")
+	}
+	return false
+}
+
 // HasRole reports whether roles grants access to any of allowed. The superuser
 // token "*" always grants access.
 func HasRole(roles []string, allowed ...string) bool {

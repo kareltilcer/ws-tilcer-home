@@ -443,7 +443,7 @@ func notFoundResult() Result {
 | `home_today` | `as_of?` | reminders due + overdue, tasks due, garden tasks — **from the metrics and lists catalogs only** (D310) |
 | `home_metrics` | `keys[]?` | no args ⇒ the 19 descriptors; with keys ⇒ values for this caller |
 | `home_lists` | `keys[]?` | the same for the 16 lists |
-| `home_activity` | `since`, `module?`, `action?`, `actor?`, `entity?`, `limit` | audit digest, **redacted** (§13.2) |
+| `home_activity` | `since`, `module?`, `action?`, `actor?`, `entity?`, `limit` | audit digest, **redacted** (§13.2). ⚠ **ADMIN ONLY**, because its HTTP twin is: `/api/logs/**` has been behind `httpx.RequireAdmin` since D5, so a reader who is refused the Log in the browser must be refused it through a token — *roles gate exactly as they do over HTTP* (PRD §V11-3). Read-only is not the same question as ungated, and redaction is the SECOND rule here rather than the first: it keeps another member’s private items from an **admin**, which was never what kept the spine away from a reader. `Tool.AdminOnly` carries it, the host hides such a tool from a non-admin’s `tools/list` and refuses it in words if called anyway, and `TestActivityHonoursTheHTTPRoleGate` is what stops the next reader repairing it. |
 
 ⚠ **`home_today` carries no unread count.** D252 kept chat out of both catalogs; an unread figure here would make the one tool that touches no module table reach into one. Unread rides on `home_chat_conversations`, where it is free.
 

@@ -125,7 +125,7 @@ func (h *Host) coreTools() []Tool {
 		{
 			Name:        toolActivity,
 			Title:       "Recent household activity",
-			Description: "Returns a digest of recent changes from the audit log — who changed what, when, and whether it came through an assistant — redacted so another member's private notes and documents show only that something private happened.",
+			Description: "Returns a digest of recent changes from the audit log — who changed what, when, and whether it came through an assistant — redacted so another member's private notes and documents show only that something private happened; admin only, as the Log itself is.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -142,6 +142,13 @@ func (h *Host) coreTools() []Tool {
   "additionalProperties": false
 }`),
 			ReadOnly: true,
+			// ⚠ THE ONE ADMIN-ONLY TOOL IN PR 1, and it is admin-only because its
+			// HTTP twin is: /api/logs/** has been behind httpx.RequireAdmin since D5,
+			// so a reader who is refused the Log in the browser must be refused this
+			// digest through a token. Redaction (leak row 7) is the SECOND rule here,
+			// not the first — it hides another member's private ITEMS from an admin,
+			// and it was never the thing keeping the spine away from a reader.
+			AdminOnly: true,
 		},
 	}
 }
@@ -629,13 +636,8 @@ func (h *Host) parseBound(raw string, lower bool) (time.Time, error) {
 	return time.Time{}, httpx.ErrUnprocessable("Čas musí být ve tvaru RRRR-MM-DD nebo RFC3339.")
 }
 
-// jsonResult builds a Result with structuredContent beside the text.
-func jsonResult(text string, payload any) (Result, error) {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		// The text half is still a complete answer, so a marshal failure degrades
-		// rather than failing the call — but it is a bug, so it is not silent.
-		return Result{Text: text}, nil
-	}
-	return Result{Text: text, JSON: b}, nil
-}
+// jsonResult is TextResult under the core handlers' own name — the providers'
+// helper, used by the host's seven for the same reason and with the same
+// degradation rule. One implementation, so the two halves of the catalog cannot
+// answer a marshal failure differently.
+func jsonResult(text string, payload any) (Result, error) { return TextResult(text, payload) }

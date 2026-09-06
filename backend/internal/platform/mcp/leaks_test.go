@@ -230,11 +230,18 @@ func TestTokenCannotExceedOwner(t *testing.T) {
 // acceptance criterion's own wording, and it is the half a fixture the caller
 // owns cannot test: redaction that never fires looks exactly like redaction that
 // works.
+// ⚠ THE CALLER IS AN ADMIN, because home_activity is admin-only — see
+// TestActivityHonoursTheHTTPRoleGate. Redaction is the SECOND rule on this tool
+// and this is where it earns its place: an admin is entitled to the Log and is
+// still not entitled to another member's private items.
 func TestActivityRedactsOtherMembersPrivateItems(t *testing.T) {
 	h := newHarness(t)
 	// Member B writes a private note through their own service call, so the audit
 	// event carries B's ownership marker.
 	noteID := h.createPrivateNoteAs(memberB, "Tajný deník", "obsah")
+	// And member A — the admin doing the reading — writes one of their own, which
+	// is the control below.
+	h.createPrivateNoteAs(memberA, "Můj vlastní deník", "obsah")
 
 	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
 	_, result := h.call(secret, "home_activity", map[string]any{
@@ -253,15 +260,60 @@ func TestActivityRedactsOtherMembersPrivateItems(t *testing.T) {
 		t.Fatalf("the redaction phrase is missing — was the event written at all?\n%s", text)
 	}
 
-	// The control: the OWNER sees it in full, or this test would pass against a
-	// digest that hides everything from everybody.
-	ownerSecret, _ := h.mintToken(memberB, "Claude B", nil, time.Time{})
-	_, ownerResult := h.call(ownerSecret, "home_activity", map[string]any{
-		"since": time.Now().Add(-time.Hour).Format(time.RFC3339),
-		"limit": 100,
-	})
-	if !strings.Contains(resultText(t, ownerResult), "Tajný deník") {
-		t.Fatalf("the owner cannot see their own private note in the digest:\n%s", resultText(t, ownerResult))
+	// The control, in the SAME call: the caller's own private note is named in
+	// full, or this test would pass against a digest that hides everything from
+	// everybody — redaction that never fires looks exactly like redaction that
+	// works.
+	if !strings.Contains(text, "Můj vlastní deník") {
+		t.Fatalf("the caller cannot see their OWN private note in the digest — the"+
+			" redaction is firing on everything:\n%s", text)
+	}
+}
+
+// home_activity reads the audit spine, and /api/logs/** has been behind
+// httpx.RequireAdmin since D5 — so the token must be refused it exactly as its
+// owner's browser is (PRD §V11-3, "roles gate exactly as they do over HTTP").
+//
+// ⚠ THIS IS LEAK ROW 6 IN ITS FOURTH SHAPE. Row 6 is usually read as "a reader
+// must be refused every WRITE", and read-only was taken as meaning ungated: the
+// digest is read-only and it is still an admin surface, so a token that could
+// call it out-ranked its owner by the whole of the household's change history.
+func TestActivityHonoursTheHTTPRoleGate(t *testing.T) {
+	h := newHarness(t)
+	h.createSharedNoteAs(memberA, "Rozpočet domácnosti", "tajné")
+
+	for _, tc := range []struct {
+		role  string
+		user  string
+		admin bool
+	}{
+		{role: "reader", user: "user-r"},
+		{role: "editor", user: "user-e"},
+		{role: "admin", user: "user-adm", admin: true},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			h.seedSession(tc.user, "Kdo "+tc.role, tc.role)
+			secret, _ := h.mintToken(tc.user, "Claude", nil, time.Time{})
+
+			_, result := h.call(secret, "home_activity", map[string]any{
+				"since": time.Now().Add(-time.Hour).Format(time.RFC3339),
+			})
+			switch {
+			case tc.admin && isError(result):
+				t.Fatalf("an admin's token was refused the digest: %s", resultText(t, result))
+			case !tc.admin && !isError(result):
+				t.Fatalf("a %s's token read the audit spine that /api/logs refuses"+
+					" them with a 403:\n%s", tc.role, resultText(t, result))
+			}
+
+			// ⚠ AND IT IS NOT OFFERED IN THE FIRST PLACE. A tool the caller will be
+			// refused is a tool the model should not be proposing.
+			body := h.rpc(secret, "tools/list", nil).Body.String()
+			if listed := strings.Contains(body, "home_activity"); listed != tc.admin {
+				t.Fatalf("tools/list offers home_activity to a %s: %t (want %t)",
+					tc.role, listed, tc.admin)
+			}
+		})
 	}
 }
 

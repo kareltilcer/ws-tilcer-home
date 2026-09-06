@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -79,10 +80,12 @@ type Deps struct {
 type Host struct {
 	deps Deps
 	sems *semaphores
-	// calls limits authenticated traffic per token id; anon limits the one method
-	// that needs no bearer, per client IP — see handle.
+	// calls limits authenticated traffic per token id; anon limits the methods
+	// that need no bearer, per client IP; fails limits bearers that do not
+	// RESOLVE, also per client IP — see serve for why the third is not the second.
 	calls *rateLimiter
 	anon  *rateLimiter
+	fails *rateLimiter
 }
 
 // New builds the host.
@@ -99,6 +102,7 @@ func New(d Deps) *Host {
 		sems:  newSemaphores(),
 		calls: newRateLimiter(d.Config.RatePerMin, window, d.Now),
 		anon:  newRateLimiter(d.Config.RatePerMin, window, d.Now),
+		fails: newRateLimiter(d.Config.RatePerMin, window, d.Now),
 	}
 }
 
@@ -106,22 +110,39 @@ func (h *Host) now() time.Time { return h.deps.Now() }
 
 // ---- Tool assembly ----
 
-// visibleTools returns the tools this principal is offered, in a stable order:
-// the seven cross-cutting ones first, then each module's in registration order.
+// visibleTools returns the tools this caller is offered, in a stable order: the
+// seven cross-cutting ones first, then each module's in registration order.
 //
 // ⚠ THE `modules` ALLOWLIST NARROWS AND NEVER WIDENS (D288). It is a convenience
 // — *this token is for the garden* — and NOT an access control: every tool it
 // does offer still resolves the caller's roles and the three access axes
-// underneath. The core seven are never narrowed, because a token that cannot say
-// who it is is a token nobody can debug.
-func (h *Host) visibleTools(tok auth.MCPToken) []Tool {
-	out := append([]Tool(nil), h.coreTools()...)
-	allowed := moduleSet(tok.Modules)
+// underneath. The core seven are never narrowed BY THE ALLOWLIST, because a token
+// that cannot say who it is is a token nobody can debug.
+//
+// ⚠ ROLES ARE A DIFFERENT QUESTION FROM THE ALLOWLIST AND ARE APPLIED HERE TOO.
+// An admin-only tool is not offered to a member who is not an admin — the model
+// should not propose a verb its caller will be refused, and the refusal in
+// toolsCall is the second half rather than the only one.
+func (h *Host) visibleTools(s *callSession) []Tool {
+	admin := reqctx.HasRole(s.actor.Roles, "admin")
+	var out []Tool
+	for _, t := range h.coreTools() {
+		if t.AdminOnly && !admin {
+			continue
+		}
+		out = append(out, t)
+	}
+	allowed := moduleSet(s.principal.Token.Modules)
 	for _, p := range h.deps.Registry.Providers() {
 		if allowed != nil && !allowed[p.Module()] {
 			continue
 		}
-		out = append(out, p.Tools()...)
+		for _, t := range p.Tools() {
+			if t.AdminOnly && !admin {
+				continue
+			}
+			out = append(out, t)
+		}
 	}
 	return out
 }
@@ -165,19 +186,29 @@ type callSession struct {
 
 // needsBearer reports whether a method requires a resolved token.
 //
-// ⚠ EVERYTHING BUT `initialize` AND `ping` DOES (D312). An unauthenticated
-// `initialize` returns server capabilities and NOTHING ELSE — no tool names — so
-// `tools/list` cannot be used to learn the household's shape. That is leak row 13,
-// and it is why the tool list is assembled after the token is known rather than
-// held as a field.
+// ⚠ EVERYTHING BUT `initialize` DOES (D312). An unauthenticated `initialize`
+// returns server capabilities and NOTHING ELSE — no tool names — so `tools/list`
+// cannot be used to learn the household's shape. That is leak row 13, and it is
+// why the tool list is assembled after the token is known rather than held as a
+// field.
+//
+// ⚠ `notifications/initialized` IS THE ONE EXEMPTION D312 DOES NOT NAME, and it
+// is not an answer: it is the fire-and-forget notification every client sends
+// immediately after `initialize`, it returns no body, and it reads nothing. A
+// client that probed with an unauthenticated `initialize` would otherwise be 401'd
+// on the very next frame of its own handshake. `ping` is deliberately NOT on this
+// list — it is a real method with a real response, and D312 says so.
 func needsBearer(method string) bool {
 	switch method {
-	case "initialize", "ping", "notifications/initialized":
+	case "initialize", methodInitialized:
 		return false
 	default:
 		return true
 	}
 }
+
+// methodInitialized is the client's post-handshake notification.
+const methodInitialized = "notifications/initialized"
 
 // dispatch routes one call. It returns the JSON-RPC result value, or an error —
 // a *ProtocolError for anything the model must not retry blindly.
@@ -187,8 +218,15 @@ func (h *Host) dispatch(ctx context.Context, s *callSession, method string, para
 		return h.initialize(params)
 	case "ping":
 		return map[string]any{}, nil
+	case methodInitialized:
+		// ⚠ ACCEPTED AND IGNORED, RATHER THAN FALLING THROUGH TO method-not-found.
+		// It is a notification, so nothing is written back either way — but serve
+		// logs a failed notification at Warn, and without this case every healthy
+		// client would leave an error-shaped line in the log on every session, which
+		// is how a log stops being read.
+		return nil, nil
 	case "tools/list":
-		return map[string]any{"tools": toolsWire(h.visibleTools(s.principal.Token))}, nil
+		return map[string]any{"tools": toolsWire(h.visibleTools(s))}, nil
 	case "tools/call":
 		return h.toolsCall(ctx, s, params)
 	case "resources/list":
@@ -277,6 +315,19 @@ func (h *Host) toolsCall(ctx context.Context, s *callSession, params json.RawMes
 		// service-layer half again underneath — which is precisely the case
 		// reqctx.CanWrite's doc comment was written for.
 		return resultWire(Result{Text: "Nemáte oprávnění k zápisu.", IsError: true}, 0), nil
+	}
+	if tool.AdminOnly && !reqctx.IsAdmin(ctx) {
+		// ⚠ THE ADMIN GATE IS SEPARATE FROM THE WRITE GATE BECAUSE READ-ONLY IS NOT
+		// THE SAME QUESTION AS UNGATED. home_activity is ReadOnly and its HTTP twin
+		// is behind httpx.RequireAdmin (D5), so a reader's token must be refused it
+		// exactly as the reader's browser is — otherwise the token out-ranks its
+		// owner, which is leak row 6 wearing a fourth hat.
+		//
+		// ⚠ REFUSED IN WORDS, NOT COLLAPSED ONTO NotFoundResult. Leak row 9's
+		// 403-reads-as-404 rule protects OWNERSHIP and MEMBERSHIP surfaces, where
+		// whether the thing exists is the secret. That a household has a Log is not
+		// a secret, and the HTTP twin answers 403 out loud.
+		return resultWire(Result{Text: "Tento nástroj je jen pro správce.", IsError: true}, 0), nil
 	}
 
 	args := in.Arguments
@@ -429,6 +480,15 @@ func (h *Host) resourcesRead(ctx context.Context, s *callSession, params json.Ra
 	if err != nil {
 		if _, perr := toResult(err); perr != nil {
 			return nil, perr
+		}
+		// ⚠ THE ANSWER IS THE SAME FOR EVERY FAILURE AND THE LOG LINE IS NOT.
+		// Collapsing a database outage onto "Nenalezeno." is required — leak row 10
+		// needs one answer, byte for byte — but collapsing it onto SILENCE is not,
+		// and it is how an incident becomes invisible: the caller is told the note
+		// does not exist while the store is what is broken. The module goes in the
+		// line, never the URI: a URI carries a note's slug, which is user content.
+		if !errors.Is(err, ErrResourceNotFound) {
+			h.logTool(ctx, "mcp resources/read failed", p.Module(), err)
 		}
 		return nil, &ProtocolError{Code: CodeInvalidParams, Message: notFoundText}
 	}

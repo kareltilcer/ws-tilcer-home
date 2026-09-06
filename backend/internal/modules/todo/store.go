@@ -431,7 +431,6 @@ func (s *Store) SearchCards(ctx context.Context, q string, limit int) ([]CardHit
 	})
 }
 
-
 // ---- Card links ----
 
 func (s *Store) ListCardLinks(ctx context.Context, q DBTX, cardID string) ([]CardLink, error) {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,8 +69,8 @@ const privateSegment = "soukrome"
 func (p *mcpProvider) Tools() []mcp.Tool {
 	return []mcp.Tool{
 		{
-			Name:  toolTree,
-			Title: "Notes tree",
+			Name:        toolTree,
+			Title:       "Notes tree",
 			Description: "Returns the folder tree of the household's shared notes, or with scope \"private\" the caller's own private notes; pass note for one note's full Markdown body.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
@@ -155,7 +156,7 @@ type treeArgs struct {
 
 func (p *mcpProvider) tree(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in treeArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if in.Note != "" {
@@ -184,7 +185,7 @@ func (p *mcpProvider) tree(ctx context.Context, args json.RawMessage) (mcp.Resul
 	for _, n := range t.RootNotes {
 		fmt.Fprintf(&b, "\n• %s (id %s)", n.Title, n.ID)
 	}
-	return jsonResult(b.String(), t)
+	return mcp.TextResult(b.String(), t)
 }
 
 func renderFolder(b *strings.Builder, node FolderNode, depth int) {
@@ -223,7 +224,7 @@ func (p *mcpProvider) readNote(ctx context.Context, id string) (mcp.Result, erro
 	if note.BodyMD != nil && *note.BodyMD != "" {
 		fmt.Fprintf(&b, "\n%s", *note.BodyMD)
 	}
-	return jsonResult(b.String(), note)
+	return mcp.TextResult(b.String(), note)
 }
 
 // uriPath renders the SPA splat for one item: the slug path, prefixed `soukrome`
@@ -244,7 +245,7 @@ type createArgs struct {
 
 func (p *mcpProvider) create(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in createArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.Title) == "" {
@@ -262,7 +263,7 @@ func (p *mcpProvider) create(ctx context.Context, args json.RawMessage) (mcp.Res
 	if err != nil {
 		return mcp.Result{}, err
 	}
-	return jsonResult(fmt.Sprintf("Poznámka „%s“ vytvořena (id %s).", note.Title, note.ID), note)
+	return mcp.TextResult(fmt.Sprintf("Poznámka „%s“ vytvořena (id %s).", note.Title, note.ID), note)
 }
 
 type updateArgs struct {
@@ -274,7 +275,7 @@ type updateArgs struct {
 
 func (p *mcpProvider) update(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in updateArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.ID) == "" {
@@ -293,7 +294,7 @@ func (p *mcpProvider) update(ctx context.Context, args json.RawMessage) (mcp.Res
 	if note == nil {
 		return mcp.NotFoundResult(), nil
 	}
-	return jsonResult(fmt.Sprintf("Poznámka „%s“ upravena.", note.Title), note)
+	return mcp.TextResult(fmt.Sprintf("Poznámka „%s“ upravena.", note.Title), note)
 }
 
 type pinArgs struct {
@@ -304,7 +305,7 @@ type pinArgs struct {
 
 func (p *mcpProvider) pin(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
 	var in pinArgs
-	if err := unmarshal(args, &in); err != nil {
+	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
 	if strings.TrimSpace(in.ID) == "" {
@@ -335,7 +336,7 @@ func (p *mcpProvider) pin(ctx context.Context, args json.RawMessage) (mcp.Result
 	if *in.Pinned {
 		verb = "připnuta"
 	}
-	return jsonResult("Poznámka "+verb+".", state)
+	return mcp.TextResult("Poznámka "+verb+".", state)
 }
 
 // Search reads BOTH roots the caller may see: the household's shared tree and
@@ -384,6 +385,22 @@ func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error
 				ExactHit:  strings.EqualFold(strings.TrimSpace(n.Title), strings.TrimSpace(q.Text)),
 			})
 		}
+	}
+	// ⚠ THE BUDGET IS PER MODULE, NOT PER ROOT (D301). notes is the one provider
+	// that reads TWO roots — the household's shared tree and the caller's own
+	// private one — so taking q.Limit from each would spend double what the host
+	// handed out and report a count the host's own budget contradicts. The trim
+	// uses the SAME order the host merges by (exact title match, then recency), so
+	// what survives here is what would have survived there: a private note is not
+	// dropped for being private, only for being older.
+	if q.Limit > 0 && len(hits) > q.Limit {
+		sort.SliceStable(hits, func(i, j int) bool {
+			if hits[i].ExactHit != hits[j].ExactHit {
+				return hits[i].ExactHit
+			}
+			return hits[i].UpdatedAt.After(hits[j].UpdatedAt)
+		})
+		hits = hits[:q.Limit]
 	}
 	return hits, nil
 }
@@ -580,21 +597,3 @@ func (s *Store) SlugPathsForScope(ctx context.Context, sc Scope, limit int) ([]S
 }
 
 // ---- helpers ----
-
-func unmarshal(args json.RawMessage, dst any) error {
-	if len(args) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(args, dst); err != nil {
-		return httpx.ErrUnprocessable("Neplatné parametry: " + err.Error())
-	}
-	return nil
-}
-
-func jsonResult(text string, payload any) (mcp.Result, error) {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return mcp.Result{Text: text}, nil
-	}
-	return mcp.Result{Text: text, JSON: b}, nil
-}
