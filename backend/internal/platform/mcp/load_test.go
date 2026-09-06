@@ -234,10 +234,13 @@ func TestTwentyConcurrentToolCallsKeepTheBrowserServed(t *testing.T) {
 			t.Errorf("%s answered with the internal-error text under load, which it does not"+
 				" answer with when called alone: %s", got.tool, truncate(got.body, 400))
 		}
-		if env := decodeEnvelopeBytes(t, got.tool, got.body); env.Error != nil {
+		env := decodeEnvelopeBytes(t, got.tool, got.body)
+		if env.Error != nil {
 			t.Errorf("%s came back as a PROTOCOL error under load (%d %s) — a model retries"+
 				" one of those forever (D311).", got.tool, env.Error.Code, env.Error.Message)
+			continue
 		}
+		assertServedTheTool(t, got.tool, env)
 	}
 
 	// ⚠ THE CALLS HAVE TO HAVE OVERLAPPED, or every assertion above is about a
@@ -301,6 +304,7 @@ func TestEveryReadToolReleasesTheOneConnection(t *testing.T) {
 		if rr.Code != http.StatusOK {
 			t.Errorf("%s got %d: %s", c.tool, rr.Code, truncate(rr.Body.String(), 400))
 		}
+		assertServedTheTool(t, c.tool, decodeEnvelopeBytes(t, c.tool, rr.Body.String()))
 
 		// ⚠ THE PROBE RUNS IN A GOROUTINE ONLY SO IT CAN BE TIMED OUT. A wedged
 		// pool makes ServeHTTP block forever, and a blocked test goroutine is a
@@ -422,6 +426,34 @@ func (h *harness) rawGET(path string) (int, time.Duration) {
 	began := time.Now()
 	h.handler.ServeHTTP(rr, req)
 	return rr.Code, time.Since(began)
+}
+
+// assertServedTheTool fails when a call came back as a TOOL error.
+//
+// ⚠ A `isError: true` RESULT IS AN HTTP 200 AND A JSON-RPC SUCCESS, and without
+// this both tests above would count one as a call that ran. They would not be
+// merely lenient: a tool that is refused never opens a `*sql.Rows` at all, so the
+// leak sweep it is supposed to perform becomes vacuous for that provider — green,
+// and proving nothing — which is the exact failure TestAnOpenRowsWedgesTheBrowser
+// exists to keep the other two from having.
+func assertServedTheTool(t *testing.T, tool string, env rpcEnvelope) {
+	t.Helper()
+	if len(env.Result) == 0 {
+		t.Errorf("%s came back with no result at all", tool)
+		return
+	}
+	var res struct {
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(env.Result, &res); err != nil {
+		t.Errorf("%s returned a result that is not an object: %v", tool, err)
+		return
+	}
+	if res.IsError {
+		t.Errorf("%s answered isError — a refused tool never reaches the database, so"+
+			" the leak sweep this test performs is vacuous for its provider: %s",
+			tool, truncate(string(env.Result), 400))
+	}
 }
 
 // decodeEnvelopeBytes is decodeEnvelope over a body already read back.

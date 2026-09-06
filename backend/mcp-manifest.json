@@ -1290,7 +1290,7 @@
       "arguments": [
         "měsíc"
       ],
-      "text": "Projdi se mnou uzávěrku měsíce.\n\n1. Zavolej `home_whoami` kvůli dnešnímu datu; pokud jsem měsíc neuvedl, vezmi ten předchozí.\n2. Zavolej `home_finance_months` na ten měsíc. Když chybí, řekni to — nezakládej ho sám.\n3. Zavolej `home_electricity_summary` a `home_electricity_readings`.\n\nNapiš česky: jestli jsou příjmy za měsíc zapsané, jaký vyšel rozpad, jestli je odečet elektroměru čerstvý, a jestli vychází nedoplatek nebo přeplatek. Na konci uveď seznam toho, co ještě chybí zapsat — a počkej, až ti řeknu, co s tím."
+      "text": "Projdi se mnou uzávěrku měsíce.\n\nMěsíc, o který jde: {{měsíc}}\n(Když je tenhle řádek prázdný, vezmi měsíc předcházející dnešnímu datu.)\n\n1. Zavolej `home_whoami` kvůli dnešnímu datu.\n2. Zavolej `home_finance_months` na ten měsíc. Když chybí, řekni to — nezakládej ho sám.\n3. Zavolej `home_electricity_summary` a `home_electricity_readings`.\n\nNapiš česky: jestli jsou příjmy za měsíc zapsané, jaký vyšel rozpad, jestli je odečet elektroměru čerstvý, a jestli vychází nedoplatek nebo přeplatek. Na konci uveď seznam toho, co ještě chybí zapsat — a počkej, až ti řeknu, co s tím."
     },
     {
       "name": "nákup",

@@ -20,6 +20,7 @@ import { cs } from '@/i18n/cs'
 import { qk } from '@/api/keys'
 import { apiErrorMessage } from '@/api/client'
 import { listAllMcpTokens, revokeAnyMcpToken } from '@/api/mcp'
+import { Spinner } from '@/components/ui/ui'
 import { compareCz, fmtDate } from '@/i18n/format'
 import { RevokeTokenDialog } from '@/platform/mcp/RevokeTokenDialog'
 import {
@@ -56,7 +57,13 @@ export function McpTokensTab() {
     return [...seen.entries()].sort((a, b) => compareCz(a[1], b[1]))
   }, [all])
 
-  const rows = owner ? all.filter((t) => t.user_id === owner) : all
+  // ⚠ THE SELECTION IS RE-DERIVED FROM THE OWNERS THAT STILL EXIST, not trusted
+  // as state. The chip row is only drawn when there is more than one owner, so a
+  // refetch that removes the last of somebody's tokens would otherwise leave the
+  // list filtered to a member with no chip left to unfilter them — an admin
+  // staring at an empty tab with no control that does anything.
+  const selected = owners.some(([id]) => id === owner) ? owner : ''
+  const rows = selected ? all.filter((t) => t.user_id === selected) : all
 
   const revoke = useMutation({
     mutationFn: (id: string) => revokeAnyMcpToken(id),
@@ -82,40 +89,55 @@ export function McpTokensTab() {
         </div>
       </section>
 
-      {owners.length > 1 && (
+      {/* ⚠ The COUNT is outside the owner-filter condition, unlike the chips. A
+          household with one member who has tokens still wants to know how many
+          there are — it is the same header line Nastavení draws unconditionally. */}
+      {all.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
-            {cs.mcp.adminOwnerFilter}
-          </span>
-          {owners.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={owner === id}
-              onClick={() => setOwner(owner === id ? '' : id)}
-              className={cn(
-                'min-h-[32px] rounded-lg border px-2.5 text-[12px] font-semibold',
-                owner === id ? 'border-accent bg-accent-soft text-fg' : 'border-border bg-s2 text-muted',
+          {owners.length > 1 && (
+            <>
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
+                {cs.mcp.adminOwnerFilter}
+              </span>
+              {owners.map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={selected === id}
+                  onClick={() => setOwner(selected === id ? '' : id)}
+                  className={cn(
+                    'min-h-[32px] rounded-lg border px-2.5 text-[12px] font-semibold',
+                    selected === id ? 'border-accent bg-accent-soft text-fg' : 'border-border bg-s2 text-muted',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+              {selected && (
+                <button
+                  type="button"
+                  onClick={() => setOwner('')}
+                  className="min-h-[32px] rounded-lg border border-border px-2.5 text-[12px] text-muted"
+                >
+                  {cs.mcp.adminClearFilter}
+                </button>
               )}
-            >
-              {label}
-            </button>
-          ))}
-          {owner && (
-            <button
-              type="button"
-              onClick={() => setOwner('')}
-              className="min-h-[32px] rounded-lg border border-border px-2.5 text-[12px] text-muted"
-            >
-              {cs.mcp.adminClearFilter}
-            </button>
+            </>
           )}
           <div className="flex-1" />
           <span className="font-mono text-[11.5px] text-muted">{tokenCountLabel(rows.length)}</span>
         </div>
       )}
 
-      {tokensQuery.isError ? (
+      {/* ⚠ LOADING IS NOT EMPTY. "Žádný člen zatím nemá token asistenta" is a
+          claim about the household, and rendering it while the request is still
+          in flight makes it a false one — the pattern every other Administrace
+          tab already follows. */}
+      {tokensQuery.isLoading ? (
+        <div className="grid min-h-[180px] place-items-center">
+          <Spinner />
+        </div>
+      ) : tokensQuery.isError ? (
         <p className="text-[13.5px] text-muted">{cs.mcp.loadFailed}</p>
       ) : rows.length === 0 ? (
         <p className="rounded-xl border border-border bg-s1 p-4 text-[13.5px] text-muted">{cs.mcp.adminEmpty}</p>

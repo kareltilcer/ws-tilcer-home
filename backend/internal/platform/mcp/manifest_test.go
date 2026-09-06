@@ -172,6 +172,68 @@ func backtickedNames(text string) []string {
 	}
 }
 
+// ⚠ AN ARGUMENT DECLARED AND NEVER SUBSTITUTED IS A VALUE SILENTLY DROPPED. It is
+// the one failure on this surface that produces no error anywhere: the member
+// types a month, `prompts/list` advertised the field so the client collected it,
+// and the body the model reads never mentions it — so the answer is about a
+// different month and looks entirely plausible. The placeholder is what makes the
+// declaration mean something, and this asserts every declaration has one.
+func TestEveryDeclaredPromptArgumentReachesItsBody(t *testing.T) {
+	h := newHarness(t)
+	declared := 0
+	for _, p := range mcp.BuildManifest(h.host).Prompts {
+		for _, arg := range p.Arguments {
+			declared++
+			if !strings.Contains(p.Text, "{{"+arg+"}}") {
+				t.Errorf("prompt %q declares the argument %q and its body never uses"+
+					" {{%s}} — a client would collect the value and the model would never"+
+					" see it", p.Name, arg, arg)
+			}
+		}
+	}
+	if declared == 0 {
+		t.Fatal("no prompt declares an argument, so this assertion is vacuous —" +
+			" `měsíční-uzávěrka` takes `měsíc` (§V11-4 FR-M8)")
+	}
+}
+
+// The arguments reach the body, and a name the prompt does not declare is
+// refused rather than dropped.
+func TestPromptArgumentsAreSubstituted(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+
+	got := h.rpc(secret, "prompts/get", map[string]any{
+		"name":      "měsíční-uzávěrka",
+		"arguments": map[string]any{"měsíc": "2026-08"},
+	})
+	body := got.Body.String()
+	if !strings.Contains(body, "2026-08") {
+		t.Errorf("the supplied month never reached the prompt body:\n%s", body)
+	}
+	if strings.Contains(body, "{{") {
+		t.Errorf("a placeholder survived into the served body:\n%s", body)
+	}
+
+	// ⚠ AND WITH NO ARGUMENT THE PLACEHOLDER IS EMPTIED, NEVER PRINTED. A body
+	// carrying a literal {{měsíc}} is what a model reads as an instruction to
+	// invent one.
+	bare := h.rpc(secret, "prompts/get", map[string]any{"name": "měsíční-uzávěrka"})
+	if strings.Contains(bare.Body.String(), "{{") {
+		t.Errorf("prompts/get with no arguments served a raw placeholder:\n%s", bare.Body.String())
+	}
+
+	// An undeclared name is a protocol error: a value quietly dropped here is a
+	// close-out of the wrong month with nothing on the wire saying so.
+	bad := h.rpc(secret, "prompts/get", map[string]any{
+		"name":      "měsíční-uzávěrka",
+		"arguments": map[string]any{"mesic": "2026-08"},
+	})
+	if env := decodeEnvelope(t, bad); env.Error == nil {
+		t.Errorf("an argument the prompt does not declare was accepted: %s", bad.Body.String())
+	}
+}
+
 // The prompts are served, not merely declared.
 func TestPromptsAreServed(t *testing.T) {
 	h := newHarness(t)

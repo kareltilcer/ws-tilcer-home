@@ -154,10 +154,13 @@ describe('the origin of a change', () => {
     })
   })
 
-  // ⚠ *Vše* CLEARS THE PARAMETER RATHER THAN SENDING AN EMPTY ONE. `via=` outside
-  // the enum is a 422 on this route — the one filter here that is a switch rather
-  // than an equality bind — so a "clear" that sent a blank would turn the default
-  // choice into an error the member cannot read.
+  // ⚠ *Vše* CLEARS THE PARAMETER RATHER THAN SENDING AN EMPTY ONE. The server
+  // would accept `via=` — `query.go` has an explicit `case "":` meaning both —
+  // so this is not about avoiding a 422; it is that this filter is the one on
+  // this route that is a SWITCH rather than an equality bind, and a request whose
+  // parameters say what the member chose is the only one a later reader of the
+  // network tab can interpret. An UNKNOWN value really is a 422, which is what
+  // keeps a typo from returning the whole spine.
   it('omits the parameter entirely when Vše is chosen', async () => {
     listLogs.mockResolvedValue({ items: [], next_cursor: null })
     renderPage()

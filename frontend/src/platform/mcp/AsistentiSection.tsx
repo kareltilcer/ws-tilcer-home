@@ -19,7 +19,7 @@ import { cs } from '@/i18n/cs'
 import { qk } from '@/api/keys'
 import { apiErrorMessage } from '@/api/client'
 import { listMcpTokens, mintMcpToken, revokeMcpToken } from '@/api/mcp'
-import { Button, Input } from '@/components/ui/ui'
+import { Button, Input, Spinner } from '@/components/ui/ui'
 import { ResponsiveModal } from '@/components/ui/modal'
 import { useOnline } from '@/platform/pwa/offline'
 import type { McpModule, McpToken, McpTokenCreated } from '@/api/types'
@@ -112,7 +112,17 @@ export function AsistentiSection() {
         )}
       </div>
 
-      {tokensQuery.isError ? (
+      {/* ⚠ LOADING IS NOT EMPTY, and on this panel the difference is a sentence
+          that is false. The empty state says "Zatím nemáte žádný token" — render
+          it while the request is still in flight and a member with three tokens
+          is told they have none, on the one screen that explains what a token is.
+          Every Administrace tab gates on isLoading before its empty state for the
+          same reason. */}
+      {tokensQuery.isLoading ? (
+        <div className="grid min-h-[120px] place-items-center">
+          <Spinner />
+        </div>
+      ) : tokensQuery.isError ? (
         <p className="text-[13.5px] text-muted">{cs.mcp.loadFailed}</p>
       ) : tokens.length === 0 ? (
         <div className="flex flex-col items-start gap-3.5">

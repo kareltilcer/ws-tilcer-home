@@ -103,10 +103,12 @@
      secondary text, which makes those two screens the worst possible place to
      inherit a metadata colour that does not measure.
 
-     ⚠ AND METADATA IS NOT DRAWN ON --accent-soft AT ALL. No value that keeps any
-     distance from --muted passes there (0.700 gives 4.05), so the surfaces that
-     need it use --muted — which is what NastaveniPage, the chat author label and
-     every v11 cell already do, each with its own note saying so. */
+     ⚠ AND METADATA ON --accent-soft USES --muted ANYWAY. Against the OLD
+     --accent-soft (0.360) this token measured 4.05 there and had to; against the
+     corrected one below (0.300) it is 5.12 dark and 4.82 light, so the pairing
+     now passes and the --muted swaps in NastaveniPage, the chat author label and
+     every v11 cell are a register choice rather than a contrast workaround. They
+     stay: --muted is the right weight for a selected control's metadata. */
   --subtle: oklch(0.700 0.012 264);
   --accent: oklch(0.680 0.120 256);
   /* Dark theme accent is intentionally bright (bloom-safe), so its foreground
@@ -119,7 +121,9 @@
      conditions and schedule builders, the private-items filter, the note toolbar
      and the widget badge — and it measured 3.77:1 in this theme and 4.33:1 in the
      light one. Both are under AA, at 12.5–13 px, nowhere near the large-text
-     exemption. It is now 4.72 and 4.60.
+     exemption. It is now 4.74 and 4.57 — the same two figures §V11-12 and the
+     CHANGELOG quote, because a measurement written down three times has to be
+     the same measurement all three.
 
      ⚠ FIXED IN THE TOKEN, NOT AT THE EIGHT CALL SITES, and NastaveniPage’s own
      v10.2 note is what asked for that: "the pairing itself is wider than this
@@ -380,8 +384,8 @@
   --subtle: oklch(0.515 0.012 264);
   --accent: oklch(0.530 0.150 256);
   --accent-fg: oklch(0.990 0.004 256);
-  /* v11: 0.930 → 0.950 — the light half of the same fix. 4.33 → 4.60 against
-     --accent; --text is 13.9 and --muted 5.8 on it, both comfortable. */
+  /* v11: 0.930 → 0.950 — the light half of the same fix. 4.33 → 4.57 against
+     --accent; --text is 14.1 and --muted 5.9 on it, both comfortable. */
   --accent-soft: oklch(0.950 0.045 256);
   --now: oklch(0.640 0.130 66);
   --now-soft: oklch(0.945 0.050 78);

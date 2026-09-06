@@ -2053,16 +2053,24 @@ export const cs = {
     // ---- revoke: the one destructive action on either screen ----
     revoke: 'Odvolat',
     revokeTitle: (name: string) => `Odvolat token „${name}“? Asistent ztratí přístup okamžitě.`,
+    // ⚠ THE OWNER IS PARENTHESISED RATHER THAN PUT AFTER „člena“, and that is
+    // grammar rather than taste: „člena“ governs the genitive and Czech personal
+    // names decline, so „člena Karel“ is wrong and „člena Karla“ is not something
+    // a display name in the nominative can be turned into. A label in its own
+    // slot reads correctly whatever the name is.
     revokeTitleAdmin: (name: string, owner: string) =>
-      `Odvolat token „${name}“ člena ${owner}? Ztratí přístup okamžitě.`,
+      `Odvolat token „${name}“ (vlastník: ${owner})? Asistent ztratí přístup okamžitě.`,
     revokeBody:
       'Odvolání platí od nejbližšího dalšího volání. Řádek zůstane v seznamu s datem — nový token si můžete udělat kdykoli.',
     revokeDone: (name: string) => `Token „${name}“ odvolán — přístup skončil`,
     revokeFailed: 'Token se nepodařilo odvolat.',
 
-    // ---- the ceiling: a sentence, not a greyed-out button ----
-    maxTitle: 'Nový token teď nejde vytvořit',
-    close: 'Zavřít',
+    // ⚠ THE CEILING HAS NO STRINGS OF ITS OWN, AND THAT IS THE DESIGN. The server
+    // refuses an eleventh token with a 422 that names the remedy, and the mint
+    // form renders that message through `apiErrorMessage` — so there is no dialog
+    // and no title for one. Two strings for the dialog that was not built stood
+    // here until a review round noticed nothing referenced them; `knip` does not
+    // check object members, so nothing else ever would have.
 
     // ---- Administrace → Asistenti → Tokeny ----
     adminGroup: 'Asistenti',

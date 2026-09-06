@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // Prompts (v11, PRD §V11-4 FR-M8, D309).
@@ -43,6 +44,12 @@ type Prompt struct {
 	Description string
 	Arguments   []PromptArgument
 	// Text is the prompt body handed to the model, in Czech.
+	//
+	// ⚠ EVERY DECLARED ARGUMENT APPEARS IN HERE AS `{{name}}`, and a test asserts
+	// it. An argument published in `prompts/list` and never substituted is the
+	// silently-dropped value this version refuses everywhere else — the member
+	// types a month, the body never mentions it, and the model closes out the one
+	// the body's fallback names instead.
 	Text string
 }
 
@@ -115,8 +122,9 @@ func (h *Host) prompts() []Prompt {
 				Description: "Měsíc ve tvaru RRRR-MM. Když ho neuvedeš, vezme se ten minulý.",
 			}},
 			Text: "Projdi se mnou uzávěrku měsíce.\n\n" +
-				"1. Zavolej `home_whoami` kvůli dnešnímu datu; pokud jsem měsíc neuvedl, " +
-				"vezmi ten předchozí.\n" +
+				"Měsíc, o který jde: {{měsíc}}\n" +
+				"(Když je tenhle řádek prázdný, vezmi měsíc předcházející dnešnímu datu.)\n\n" +
+				"1. Zavolej `home_whoami` kvůli dnešnímu datu.\n" +
 				"2. Zavolej `home_finance_months` na ten měsíc. Když chybí, řekni to — " +
 				"nezakládej ho sám.\n" +
 				"3. Zavolej `home_electricity_summary` a `home_electricity_readings`.\n\n" +
@@ -163,6 +171,10 @@ func promptsWire(ps []Prompt) []map[string]any {
 
 type promptsGetParams struct {
 	Name string `json:"name"`
+	// ⚠ THE ARGUMENTS ARE READ, NOT ACCEPTED AND IGNORED. The protocol's own
+	// shape is a flat map of strings, and `měsíční-uzávěrka` is the one prompt
+	// that declares one.
+	Arguments map[string]string `json:"arguments"`
 }
 
 func (h *Host) promptsGet(params json.RawMessage) (any, error) {
@@ -171,17 +183,62 @@ func (h *Host) promptsGet(params json.RawMessage) (any, error) {
 		return nil, &ProtocolError{Code: CodeInvalidParams, Message: "prompts/get requires a name"}
 	}
 	for _, p := range h.prompts() {
-		if p.Name == in.Name {
-			return map[string]any{
-				"description": p.Description,
-				"messages": []any{map[string]any{
-					"role":    "user",
-					"content": map[string]any{"type": "text", "text": p.Text},
-				}},
-			}, nil
+		if p.Name != in.Name {
+			continue
 		}
+		text, perr := renderPrompt(p, in.Arguments)
+		if perr != nil {
+			return nil, perr
+		}
+		return map[string]any{
+			"description": p.Description,
+			"messages": []any{map[string]any{
+				"role":    "user",
+				"content": map[string]any{"type": "text", "text": text},
+			}},
+		}, nil
 	}
 	// A protocol error, not an empty result: the model cannot fix an unknown
 	// prompt name by trying different arguments.
 	return nil, &ProtocolError{Code: CodeInvalidParams, Message: "unknown prompt " + in.Name}
+}
+
+// renderPrompt substitutes the caller's arguments into the body.
+//
+// ⚠ AN ARGUMENT THAT REACHES NO PLACEHOLDER IS A VALUE SILENTLY DROPPED, and that
+// is the one shape this version refuses everywhere else: an unknown module is a
+// 422, an unknown `via` is a 422, an expiry on PATCH is a 422 rather than a
+// no-op, and `DecodeArgs` is strict for exactly this reason. A prompt argument
+// is worse than the rest of them, because there is no error at all — the member
+// types a month, the model never sees it, and the answer is about a different
+// month that looks entirely plausible.
+//
+// ⚠ AN UNDECLARED NAME IS REFUSED rather than ignored, on the same argument. A
+// client sending `mesic` for `měsíc` gets told; it does not get a close-out of
+// last month with no indication that anything was dropped.
+func renderPrompt(p Prompt, args map[string]string) (string, *ProtocolError) {
+	declared := make(map[string]bool, len(p.Arguments))
+	for _, a := range p.Arguments {
+		declared[a.Name] = true
+	}
+	for name := range args {
+		if !declared[name] {
+			return "", &ProtocolError{
+				Code:    CodeInvalidParams,
+				Message: "prompt " + p.Name + " has no argument " + name,
+			}
+		}
+	}
+	text := p.Text
+	for _, a := range p.Arguments {
+		value := strings.TrimSpace(args[a.Name])
+		if a.Required && value == "" {
+			return "", &ProtocolError{
+				Code:    CodeInvalidParams,
+				Message: "prompt " + p.Name + " requires the argument " + a.Name,
+			}
+		}
+		text = strings.ReplaceAll(text, "{{"+a.Name+"}}", value)
+	}
+	return text, nil
 }

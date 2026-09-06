@@ -44,15 +44,15 @@ export function RevealTokenDialog({ token, onDone }: { token: McpTokenCreated; o
 
   return (
     // ⚠ `onOpenChange` IS WIRED THE WAY EVERY OTHER DIALOG IN HOME WIRES IT, and
-    // that is what makes the three refusals below LOAD-BEARING rather than
+    // that is what makes the two refusals below LOAD-BEARING rather than
     // decorative. A controlled `open` with no handler would also stay open — and
     // would stay open with the refusals deleted, so nothing could tell the two
     // apart. It was written that way first, and the test that was supposed to
     // prove Escape does not dismiss passed with every guard removed.
     //
-    // Nothing reaches this handler now: Escape, pointer-down-outside and
-    // interact-outside are each prevented, and no Dialog.Close is rendered. The
-    // one exit is the Hotovo button, which calls onDone directly.
+    // Nothing reaches this handler now: Escape and interact-outside are each
+    // prevented, and no Dialog.Close is rendered. The one exit is the Hotovo
+    // button, which calls onDone directly.
     <Dialog.Root
       open
       onOpenChange={(open) => {
@@ -63,12 +63,19 @@ export function RevealTokenDialog({ token, onDone }: { token: McpTokenCreated; o
         <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/60" />
         <Dialog.Content
           aria-describedby={undefined}
-          // The three dismissals, refused one by one. Radix fires each of these
+          // The two dismissals, refused one by one. Radix fires each of these
           // before it would close; preventing the event is what stops it — and
-          // with onOpenChange wired above, deleting any one of these three lines
+          // with onOpenChange wired above, deleting either of these two lines
           // really does hand the member a dialog that throws their token away.
+          //
+          // ⚠ TWO, NOT THREE. `onPointerDownOutside` stood here as well, and Radix
+          // fires BOTH of them for one pointer-down and dismisses only if neither
+          // prevented it — so each covered for the other and deleting either alone
+          // reddened nothing, while the comment claimed otherwise. A guard whose
+          // deletion no test notices is the exact shape this dialog was caught in
+          // once already. `onInteractOutside` is the one that stays because it is
+          // the wider of the two: it fires for a focus move outside as well.
           onEscapeKeyDown={(e) => e.preventDefault()}
-          onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
           // ⚠ FOCUS LANDS ON THE COPY BUTTON, NOT ON *Hotovo*. Radix focuses the
           // first focusable child by default, and here that would put the exit

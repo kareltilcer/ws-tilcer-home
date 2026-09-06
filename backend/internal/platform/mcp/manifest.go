@@ -161,6 +161,13 @@ func MarshalManifest(m Manifest) ([]byte, error) {
 
 // compactSchema re-encodes a tool's schema so the manifest carries structure
 // rather than the source file's line breaks.
+//
+// ⚠ IT RE-ENCODES WITH HTML ESCAPING OFF TOO. `json.Marshal` escapes `<`, `>`
+// and `&` unconditionally, and the outer encoder cannot undo what is already in
+// the bytes it is handed — so marshalling here with the default would put
+// `&` inside every schema that mentions one, defeating MarshalManifest's
+// SetEscapeHTML(false) for exactly the half of the file that is most likely to
+// carry prose: a tool's per-property descriptions.
 func compactSchema(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return json.RawMessage(`{}`)
@@ -172,9 +179,13 @@ func compactSchema(raw json.RawMessage) json.RawMessage {
 		// travels verbatim and the diff shows something wrong.
 		return raw
 	}
-	out, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return raw
 	}
-	return out
+	// Encode appends a newline; a RawMessage embedded in another document must not
+	// carry one.
+	return json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n"))
 }
