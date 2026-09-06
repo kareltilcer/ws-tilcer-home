@@ -58,7 +58,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
   "properties": {
     "from": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to today."},
     "to": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to 14 days after from."},
-    "status": {"type": "string", "description": "Filter by status, e.g. \"open\"."},
+    "status": {"type": "string", "enum": ["open", "done", "skipped"], "description": "Filter by status. Omit for every status."},
     "bed_id": {"type": "string"},
     "limit": {"type": "integer", "minimum": 1}
   },
@@ -76,13 +76,19 @@ func (p *mcpProvider) Tools() []mcp.Tool {
     "title_cs": {"type": "string", "minLength": 1, "description": "What to do, in Czech — this is what appears on the work list."},
     "window_from": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
     "window_to": {"type": "string", "description": "ISO date (YYYY-MM-DD), on or after window_from."},
-    "kind": {"type": "string", "description": "Optional job kind."},
+    "kind": {
+      "type": "string",
+      "description": "What kind of job it is. Use \"other\" when none of the rest fits.",
+      "enum": ["bed_prep", "sow_indoor", "prick_out", "harden_off", "sow_direct", "transplant",
+               "thin", "support", "feed", "mulch", "pest_check", "prune", "spray", "harvest",
+               "process", "store", "clear", "water", "weed", "other"]
+    },
     "season_year": {"type": "integer", "description": "Defaults to the season the window falls in."},
     "planting_id": {"type": "string"},
     "bed_id": {"type": "string"},
     "notes_md": {"type": "string"}
   },
-  "required": ["title_cs", "window_from", "window_to"],
+  "required": ["title_cs", "window_from", "window_to", "kind"],
   "additionalProperties": false
 }`),
 		},
@@ -202,6 +208,17 @@ func (p *mcpProvider) tasks(ctx context.Context, args json.RawMessage) (mcp.Resu
 	} else if err := validGardenDate(to, "to"); err != nil {
 		return mcp.Result{}, err
 	}
+	// ⚠ AN UNRECOGNISED STATUS IS REFUSED, NOT BOUND. The store appends
+	// `AND t.status = ?` with whatever it is given, so "pending" or "todo" — the
+	// words a model reaches for when the description says only *e.g. "open"* —
+	// matched no row and the tool answered "(nic v tomto okně)". The household is
+	// then told there is no garden work when what was wrong was the filter. The
+	// legal values are already declared as EnumTaskStatus; this is that enum,
+	// enforced, the way `via` and the module allowlist are.
+	if in.Status != "" && !Valid(EnumTaskStatus, in.Status) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"status musí být jedna z hodnot: " + strings.Join(Values(EnumTaskStatus), ", ") + ".")
+	}
 	page, err := p.svc.ListTasks(ctx, TaskFilter{
 		From: from, To: to, Status: in.Status, BedID: in.BedID,
 	}, in.Limit, "")
@@ -261,6 +278,20 @@ func (p *mcpProvider) taskCreate(ctx context.Context, args json.RawMessage) (mcp
 	if in.WindowTo < in.WindowFrom {
 		return mcp.Result{}, httpx.ErrUnprocessable("window_to nesmí být dřív než window_from.")
 	}
+	// ⚠ `kind` IS REQUIRED, AND CALLING IT OPTIONAL MADE THIS TOOL UNUSABLE.
+	// `validateTask` refuses an empty kind — `Valid(EnumTaskKind, "")` is false —
+	// so a model that followed the schema and omitted it was refused EVERY time,
+	// with the service's "Neznámý druh práce." for a field it had been told it
+	// could leave out. The HTTP twin requires it too.
+	//
+	// ⚠ AND IT IS REFUSED RATHER THAN DEFAULTED TO `other`. Silently picking a
+	// kind is what `Coerce`'s own doc comment refuses for a crop, for the same
+	// reason: the kind is what decides which work list the job appears on, and a
+	// wrong one chosen on the caller's behalf is never noticed.
+	if !Valid(EnumTaskKind, in.Kind) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"kind musí být jedna z hodnot: " + strings.Join(Values(EnumTaskKind), ", ") + ".")
+	}
 	year := in.SeasonYear
 	if year == nil {
 		y, err := time.Parse("2006-01-02", in.WindowFrom)
@@ -272,11 +303,8 @@ func (p *mcpProvider) taskCreate(ctx context.Context, args json.RawMessage) (mcp
 	}
 	kind := in.Kind
 	input := TaskInput{
-		TitleCS: &title, WindowFrom: &in.WindowFrom, WindowTo: &in.WindowTo,
+		TitleCS: &title, WindowFrom: &in.WindowFrom, WindowTo: &in.WindowTo, Kind: &kind,
 		PlantingID: in.PlantingID, BedID: in.BedID, NotesMD: in.NotesMD, SeasonYear: year,
-	}
-	if kind != "" {
-		input.Kind = &kind
 	}
 	t, err := p.svc.CreateTask(ctx, input)
 	if err != nil {

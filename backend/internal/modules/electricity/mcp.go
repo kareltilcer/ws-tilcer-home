@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/dates"
+	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/mcp"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
@@ -128,10 +129,13 @@ func (p *mcpProvider) readings(ctx context.Context, args json.RawMessage) (mcp.R
 	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
-	limit := in.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 24
-	}
+	// ⚠ CLAMPED, NOT RESET. `if limit > 100 { limit = 24 }` answers a request for
+	// 150 with 24 — fewer rows than the bound it was refusing — and nothing on the
+	// wire says the number was changed at all. appdb.ClampLimit is the shared
+	// helper that returns the BOUND, and electricity not reaching for it is
+	// precisely the debt D311 records against this module's REST surface; the
+	// second front door does not get to repeat it.
+	limit := appdb.ClampLimit(in.Limit, 24, 100)
 	rows, _, err := p.svc.Store().ListReadings(ctx, limit, "")
 	if err != nil {
 		return mcp.Result{}, err
@@ -257,22 +261,25 @@ func (p *mcpProvider) summary(ctx context.Context, args json.RawMessage) (mcp.Re
 	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
-	periodID := in.PeriodID
-	if periodID == "" {
-		// ⚠ The newest period, resolved here rather than defaulted in the store: a
-		// household with no period at all is a normal early state, not an error, and
-		// the answer for it is a sentence rather than a 404.
-		periods, _, err := p.svc.Store().ListPeriods(ctx, 1, "")
-		if err != nil {
-			return mcp.Result{}, err
-		}
-		if len(periods) == 0 {
+	// ⚠ AN EMPTY id IS HOW THE SERVICE IS ASKED FOR THE CURRENT PERIOD, and it is
+	// the service's question rather than this tool's. `resolvePeriod` answers with
+	// the period CONTAINING TODAY — which is what "the current billing period"
+	// means, and what this tool's own description promises.
+	//
+	// ⚠ THE NEWEST `starts_on` IS A DIFFERENT PERIOD, and reaching for it here was
+	// wrong the moment next year's period is created ahead of the current one —
+	// which is the ordinary way a period is set up. The answer then reported a
+	// period that has not started, with no consumption and no advances, as though
+	// it were the one being lived in.
+	s, err := p.svc.Summary(ctx, in.PeriodID)
+	if err != nil {
+		// ⚠ NO PERIOD AT ALL IS A NORMAL EARLY STATE, not a failure — but only when
+		// the caller named none. An id that does not resolve is a genuine
+		// not-found and keeps the refusal. The sentence is the service's own,
+		// verbatim, so the two surfaces say the same thing.
+		if in.PeriodID == "" && mcp.IsNotFound(err) {
 			return mcp.Result{Text: "Zatím není založené žádné zúčtovací období."}, nil
 		}
-		periodID = periods[0].ID
-	}
-	s, err := p.svc.Summary(ctx, periodID)
-	if err != nil {
 		return mcp.Result{}, err
 	}
 	return mcp.TextResult(renderSummary(s), summaryWire(s))
@@ -361,19 +368,21 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 	if kind != "electricity.reading" {
 		return mcp.NotFoundResult(), nil
 	}
-	rows, _, err := p.svc.Store().ListReadings(ctx, 500, "")
+	// ⚠ ONE ROW, BY ID. Listing the newest five hundred and scanning them in Go
+	// answered NOT FOUND for a reading older than that page — a row that exists,
+	// reported as though it never had — and spent five hundred scanned rows on the
+	// ONE connection to answer a point lookup. `Store.GetReading` is the indexed
+	// read the HTTP detail route and both update paths already use.
+	r, ok, err := p.svc.Store().GetReading(ctx, nil, id)
 	if err != nil {
 		return mcp.Result{}, err
 	}
-	for _, r := range rows {
-		if r.ID != id {
-			continue
-		}
-		return mcp.TextResult(
-			fmt.Sprintf("Odečet %s — VT %s, NT %s (id %s)", r.ReadOn, kwh(r.VTDkwh), kwh(r.NTDkwh), r.ID),
-			readingWire(r))
+	if !ok {
+		return mcp.NotFoundResult(), nil
 	}
-	return mcp.NotFoundResult(), nil
+	return mcp.TextResult(
+		fmt.Sprintf("Odečet %s — VT %s, NT %s (id %s)", r.ReadOn, kwh(r.VTDkwh), kwh(r.NTDkwh), r.ID),
+		readingWire(r))
 }
 
 // ---- units ----

@@ -62,6 +62,11 @@ type harness struct {
 	todo    *todo.Service
 	chat    *chat.Service
 	docs    *documents.Service
+	// elec and garden are held so a fixture can reach the verbs v11 deliberately
+	// does NOT publish — a billing period, a season — which is exactly what the
+	// tools that read them need in front of them.
+	elec   *electricity.Service
+	garden *garden.Service
 	// notesProv is the notes provider the registry holds, reachable directly so a
 	// test can hand it a budget of its own. ⚠ The host always passes
 	// resourceListLimit (200), so the only way to assert that a provider reading
@@ -150,6 +155,11 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	sink := audit.NewSink()
 	notify := func(context.Context, string, any) {}
 
+	loc, tzErr := time.LoadLocation("Europe/Prague")
+	if tzErr != nil {
+		t.Fatalf("load timezone: %v", tzErr)
+	}
+
 	todoSvc := todo.NewService(db, sink, notify)
 	eventsSvc := events.NewService(db, sink, notify, 500, 24)
 	notesSvc := notes.NewService(db, sink, notify, nil, notes.ImageOptions{}, logger)
@@ -163,21 +173,22 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	}
 	docsSvc := documents.NewService(db, sink, notify, blob, documents.Options{MaxUploadBytes: 1 << 20}, logger)
 	financeSvc := finance.NewService(db, sink, notify)
-	gardenSvc := garden.NewService(db, sink, notify, garden.Options{})
+	// ⚠ THE HOUSEHOLD TIMEZONE, NOT THE ZERO VALUE. garden.NewService defaults a
+	// nil Location to UTC, and garden’s own tools default their date window to
+	// s.today() — so a harness without it exercises a different day boundary from
+	// the one production runs, for an hour every evening.
+	gardenSvc := garden.NewService(db, sink, notify, garden.Options{Location: loc})
 	chatSvc := chat.NewService(db, sink, nil, nil, nil, chat.Options{TrashDays: 7, Blob: blob, Upload: chat.UploadOptions{MaxBytes: 1 << 20}})
 	adminSvc := admin.NewService(db, sink, admin.Options{Logger: logger})
 
-	loc, tzErr := time.LoadLocation("Europe/Prague")
-	if tzErr != nil {
-		t.Fatalf("load timezone: %v", tzErr)
-	}
 	todoMod := todo.NewModule(todoSvc)
 	eventsMod := events.NewModule(eventsSvc, loc, 30)
 	notesMod := notes.NewModule(notesSvc)
 	docsMod := documents.NewModule(docsSvc)
 	financeMod := finance.NewModule(financeSvc, loc)
 	gardenMod := garden.NewModule(gardenSvc)
-	elecMod := electricity.NewModule(electricity.NewService(db, sink, notify, loc))
+	elecSvc := electricity.NewService(db, sink, notify, loc)
+	elecMod := electricity.NewModule(elecSvc)
 	chatMod := chat.NewModule(chatSvc)
 	loggingMod := logging.New(db)
 	adminMod := admin.NewModule(adminSvc)
@@ -254,7 +265,8 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	})
 
 	h := &harness{t: t, db: db, tokens: tokens, notes: notesSvc, todo: todoSvc,
-		chat: chatSvc, docs: docsSvc, notesProv: notesMod.MCPProvider(), registry: registry}
+		chat: chatSvc, docs: docsSvc, elec: elecSvc, garden: gardenSvc,
+		notesProv: notesMod.MCPProvider(), registry: registry}
 	h.handler = httpx.NewRouter(httpx.Deps{
 		Logger:   logger,
 		DB:       db,

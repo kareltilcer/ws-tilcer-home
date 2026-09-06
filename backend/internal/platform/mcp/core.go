@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,25 @@ import (
 
 // coreHandlerFunc is one core tool's implementation.
 type coreHandlerFunc func(ctx context.Context, s *callSession, args json.RawMessage) (Result, error)
+
+// searchableModules is the vocabulary `home_search`'s `in` filter accepts, in the
+// registration order the merge tiebreaks on.
+//
+// ⚠ IT IS THE REGISTRY, NOT KnownModules, and the two differ by `logging`. That
+// list is the TOKEN allowlist's vocabulary and openapi's `McpModule` enum, where
+// a module with no tool has no business appearing; this one answers a different
+// question — what can be searched — and `logging` publishes an empty Tools() and
+// a real index over audit_events_fts (FR-M2). It is NOT the token allowlist
+// widened: a token scoped to a subset still cannot name `logging`, because
+// searchModules filters by the token first.
+func (h *Host) searchableModules() []string {
+	providers := h.deps.Registry.Providers()
+	out := make([]string, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, p.Module())
+	}
+	return out
+}
 
 const (
 	toolWhoami   = "home_whoami"
@@ -252,12 +272,22 @@ func (h *Host) search(ctx context.Context, s *callSession, args json.RawMessage)
 	// per-module counts come back empty, and the answer is "0 hits" from a
 	// household that has plenty: exactly the silence this refusal exists to
 	// prevent, reached through the guard instead of around it.
+	//
+	// ⚠ AND THE VOCABULARY HERE IS WIDER THAN KnownModules BY EXACTLY ONE.
+	// KnownModules is the TOKEN allowlist's vocabulary — openapi's McpModule enum
+	// — and `logging` is deliberately absent from it because it publishes no tool.
+	// It does publish a fifth of the search CORPUS, though, and its hits come back
+	// labelled `logging.event`: a model handed those rows and then refused
+	// `in: ["logging"]` has been told the module both exists and does not. What is
+	// searchable is what the registry answers, so that is what this refusal is
+	// measured against.
+	searchable := h.searchableModules()
 	wantedMods := make([]string, 0, len(in.In))
 	for _, m := range in.In {
 		name := strings.TrimSpace(m)
-		if !KnownModule(name) {
+		if !slices.Contains(searchable, name) {
 			return Result{}, httpx.ErrUnprocessable("Neznámý modul: " + m +
-				". Povolené: " + strings.Join(KnownModules, ", ") + ".")
+				". Povolené: " + strings.Join(searchable, ", ") + ".")
 		}
 		wantedMods = append(wantedMods, name)
 	}

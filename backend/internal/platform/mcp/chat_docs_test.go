@@ -36,15 +36,31 @@ func TestChatReadIsAuditedWithoutBodies(t *testing.T) {
 		t.Fatalf("expected exactly one chat.read event, got %d", n)
 	}
 
-	var summary, meta, entityID string
+	var summary, meta, entityID, entityType string
 	if err := h.db.QueryRow(`
-		SELECT summary, COALESCE(meta, ''), COALESCE(entity_id, '')
+		SELECT summary, COALESCE(meta, ''), COALESCE(entity_id, ''), COALESCE(entity_type, '')
 		  FROM audit_events WHERE module = 'chat' AND action = 'read'`).
-		Scan(&summary, &meta, &entityID); err != nil {
+		Scan(&summary, &meta, &entityID, &entityType); err != nil {
 		t.Fatalf("read the event: %v", err)
 	}
 	if entityID != conversationID {
 		t.Fatalf("entity_id is %q, want the conversation id", entityID)
+	}
+	// ⚠ THE MODULE'S OWN ENTITY TYPE, not a second spelling of it. The Log's entity
+	// timeline selects on `entity_type = ?`, so a read filed under `conversation`
+	// while every other chat event is filed under `chat_conversation` is absent from
+	// the history of the conversation it records — the one place somebody asking
+	// "what has the assistant seen?" would look. Asserted against the same constant
+	// v10's own writes use, so the two cannot drift apart silently.
+	var v10Type string
+	if err := h.db.QueryRow(`
+		SELECT entity_type FROM audit_events
+		 WHERE module = 'chat' AND action = 'conversation.created' LIMIT 1`).Scan(&v10Type); err != nil {
+		t.Fatalf("read v10's own entity type: %v", err)
+	}
+	if entityType != v10Type {
+		t.Fatalf("chat.read is filed under entity_type %q while every other chat event"+
+			" uses %q — the Log's entity timeline will not show it", entityType, v10Type)
 	}
 	if !strings.Contains(meta, tok.ID) || !strings.Contains(meta, "message_count") {
 		t.Fatalf("the event does not carry the token and a count: %s", meta)
@@ -159,6 +175,28 @@ func TestDocumentResourcesAreViewerScoped(t *testing.T) {
 		}
 		if !strings.Contains(body, "navod-k-mycce") {
 			t.Fatalf("the shared document is missing, so the scoping proves nothing:\n%s", body)
+		}
+	})
+
+	// ⚠ AND A LISTED URI ACTUALLY READS. Every other assertion here is about what
+	// comes back EMPTY, and a listing whose URIs all resolved to nothing would
+	// satisfy all of them — the twin of chat's "the caller reads their own", which
+	// is what makes the refusals below mean something.
+	t.Run("a listed URI reads back its bytes", func(t *testing.T) {
+		rr := h.rpc(secret, "resources/read", map[string]any{"uri": "home://documents/navod-k-mycce"})
+		if !strings.Contains(rr.Body.String(), "obsah dokumentu") {
+			t.Fatalf("a shared document listed for the caller did not read: %s", rr.Body.String())
+		}
+	})
+
+	// The owner's own private document reads, under the `soukrome` prefix the SPA
+	// parses — which is what makes the borrowed-URI refusal below a refusal rather
+	// than a path that never worked.
+	t.Run("the owner reads their own private document", func(t *testing.T) {
+		bSecret, _ := h.mintToken(memberB, "Claude B", nil, time.Time{})
+		rr := h.rpc(bSecret, "resources/read", map[string]any{"uri": "home://documents/soukrome/vyplatni-paska"})
+		if !strings.Contains(rr.Body.String(), "obsah dokumentu") {
+			t.Fatalf("the OWNER could not read their own private document: %s", rr.Body.String())
 		}
 	})
 

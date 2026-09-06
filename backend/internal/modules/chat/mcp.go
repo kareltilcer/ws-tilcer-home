@@ -238,24 +238,37 @@ func (p *mcpProvider) Resources() []mcp.ResourceTemplate {
 
 // ListResources enumerates the attachments the CALLER may read — leak row 11.
 //
-// ⚠ IT GOES THROUGH THE MEMBER-SCOPED CLEAN-UP READ, which already applies
+// ⚠ IT GOES THROUGH THE MEMBER-SCOPED CLEAN-UP QUERY, which already applies
 // membership, the history floor and the koš in SQL. A listing built from a
 // different query would be a second place the floor has to be remembered.
+//
+// ⚠ BUT NOT THROUGH `Service.Cleanup`, AND THAT IS THE POINT. That method carries
+// `assertCleanupGate` — member ∧ (editor | admin), D241 — because DELETING an
+// attachment is a write. A `reader` calling it is refused 403, the host swallows
+// one module's listing failure so the rest survives, and the reader's
+// resources/list came back with every note and document and no chat attachment at
+// all, from conversations they are in and can still read one at a time. A read
+// listing gated by a write permission is a refusal nobody can see.
+//
+// ⚠ AND THE ORDER IS `recent`, NOT THE CLEAN-UP SCREEN'S `size`. This is a
+// listing of what is there, not of what is worth deleting; when the cap cuts it,
+// what should fall off the end is the oldest, not the smallest.
 func (p *mcpProvider) ListResources(ctx context.Context, limit int) ([]mcp.Resource, error) {
-	if _, ok := reqctx.ActorFrom(ctx); !ok {
+	actor, ok := reqctx.ActorFrom(ctx)
+	if !ok || actor.UserID == "" {
 		return nil, fmt.Errorf("chat: resource listing without an actor")
 	}
-	page, err := p.svc.Cleanup(ctx, "", "", "", limit)
+	rows, _, _, err := p.svc.store.CleanupItems(ctx, p.svc.db, actor.UserID, "", sortRecent, "", limit)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]mcp.Resource, 0, len(page.Items))
-	for _, it := range page.Items {
+	out := make([]mcp.Resource, 0, len(rows))
+	for _, r := range rows {
 		out = append(out, mcp.Resource{
-			URI:      fmt.Sprintf("%s%s/attachments/%s", uriPrefix, it.ConversationID, it.Attachment.ID),
-			Name:     it.Attachment.OriginalFilename,
-			MIMEType: it.Attachment.ContentType,
-			Size:     it.Attachment.ByteSize,
+			URI:      fmt.Sprintf("%s%s/attachments/%s", uriPrefix, r.attachment.ConversationID, r.attachment.ID),
+			Name:     r.attachment.OriginalFilename,
+			MIMEType: r.attachment.ContentType,
+			Size:     r.attachment.ByteSize,
 		})
 	}
 	return out, nil
@@ -353,14 +366,26 @@ func (s *Service) RecordTokenThreadRead(ctx context.Context, conversationID stri
 	if !viaToken {
 		return nil
 	}
-	name := conversationID
-	if c, err := s.GetConversation(ctx, conversationID); err == nil {
-		name = c.Name
-	}
 	return appdb.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		// ⚠ THE NAME COMES FROM THE ONE-COLUMN READ, INSIDE THE TX. `GetConversation`
+		// would answer the same question through memberScope, the conversation read
+		// and attachPreviews — three-plus queries on the ONE connection to obtain a
+		// string for a summary — and the caller has already passed the membership
+		// gate to get here. `ConversationName` is what the clean-up path's own audit
+		// write uses, for exactly this.
+		name, err := s.store.ConversationName(ctx, tx, conversationID)
+		if err != nil {
+			return err
+		}
 		return s.sink.Record(ctx, tx, audit.Event{
-			Action:     "read",
-			EntityType: "conversation",
+			Action: "read",
+			// ⚠ THE MODULE'S OWN ENTITY TYPE, not a second spelling of it. Every other
+			// chat event is filed under `chat_conversation` (Service.record), and the
+			// Log's entity timeline selects on `entity_type = ?` — so a read filed as
+			// `conversation` is absent from the history of the very conversation it
+			// records, which is the one place somebody asking "what has the assistant
+			// seen?" would look.
+			EntityType: "chat_conversation",
 			EntityID:   conversationID,
 			Summary:    "Asistent četl konverzaci „" + name + "“",
 			Meta:       map[string]any{"token_id": tokenID, "message_count": messageCount},

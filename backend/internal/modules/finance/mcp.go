@@ -49,8 +49,8 @@ func (p *mcpProvider) Tools() []mcp.Tool {
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "month": {"type": "string", "description": "A single month as YYYY-MM."},
-    "limit": {"type": "integer", "minimum": 1}
+    "month": {"type": "string", "description": "A single month as YYYY-MM. Resolved directly, so any recorded month answers however far back it is."},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
   },
   "additionalProperties": false
 }`),
@@ -59,7 +59,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
 		{
 			Name:        toolMonthCreate,
 			Title:       "Record a month",
-			Description: "Records one month's two incomes and its four percentage rates, which must be whole numbers summing to 100; the split is computed from them and never sent.",
+			Description: "Records one month's two incomes and its four percentage rates, which must be whole numbers summing to 100; the split is computed from them and never sent. Call home_finance_months first — the previous month's rates are usually the ones to repeat.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -68,7 +68,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
     "income_andy": {"type": "integer", "minimum": 0, "description": "In whole Kč."},
     "rates": {
       "type": "object",
-      "description": "All four, or none. They must sum to 100.",
+      "description": "All four, and they must sum to 100. A month has no split without them, so there is no default.",
       "properties": {
         "personal": {"type": "integer"},
         "operational": {"type": "integer"},
@@ -79,7 +79,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
       "additionalProperties": false
     }
   },
-  "required": ["month", "income_kaja", "income_andy"],
+  "required": ["month", "income_kaja", "income_andy", "rates"],
   "additionalProperties": false
 }`),
 		},
@@ -135,29 +135,52 @@ func (p *mcpProvider) months(ctx context.Context, args json.RawMessage) (mcp.Res
 	if err := mcp.DecodeArgs(args, &in); err != nil {
 		return mcp.Result{}, err
 	}
+	// ⚠ ONE MONTH IS A ROW LOOKUP, NOT A FILTER OVER A PAGE. `Store.ForMonth` is
+	// the indexed read the Rozpočet widget and the *_current metrics already use.
+	// Filtering the newest `limit` rows in Go instead answered NOT FOUND for every
+	// month older than that page — and finance's history arrived here by migration
+	// from `fin` (§V6-12), so "older than the newest two dozen" is most of it. A
+	// household asking what it earned in a year it has recorded is not an edge
+	// case, and being told the month does not exist is the one answer nobody can
+	// argue with.
+	if in.Month != "" {
+		if err := validMonth(in.Month); err != nil {
+			return mcp.Result{}, err
+		}
+		m, ok, err := p.svc.Store().ForMonth(ctx, in.Month)
+		if err != nil {
+			return mcp.Result{}, err
+		}
+		if !ok {
+			return mcp.NotFoundResult(), nil
+		}
+		return renderMonths([]Month{m})
+	}
+	// ⚠ A LIMIT PAST THE SERVICE'S BOUND IS REFUSED, NOT SENT. `Service.List`
+	// RESETS anything above 200 back to 50 rather than clamping to it, so a
+	// request for 300 comes back with fewer rows than a request for 200 — and
+	// there is nothing on this wire that could say the number was changed.
 	limit := in.Limit
 	if limit <= 0 {
 		limit = 24
+	}
+	if limit > monthsListMax {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			fmt.Sprintf("limit smí být nejvýše %d.", monthsListMax))
 	}
 	page, err := p.svc.List(ctx, limit, "")
 	if err != nil {
 		return mcp.Result{}, err
 	}
-	items := page.Items
-	if in.Month != "" {
-		if err := validMonth(in.Month); err != nil {
-			return mcp.Result{}, err
-		}
-		items = nil
-		for _, m := range page.Items {
-			if m.Month == in.Month {
-				items = append(items, m)
-			}
-		}
-		if len(items) == 0 {
-			return mcp.NotFoundResult(), nil
-		}
-	}
+	return renderMonths(page.Items)
+}
+
+// monthsListMax mirrors the ceiling `Service.List` enforces. ⚠ It is a REFUSAL
+// bound here rather than a clamp, because the service's own behaviour past it is
+// a reset to 50 — the value a caller is least likely to have meant.
+const monthsListMax = 200
+
+func renderMonths(items []Month) (mcp.Result, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d měsíců:\n", len(items))
 	for _, m := range items {
@@ -204,6 +227,20 @@ func (p *mcpProvider) monthCreate(ctx context.Context, args json.RawMessage) (mc
 	}
 	if err := validIncome(*in.IncomeAndy, "income_andy"); err != nil {
 		return mcp.Result{}, err
+	}
+	// ⚠ THE RATES ARE REQUIRED ON A CREATE, AND THE SCHEMA SAYING OTHERWISE MADE
+	// THIS TOOL UNUSABLE. `resolveRates(nil)` is "Sazby jsou povinné." — a month
+	// with no rates has no split, which is the number this module exists to
+	// produce — so a model that read "All four, or none" and sent none was refused
+	// every single time. There is nothing to inherit from and nothing to default
+	// to: last month's rates are a guess about this month's intent.
+	//
+	// ⚠ ON AN UPDATE THEY STAY OPTIONAL, because there the stored block is what an
+	// omitted one means. That asymmetry is the service's and this mirrors it
+	// rather than flattening it.
+	if in.Rates == nil {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"Sazby jsou povinné — zadejte všechny čtyři, dohromady 100 %.")
 	}
 	if err := validRates(in.Rates); err != nil {
 		return mcp.Result{}, err
@@ -279,10 +316,15 @@ func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error
 		return nil, nil
 	}
 	// ⚠ A LIST-AND-FILTER RATHER THAN A QUERY, and it is the honest read for this
-	// module: `finance_months` is a few dozen rows and a month key is either a
-	// prefix of the term or it is not. There is no index to add and nothing an
+	// module: `finance_months` is one row per month and a month key is either a
+	// substring of the term or it is not. There is no index to add and nothing an
 	// index would save.
-	page, err := p.svc.List(ctx, 500, "")
+	//
+	// ⚠ THE BOUND IS THE SERVICE'S OWN CEILING, and asking past it made this scan
+	// SMALLER rather than larger: `Service.List` resets anything above 200 back to
+	// 50, so the 500 written here was a fifty-row scan wearing a five-hundred-row
+	// comment, and a month older than the fiftieth was unfindable.
+	page, err := p.svc.List(ctx, monthsListMax, "")
 	if err != nil {
 		return nil, err
 	}
@@ -359,12 +401,19 @@ func validRates(r *monthRates) error {
 	if r.Personal == nil || r.Operational == nil || r.Fun == nil || r.NoFun == nil {
 		return httpx.ErrUnprocessable("Sazby se zadávají všechny čtyři najednou.")
 	}
-	for name, v := range map[string]int{
-		"personal": *r.Personal, "operational": *r.Operational,
-		"fun": *r.Fun, "no_fun": *r.NoFun,
+	// ⚠ AN ORDERED SLICE, NOT A MAP. Ranging a map picks the offending field by
+	// Go's randomised iteration order, so two identical calls with two bad rates
+	// name two different fields — and a model that corrects the one it was told
+	// about is refused again about another. The order here is the schema's.
+	for _, f := range []struct {
+		name string
+		v    int
+	}{
+		{"personal", *r.Personal}, {"operational", *r.Operational},
+		{"fun", *r.Fun}, {"no_fun", *r.NoFun},
 	} {
-		if v < 0 || v > 100 {
-			return httpx.ErrUnprocessable("Sazba " + name + " musí být mezi 0 a 100.")
+		if f.v < 0 || f.v > 100 {
+			return httpx.ErrUnprocessable("Sazba " + f.name + " musí být mezi 0 a 100.")
 		}
 	}
 	if sum := *r.Personal + *r.Operational + *r.Fun + *r.NoFun; sum != 100 {

@@ -292,7 +292,14 @@ func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error
 	}
 	var hits []mcp.Hit
 	for _, sc := range p.scopesFor(actor.UserID) {
-		page, err := p.svc.List(ctx, q.Text, nil, false, q.Limit, "", sc)
+		// ⚠ THE LIMIT ARGUMENT IS INERT ON THE SEARCH BRANCH, and passing q.Limit
+		// into it read as though the budget were enforced at the query. It is not:
+		// `Service.List` uses the module's own `searchLimit` whenever there is a
+		// text query and looks at `limit` only when listing. The budget is spent
+		// below, once, across BOTH roots — which is why notes' twin passes no limit
+		// at all (its List has no such parameter) and why this one passes nothing
+		// that could be mistaken for one.
+		page, err := p.svc.List(ctx, q.Text, nil, false, 0, "", sc)
 		if err != nil {
 			return nil, err
 		}
