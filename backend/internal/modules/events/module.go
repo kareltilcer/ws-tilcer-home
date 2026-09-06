@@ -21,6 +21,9 @@ type Module struct {
 	widgets []registry.WidgetProvider
 	metrics *metricProvider
 	lists   *listProvider
+	// loc is HOME_TIMEZONE, held so the v11 MCP provider can default a window
+	// to "the next 30 days" in the household's own day rather than in UTC.
+	loc *time.Location
 }
 
 // NewModule builds the events module over svc. loc + lookbackDays configure the
@@ -29,6 +32,7 @@ func NewModule(svc *Service, loc *time.Location, lookbackDays int) *Module {
 	return &Module{
 		svc:     svc,
 		handler: NewHandler(svc),
+		loc:     loc,
 		widgets: []registry.WidgetProvider{
 			newPripominkyProvider(svc.store, loc, lookbackDays, svc.maxOccurrences),
 			newTentoMesicProvider(svc.store, loc, svc.maxOccurrences),

@@ -1,0 +1,311 @@
+// Package mcp is the FIFTH registered catalog (v11, PRD §V11-4 FR-M2, D276) and
+// the second front door to all eleven modules.
+//
+// mcp lives in platform/ and is imported BY modules; it must never import a
+// module. The host reaches feature data through Provider, never through a
+// module's tables — the same rule registry.Catalog, metrics.Registry and
+// lists.Registry all follow, and the reason `internal/arch` stays green with a
+// sixth cross-module consumer in the tree.
+//
+// ⚠ WHAT IS DIFFERENT ABOUT THIS CATALOG, in one paragraph. The other four answer
+// a question with a value: a widget returns a payload for one host, a metric an
+// int, a list a bounded slice of Czech lines, a storage declaration a table name.
+// This one answers with a VERB — and the caller is a program with nobody watching
+// the screen. So the shape of the surface is decided by what is ABSENT: delete,
+// publish, purge, upload, membership change, admin mutation, season close and
+// dashboard layout are not gated, not confirmed, they simply do not exist here
+// (D295). A gated destructive tool is one a model still proposes and a member
+// still approves at 23:40.
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// Source is the optional interface a feature module implements to publish an MCP
+// provider.
+//
+// ⚠ IT IS DELIBERATELY NOT PART OF registry.Module (D56, restated at every
+// catalog since): adding a capability must not change the contract every module
+// implements. Collect type-asserts for it, exactly as metrics.Source and
+// lists.Source are asserted.
+type Source interface{ MCPProvider() Provider }
+
+// Provider is how one module publishes tools, search and resources.
+//
+// ⚠ A PROVIDER WITH NO TOOLS IS NOT AN EMPTY PROVIDER. `logging` implements this
+// for Search alone — an empty Tools() and a real index over audit_events_fts. If
+// an empty Tools() made something skip the provider entirely, search would lose a
+// fifth of its corpus silently.
+type Provider interface {
+	// Module is the English code identifier, matching registry.Module.Name().
+	//
+	// ⚠ It is a METHOD rather than something derived from the tool-name prefix.
+	// Deriving it would make `home_admin_status` look like it belongs to a module
+	// called `admin_status`, and the completeness test needs the real answer to
+	// check openapi's McpModule enum against the registry.
+	Module() string
+
+	// Tools this module publishes. MAY be empty — see logging.
+	Tools() []Tool
+
+	// Call executes one of them. name is the FULL tool name
+	// ("home_todo_card_create"). ctx carries a resolved reqctx.Actor; a ctx
+	// without one is an error, never an unscoped read (D302).
+	Call(ctx context.Context, name string, args json.RawMessage) (Result, error)
+
+	// Search contributes this module's rows to the one cross-module search.
+	// Return (nil, nil) for a module with nothing to find.
+	Search(ctx context.Context, q Query) ([]Hit, error)
+
+	// Resources are the URI templates this module addresses. MAY be empty.
+	Resources() []ResourceTemplate
+
+	// ListResources enumerates the concrete resources the CALLER may read, at
+	// most limit of them.
+	//
+	// ⚠ IT IS VIEWER-SCOPED, and that is leak row 11 (D308): a private root
+	// appears only for its owner, a conversation only for its members. This is
+	// the *existence* leak v9 spent a whole version closing, arriving in a new
+	// surface — a listing is an answer even when every read is refused.
+	ListResources(ctx context.Context, limit int) ([]Resource, error)
+
+	// Read resolves one URI. ⚠ Access is re-checked here, FROM SCRATCH, on every
+	// call: a URI is not a capability (D308). One a member obtained out of band
+	// must return the same thing a URI that never existed returns.
+	Read(ctx context.Context, uri string) (Content, error)
+}
+
+// Tool is one published verb.
+type Tool struct {
+	Name string // "home_todo_card_create", unique across the registry
+	// Title is a short English label.
+	Title string
+	// Description is ONE English sentence saying what the tool returns and what
+	// it costs. ⚠ It is the whole of a model's tool-selection evidence: a model
+	// choosing the wrong tool is a documentation defect with no failing test.
+	Description string
+	// InputSchema is JSON Schema, draft 2020-12.
+	InputSchema json.RawMessage
+	// ReadOnly feeds annotations.readOnlyHint, truthfully.
+	//
+	// ⚠ There is no DestructiveHint field, and its absence is the mechanism
+	// (D294). Nothing destructive is published at all, so there is nothing to
+	// annotate — and TestNoDestructiveTools asserts the annotation never appears.
+	ReadOnly bool
+}
+
+// Result is what a tool call returns.
+type Result struct {
+	// Text is the human-readable answer, with Czech data verbatim.
+	Text string
+	// JSON becomes structuredContent; nil when there is nothing structured.
+	JSON json.RawMessage
+	// IsError marks a tool that RAN AND REFUSED — never a protocol failure.
+	//
+	// ⚠ The two are not interchangeable and getting them backwards is not
+	// cosmetic: a model RETRIES a protocol error and READS a tool error.
+	IsError bool
+}
+
+// Query is one cross-module search.
+type Query struct {
+	Text string // the caller's terms, unparsed
+	// Limit is PER MODULE (D301), already clamped by the host. A search that
+	// returns 40 chat messages and no notes because chat is chattier is a worse
+	// answer than 8 of each.
+	Limit int
+}
+
+// Hit is one search row.
+//
+// ⚠ IT CARRIES NO SCORE, AND THE TYPE IS WHERE THAT DECISION IS ENFORCED (D300).
+// bm25 values from five separate external-content FTS5 indexes are not
+// comparable, and a global "relevance" assembled from them is confident nonsense.
+// A provider that wanted to rank globally has nowhere to put the number.
+type Hit struct {
+	Kind      string    // "notes.note", "todo.card", "garden.plant" …
+	ID        string    //
+	Title     string    // Czech, verbatim
+	Snippet   string    // Czech, verbatim; may be ""
+	UpdatedAt time.Time // for the merge order — NOT a score
+	URI       string    // resource URI when the hit is addressable; "" otherwise
+	ExactHit  bool      // the module's own judgement that the title matched exactly
+}
+
+// ResourceTemplate is one URI shape a module addresses.
+type ResourceTemplate struct {
+	URITemplate string // "home://notes/{path}"
+	Name        string // stable identifier, e.g. "note"
+	Title       string // Czech label
+	Description string // one sentence
+	MIMEType    string // when every instance shares one; "" otherwise
+}
+
+// Resource is one concrete addressable thing, as `resources/list` renders it.
+type Resource struct {
+	URI      string
+	Name     string // Czech title
+	MIMEType string
+	Size     int64 // bytes, 0 when unknown
+}
+
+// Content is what a resource read returns. Exactly one of Text and Blob is set.
+type Content struct {
+	URI      string
+	MIMEType string
+	Text     string
+	Blob     []byte
+	// Truncated is set by the HOST, never by a provider, when the payload was
+	// cut to HOME_MCP_MAX_RESULT_KB (D307).
+	Truncated bool
+}
+
+// ---- Embeddable defaults ----
+
+// NoResources is embedded by a provider that addresses nothing by URI. It exists
+// so that "this module has no resources" is one line rather than three empty
+// methods per provider — and so that adding a method to Provider later fails the
+// build in one place instead of nine.
+type NoResources struct{}
+
+func (NoResources) Resources() []ResourceTemplate { return nil }
+
+func (NoResources) ListResources(context.Context, int) ([]Resource, error) { return nil, nil }
+
+// Read on a provider with no resources refuses exactly the way an unknown URI
+// does — never with a distinguishable "this module has no resources" (D303).
+func (NoResources) Read(context.Context, string) (Content, error) {
+	return Content{}, ErrResourceNotFound
+}
+
+// ---- Registry ----
+
+// Registry is the assembled catalog. Built once at composition; read-only after.
+//
+// ⚠ IT DOES NOT REUSE platform/catalog, and that is a deviation worth stating.
+// The metric and list catalogs share that generic core because their descriptors
+// have a key AND A SCOPE — household or personal — and the admin scheduler
+// filters both through one scope predicate. A tool has no scope: every result is
+// computed for the caller, always, so registering one through catalog.Register
+// would mean inventing a scope value to satisfy a validator that would then mean
+// nothing. What IS shared is the property that mattered — a duplicate key fails
+// the BUILD of the registry rather than silently shadowing.
+type Registry struct {
+	providers []Provider          // registration (module) order — the merge tiebreak
+	byModule  map[string]Provider //
+	byTool    map[string]Provider //
+	toolOwner map[string]string   // tool name → module
+}
+
+// NewRegistry returns an empty registry.
+func NewRegistry() *Registry {
+	return &Registry{
+		byModule:  map[string]Provider{},
+		byTool:    map[string]Provider{},
+		toolOwner: map[string]string{},
+	}
+}
+
+// Register adds one provider. A duplicate module or a duplicate tool name is a
+// programming error and fails the build of the registry.
+func (r *Registry) Register(p Provider) error {
+	if p == nil {
+		return nil
+	}
+	mod := p.Module()
+	if mod == "" {
+		return fmt.Errorf("mcp: a provider published no module name")
+	}
+	if _, dup := r.byModule[mod]; dup {
+		return fmt.Errorf("mcp: duplicate provider for module %q", mod)
+	}
+	for _, t := range p.Tools() {
+		if t.Name == "" {
+			return fmt.Errorf("mcp: module %q published a tool with no name", mod)
+		}
+		if owner, dup := r.toolOwner[t.Name]; dup {
+			return fmt.Errorf("mcp: duplicate tool name %q (modules %q and %q)", t.Name, owner, mod)
+		}
+		if len(t.InputSchema) == 0 {
+			return fmt.Errorf("mcp: tool %q has no input schema", t.Name)
+		}
+		r.byTool[t.Name] = p
+		r.toolOwner[t.Name] = mod
+	}
+	r.byModule[mod] = p
+	r.providers = append(r.providers, p)
+	return nil
+}
+
+// Collect builds a registry from anything implementing Source — in practice the
+// module set, passed straight from the composition root, in module order.
+//
+// ⚠ THE ORDER IS LOAD-BEARING and it is the caller's: it is the third tiebreak of
+// the search merge (D300), so a stable module order is what makes a search return
+// the same page twice.
+func Collect(modules ...any) (*Registry, error) {
+	r := NewRegistry()
+	for _, m := range modules {
+		src, ok := m.(Source)
+		if !ok {
+			continue // a module with no MCP surface is normal, not an error
+		}
+		if err := r.Register(src.MCPProvider()); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
+// Providers returns every registered provider in module order. Nil-receiver safe,
+// so a host wired with no catalog degrades to "nothing is published" rather than
+// panicking inside a tool call.
+func (r *Registry) Providers() []Provider {
+	if r == nil {
+		return nil
+	}
+	return r.providers
+}
+
+// Modules returns the registered module names in order.
+func (r *Registry) Modules() []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.providers))
+	for _, p := range r.providers {
+		out = append(out, p.Module())
+	}
+	return out
+}
+
+// ToolOwner returns the module publishing name.
+func (r *Registry) ToolOwner(name string) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	m, ok := r.toolOwner[name]
+	return m, ok
+}
+
+// ProviderForTool returns the provider that publishes name.
+func (r *Registry) ProviderForTool(name string) (Provider, bool) {
+	if r == nil {
+		return nil, false
+	}
+	p, ok := r.byTool[name]
+	return p, ok
+}
+
+// Provider returns one module's provider.
+func (r *Registry) Provider(module string) (Provider, bool) {
+	if r == nil {
+		return nil, false
+	}
+	p, ok := r.byModule[module]
+	return p, ok
+}

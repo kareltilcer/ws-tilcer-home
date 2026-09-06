@@ -105,8 +105,8 @@ func (c Config) refreshIdentity(ctx context.Context, sess Session, now time.Time
 	minted, mintErr := mints.do(sess.ID, func() (Identity, error) {
 		return c.Authr.Mint(ctx, sess.UserID)
 	})
-	switch {
-	case errors.Is(mintErr, ErrUserClosed):
+	switch classifyMint(mintErr) {
+	case mintClosed:
 		// ⚠ From a CONNECTION the revoke runs on a context detached from the
 		// caller's: ctx is the connection's, and the member closing their tab
 		// mid-mint would otherwise cancel this UPDATE — the row stays live, nothing
@@ -142,7 +142,7 @@ func (c Config) refreshIdentity(ctx context.Context, sess Session, now time.Time
 			c.sessionRevoked(sess.ID)
 		}
 		return Identity{}, true, ErrUserClosed
-	case mintErr == nil:
+	case mintFresh:
 		// ⚠ DETACHED FOR A CONNECTION, FOR THE SAME REASON THE REVOKE ABOVE IS.
 		// This write is what makes a mint that already succeeded STICK: it stamps
 		// roles_refreshed_at, and every other caller reads that stamp to decide not
@@ -188,6 +188,42 @@ func (c Config) refreshIdentity(ctx context.Context, sess Session, now time.Time
 			c.logger().Warn("role re-mint failed (transient)", "user", sess.UserID, "err", mintErr)
 		}
 		return sess.identity(), false, nil
+	}
+}
+
+// mintOutcome is what a Mint said about an account, and classifyMint is the ONE
+// place that reading is taken.
+//
+// ⚠ IT IS A NAMED FUNCTION BECAUSE THERE ARE NOW TWO DOORS. refreshIdentity
+// takes this decision for a session — shared by the request middleware and by
+// RevalidateSession precisely so an open websocket and an HTTP request cannot
+// disagree about whether an account is still open — and v11 added a third caller
+// on a credential with no session row at all (MCPAuth.identity). The two paths
+// must WRITE different things: one revokes a session, the other stamps a token.
+// What they must never do is READ a mint differently, because that is how a
+// closed account keeps one of its two keys.
+type mintOutcome int
+
+const (
+	// mintFresh — auth answered and the identity is current.
+	mintFresh mintOutcome = iota
+	// mintClosed — auth says this account is disabled, deleted or unverified.
+	// FAIL CLOSED: the credential dies.
+	mintClosed
+	// mintTransient — auth did NOT answer. ⚠ Not the same thing, and conflating
+	// the two turns a five-minute auth outage into every session in the household
+	// being dropped and every token needing to be re-minted by hand.
+	mintTransient
+)
+
+func classifyMint(err error) mintOutcome {
+	switch {
+	case errors.Is(err, ErrUserClosed):
+		return mintClosed
+	case err == nil:
+		return mintFresh
+	default:
+		return mintTransient
 	}
 }
 
@@ -497,7 +533,7 @@ func NewCSRF(origins []string, bypass bool) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !originAllowed(r, origins) {
+			if !OriginAllowed(r, origins) {
 				httpx.WriteError(w, httpx.ErrForbidden("origin not allowed"))
 				return
 			}
@@ -520,18 +556,34 @@ func safeMethod(m string) bool {
 	return false
 }
 
-// originAllowed checks the request's Origin (or, absent that, Referer) host
-// against the allowlist. Entries may be exact origins ("https://home.tilcer.cz")
-// or wildcards ("https://*.tilcer.cz").
-func originAllowed(r *http.Request, allowed []string) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		if ref := r.Header.Get("Referer"); ref != "" {
-			if u, err := url.Parse(ref); err == nil {
-				origin = u.Scheme + "://" + u.Host
-			}
+// RequestOrigin returns the origin a request claims — its Origin header, or the
+// scheme+host of its Referer when there is no Origin — and "" when it claims
+// neither.
+//
+// ⚠ IT IS EXPORTED SO THE MCP FRONT DOOR CAN TELL "no origin" FROM "a foreign
+// origin", a distinction CSRF does not need: a cookie-authenticated mutation
+// claiming neither header is unverifiable and refused, while an MCP call
+// claiming neither is an ordinary CLI and is allowed on its bearer alone (D281).
+// Two questions, one parser — a second allowlist reader is how the two lists come
+// to disagree about a trailing slash.
+func RequestOrigin(r *http.Request) string {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return origin
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
+			return u.Scheme + "://" + u.Host
 		}
 	}
+	return ""
+}
+
+// OriginAllowed checks the request's claimed origin against the allowlist.
+// Entries may be exact origins ("https://home.tilcer.cz") or wildcards
+// ("https://*.tilcer.cz"). A request claiming NO origin at all is not allowed —
+// see RequestOrigin for the caller that needs that case separated.
+func OriginAllowed(r *http.Request, allowed []string) bool {
+	origin := RequestOrigin(r)
 	if origin == "" {
 		return false // cannot verify a cookie-authenticated mutation
 	}

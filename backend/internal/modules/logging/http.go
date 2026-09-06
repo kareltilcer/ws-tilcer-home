@@ -38,6 +38,7 @@ func (h *HTTPHandler) list(w http.ResponseWriter, r *http.Request) {
 		EntityID:   q.Get("entity_id"),
 		Level:      q.Get("level"),
 		Q:          q.Get("q"),
+		Via:        q.Get("via"),
 		Limit:      atoiOr(q.Get("limit"), 0),
 		Cursor:     q.Get("cursor"),
 	}

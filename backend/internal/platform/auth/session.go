@@ -180,6 +180,40 @@ func (s *SessionStore) RefreshIdentity(ctx context.Context, sessionID string, id
 	return err
 }
 
+// NewestIdentity returns the freshest identity projection home holds for a
+// member, the moment it was confirmed, and the id of the row carrying it —
+// whatever the state of that row.
+//
+// ⚠ IT IS FRESHEST, NOT NEWEST, and it is the same distinction push.Store
+// .Members makes for the household directory: `roles_refreshed_at` is stamped by
+// every re-mint, while `created_at` names the last device to log IN, which is not
+// the last device to be USED. A tablet signed into once in July outranks the
+// laptop its owner works on daily, and nothing will ever refresh that row.
+//
+// ⚠ REVOKED AND EXPIRED ROWS ARE INCLUDED, because the caller is the MCP bearer
+// path (MCPAuth.identity) and logging out on a laptop is not a statement about a
+// token. `found` is false only for a member home has never seen a session for.
+func (s *SessionStore) NewestIdentity(ctx context.Context, userID string) (id Identity, refreshedAt time.Time, sessionID string, found bool, err error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, email, display_name, roles, roles_refreshed_at
+		   FROM sessions WHERE user_id = ?
+		  ORDER BY roles_refreshed_at DESC, id DESC LIMIT 1`, userID)
+	var (
+		rolesJSON              string
+		displayName, refreshed sql.NullString
+	)
+	if scanErr := row.Scan(&sessionID, &id.Email, &displayName, &rolesJSON, &refreshed); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			return Identity{}, time.Time{}, "", false, nil
+		}
+		return Identity{}, time.Time{}, "", false, fmt.Errorf("session: newest identity: %w", scanErr)
+	}
+	id.UserID = userID
+	id.DisplayName = displayName.String
+	_ = json.Unmarshal([]byte(rolesJSON), &id.Roles)
+	return id, parseTS(refreshed.String), sessionID, true, nil
+}
+
 // RevokeByID marks a session revoked (used by the middleware when a mint
 // fails closed). Idempotent.
 func (s *SessionStore) RevokeByID(ctx context.Context, id string) error {

@@ -80,6 +80,12 @@ func (m *Module) AuditActions() []string {
 		// is a hand-maintained map that falls back to the raw key — without an entry
 		// these show up as `notes.note.publish` in the rule composer (D213).
 		"note.publish", "folder.publish",
+		// v11 — the second READ in Home that writes an audit event, after v9's
+		// admin.private_items.view. It fires ONLY when the reader is an MCP token
+		// (D297), and it records the container and never the content: without it,
+		// "what has the assistant seen?" has no answer at all on a surface
+		// deliberately opened onto private notes.
+		"private.read",
 	}
 }
 

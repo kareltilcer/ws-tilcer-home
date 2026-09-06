@@ -353,6 +353,12 @@ var PlatformTables = []string{
 	// in this block rather than in `admin`. It is created by 02004, so it must be
 	// declared here or the completeness guard fails the moment v10 migrates.
 	"storage_thresholds",
+	// v11 (D283). ⚠ mcp_tokens belongs to NEITHER a module nor `auth` alone:
+	// `auth` writes it, the MCP host reads it and `admin` lists it, and none of
+	// the three may import another — the storage_thresholds shape exactly. It is
+	// created by 02005, so it must be declared here or the completeness guard
+	// fails the moment v11 migrates.
+	"mcp_tokens",
 	// Not created by any migration.
 	"goose_db_version",
 	"sqlite_sequence",

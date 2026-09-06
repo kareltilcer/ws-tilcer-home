@@ -40,6 +40,24 @@ type AuditEvent struct {
 	UserAgent   *string         `json:"user_agent"`
 	Site        string          `json:"site"`
 	Meta        json.RawMessage `json:"meta"`
+	// Via is "mcp" when the change was made through an MCP token, and null for
+	// the browser and for every system or service actor (v11, D290/D292).
+	//
+	// ⚠ THE ACTOR IS STILL THE MEMBER. `actor_type` is unchanged and still
+	// user | system | service: the token carries the member's own id and roles,
+	// which is what lets every ownership and membership check in eleven modules
+	// keep working untouched. What names the token is `actor_label` — "Karel ·
+	// Claude (notebook)" (D291) — and this field.
+	Via *string `json:"via"`
+	// ViaTokenID is mcp_tokens.id, non-null iff Via is "mcp".
+	//
+	// ⚠ IT IS NOT JOINED TO A NAME HERE, and that is the design's own
+	// resolution rather than an omission. HANDOFF-13 §6 asked for a LEFT JOIN so
+	// the row's chip could read the token's name — but the mock settled it the
+	// other way: the actor line ALREADY carries the name, so the chip reads only
+	// "Přes asistenta" and a second copy on the same row would be noise. A join
+	// nothing renders is a join that goes wrong quietly, so there is none.
+	ViaTokenID *string `json:"via_token_id"`
 	// Redacted is true when this event concerns a PRIVATE note or document and the
 	// caller is not its owner (v9, D187). The row is still returned — the spine
 	// records everything — but `summary` carries the fixed Czech phrase,
@@ -95,8 +113,16 @@ type Filter struct {
 	EntityID   string
 	Level      string
 	Q          string
-	Limit      int
-	Cursor     string
+	// Via filters by HOW a change was made: "mcp" for changes through an MCP
+	// token, "ui" for everything else, "" for both (v11, D292).
+	//
+	// ⚠ IT ANSWERS THE BROWSING/MATCHING QUESTION AS *BROWSING* — see
+	// selectsOnContent. It is a dimension filter like module or actor: it selects
+	// on how a row was written, never on what a private item CONTAINS, so a
+	// private event of somebody else's comes back redacted rather than excluded.
+	Via    string
+	Limit  int
+	Cursor string
 }
 
 // selectsOnContent reports whether this filter SELECTS on a private event's
@@ -117,6 +143,7 @@ const (
 
 const eventCols = `e.id, e.ts, e.actor_user_id, e.actor_type, e.actor_label, e.module, e.action,
 	e.entity_type, e.entity_id, e.summary, e.level, e.request_id, e.ip, e.user_agent, e.site, e.meta,
+	e.via, e.via_token_id,
 	(SELECT COUNT(*) FROM audit_changes c WHERE c.event_id = e.id) AS change_count,
 	json_extract(e.meta, '$.visibility'), json_extract(e.meta, '$.owner_id')`
 
@@ -537,6 +564,17 @@ func commonConds(f Filter, viewerID string) ([]string, []any, error) {
 	add("entity_type", f.EntityType)
 	add("entity_id", f.EntityID)
 	add("level", f.Level)
+	// ⚠ `mcp` IS A SEEK AND `ui` IS NOT, and that asymmetry is the point of the
+	// partial index: idx_events_via covers only the rows where via IS NOT NULL,
+	// which is a handful against the largest table in the database. Asking for
+	// "in the app" is asking for almost every row, so there is nothing an index
+	// could usefully do for it.
+	switch f.Via {
+	case ViaMCP:
+		conds = append(conds, "e.via IS NOT NULL")
+	case ViaUI:
+		conds = append(conds, "e.via IS NULL")
+	}
 	if f.Q != "" {
 		conds = append(conds, "e.rowid IN (SELECT rowid FROM audit_events_fts WHERE audit_events_fts MATCH ?)")
 		args = append(args, ftsQuery(f.Q))
@@ -670,15 +708,19 @@ func scanEvent(row appdb.Scanner) (AuditEvent, error) {
 		e                                             AuditEvent
 		actorUserID, actorLabel, entityType, entityID sql.NullString
 		requestID, ip, userAgent, meta                sql.NullString
+		via, viaTokenID                               sql.NullString
 		visibility, ownerID                           sql.NullString
 	)
 	if err := row.Scan(
 		&e.ID, &e.TS, &actorUserID, &e.ActorType, &actorLabel, &e.Module, &e.Action,
 		&entityType, &entityID, &e.Summary, &e.Level, &requestID, &ip, &userAgent, &e.Site, &meta,
+		&via, &viaTokenID,
 		&e.ChangeCount, &visibility, &ownerID,
 	); err != nil {
 		return AuditEvent{}, err
 	}
+	e.Via = nsToPtr(via)
+	e.ViaTokenID = nsToPtr(viaTokenID)
 	e.visibility = visibility.String
 	e.ownerID = ownerID.String
 	e.ActorUserID = nsToPtr(actorUserID)
@@ -719,3 +761,15 @@ func nsToPtr(ns sql.NullString) *string {
 	v := ns.String
 	return &v
 }
+
+// The `via` filter's vocabulary (v11, D292).
+//
+// ⚠ `ViaUI` HAS NO STORED VALUE — it is `via IS NULL`, not the string "ui". The
+// column records the EXCEPTION and leaves the norm null, which is what makes
+// idx_events_via a partial index costing nothing on the 99% of rows a person
+// wrote in the app. A stored "ui" would double the index and answer the same
+// question.
+const (
+	ViaMCP = "mcp"
+	ViaUI  = "ui"
+)

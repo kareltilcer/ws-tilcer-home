@@ -50,7 +50,25 @@ var PlatformActions = []string{
 	"push.unsubscribe",
 	"push.prefs",
 	"push.test",
+	// v11 — the MCP token lifecycle. They belong to platform for the same reason
+	// login does: the store lives beside the session store, and no feature module
+	// owns a credential.
+	//
+	// ⚠ There is no `mcp.token.use`. What a token DID is what audit_events already
+	// records, marked with `via` — a second log of every call would be a private,
+	// unsearchable, un-redactable copy of the first (D225's reasoning, applied to a
+	// new temptation).
+	"mcp.token.create",
+	"mcp.token.update",
+	"mcp.token.revoke",
 }
+
+// ViaMCP is the value of audit_events.via for a change made through an MCP
+// personal access token (v11, D290). There is deliberately no "ui" value and
+// no NOT NULL default: the browser's changes carry NULL, which is what makes
+// idx_events_via a PARTIAL index costing nothing on the 99% of rows where the
+// answer is "a person, in the app".
+const ViaMCP = "mcp"
 
 // Levels.
 const (

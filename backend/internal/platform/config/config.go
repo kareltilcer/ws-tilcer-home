@@ -139,6 +139,10 @@ type Config struct {
 	// nothing else. The module runs with none of these set.
 	Garden GardenConfig
 
+	// MCP is the v11 front door's configuration: six variables, all defaulted,
+	// none secret, and no new outbound dependency of any kind.
+	MCP MCPConfig
+
 	// Status is the outbound crash-reporting configuration (status.tilcer.cz).
 	// It is the second external dependency this service has, and — like the
 	// garden's forecast — it is soft: with none of it set the app runs exactly as
@@ -382,6 +386,39 @@ func (d DocsConfig) MirrorEnabled() bool {
 }
 
 // IsProduction reports whether the service is running in production.
+// mcp reads the six v11 variables and range-checks every one at BOTH ends.
+//
+// ⚠ REFUSED, NOT CLAMPED — see MCPConfig. Each bound is an error rather than a
+// warning because none of these can have a deployed value yet: v11 is the
+// release that introduces them.
+func (l *loader) mcp() MCPConfig {
+	m := MCPConfig{
+		Enabled:          l.boolDefault("HOME_MCP_ENABLED", defaultMCPEnabled),
+		RatePerMin:       l.intDefault("HOME_MCP_RATE_PER_MIN", defaultMCPRatePerMin),
+		MaxResultKB:      l.intDefault("HOME_MCP_MAX_RESULT_KB", defaultMCPMaxResultKB),
+		MaxTokensPerUser: l.intDefault("HOME_MCP_MAX_TOKENS_PER_USER", defaultMCPMaxTokensPerUser),
+		SearchLimit:      l.intDefault("HOME_MCP_SEARCH_LIMIT", defaultMCPSearchLimit),
+	}
+	timeoutSec := l.intDefault("HOME_MCP_CALL_TIMEOUT_SEC", defaultMCPCallTimeoutSec)
+	if timeoutSec < 1 || timeoutSec > maxMCPCallTimeoutSec {
+		l.errf("HOME_MCP_CALL_TIMEOUT_SEC must be between 1 and %d (got %d)", maxMCPCallTimeoutSec, timeoutSec)
+	}
+	m.CallTimeout = time.Duration(timeoutSec) * time.Second
+	if m.RatePerMin < 1 || m.RatePerMin > maxMCPRatePerMin {
+		l.errf("HOME_MCP_RATE_PER_MIN must be between 1 and %d (got %d)", maxMCPRatePerMin, m.RatePerMin)
+	}
+	if m.MaxResultKB < 1 || m.MaxResultKB > maxMCPMaxResultKB {
+		l.errf("HOME_MCP_MAX_RESULT_KB must be between 1 and %d (got %d)", maxMCPMaxResultKB, m.MaxResultKB)
+	}
+	if m.MaxTokensPerUser < 1 || m.MaxTokensPerUser > maxMCPMaxTokensPerUser {
+		l.errf("HOME_MCP_MAX_TOKENS_PER_USER must be between 1 and %d (got %d)", maxMCPMaxTokensPerUser, m.MaxTokensPerUser)
+	}
+	if m.SearchLimit < 1 || m.SearchLimit > maxMCPSearchLimit {
+		l.errf("HOME_MCP_SEARCH_LIMIT must be between 1 and %d (got %d)", maxMCPSearchLimit, m.SearchLimit)
+	}
+	return m
+}
+
 func (c *Config) IsProduction() bool { return c.Env == "production" }
 
 // Redacted returns a log-safe one-line summary of the configuration with the
@@ -406,11 +443,11 @@ func (c *Config) Redacted() string {
 	return fmt.Sprintf(
 		"env=%s addr=%s db=%s static=%s site=%s auth_base=%s auth_secret=%s jwt_secret=%s jwt_issuer=%s tz=%s "+
 			"lookback=%d rrule_max=%d rrule_window_months=%d log_retention=%d "+
-			"session_ttl_days=%d role_refresh_min=%d ws_revalidate_min=%d origins=%v dev_auth_bypass=%t %s %s %s",
+			"session_ttl_days=%d role_refresh_min=%d ws_revalidate_min=%d origins=%v dev_auth_bypass=%t %s %s %s %s",
 		c.Env, c.Addr, c.DBPath, static, c.SiteKey, c.AuthBaseURL, secret, jwtSecret, jwtIssuer, c.TimezoneName,
 		c.DashboardLookbackDays, c.RRuleMaxOccurrences, c.RRuleMaxWindowMonths,
 		c.LogRetentionDays, c.SessionTTLDays, c.RoleRefreshMinutes, c.WSRevalidateMinutes, c.AllowedOrigins, c.DevAuthBypass,
-		c.Docs.redacted(), c.Notif.redacted(), c.Status.redacted(),
+		c.Docs.redacted(), c.Notif.redacted(), c.Status.redacted(), c.MCP.redacted(),
 	)
 }
 
@@ -573,6 +610,23 @@ const (
 	// nothing survives a restart, and nothing can be stale for longer than a minute.
 	defaultStorageCacheSeconds = 60
 
+	// mcp (v11). Six defaults, chosen against ONE database connection rather than
+	// against a client's appetite.
+	defaultMCPEnabled          = true
+	defaultMCPRatePerMin       = 120
+	defaultMCPCallTimeoutSec   = 20
+	defaultMCPMaxResultKB      = 256
+	defaultMCPMaxTokensPerUser = 10
+	defaultMCPSearchLimit      = 10
+	// The ceilings. A rate above this, or a timeout longer than a minute, stops
+	// bounding the incident it exists for: the pool is ONE connection, so a
+	// 120-second call is two minutes with the household's browser behind it.
+	maxMCPRatePerMin       = 6000
+	maxMCPCallTimeoutSec   = 60
+	maxMCPMaxResultKB      = 4096
+	maxMCPMaxTokensPerUser = 100
+	maxMCPSearchLimit      = 100
+
 	// notifications + scheduler (v5)
 	defaultNotifCoalesce         = 60 * time.Second
 	defaultNotifRetentionDays    = 30
@@ -652,6 +706,7 @@ func Load(getenv Getenv) (*Config, error) {
 		CacheSeconds: l.intDefault("HOME_STORAGE_CACHE_SECONDS", defaultStorageCacheSeconds),
 	}
 	c.ChatTrashDays = l.intDefault("HOME_CHAT_TRASH_DAYS", defaultChatTrashDays)
+	c.MCP = l.mcp()
 
 	// Range sanity — these bound server work, so a nonsensical value is a bug.
 	if c.DashboardLookbackDays < 0 {
@@ -1101,6 +1156,54 @@ func (l *loader) status(c *Config) StatusConfig {
 //
 // Two plain integers, both defaulted, neither a secret — no new bucket credential,
 // no feature flag, and deliberately NO CONFIGURATION FOR PRIVACY AT ALL.
+// MCPConfig is the MCP front door (v11, PRD §V11-9).
+//
+// ⚠ ALL SIX REFUSE AT BOTH ENDS RATHER THAN CLAMPING, and that is v10's
+// precedent applied in the other direction. The two older session windows clamp
+// with a loud CONFIGURATION CORRECTED warning because they shipped with a floor
+// check only, so an over-cap value has always been legal and may already be set
+// in Coolify — refusing one would crash-loop the container on the deploy that
+// lands the cap. NOTHING IS UPGRADING INTO THESE SIX: a bad value can only be a
+// fresh mistake, and a fresh mistake is exactly what a boot should refuse.
+type MCPConfig struct {
+	// Enabled gates the whole /mcp endpoint.
+	//
+	// ⚠ IT DEFAULTS TRUE ON PURPOSE (D317). The real gate is that a human must
+	// mint a token in the UI; a flag defaulting to off is a second thing to forget
+	// on a surface whose failure mode is SILENCE — a disabled server and a
+	// misconfigured client look identical from the client. Its state is logged
+	// once at boot, the way statusreport's is, for the same reason.
+	Enabled bool
+	// RatePerMin bounds calls per token per minute.
+	RatePerMin int
+	// CallTimeout is the hard per-call deadline on the ctx, so a pathological
+	// query cannot hold the ONE database connection after the client gave up.
+	CallTimeout time.Duration
+	// MaxResultKB caps a tool result and a resource read, enforced by the HOST
+	// rather than by each provider — a cap eleven providers must remember is a cap
+	// that is wrong in at least one of them (D307).
+	MaxResultKB int
+	// MaxTokensPerUser bounds LIVE (non-revoked, non-expired) tokens per member.
+	// ⚠ Not a security boundary — a hygiene one: a list nobody can read is a list
+	// nobody revokes from (D289).
+	MaxTokensPerUser int
+	// SearchLimit is the search budget PER MODULE, not globally (D301). A search
+	// returning 40 chat messages and no notes because chat is chattier is a worse
+	// answer than 8 of each.
+	SearchLimit int
+}
+
+// redacted summarises the MCP configuration. ⚠ None of it is secret — there is
+// no new secret in v11 at all — so every value is printed in full, and the boot
+// line is the only place a disabled server says that it is disabled.
+func (m MCPConfig) redacted() string {
+	if !m.Enabled {
+		return "mcp=off"
+	}
+	return fmt.Sprintf("mcp=on(rate=%d/min timeout=%s max_result=%dKB max_tokens=%d search_limit=%d/module)",
+		m.RatePerMin, m.CallTimeout, m.MaxResultKB, m.MaxTokensPerUser, m.SearchLimit)
+}
+
 type StorageConfig struct {
 	// WarnTotalMB is the warning threshold on the MODULES' primary-bucket total.
 	// 0 disables the warning.

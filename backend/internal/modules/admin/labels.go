@@ -49,6 +49,8 @@ var actionLabels = map[string]string{
 	// v9 — publishing a private item into the shared tree.
 	"notes.note.publish":   "Když někdo zveřejní soukromou poznámku pro celou domácnost",
 	"notes.folder.publish": "Když někdo zveřejní soukromou složku poznámek pro celou domácnost",
+	// v11 — a READ, not a change. It fires only for an MCP token.
+	"notes.private.read": "Když asistent otevře soukromou poznámku",
 
 	// documents (Dokumenty)
 	"documents.document.create":        "Když někdo nahraje dokument",
@@ -127,6 +129,12 @@ var actionLabels = map[string]string{
 	"platform.push.unsubscribe": "Když si někdo vypne oznámení na zařízení",
 	"platform.push.prefs":       "Když si někdo změní nastavení oznámení",
 	"platform.push.test":        "Když si někdo pošle zkušební oznámení",
+	// v11 — the MCP token lifecycle. A rule on these is a rule about somebody
+	// connecting or disconnecting an assistant, which is a household-visible fact
+	// even though what the assistant then does is recorded per change with `via`.
+	"platform.mcp.token.create": "Když si někdo vytvoří token pro asistenta",
+	"platform.mcp.token.update": "Když si někdo přejmenuje token pro asistenta",
+	"platform.mcp.token.revoke": "Když někdo odvolá token pro asistenta",
 
 	// logging
 	"logging.prune": "Když se pročistí historie logu",
