@@ -212,6 +212,11 @@ func (NoResources) Read(context.Context, string) (Content, error) {
 // carries a RULE — D311's "a malformed body is a 422, not a 500", because an
 // agent retries a 500 and gives up on a 422 — which a tenth copy written from
 // memory is exactly how a module comes to lose.
+//
+// ⚠ AND THE HOST'S OWN SEVEN GO THROUGH THEM TOO. They were the exception for one
+// round — three hand-written `json.Unmarshal`s with their own Czech refusal and
+// three more guarded by `len(args) > 0` — which is three spellings of one rule
+// inside one file, and three precedents for the eighth core tool to copy from.
 
 // DecodeArgs decodes one tool call's arguments, mapping a malformed body onto a
 // 422-shaped refusal rather than an internal error (D311). Absent arguments

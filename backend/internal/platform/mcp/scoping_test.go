@@ -168,6 +168,28 @@ func TestSearchModuleFilter(t *testing.T) {
 		}
 	})
 
+	// ⚠ AND THE NAME THAT PASSED THE REFUSAL IS THE NAME THAT IS MATCHED. The
+	// guard above trimmed before asking KnownModules and then built the match set
+	// from the RAW value, so "notes " went past the refusal into a set no
+	// provider's Module() can equal: nothing ran, no per-module count came back,
+	// and the answer was "0 hits" from a household with plenty — the silence the
+	// refusal exists to prevent, reached THROUGH it. The Log's `via` filter, added
+	// in the same round, refuses "mcp " outright; both spellings are honest and
+	// this one cannot be both.
+	t.Run("a padded module name narrows exactly as the bare one does", func(t *testing.T) {
+		_, result := h.call(secret, "home_search", map[string]any{
+			"query": "Nákup", "in": []string{"notes "},
+		})
+		if isError(result) {
+			t.Fatalf("in=[\"notes \"] was refused after its trimmed form was accepted: %s",
+				resultText(t, result))
+		}
+		if got := len(searchTitles(t, result)); got != 1 {
+			t.Fatalf("in=[\"notes \"] found %d hits, want 1 — a name validated trimmed and"+
+				" matched untrimmed narrows the search to nothing and says so nowhere", got)
+		}
+	})
+
 	t.Run("an unknown module is refused by name", func(t *testing.T) {
 		_, result := h.call(secret, "home_search", map[string]any{
 			"query": "Nákup", "in": []string{"poznamky"},

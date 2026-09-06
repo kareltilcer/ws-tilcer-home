@@ -581,19 +581,35 @@ func toolsWire(tools []Tool) []map[string]any {
 // must remember is a cap that is wrong in at least one of them. ⚠ And truncation
 // is STATED IN THE RESULT, never silent — a model handed half a list with no note
 // will reason about it as though it were the whole list.
+//
+// ⚠ ONE BUDGET FOR THE WHOLE RESULT, NOT ONE FOR EACH HALF. The text and the
+// structured payload used to be measured against maxBytes SEPARATELY, so a tool
+// answering with 250 kB of each shipped half a megabyte under a 256 kB cap —
+// twice the figure whose entire purpose is to bound what arrives in the model's
+// context. The text is served first because it is the half that is always
+// readable; the JSON gets what is left.
 func resultWire(r Result, maxBytes int) map[string]any {
 	text, truncated := capText(r.Text, maxBytes)
 	if truncated {
 		text += "\n\n[Zkráceno — výsledek byl příliš dlouhý.]"
 	}
+	// Structured content is dropped rather than cut when it would not fit: half a
+	// JSON document is not a smaller JSON document, and a client that parses it
+	// would fail on the truncation instead of reading the text beside it.
+	//
+	// ⚠ AND THE DROP IS SAID OUT LOUD, for the reason the truncation above is and
+	// the reason an oversized blob is refused in words: a model that asked for
+	// structuredContent and silently received none cannot tell a payload that was
+	// too large from a tool that publishes none at all.
+	structured := len(r.JSON) > 0 && (maxBytes <= 0 || len(text)+len(r.JSON) <= maxBytes)
+	if len(r.JSON) > 0 && !structured {
+		text += "\n\n[Strukturovaná část odpovědi byla vynechána — nevešla se do limitu.]"
+	}
 	out := map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": text}},
 		"isError": r.IsError,
 	}
-	// Structured content is dropped rather than cut when it would not fit: half a
-	// JSON document is not a smaller JSON document, and a client that parses it
-	// would fail on the truncation instead of reading the text beside it.
-	if len(r.JSON) > 0 && (maxBytes <= 0 || len(r.JSON) <= maxBytes) {
+	if structured {
 		out["structuredContent"] = r.JSON
 	}
 	return out
@@ -611,11 +627,18 @@ func contentWire(c Content, maxBytes int) map[string]any {
 		// truncated because a shorter text is still a text; bytes cannot. The
 		// replacement is a sentence in the one channel a model actually reads, and
 		// it names the cap so the answer is actionable rather than mysterious.
-		if maxBytes > 0 && len(c.Blob) > maxBytes {
+		//
+		// ⚠ THE SIZE THAT IS MEASURED IS THE SIZE THAT GOES ON THE WIRE. `blob` is
+		// base64, which is four bytes out for every three in, so comparing the RAW
+		// length against the cap let a file a third over it through — and then
+		// reported a figure the reader could not reconcile with what arrived. The
+		// message names the encoded size for the same reason.
+		encoded := base64.StdEncoding.EncodedLen(len(c.Blob))
+		if maxBytes > 0 && encoded > maxBytes {
 			out["mimeType"] = "text/plain"
 			out["text"] = fmt.Sprintf(
-				"[Soubor je příliš velký pro tento kanál — %d kB proti limitu %d kB. Otevřete ho v aplikaci.]",
-				len(c.Blob)>>10, maxBytes>>10)
+				"[Soubor je příliš velký pro tento kanál — %d kB po zakódování proti limitu %d kB. Otevřete ho v aplikaci.]",
+				encoded>>10, maxBytes>>10)
 			return out
 		}
 		out["blob"] = base64.StdEncoding.EncodeToString(c.Blob)

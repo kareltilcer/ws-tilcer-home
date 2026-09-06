@@ -441,18 +441,37 @@ func (p *mcpProvider) Resources() []mcp.ResourceTemplate {
 // closing, arriving in a new surface: a listing is an answer even when every read
 // is refused. Both roots the caller may see are enumerated and no other, and
 // `soukrome` is the only thing distinguishing them in a URI.
+//
+// ⚠ THE BUDGET IS THE HOST'S AND IT IS PER MODULE, NOT PER ROOT — the same
+// arithmetic Search gets right (D301/D308), and notes is the one provider that
+// reads two roots. Taking `limit` from EACH returned up to twice what the host
+// asked for: a listing 200 rows over a cap whose only job is to bound a query
+// against the ONE connection, and one that made the host's "this page was cut"
+// warning fire on a page nothing had cut.
+//
+// ⚠ AND THE CALLER'S OWN PRIVATE ROOT IS ENUMERATED FIRST, which is what the
+// shared budget's ORDER decides. When a household outgrows the cap something has
+// to fall off the end, and it must not be the half only its owner can see: a
+// shared note dropped here is still reachable through home_search and
+// home_notes_tree, and the host logs a Warn naming the module, while a private
+// tree that vanished because the shared one got big would look to the model
+// exactly like a member who keeps no private notes.
 func (p *mcpProvider) ListResources(ctx context.Context, limit int) ([]mcp.Resource, error) {
 	actor, ok := reqctx.ActorFrom(ctx)
 	if !ok {
 		return nil, fmt.Errorf("notes: resource listing without an actor")
 	}
-	scopes := []Scope{{}}
+	var scopes []Scope
 	if actor.UserID != "" {
 		scopes = append(scopes, Scope{Private: true, OwnerID: actor.UserID})
 	}
+	scopes = append(scopes, Scope{})
 	var out []mcp.Resource
 	for _, sc := range scopes {
-		rows, err := p.svc.Store().SlugPathsForScope(ctx, sc, limit)
+		if len(out) >= limit {
+			break
+		}
+		rows, err := p.svc.Store().SlugPathsForScope(ctx, sc, limit-len(out))
 		if err != nil {
 			return nil, err
 		}

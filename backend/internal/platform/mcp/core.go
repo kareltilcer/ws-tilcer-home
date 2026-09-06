@@ -226,8 +226,8 @@ type searchArgs struct {
 // over its own index, viewer-scoped, with its own LIMIT; the host merges.
 func (h *Host) search(ctx context.Context, s *callSession, args json.RawMessage) (Result, error) {
 	var in searchArgs
-	if err := json.Unmarshal(args, &in); err != nil {
-		return Result{}, httpx.ErrUnprocessable("Neplatné parametry vyhledávání.")
+	if err := DecodeArgs(args, &in); err != nil {
+		return Result{}, err
 	}
 	if strings.TrimSpace(in.Query) == "" {
 		return Result{}, httpx.ErrUnprocessable("Zadejte hledaný výraz.")
@@ -244,14 +244,25 @@ func (h *Host) search(ctx context.Context, s *callSession, args json.RawMessage)
 	// can fix it. Validated against KnownModules rather than the live registry,
 	// because between PR 1 and PR 2 six of those publish no provider yet and
 	// naming one of them is an empty answer rather than a mistake.
+	//
+	// ⚠ THE NAME THAT IS VALIDATED IS THE NAME THAT IS MATCHED, and that is the
+	// whole reason normaliseModules keeps its trimmed value rather than the raw
+	// one. Checking `TrimSpace(m)` and then matching on `m` puts "notes " past the
+	// refusal and into a set no provider's Module() can equal — nothing runs, the
+	// per-module counts come back empty, and the answer is "0 hits" from a
+	// household that has plenty: exactly the silence this refusal exists to
+	// prevent, reached through the guard instead of around it.
+	wantedMods := make([]string, 0, len(in.In))
 	for _, m := range in.In {
-		if !KnownModule(strings.TrimSpace(m)) {
+		name := strings.TrimSpace(m)
+		if !KnownModule(name) {
 			return Result{}, httpx.ErrUnprocessable("Neznámý modul: " + m +
 				". Povolené: " + strings.Join(KnownModules, ", ") + ".")
 		}
+		wantedMods = append(wantedMods, name)
 	}
 
-	wanted := moduleSet(in.In)
+	wanted := moduleSet(wantedMods)
 	order := map[string]int{}
 	counts := map[string]int{}
 	var hits []Hit
@@ -331,8 +342,8 @@ type getArgs struct {
 // returns went through that module's own access checks.
 func (h *Host) get(ctx context.Context, s *callSession, args json.RawMessage) (Result, error) {
 	var in getArgs
-	if err := json.Unmarshal(args, &in); err != nil {
-		return Result{}, httpx.ErrUnprocessable("Neplatné parametry.")
+	if err := DecodeArgs(args, &in); err != nil {
+		return Result{}, err
 	}
 	if in.Kind == "" || in.ID == "" {
 		return Result{}, httpx.ErrUnprocessable("Zadejte kind i id.")
@@ -392,10 +403,8 @@ type todayArgs struct {
 // into one. Unread rides on home_chat_conversations, where it is free.
 func (h *Host) today(ctx context.Context, _ *callSession, args json.RawMessage) (Result, error) {
 	var in todayArgs
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &in); err != nil {
-			return Result{}, httpx.ErrUnprocessable("Neplatné parametry.")
-		}
+	if err := DecodeArgs(args, &in); err != nil {
+		return Result{}, err
 	}
 	at, err := h.asOf(in.AsOf)
 	if err != nil {
@@ -451,10 +460,8 @@ type catalogArgs struct {
 
 func (h *Host) metrics(ctx context.Context, _ *callSession, args json.RawMessage) (Result, error) {
 	var in catalogArgs
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &in); err != nil {
-			return Result{}, httpx.ErrUnprocessable("Neplatné parametry.")
-		}
+	if err := DecodeArgs(args, &in); err != nil {
+		return Result{}, err
 	}
 	if len(in.Keys) == 0 {
 		descs := h.deps.Metrics.Catalog()
@@ -501,10 +508,8 @@ func (h *Host) metrics(ctx context.Context, _ *callSession, args json.RawMessage
 
 func (h *Host) lists(ctx context.Context, _ *callSession, args json.RawMessage) (Result, error) {
 	var in catalogArgs
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &in); err != nil {
-			return Result{}, httpx.ErrUnprocessable("Neplatné parametry.")
-		}
+	if err := DecodeArgs(args, &in); err != nil {
+		return Result{}, err
 	}
 	if len(in.Keys) == 0 {
 		descs := h.deps.Lists.Catalog()
@@ -573,8 +578,8 @@ type activityArgs struct {
 // consumers, so the two cannot drift.
 func (h *Host) activity(ctx context.Context, _ *callSession, args json.RawMessage) (Result, error) {
 	var in activityArgs
-	if err := json.Unmarshal(args, &in); err != nil {
-		return Result{}, httpx.ErrUnprocessable("Neplatné parametry.")
+	if err := DecodeArgs(args, &in); err != nil {
+		return Result{}, err
 	}
 	since, err := h.parseBound(in.Since, true)
 	if err != nil {

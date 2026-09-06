@@ -51,6 +51,17 @@ func (h *Host) Mount(r chi.Router) {
 	// excludes /mcp (leak row 2), but chi propagates a NotFound registered on a
 	// subrouter, so this is the second half of that guard and the one a mistyped
 	// path actually hits.
+	//
+	// ⚠ IT IS REGISTERED ONLY WHEN THE SERVER IS ENABLED, AND THE DISABLED DOOR IS
+	// STILL JSON — checked rather than assumed, because chi's Mount() copies the
+	// parent's NotFound onto a subrouter only if the parent HAS one at Mount()
+	// time, and httpx.NewRouter registers its own afterwards. What closes the gap
+	// is the OTHER half of chi's contract: Mux.NotFound walks the subroutes it has
+	// already mounted and installs the handler on any that lack one, so the empty
+	// /mcp sub-mux a disabled server leaves behind inherits the router's JSON 404
+	// — the one that excludes /mcp from the SPA. TestDisabledServerIs404 asserts
+	// the Content-Type, not merely the status, so this stays true by test rather
+	// than by reading chi.
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "not_found", "no such MCP endpoint")
 	})

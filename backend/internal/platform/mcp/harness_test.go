@@ -51,6 +51,11 @@ type harness struct {
 	tokens  *auth.MCPTokenStore
 	notes   *notes.Service
 	todo    *todo.Service
+	// notesProv is the notes provider the registry holds, reachable directly so a
+	// test can hand it a budget of its own. ⚠ The host always passes
+	// resourceListLimit (200), so the only way to assert that a provider reading
+	// TWO roots spends ONE budget is to ask it with a number a fixture can reach.
+	notesProv mcp.Provider
 }
 
 const (
@@ -198,7 +203,8 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 		Logger: logger,
 	})
 
-	h := &harness{t: t, db: db, tokens: tokens, notes: notesSvc, todo: todoSvc}
+	h := &harness{t: t, db: db, tokens: tokens, notes: notesSvc, todo: todoSvc,
+		notesProv: notesMod.MCPProvider()}
 	h.handler = httpx.NewRouter(httpx.Deps{
 		Logger:   logger,
 		DB:       db,
