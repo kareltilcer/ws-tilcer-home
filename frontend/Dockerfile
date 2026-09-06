@@ -50,10 +50,12 @@ ARG VITE_STATUS_RELEASE=""
 # release apart in a bug report.
 #
 # ⚠ IT DEFAULTS TO COOLIFY'S OWN SOURCE_COMMIT, so a normal deploy needs nothing set
-# — but Coolify EXCLUDES that variable from the build by default, and the toggle is
-# "Include Source Commit in Build" in the application's advanced settings. With it
-# off the label simply reads "v1.10.2" with no commit: version.ts prints the version
-# alone rather than printing an unexpanded variable.
+# — but Coolify EXCLUDES that variable from the build by default, and the control that
+# changes it lives under Configuration → Advanced. It has been renamed once; the README
+# writes down both names and says to check them against Coolify's SOURCE rather than its
+# published docs, which still name only the older one. Left excluded, the label simply
+# reads "v1.10.2" with no commit: version.ts prints the version alone rather than
+# printing an unexpanded variable.
 #
 # ⚠ AND THE REASON COOLIFY GIVES FOR EXCLUDING IT DOES NOT APPLY TO THIS FILE. The
 # concern is that a value changing every commit invalidates every layer below it —
@@ -64,7 +66,34 @@ ARG VITE_STATUS_RELEASE=""
 # toggle adds nothing on top of it.) The only builds that pay for the toggle are
 # commits that touch NOTHING under frontend/; on any commit that touches something,
 # `COPY . .` has already invalidated the build layer and the arg costs nothing on top.
-ARG SOURCE_COMMIT=""
+#
+# ⚠⚠ THE NEXT LINE HAS NO `=""` AND THAT IS THE WHOLE POINT — DO NOT "TIDY" IT.
+# `ARG SOURCE_COMMIT=""` here is a re-declaration WITH a default, and a default written in
+# this file BEATS THE `ARG SOURCE_COMMIT=<sha>` LINE COOLIFY SPLICES IN after every FROM:
+# in-stage it RESETS the injected value, and above the FROM (older Coolify spliced at a
+# hardcoded line index 1 — coollabsio/coolify#7118) the in-stage default SHADOWS it.
+# Measured both ways against this file, reading the result back out of `dist/assets/*.js`:
+# bare inherits, `=""` comes out empty. The label shipped commit-less once with `=""` here.
+#
+# ⚠ THE NINE ARGS ABOVE KEEP THEIR `=""` and are not wrong for it. Those are Coolify build
+# VARIABLES, and a variable Coolify has a value for is also passed as a `--build-arg`,
+# which beats every default in this file. `SOURCE_COMMIT` is the platform's own and can
+# instead arrive by the spliced ARG alone, which `=""` beats.
+#
+# ⚠ WHY THE DEPLOY THAT BROKE TOOK THAT ROUTE IS NOT ESTABLISHED, and do not let this
+# comment read as if it were. Bare is right under every route either way; the README has
+# the measured table of routes and spellings, and the open question.
+#
+# ⚠ WHAT BARE DOES NOT SURVIVE IS AN EXPLICIT EMPTY VALUE — `--build-arg SOURCE_COMMIT=`,
+# or a key-only `--build-arg SOURCE_COMMIT` with the name exported empty. That beats bare
+# and the splice alike (measured), so do NOT create a Coolify variable named
+# `SOURCE_COMMIT` or `VITE_APP_COMMIT`. The README has the platform detail and the order
+# to check things in when a rebuild still shows no commit.
+#
+# `frontend/src/platform/version.test.ts` asserts this line is bare, and asserts its
+# POSITION too — because a default is not the only edit that breaks it — since prose is
+# not a reader.
+ARG SOURCE_COMMIT
 ARG VITE_APP_COMMIT=$SOURCE_COMMIT
 ENV VITE_REAL_AUTH=$VITE_REAL_AUTH \
     VITE_AUTH_BASE_URL=$VITE_AUTH_BASE_URL \

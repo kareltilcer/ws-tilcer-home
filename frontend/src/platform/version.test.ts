@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import changelog from '../../../handoff/v10/CHANGELOG.md?raw'
+import dockerfile from '../../Dockerfile?raw'
 import lockfileRaw from '../../package-lock.json?raw'
 import { version as packageVersion } from '../../package.json'
 import { APP_VERSION, shortCommit, versionLabel } from './version'
@@ -135,5 +136,97 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
     expect(lock.packages?.['']?.version, 'package-lock.json packages[""] version').toBe(
       packageVersion,
     )
+  })
+})
+
+// ⚠ THE COMMIT HALF HAS AN INVARIANT WITH NO READER TOO, and it is one line of a
+// Dockerfile that looks like a typo. `ARG SOURCE_COMMIT` is BARE on purpose: a default
+// written in the Dockerfile beats the `ARG SOURCE_COMMIT=<sha>` line Coolify splices in,
+// so `ARG SOURCE_COMMIT=""` — the spelling the nine args above it use — blanks the commit
+// on every deploy that reaches the build by that splice. That shipped once already. The
+// comment above the line says so in capitals, which is exactly the kind of rule an editor
+// normalising a file does not read, so it is asserted here for the same reason the
+// CHANGELOG mapping and the lockfile are.
+describe('frontend/Dockerfile keeps the commit arg inheritable', () => {
+  const lines = dockerfile.split('\n').map((line) => line.trim())
+  const firstFrom = lines.findIndex((line) => /^FROM\s/i.test(line))
+  const buildStep = lines.findIndex((line) => /^RUN\s+npm\s+run\s+build\b/.test(line))
+  const sourceArg = lines.findIndex((line) => /^ARG\s+SOURCE_COMMIT\b/.test(line))
+  // `${SOURCE_COMMIT}`, surrounding quotes, and a trailing `# comment` — which that file's
+  // own `RUN npm run build` line already carries — are all the SAME INSTRUCTION to Docker,
+  // measured. A guard that reddens on an edit Docker cannot tell apart is a guard the next
+  // person deletes, and then the line it was protecting is unprotected.
+  const viteArg = lines.findIndex((line) =>
+    /^ARG\s+VITE_APP_COMMIT="?\$\{?SOURCE_COMMIT\}?"?(\s+#.*)?$/.test(line),
+  )
+
+  it('declares SOURCE_COMMIT bare, with no default to beat the injected value', () => {
+    const declarations = lines.filter((line) => /^ARG\s+SOURCE_COMMIT\b/.test(line))
+    expect(declarations, 'no `ARG SOURCE_COMMIT` line in frontend/Dockerfile').toHaveLength(
+      1,
+    )
+    // `ARG SOURCE_COMMIT=""`, `ARG SOURCE_COMMIT=` and `ARG SOURCE_COMMIT=x` all lose.
+    // Extra spacing and a trailing `# comment` do NOT — measured, they build to the same
+    // instruction, and this line gets the same tolerance as `viteArg` above for the same
+    // reason: a guard that reddens on an edit Docker cannot see is a guard that gets cut.
+    expect(
+      declarations[0],
+      'ARG SOURCE_COMMIT must stay BARE — a default here beats what Coolify injects and blanks the label',
+    ).toMatch(/^ARG\s+SOURCE_COMMIT(\s+#.*)?$/)
+  })
+
+  it('still chains VITE_APP_COMMIT off it, which is what reaches the bundle', () => {
+    expect(
+      viteArg,
+      'frontend/Dockerfile no longer defaults VITE_APP_COMMIT from SOURCE_COMMIT',
+    ).toBeGreaterThanOrEqual(0)
+  })
+
+  // ⚠ A DEFAULT IS NOT THE ONLY EDIT THAT BLANKS THE LABEL, and the other three leave both
+  // lines spelled exactly the way the assertions above want them.
+  //
+  // Moved ABOVE the first FROM, this declaration becomes a GLOBAL, and a global reaches a
+  // stage only through a bare re-declaration inside it — which there would no longer be:
+  // measured, that shape bakes an empty commit even under `--build-arg SOURCE_COMMIT=<sha>`,
+  // so it breaks the STRONGEST supply path, not the weakest.
+  //
+  // Moved BELOW the line that reads it, `$SOURCE_COMMIT` expands before the name is
+  // declared and yields empty — measured, again even under `--build-arg`. ⚠ THAT ONE IS
+  // INVISIBLE ON A COOLIFY DEPLOY, because the `ARG SOURCE_COMMIT=<sha>` line Coolify
+  // splices in after the FROM declares the name first and the expansion then works
+  // (measured both ways). It breaks local builds and the `--build-arg`-only path instead,
+  // which is precisely why it is asserted here: the next deploy would not notice.
+  //
+  // Moved past `RUN npm run build` — into the Nginx stage, say — both lines are still in
+  // the file, still in order, and reach nothing: the ENV block above the build would bake
+  // an empty commit. That is why the build step is an anchor here and not just the FROM.
+  it('keeps both args inside the build stage, in the order the expansion needs', () => {
+    expect(firstFrom, 'no FROM instruction in frontend/Dockerfile').toBeGreaterThanOrEqual(
+      0,
+    )
+    expect(buildStep, 'no `RUN npm run build` in frontend/Dockerfile').toBeGreaterThan(
+      firstFrom,
+    )
+    expect(
+      sourceArg,
+      'ARG SOURCE_COMMIT must sit AFTER the first FROM — above it, it is a global and nothing here re-declares it',
+    ).toBeGreaterThan(firstFrom)
+    expect(
+      viteArg,
+      'ARG VITE_APP_COMMIT=$SOURCE_COMMIT must come AFTER ARG SOURCE_COMMIT, or it expands to nothing',
+    ).toBeGreaterThan(sourceArg)
+    expect(
+      viteArg,
+      'both ARGs must sit ABOVE `RUN npm run build` — below it they are read by nothing',
+    ).toBeLessThan(buildStep)
+    // A FROM between them and the build step would put them in an earlier stage, which
+    // the ordering assertions above cannot see.
+    const stageBreak = lines.findIndex(
+      (line, i) => i > sourceArg && i < buildStep && /^FROM\s/i.test(line),
+    )
+    expect(
+      stageBreak,
+      'a FROM between the ARGs and `RUN npm run build` leaves them in a different stage',
+    ).toBe(-1)
   })
 })
