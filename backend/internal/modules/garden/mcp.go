@@ -84,8 +84,8 @@ func (p *mcpProvider) Tools() []mcp.Tool {
                "process", "store", "clear", "water", "weed", "other"]
     },
     "season_year": {"type": "integer", "description": "Defaults to the season the window falls in."},
-    "planting_id": {"type": "string"},
-    "bed_id": {"type": "string"},
+    "planting_id": {"type": "string", "description": "A planting id from home_garden_plan. An id that names no planting is refused."},
+    "bed_id": {"type": "string", "description": "A bed id from home_garden_plan — the id, not the code the work list prints. An id that names no bed is refused."},
     "notes_md": {"type": "string"}
   },
   "required": ["title_cs", "window_from", "window_to", "kind"],
@@ -307,6 +307,35 @@ func (p *mcpProvider) taskCreate(ctx context.Context, args json.RawMessage) (mcp
 	if !Valid(EnumTaskKind, in.Kind) {
 		return mcp.Result{}, httpx.ErrUnprocessable(
 			"kind musí být jedna z hodnot: " + strings.Join(Values(EnumTaskKind), ", ") + ".")
+	}
+	// ⚠ THE TWO OPTIONAL IDS ARE CHECKED HERE OR NOT AT ALL, AND UNCHECKED THEY
+	// ANSWERED WITH THE INTERNAL ERROR. `CreateTask` carries no existence check for
+	// either — `garden_tasks.planting_id` and `.bed_id` are plain REFERENCES — so an
+	// id that names nothing reached the INSERT, tripped the foreign key, and came
+	// back as an untyped error the host maps onto "Došlo k chybě, zkuste to prosím
+	// znovu.". That is the one refusal D311 exists to keep off this door: an agent
+	// RETRIES a 500 and gives up on a 422, so a mistyped id became a loop instead of
+	// a correction. `CreatePlanting` checks its own bed inside the transaction,
+	// which is why the sibling write never had this — the gap is CreateTask's.
+	//
+	// ⚠ AND THE MISTAKE IS THE OBVIOUS ONE: the work list prints "záhon A1" — the
+	// bed's CODE — and the only place a bed *id* appears is home_garden_plan's
+	// structuredContent. Refusing the code by name is what turns that into one
+	// corrected call rather than a retry loop, and it is what requireBed already
+	// does for this module's two read tools.
+	//
+	// ⚠ THEY ARE CHECKED BEFORE THE SEASON, deliberately: these are ids the caller
+	// TYPED, while the year below is usually the provider's own default. The
+	// refusal that names something they wrote is the more useful of the two.
+	if in.BedID != nil {
+		if err := p.requireBed(ctx, *in.BedID); err != nil {
+			return mcp.Result{}, err
+		}
+	}
+	if in.PlantingID != nil {
+		if err := p.requirePlanting(ctx, *in.PlantingID); err != nil {
+			return mcp.Result{}, err
+		}
 	}
 	year := in.SeasonYear
 	if year == nil {
@@ -589,6 +618,11 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 // answered "(nic v tomto okně)" or "0 výsadeb" — the household told there is no
 // garden work when what was wrong was the filter. One indexed read is what the
 // difference costs, and `Service.GetBed` is the read the detail route uses.
+//
+// ⚠ AND IT GUARDS THE WRITE TOO, which is the sharper of the two cases: on
+// `home_garden_task_create` an unchecked bed_id is a foreign-key violation rather
+// than an empty answer, and it reaches the caller as the internal error. See
+// requirePlanting.
 func (p *mcpProvider) requireBed(ctx context.Context, bedID string) error {
 	if strings.TrimSpace(bedID) == "" {
 		return nil
@@ -596,6 +630,26 @@ func (p *mcpProvider) requireBed(ctx context.Context, bedID string) error {
 	if _, err := p.svc.GetBed(ctx, bedID); err != nil {
 		if mcp.IsNotFound(err) {
 			return httpx.ErrUnprocessable("Záhon " + bedID + " neexistuje.")
+		}
+		return err
+	}
+	return nil
+}
+
+// requirePlanting refuses a planting_id that names no planting, naming it.
+//
+// ⚠ IT IS requireBed's TWIN AND FOR THE SAME REASON, one step further along: on
+// `home_garden_task_create` an unchecked id is not a narrowed query but a FOREIGN
+// KEY violation, which leaves this package untyped and reaches the caller as the
+// internal error. The garden is household-visible and hides nothing, so the id
+// goes back in words rather than through leak row 9's bare "Nenalezeno.".
+func (p *mcpProvider) requirePlanting(ctx context.Context, plantingID string) error {
+	if strings.TrimSpace(plantingID) == "" {
+		return nil
+	}
+	if _, err := p.svc.GetPlanting(ctx, plantingID); err != nil {
+		if mcp.IsNotFound(err) {
+			return httpx.ErrUnprocessable("Výsadba " + plantingID + " neexistuje.")
 		}
 		return err
 	}

@@ -149,7 +149,12 @@ func (p *mcpProvider) readings(ctx context.Context, args json.RawMessage) (mcp.R
 		if i == 0 {
 			// The one nudge this module is allowed: a plain in-app line, never a
 			// notification (D156).
-			fmt.Fprintf(&b, "\n  poslední odečet před %d dny", r.ReadOn.DaysUntil(today))
+			//
+			// ⚠ "před 1 dny" IS THE SAME BROKEN CZECH mcp.Plural WAS ADDED FOR. The
+			// instrumental takes `dnem` for one and `dny` for every other count, so
+			// the one/few/many triple here is deliberately dnem/dny/dny rather than
+			// three distinct words.
+			fmt.Fprintf(&b, "\n  poslední odečet %s", daysAgo(r.ReadOn.DaysUntil(today)))
 		}
 	}
 	return mcp.TextResult(b.String(), readingsWire(rows))
@@ -293,7 +298,7 @@ func renderSummary(s Summary) string {
 		fmt.Fprintf(&b, " (%s)", s.Reason)
 	}
 	if s.LastReadingOn != nil && s.LastReadingAgeDays != nil {
-		fmt.Fprintf(&b, "\nPoslední odečet %s, před %d dny", *s.LastReadingOn, *s.LastReadingAgeDays)
+		fmt.Fprintf(&b, "\nPoslední odečet %s, %s", *s.LastReadingOn, daysAgo(*s.LastReadingAgeDays))
 	}
 	if s.Actual != nil {
 		fmt.Fprintf(&b, "\nSpotřeba zatím: VT %s, NT %s", kwh(s.Actual.VTDkwh), kwh(s.Actual.NTDkwh))
@@ -301,8 +306,9 @@ func renderSummary(s Summary) string {
 	if s.CostTotalHaler != nil {
 		fmt.Fprintf(&b, "\nOdhad nákladů za období: %s", kc(*s.CostTotalHaler))
 	}
-	fmt.Fprintf(&b, "\nZálohy zaplacené: %s (splatné %s, %d měsíců)",
-		kc(s.AdvancesTotalHaler), kc(s.AdvancesDueHaler), s.MonthsDue)
+	fmt.Fprintf(&b, "\nZálohy zaplacené: %s (splatné %s, %s)",
+		kc(s.AdvancesTotalHaler), kc(s.AdvancesDueHaler),
+		mcp.Plural(s.MonthsDue, "měsíc", "měsíce", "měsíců"))
 	if s.BalanceHaler != nil {
 		// ⚠ THE SIGN IS THE ANSWER and it is named in words, because ">0" is not a
 		// thing anybody standing at a meter reads correctly.
@@ -383,6 +389,16 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 	return mcp.TextResult(
 		fmt.Sprintf("Odečet %s — VT %s, NT %s (id %s)", r.ReadOn, kwh(r.VTDkwh), kwh(r.NTDkwh), r.ID),
 		readingWire(r))
+}
+
+// daysAgo renders "před N dny" with the one form Czech spells differently.
+//
+// ⚠ IT IS ONE FUNCTION BECAUSE THE PHRASE APPEARS TWICE — once on the readings
+// list and once in the summary — and a count that is grammatical in one of them
+// and not the other is the shape this defect already had: mcp.Plural was
+// introduced for exactly these strings and reached the section headers only.
+func daysAgo(days int) string {
+	return "před " + mcp.Plural(days, "dnem", "dny", "dny")
 }
 
 // ---- units ----

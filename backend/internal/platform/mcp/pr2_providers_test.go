@@ -855,3 +855,154 @@ func firstHitID(t *testing.T, result map[string]any, kind string) string {
 	t.Fatalf("no %s hit in the search result: %#v", kind, result)
 	return ""
 }
+
+// ---- round 3 ----
+
+// ⚠ AN ID THAT NAMES NOTHING IS A 422, NOT THE INTERNAL ERROR (D311, §7.4). Both
+// of home_garden_task_create's optional ids reached the INSERT unchecked, where
+// `garden_tasks.bed_id` and `.planting_id` are plain REFERENCES — so a mistyped
+// one tripped the foreign key, left the package as an untyped error, and came back
+// as "Došlo k chybě, zkuste to prosím znovu.". An agent RETRIES that and gives up
+// on a 422, so the one input a model is most likely to get wrong was the one input
+// that produced a loop.
+//
+// ⚠ AND THE LIKELY MISTAKE IS THE BED *CODE*. The work list prints "záhon A1";
+// the only place a bed id appears at all is home_garden_plan's structuredContent.
+func TestGardenTaskCreateRefusesIdsThatNameNothing(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	ctx := testsupport.CtxUser(memberA, "editor")
+
+	year := h.elec.Today().Y
+	if _, _, err := h.garden.CreateSeason(ctx, garden.SeasonCreateInput{Year: year}, false); err != nil {
+		t.Fatalf("seed season: %v", err)
+	}
+	base := map[string]any{
+		"title_cs":    "Zalít skleník",
+		"window_from": dates.Date{Y: year, M: time.July, D: 1}.String(),
+		"window_to":   dates.Date{Y: year, M: time.July, D: 7}.String(),
+		"kind":        "water",
+	}
+	for _, tc := range []struct{ field, value string }{
+		{"bed_id", "A1"},
+		{"planting_id", "vysadba-99"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			args := map[string]any{}
+			for k, v := range base {
+				args[k] = v
+			}
+			args[tc.field] = tc.value
+
+			rr, result := h.call(secret, "home_garden_task_create", args)
+			if result == nil {
+				t.Fatalf("came back as a PROTOCOL error: %s", rr.Body.String())
+			}
+			if !isError(result) {
+				t.Fatalf("a job was created against a %s that names nothing: %s",
+					tc.field, resultText(t, result))
+			}
+			text := resultText(t, result)
+			if strings.Contains(text, "Došlo k chybě") {
+				t.Fatalf("%s=%q answered with the INTERNAL error, which an agent retries"+
+					" rather than corrects: %s", tc.field, tc.value, text)
+			}
+			if !strings.Contains(text, tc.value) {
+				t.Fatalf("the refusal does not name the %s it refused: %s", tc.field, text)
+			}
+		})
+	}
+
+	// ⚠ AND THE GUARD DOES NOT COST THE ORDINARY CALL ANYTHING. A job with neither
+	// id — which is what the schema's four required fields alone produce — still
+	// writes.
+	if _, ok := h.call(secret, "home_garden_task_create", base); isError(ok) {
+		t.Fatalf("the guard refused a job with no bed and no planting: %s", resultText(t, ok))
+	}
+}
+
+// ⚠ THE COUNTS INSIDE THE ROWS TAKE mcp.Plural TOO. Round 2 introduced it for
+// exactly these strings and reached the section HEADERS only, so five counts were
+// left in the genitive plural one line further down: a conversation starts with
+// "1 členů", a two-person household reads "2 členů", yesterday's meter reading is
+// "před 1 dny" and a single month due is "1 měsíců".
+func TestCzechCountsInsideTheRowsToo(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+	ctx := testsupport.CtxUser(memberA, "editor")
+
+	h.seedConversation("Rodina", memberA)
+	today := h.elec.Today()
+	h.seedPeriod(ctx, today.AddDays(-40), today.AddDays(320))
+	for _, seed := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"home_electricity_advance_add", map[string]any{
+			"effective_from": today.AddDays(-40).String(), "amount_kc": 1500.0, "due_day": 15}},
+		{"home_electricity_reading_add", map[string]any{
+			"vt_kwh": 10.0, "nt_kwh": 5.0, "read_on": today.AddDays(-1).String()}},
+	} {
+		if _, r := h.call(secret, seed.tool, seed.args); isError(r) {
+			t.Fatalf("seed %s: %s", seed.tool, resultText(t, r))
+		}
+	}
+
+	for _, tc := range []struct {
+		tool  string
+		want  string
+		wrong []string
+	}{
+		{"home_chat_conversations", "1 člen", []string{"1 členů", "1 nepřečtených"}},
+		{"home_electricity_readings", "před 1 dnem", []string{"před 1 dny"}},
+		{"home_electricity_summary", "1 měsíc", []string{"1 měsíců", "před 1 dny"}},
+	} {
+		_, result := h.call(secret, tc.tool, nil)
+		text := resultText(t, result)
+		if !strings.Contains(text, tc.want) {
+			t.Errorf("%s does not say %q:\n%s", tc.tool, tc.want, text)
+		}
+		for _, wrong := range tc.wrong {
+			if strings.Contains(text, wrong) {
+				t.Errorf("%s still says %q:\n%s", tc.tool, wrong, text)
+			}
+		}
+	}
+}
+
+// ⚠ THE ONE TOOL `admin` PUBLISHES HAD NEVER BEEN RUN. Every assertion about it
+// was about its ABSENCE — hidden from a reader's tools/list, refused when called
+// by name — and the harness left `admin.Storage()` nil, so even the admin's own
+// call short-circuited on ErrNotImplemented and reached the internal error. A
+// surface asserted and a behaviour never called is the shape of every defect the
+// two previous rounds found.
+func TestAdminStatusAnswersTheAdminItIsFor(t *testing.T) {
+	h := newHarness(t)
+	secret, _ := h.mintToken(memberA, "Claude", nil, time.Time{})
+
+	_, result := h.call(secret, "home_admin_status", nil)
+	if isError(result) {
+		t.Fatalf("home_admin_status refused the household's admin: %s", resultText(t, result))
+	}
+	text := resultText(t, result)
+	for _, want := range []string{"Databáze:", "Objekty (R2):"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the status is missing %q:\n%s", want, text)
+		}
+	}
+	// ⚠ THE PER-MODULE BREAKDOWN COMES THROUGH THE STORAGE REGISTRY, which is how
+	// `admin` reaches ten modules without importing one (D191). A snapshot with no
+	// module rows would render the same two headings and mean nothing.
+	for _, module := range []string{"garden", "chat", "documents"} {
+		if !strings.Contains(text, "• "+module+":") {
+			t.Errorf("no %q row in the breakdown:\n%s", module, text)
+		}
+	}
+
+	// The expensive branch runs too — `refresh` costs a full storage scan, and it
+	// is the one argument this tool takes.
+	_, refreshed := h.call(secret, "home_admin_status", map[string]any{"refresh": true})
+	if isError(refreshed) {
+		t.Fatalf("home_admin_status refused a refresh: %s", resultText(t, refreshed))
+	}
+}

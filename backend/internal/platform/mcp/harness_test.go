@@ -35,7 +35,9 @@ import (
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/mcp"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -205,6 +207,28 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	if err != nil {
 		t.Fatalf("collect mcp providers: %v", err)
 	}
+	// ⚠ THE ÚLOŽIŠTĚ SNAPSHOT IS WIRED IN, AS THE COMPOSITION ROOT DOES. Without it
+	// `admin.Storage()` is nil, `home_admin_status` short-circuits on
+	// ErrNotImplemented, and the host maps that onto the internal error — so the ONE
+	// tool the admin module publishes could be listed, gated and refused by every
+	// test in this package and still never once RUN. That is the exact shape of the
+	// four defects rounds 1 and 2 found: a surface asserted and a behaviour never
+	// called.
+	storageCatalog, err := storage.Collect(allModules...)
+	if err != nil {
+		t.Fatalf("collect storage declarations: %v", err)
+	}
+	// The path is asked of SQLite rather than threaded down from testsupport.NewDB,
+	// which does not hand it back — one pragma read beats a second constructor.
+	var dbPath string
+	if err := db.QueryRow(`SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&dbPath); err != nil {
+		t.Fatalf("resolve the test database path: %v", err)
+	}
+	adminSvc.SetStorage(admin.NewStorageService(admin.StorageDeps{
+		DB: db, DBPath: dbPath, Catalog: storageCatalog,
+		Primary: blob, PrimaryBucket: "home-test",
+		Members: push.NewStore(db), WarnTotalMB: 1024, CacheSeconds: 30,
+	}))
 	// ⚠ THE METRIC AND LIST CATALOGS TAKE THE *CONTRIBUTING* SIX, not all ten —
 	// `electricity` (D147) and `chat` (D252) are deliberately absent from both, and
 	// so is `admin`, which reads them rather than publishing into them. Collecting

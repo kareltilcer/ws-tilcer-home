@@ -123,9 +123,15 @@ func (p *mcpProvider) conversations(ctx context.Context, args json.RawMessage) (
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s:\n", mcp.Plural(len(page.Items), "konverzace", "konverzace", "konverzací"))
 	for _, c := range page.Items {
-		fmt.Fprintf(&b, "\n• %s (id %s) — %d členů", c.Name, c.ID, c.MemberCount)
+		// ⚠ THE ROW'S OWN COUNTS TAKE mcp.Plural TOO, not only the header above it.
+		// A conversation starts with ONE member and a household has two to four, so
+		// "1 členů" and "2 členů" are the ordinary readings of this line rather than
+		// an edge case — and "1 nepřečtených" is the same mistake about a message.
+		fmt.Fprintf(&b, "\n• %s (id %s) — %s", c.Name, c.ID,
+			mcp.Plural(c.MemberCount, "člen", "členy", "členů"))
 		if c.UnreadCount > 0 {
-			fmt.Fprintf(&b, ", %d nepřečtených", c.UnreadCount)
+			fmt.Fprintf(&b, ", %s",
+				mcp.Plural(c.UnreadCount, "nepřečtená", "nepřečtené", "nepřečtených"))
 		}
 		if c.Muted {
 			b.WriteString(", ztlumeno")
@@ -231,8 +237,9 @@ func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, err
 		}
 		return mcp.Result{}, err
 	}
-	return mcp.TextResult(fmt.Sprintf("%s (id %s) — %d členů, %d nepřečtených",
-		c.Name, c.ID, c.MemberCount, c.UnreadCount), c)
+	return mcp.TextResult(fmt.Sprintf("%s (id %s) — %s, %s", c.Name, c.ID,
+		mcp.Plural(c.MemberCount, "člen", "členy", "členů"),
+		mcp.Plural(c.UnreadCount, "nepřečtená", "nepřečtené", "nepřečtených")), c)
 }
 
 // ---- Resources ----
