@@ -237,6 +237,20 @@ func (h *Host) search(ctx context.Context, s *callSession, args json.RawMessage)
 		limit = in.Limit
 	}
 
+	// ⚠ AN UNKNOWN MODULE NAME IS REFUSED, NOT DROPPED, and it is the same rule
+	// the token allowlist takes for the same reason (see normaliseModules): a
+	// search silently narrowed to nothing is indistinguishable from a household
+	// with nothing in it, and the caller who typed "poznamky" is the only one who
+	// can fix it. Validated against KnownModules rather than the live registry,
+	// because between PR 1 and PR 2 six of those publish no provider yet and
+	// naming one of them is an empty answer rather than a mistake.
+	for _, m := range in.In {
+		if !KnownModule(strings.TrimSpace(m)) {
+			return Result{}, httpx.ErrUnprocessable("Neznámý modul: " + m +
+				". Povolené: " + strings.Join(KnownModules, ", ") + ".")
+		}
+	}
+
 	wanted := moduleSet(in.In)
 	order := map[string]int{}
 	counts := map[string]int{}
@@ -462,11 +476,19 @@ func (h *Host) metrics(ctx context.Context, _ *callSession, args json.RawMessage
 	values := map[string]any{}
 	var b strings.Builder
 	for _, key := range in.Keys {
-		v, err := h.deps.Metrics.Resolve(ctx, userID, key, at)
-		if err != nil {
+		// ⚠ THE CATALOG IS ASKED FIRST, so an unknown key and a broken store are
+		// two answers rather than one. Reporting a resolver failure as "unknown
+		// metric" sends the model to the catalog, where it finds the key, calls
+		// again and loops — D311's retry loop reached through the wrong TEXT rather
+		// than through the wrong status.
+		if !h.deps.Metrics.Has(key) {
 			// An unknown key is the caller's mistake and is worth naming — it is the
 			// one error here a model can act on by asking for the catalog.
 			return Result{Text: fmt.Sprintf("Neznámá metrika %q. Zavolejte home_metrics bez parametrů pro seznam.", key), IsError: true}, nil
+		}
+		v, err := h.deps.Metrics.Resolve(ctx, userID, key, at)
+		if err != nil {
+			return Result{}, err
 		}
 		values[key] = v
 		fmt.Fprintf(&b, "%s: %d\n", key, v)
@@ -504,9 +526,15 @@ func (h *Host) lists(ctx context.Context, _ *callSession, args json.RawMessage) 
 	values := map[string]any{}
 	var b strings.Builder
 	for _, key := range in.Keys {
+		// The catalog first, for the reason home_metrics gives: an unknown key and a
+		// broken store are two different answers, and only one of them is the
+		// caller's to fix.
+		if !h.deps.Lists.Has(key) {
+			return Result{Text: fmt.Sprintf("Neznámý seznam %q. Zavolejte home_lists bez parametrů pro seznam.", key), IsError: true}, nil
+		}
 		got, err := h.deps.Lists.Resolve(ctx, userID, key, at)
 		if err != nil {
-			return Result{Text: fmt.Sprintf("Neznámý seznam %q. Zavolejte home_lists bez parametrů pro seznam.", key), IsError: true}, nil
+			return Result{}, err
 		}
 		values[key] = got
 		fmt.Fprintf(&b, "%s:\n", key)

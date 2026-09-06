@@ -295,6 +295,16 @@ func (h *Host) patchToken(w http.ResponseWriter, r *http.Request) {
 		changes = append(changes, audit.Change{Field: "modules", Old: &oldM, New: &newM})
 	}
 
+	// ⚠ NOTHING CHANGED IS NOT A CHANGE. McpTokenUpdate has no required field, so
+	// an empty body — or one repeating the values already stored — is a valid
+	// PATCH; writing mcp.token.update for it puts "Upraven token pro asistenta" in
+	// the Log with no field diffs behind it, which is the one row a member auditing
+	// their own credential cannot tell from a real rename.
+	if len(changes) == 0 {
+		httpx.JSON(w, http.StatusOK, tokenWire(tok))
+		return
+	}
+
 	err = appdb.WithTx(ctx, h.deps.DB, func(tx *sql.Tx) error {
 		if err := h.deps.Tokens.Update(ctx, tx, id, name, mods); err != nil {
 			return err

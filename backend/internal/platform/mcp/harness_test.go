@@ -308,6 +308,24 @@ func (h *harness) rpcWith(decorate func(*http.Request), method string, params an
 	return rr
 }
 
+// rpcNotification posts one call with NO id — a JSON-RPC notification, which
+// MUST NOT be answered with a response object.
+func (h *harness) rpcNotification(bearer, method string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
+	if err != nil {
+		h.t.Fatalf("marshal notification: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(string(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	return rr
+}
+
 // call runs one tool and returns the response plus the decoded result object.
 func (h *harness) call(bearer, tool string, args any) (*httptest.ResponseRecorder, map[string]any) {
 	h.t.Helper()

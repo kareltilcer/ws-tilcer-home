@@ -55,7 +55,18 @@ type rpcResponse struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
+// newResult wraps one successful answer.
+//
+// ⚠ A NIL RESULT BECOMES AN EMPTY OBJECT, because `result` is tagged omitempty
+// and a response carrying NEITHER `result` nor `error` is not a JSON-RPC
+// response at all. `notifications/initialized` is the case that reaches this:
+// it is a notification, so it is normally answered with 202 and no body — but a
+// client that sends it WITH an id takes the ordinary path, and answering that
+// with an empty envelope fails a strict client against a working server.
 func newResult(id json.RawMessage, result any) rpcResponse {
+	if result == nil {
+		result = map[string]any{}
+	}
 	return rpcResponse{JSONRPC: "2.0", ID: nullID(id), Result: result}
 }
 

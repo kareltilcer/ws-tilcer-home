@@ -584,6 +584,16 @@ func commonConds(f Filter, viewerID string) ([]string, []any, error) {
 	case ViaUI:
 		// No index, and none would help: "in the app" is almost every row.
 		conds = append(conds, "e.via IS NULL")
+	case "":
+		// Both, which is the default and the only thing an absent filter can mean.
+	default:
+		// ⚠ REFUSED, BECAUSE FALLING THROUGH HERE RETURNS EVERY ROW. Every other
+		// dimension filter on this route is an equality bind, so an unknown value
+		// narrows to nothing — honest, if unhelpful. This one is a switch, so an
+		// unknown value added NO condition and the caller was handed the whole spine
+		// as though they had not filtered at all, with nothing on the wire saying so.
+		// openapi.yaml declares enum [mcp, ui]; this is that enum, enforced.
+		return nil, nil, errInvalid("via", fmt.Errorf("must be %q or %q", ViaMCP, ViaUI))
 	}
 	if f.Q != "" {
 		conds = append(conds, "e.rowid IN (SELECT rowid FROM audit_events_fts WHERE audit_events_fts MATCH ?)")

@@ -204,12 +204,15 @@ func renderFolder(b *strings.Builder, node FolderNode, depth int) {
 func (p *mcpProvider) readNote(ctx context.Context, id string) (mcp.Result, error) {
 	note, err := p.svc.GetNoteDetail(ctx, id)
 	if err != nil {
+		// ⚠ A FOREIGN PRIVATE NOTE ARRIVES HERE AS httpx.ErrNotFound — NOT as nil
+		// and not as a 403. The store enforces the audience in SQL (viewerCond), so
+		// the row never reaches Go and the service cannot tell it from an id that
+		// was never issued. The error is RETURNED rather than translated here: the
+		// host's one mapper collapses 403 and 404 onto the same refusal, which is
+		// what makes the two answers byte-identical (leak row 9).
 		return mcp.Result{}, err
 	}
 	if note == nil {
-		// ⚠ A FOREIGN PRIVATE NOTE ARRIVES HERE AS nil, not as a 403: the store
-		// enforces the audience in SQL (viewerCond), so the row never reaches Go.
-		// The answer is byte-identical to an id that was never issued.
 		return mcp.NotFoundResult(), nil
 	}
 	if err := p.svc.RecordTokenNoteRead(ctx, *note); err != nil {
@@ -497,6 +500,10 @@ func (p *mcpProvider) Read(ctx context.Context, uri string) (mcp.Content, error)
 	}
 	note, err := p.svc.GetNoteDetail(ctx, res.ID)
 	if err != nil {
+		// The service answers a note that is gone with httpx.ErrNotFound, which the
+		// host reads through mcp.IsNotFound — so a row deleted between Resolve and
+		// here is the ordinary refusal and not a line on the crash board, while a
+		// store failure still is.
 		return mcp.Content{}, err
 	}
 	if note == nil {

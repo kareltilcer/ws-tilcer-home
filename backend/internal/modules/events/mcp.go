@@ -43,12 +43,34 @@ const (
 	toolComplete = "home_events_complete"
 )
 
-// leadValues is the reminder-lead vocabulary, for the schema's enum.
+// leadValues is the reminder-lead vocabulary, in ascending duration, and it is
+// the ONE place v11 spells it.
 //
 // ⚠ "0d" IS THE SAME-DAY LEAD AND IT IS NOT A TYPO FOR "no reminder" (#46,
 // §V10-16): it is a lead of nothing, which puts the reminder on the event's own
 // morning. `reminder_enabled: false` is how an event has no reminder.
+//
+// ⚠ IT IS ORDERED AND validLeads IS A MAP, which is why the list is written out
+// rather than derived from it: a Go map has no order, so a derived enum would
+// offer the model "0d, 1d, 1m, 1w, 2d, 2w" — alphabetical, which reads as a
+// vocabulary with no shape at all. TestLeadVocabularyMatchesTheValidator is what
+// holds the two to the same SET instead.
 var leadValues = []string{"0d", "1d", "2d", "1w", "2w", "1m"}
+
+// leadEnum is leadValues as a JSON array, spliced into BOTH input schemas below.
+//
+// ⚠ THE SCHEMAS ARE WHAT A MODEL READS, so a hand-copied enum beside a
+// validator is a documentation defect with no failing test: the seventh lead
+// would be accepted by the service and never offered to the caller. One value,
+// two uses — and the refusal message below joins the same slice, so the three
+// places a lead is named in this file are one place.
+var leadEnum = func() string {
+	b, err := json.Marshal(leadValues)
+	if err != nil {
+		panic("events: marshal lead vocabulary: " + err.Error())
+	}
+	return string(b)
+}()
 
 func (p *mcpProvider) Tools() []mcp.Tool {
 	return []mcp.Tool{
@@ -79,7 +101,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
     "description": {"type": "string"},
     "rrule": {"type": "string", "description": "Optional iCalendar RRULE, e.g. FREQ=YEARLY."},
     "reminder_enabled": {"type": "boolean"},
-    "reminder_lead": {"type": "string", "enum": ["0d", "1d", "2d", "1w", "2w", "1m"], "description": "\"0d\" is the day itself."}
+    "reminder_lead": {"type": "string", "enum": ` + leadEnum + `, "description": "\"0d\" is the day itself."}
   },
   "required": ["title", "starts_on"],
   "additionalProperties": false
@@ -98,7 +120,7 @@ func (p *mcpProvider) Tools() []mcp.Tool {
     "description": {"type": "string"},
     "rrule": {"type": "string"},
     "reminder_enabled": {"type": "boolean"},
-    "reminder_lead": {"type": "string", "enum": ["0d", "1d", "2d", "1w", "2w", "1m"]},
+    "reminder_lead": {"type": "string", "enum": ` + leadEnum + `},
     "archived": {"type": "boolean"}
   },
   "required": ["id"],

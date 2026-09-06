@@ -314,6 +314,28 @@ func (p *mcpProvider) checklist(ctx context.Context, args json.RawMessage) (mcp.
 	if in.ItemID != "" && in.Done == nil {
 		return mcp.Result{}, httpx.ErrUnprocessable("K item_id je potřeba i done.")
 	}
+	// ⚠ THE ITEM MUST BELONG TO THE CARD THE CALLER NAMED, and nothing under this
+	// checks it: Service.UpdateChecklistItem resolves an item by id ALONE, which is
+	// right for its HTTP twin (that route is item-addressed and carries no card) and
+	// wrong here, where the tool takes both and then renders card_id's list. A
+	// mismatched pair ticked a box on a DIFFERENT card, audited it, and answered
+	// with a checklist the change was not in — so the model read its own write as
+	// having failed and sent it again.
+	//
+	// ⚠ AND IT RUNS BEFORE THE ADD, because this tool can do two things in one
+	// call: checking after would append the new item and then refuse, leaving a
+	// half-applied write, which is worse than either whole outcome. It costs one
+	// read, only when item_id is given, and it is the same read that makes an
+	// unknown card_id a clean refusal rather than an empty list.
+	if in.ItemID != "" {
+		before, err := p.svc.ListChecklist(ctx, in.CardID)
+		if err != nil {
+			return mcp.Result{}, err
+		}
+		if !hasChecklistItem(before, in.ItemID) {
+			return mcp.NotFoundResult(), nil
+		}
+	}
 	if in.Add != "" {
 		if strings.TrimSpace(in.Add) == "" {
 			return mcp.Result{}, httpx.ErrUnprocessable("Text položky nesmí být prázdný.")
@@ -345,6 +367,16 @@ func (p *mcpProvider) checklist(ctx context.Context, args json.RawMessage) (mcp.
 		fmt.Fprintf(&b, "\n%s %s (id %s)", mark, it.Text, it.ID)
 	}
 	return mcp.TextResult(b.String(), items)
+}
+
+// hasChecklistItem reports whether id is one of this card's items.
+func hasChecklistItem(items []ChecklistItem, id string) bool {
+	for _, it := range items {
+		if it.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Search scans card titles across every board.

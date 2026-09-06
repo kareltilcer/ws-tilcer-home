@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -422,6 +422,19 @@ func (h *Host) resourceTemplates(s *callSession) any {
 	return map[string]any{"resourceTemplates": out}
 }
 
+// resourceListLimit bounds ONE module's resource listing.
+//
+// ⚠ IT IS NOT HOME_MCP_SEARCH_LIMIT AND MUST NOT BE. That variable is the
+// per-module SEARCH budget (D301) — ten hits, because a search wants the best
+// few from each module rather than everything from the chattiest. A LISTING
+// answers "what is there", and answering it with ten notes out of forty is not a
+// smaller answer, it is a wrong one: the model reasons about the tree it was
+// shown as though it were the tree. FR-M7 caps a resource by
+// HOME_MCP_MAX_RESULT_KB, which is a size and not a count, so the count is here:
+// a bound on the query against the ONE connection, set where this household
+// cannot reach it.
+const resourceListLimit = 200
+
 // resourcesList enumerates what the CALLER may read.
 //
 // ⚠ LEAK ROW 11 (D308). A listing is an answer even when every read is refused:
@@ -436,10 +449,19 @@ func (h *Host) resourcesList(ctx context.Context, s *callSession, _ json.RawMess
 		if allowed != nil && !allowed[p.Module()] {
 			continue
 		}
-		items, err := p.ListResources(ctx, h.deps.Config.SearchLimit)
+		items, err := p.ListResources(ctx, resourceListLimit)
 		if err != nil {
 			h.logTool(ctx, "mcp resources/list failed", p.Module(), err)
 			continue // one module's failure must not blank the whole listing
+		}
+		// ⚠ A FULL PAGE MEANS THE LISTING WAS CUT, and there is nowhere on the
+		// wire to say so: resources/list carries no field for it short of the
+		// cursor pagination v11 does not implement. So it is said where somebody
+		// can act on it — raise the constant, or ship pagination — rather than
+		// left as a number nobody ever sees reached.
+		if len(items) >= resourceListLimit {
+			h.deps.Logger.Warn("mcp resources/list hit the listing cap; the model was shown a partial tree",
+				"module", p.Module(), "limit", resourceListLimit)
 		}
 		for _, it := range items {
 			row := map[string]any{"uri": it.URI, "name": it.Name}
@@ -487,7 +509,13 @@ func (h *Host) resourcesRead(ctx context.Context, s *callSession, params json.Ra
 		// and it is how an incident becomes invisible: the caller is told the note
 		// does not exist while the store is what is broken. The module goes in the
 		// line, never the URI: a URI carries a note's slug, which is user content.
-		if !errors.Is(err, ErrResourceNotFound) {
+		//
+		// ⚠ AND THE TEST IS IsNotFound, NOT ErrResourceNotFound ALONE. A provider
+		// reaches its module's service, and every service in this repository answers
+		// a missing or foreign row with httpx.ErrNotFound — so keying the line on
+		// the sentinel alone reported a note somebody had deleted as an incident, on
+		// a board that groups by first frame.
+		if !IsNotFound(err) {
 			h.logTool(ctx, "mcp resources/read failed", p.Module(), err)
 		}
 		return nil, &ProtocolError{Code: CodeInvalidParams, Message: notFoundText}
@@ -577,14 +605,20 @@ func contentWire(c Content, maxBytes int) map[string]any {
 		out["mimeType"] = c.MIMEType
 	}
 	if len(c.Blob) > 0 {
-		blob := c.Blob
-		if maxBytes > 0 && len(blob) > maxBytes {
-			// ⚠ Bytes are truncated at the SOURCE, not after base64, so the client
-			// receives a short-but-well-formed payload rather than a broken encoding.
-			blob = blob[:maxBytes]
-			out["_truncated"] = true
+		// ⚠ AN OVERSIZED BLOB IS REFUSED IN WORDS, NOT CUT. Half a PDF is not a
+		// smaller PDF and half a JPEG is not a smaller JPEG — both are files that
+		// will not open, handed over with no way for the model to tell. Text can be
+		// truncated because a shorter text is still a text; bytes cannot. The
+		// replacement is a sentence in the one channel a model actually reads, and
+		// it names the cap so the answer is actionable rather than mysterious.
+		if maxBytes > 0 && len(c.Blob) > maxBytes {
+			out["mimeType"] = "text/plain"
+			out["text"] = fmt.Sprintf(
+				"[Soubor je příliš velký pro tento kanál — %d kB proti limitu %d kB. Otevřete ho v aplikaci.]",
+				len(c.Blob)>>10, maxBytes>>10)
+			return out
 		}
-		out["blob"] = base64.StdEncoding.EncodeToString(blob)
+		out["blob"] = base64.StdEncoding.EncodeToString(c.Blob)
 		return out
 	}
 	text, truncated := capText(c.Text, maxBytes)

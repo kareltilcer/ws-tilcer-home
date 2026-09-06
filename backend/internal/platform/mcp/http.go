@@ -67,7 +67,17 @@ func (h *Host) Mount(r chi.Router) {
 // preserved exactly, and the unauthenticated methods get their own IP-keyed
 // limiter so the exemption is not a free hole.
 func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set(protocolVersionHeader, negotiatedVersion(r))
+	// ⚠ THE HEADER NAMES WHAT HOME SPEAKS, NEVER WHAT THE CALLER ASKED FOR. It
+	// used to echo the request's value back unread, so a client pinned to a
+	// revision home does not implement was served in full and told, in the
+	// negotiated-version header, that home spoke it too. Home speaks exactly one
+	// (D278) and says so on every answer.
+	w.Header().Set(protocolVersionHeader, protocolVersion)
+	if v := r.Header.Get(protocolVersionHeader); v != "" && v != protocolVersion {
+		writeJSONError(w, http.StatusBadRequest, "unsupported_protocol_version",
+			"unsupported MCP-Protocol-Version "+v+"; home speaks "+protocolVersion)
+		return
+	}
 
 	// 3. Origin (D281). ⚠ A request claiming NO origin is allowed — a CLI has none
 	// — but only on a valid bearer, which step 4 then requires. A request that
@@ -205,15 +215,6 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeRPC(w, http.StatusOK, newResult(req.ID, result))
-}
-
-// negotiatedVersion echoes the client's protocol version when it sent one, and
-// names ours otherwise.
-func negotiatedVersion(r *http.Request) string {
-	if v := r.Header.Get(protocolVersionHeader); v != "" {
-		return v
-	}
-	return protocolVersion
 }
 
 // bearerToken reads the Authorization header.

@@ -5902,6 +5902,11 @@ components:
         MCP token; `ui` returns only those made in the browser. Omit for both (v11, D292).
         Backed by a PARTIAL index over `via IS NOT NULL`, so the filter is a seek and costs
         nothing on the rows where it is null.
+
+        ⚠ A value outside this enum is a **422**, never a silently ignored filter. Every
+        other filter on this route is an equality bind, so an unknown value narrows to
+        nothing; this one is a switch, and falling through it would return every row as
+        though nothing had been filtered.
       schema:
         type: string
         enum: [mcp, ui]

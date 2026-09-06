@@ -79,6 +79,26 @@ func NotFoundResult() Result { return Result{Text: notFoundText, IsError: true} 
 // InternalResult is the refusal for a failure nobody predicted.
 func InternalResult() Result { return Result{Text: internalText, IsError: true} }
 
+// IsNotFound reports whether err is the refusal every ownership- and
+// membership-scoped surface answers with.
+//
+// ⚠ IT IS ONE FUNCTION BECAUSE TWO CALLERS ASK THE SAME QUESTION FOR
+// OPPOSITE REASONS. toResult asks it to pick the answer; the host asks it to
+// decide whether a failed resources/read is worth a line on the crash board. A
+// provider that returns httpx.ErrNotFound rather than ErrResourceNotFound —
+// which is what every module service already returns — must not be reported as
+// an incident for a note somebody deleted.
+func IsNotFound(err error) bool {
+	if errors.Is(err, ErrResourceNotFound) {
+		return true
+	}
+	var ae *httpx.APIError
+	if errors.As(err, &ae) {
+		return ae.Status == http.StatusNotFound || ae.Status == http.StatusForbidden
+	}
+	return false
+}
+
 // toResult maps a provider's error onto what the client sees.
 //
 // It returns (Result, nil) for anything the model should READ, and

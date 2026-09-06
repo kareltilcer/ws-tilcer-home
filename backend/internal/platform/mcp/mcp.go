@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -304,7 +305,12 @@ func NewRegistry() *Registry {
 // Register adds one provider. A duplicate module or a duplicate tool name is a
 // programming error and fails the build of the registry.
 func (r *Registry) Register(p Provider) error {
-	if p == nil {
+	// ⚠ reflect, BECAUSE `p == nil` IS NOT THE QUESTION. A Source whose
+	// MCPProvider() returns a nil *someProvider hands over an interface that is
+	// NOT nil, so the plain check passes and the next line panics at composition
+	// — a crash-loop with a stack where every other failure in this function
+	// produces a sentence naming the module.
+	if isNilProvider(p) {
 		return nil
 	}
 	mod := p.Module()
@@ -330,6 +336,20 @@ func (r *Registry) Register(p Provider) error {
 	r.byModule[mod] = p
 	r.providers = append(r.providers, p)
 	return nil
+}
+
+// isNilProvider reports whether p is nil, INCLUDING a typed nil in a non-nil
+// interface.
+func isNilProvider(p Provider) bool {
+	if p == nil {
+		return true
+	}
+	switch v := reflect.ValueOf(p); v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // Collect builds a registry from anything implementing Source — in practice the

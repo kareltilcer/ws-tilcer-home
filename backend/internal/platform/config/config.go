@@ -385,7 +385,6 @@ func (d DocsConfig) MirrorEnabled() bool {
 	return d.BackupBucket != "" && d.MirrorInterval > 0
 }
 
-// IsProduction reports whether the service is running in production.
 // mcp reads the six v11 variables and range-checks every one at BOTH ends.
 //
 // ⚠ REFUSED, NOT CLAMPED — see MCPConfig. Each bound is an error rather than a
@@ -419,6 +418,7 @@ func (l *loader) mcp() MCPConfig {
 	return m
 }
 
+// IsProduction reports whether the service is running in production.
 func (c *Config) IsProduction() bool { return c.Env == "production" }
 
 // Redacted returns a log-safe one-line summary of the configuration with the
@@ -1152,10 +1152,6 @@ func (l *loader) status(c *Config) StatusConfig {
 	return s
 }
 
-// StorageConfig is the Úložiště page's whole configuration (v9, §V9-9).
-//
-// Two plain integers, both defaulted, neither a secret — no new bucket credential,
-// no feature flag, and deliberately NO CONFIGURATION FOR PRIVACY AT ALL.
 // MCPConfig is the MCP front door (v11, PRD §V11-9).
 //
 // ⚠ ALL SIX REFUSE AT BOTH ENDS RATHER THAN CLAMPING, and that is v10's
@@ -1204,6 +1200,10 @@ func (m MCPConfig) redacted() string {
 		m.RatePerMin, m.CallTimeout, m.MaxResultKB, m.MaxTokensPerUser, m.SearchLimit)
 }
 
+// StorageConfig is the Úložiště page's whole configuration (v9, §V9-9).
+//
+// Two plain integers, both defaulted, neither a secret — no new bucket credential,
+// no feature flag, and deliberately NO CONFIGURATION FOR PRIVACY AT ALL.
 type StorageConfig struct {
 	// WarnTotalMB is the warning threshold on the MODULES' primary-bucket total.
 	// 0 disables the warning.
