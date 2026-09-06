@@ -19,6 +19,16 @@ export interface LogFilters {
   entity_type?: string
   entity_id?: string
   level?: string
+  /**
+   * How the change was made: `mcp` through an assistant, `ui` in the browser,
+   * absent for both (v11, D292).
+   *
+   * ⚠ A VALUE OUTSIDE THAT PAIR IS A 422, never a silently ignored filter.
+   * Every other filter on this route is an equality bind, so a nonsense value
+   * narrows to nothing; this one is a SWITCH on the server, and falling through
+   * it would return every row as though nothing had been filtered.
+   */
+  via?: 'mcp' | 'ui' | ''
   q?: string
   limit?: number
   cursor?: string

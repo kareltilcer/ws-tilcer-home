@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import changelog from '../../../handoff/v10/CHANGELOG.md?raw'
+import changelog from '../../../handoff/v11/CHANGELOG.md?raw'
 import dockerfile from '../../Dockerfile?raw'
 import lockfileRaw from '../../package-lock.json?raw'
 import { version as packageVersion } from '../../package.json'
@@ -81,7 +81,7 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
 
   it('carries the newest CHANGELOG release in minor.patch, under a constant major', () => {
     const newest = changelog.match(/^## v(\d+)(?:\.(\d+))?(\.\d+)?/m)
-    expect(newest, 'no "## vX[.Y]" heading found in handoff/v10/CHANGELOG.md').not.toBeNull()
+    expect(newest, 'no "## vX[.Y]" heading found in handoff/v11/CHANGELOG.md').not.toBeNull()
     // ⚠ A THIRD COMPONENT IS REFUSED, NOT DROPPED. `minor.patch` has nowhere to put it,
     // so a `## v10.2.1` heading would be satisfied by `1.10.2` — a label naming a release
     // that was never cut, which is the one thing this whole chain exists to prevent.
@@ -112,7 +112,7 @@ describe('APP_VERSION agrees with the CHANGELOG it is bumped with', () => {
     ])
     expect(
       releases.length,
-      'no "## vX[.Y]" heading found in handoff/v10/CHANGELOG.md',
+      'no "## vX[.Y]" heading found in handoff/v11/CHANGELOG.md',
     ).toBeGreaterThan(0)
     const highest = [...releases].sort((a, b) => b[0] - a[0] || b[1] - a[1])[0]
     expect(

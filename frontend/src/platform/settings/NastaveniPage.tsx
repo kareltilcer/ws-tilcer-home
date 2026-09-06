@@ -19,6 +19,7 @@ import { useAuth } from '@/app/auth'
 import { useTheme } from '@/theme/theme'
 import { usePushDevice, usePushPreferences } from '@/platform/push/usePush'
 import { useInstallPrompt, useOnline } from '@/platform/pwa/offline'
+import { AsistentiSection } from '@/platform/mcp/AsistentiSection'
 import { sendPushTest } from '@/api/push'
 import { apiErrorMessage } from '@/api/client'
 import type { PushCategories, PushTestResult } from '@/api/types'
@@ -175,6 +176,20 @@ export function NastaveniPage() {
         <p className="text-[12.5px] text-muted text-pretty">{cs.settings.installHint}</p>
         <p className="mt-2 text-[12.5px] text-muted text-pretty">{cs.settings.offlineNote}</p>
       </section>
+
+      {/* ---- Asistenti (MCP), v11 — the FOURTH section, and it sits LAST ----
+
+          ⚠ v11 ADDS NO MODULE, NO ROUTE AND NO NAV ENTRY. The whole of what a
+          member ever sees of the MCP server is this panel and, for an admin, one
+          tab in Administrace — so it lands inside an existing screen rather than
+          becoming one.
+
+          ⚠ AND IT IS LAST OF THE FOUR ON PURPOSE. Oznámení, Vzhled a účet and
+          Aplikace describe things every member already has; this one describes a
+          thing most of them will never create, and it is the only panel on this
+          screen a member may never open at all. It is also the one place in the
+          application that ever explains what a token is. */}
+      <AsistentiSection />
     </div>
   )
 }

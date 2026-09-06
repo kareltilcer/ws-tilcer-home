@@ -34,6 +34,22 @@ export interface AuditEvent {
    */
   redacted: boolean
   change_count: number
+  /**
+   * `mcp` when the change was made through an MCP token; null for the browser
+   * and for system/service actors (v11, D290).
+   *
+   * ⚠ `actor_type` IS DELIBERATELY UNCHANGED and still `user | system |
+   * service`. The actor IS the member — same id, same roles, so every ownership
+   * and membership check in eleven modules keeps working untouched. What names
+   * the token is `actor_label` ("Karel · Claude (notebook)") and this field.
+   *
+   * ⚠ AND IT CANNOT BE ANSWERED RETROACTIVELY. Every row written before v11
+   * has it null, which is correct: those changes really were made in the browser.
+   */
+  via: 'mcp' | null
+  /** `mcp_tokens.id`, non-null iff `via = "mcp"`. A token row is never deleted,
+   *  only revoked, so it resolves for the life of the event. */
+  via_token_id: string | null
 }
 
 export interface AuditEventDetail extends AuditEvent {

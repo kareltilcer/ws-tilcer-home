@@ -20,6 +20,20 @@ import { ResponsiveModal } from '@/components/ui/modal'
 const MODULES = ['', 'logging', 'platform', 'todo', 'events', 'notes', 'documents', 'dashboard', 'admin', 'finance', 'garden', 'electricity', 'chat']
 const LEVELS = ['', 'info', 'warn', 'error']
 
+/**
+ * The Log's eighth filtering dimension (v11, D292): where a change came from.
+ *
+ * ⚠ THREE CHIPS RATHER THAN A FOURTH SELECT, and not for looks. This is the
+ * one filter on this screen a person reaches for as a QUESTION — *did I do this,
+ * or did the assistant?* — and it has exactly three answers, all of them worth
+ * seeing at once. A closed select would hide two thirds of it behind a click.
+ */
+const VIA_CHOICES: readonly { value: '' | 'ui' | 'mcp'; label: string }[] = [
+  { value: '', label: cs.mcp.viaAll },
+  { value: 'ui', label: cs.mcp.viaUi },
+  { value: 'mcp', label: cs.mcp.viaMcp },
+]
+
 const selectCls =
   'h-10 rounded-md border border-border bg-s1 px-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-focus'
 
@@ -137,6 +151,28 @@ function StreamView() {
         <Input type="date" aria-label="Od" value={draft.from?.slice(0, 10) ?? ''} onChange={(e) => set('from', e.target.value ? `${e.target.value}T00:00:00Z` : '')} />
         <Input type="date" aria-label="Do" value={draft.to?.slice(0, 10) ?? ''} onChange={(e) => set('to', e.target.value ? `${e.target.value}T23:59:59Z` : '')} />
         <Input placeholder="Hledat v textu…" value={draft.q ?? ''} onChange={(e) => set('q', e.target.value)} />
+        <div
+          role="group"
+          aria-label={cs.mcp.viaGroup}
+          className="flex flex-wrap items-center gap-1.5 sm:col-span-2 lg:col-span-3"
+        >
+          {VIA_CHOICES.map((choice) => (
+            <button
+              key={choice.value || 'all'}
+              type="button"
+              aria-pressed={(draft.via ?? '') === choice.value}
+              onClick={() => set('via', choice.value)}
+              className={cn(
+                'min-h-[38px] rounded-lg border px-3 text-[13px] font-semibold',
+                (draft.via ?? '') === choice.value
+                  ? 'border-accent bg-accent-soft text-fg'
+                  : 'border-border bg-s2 text-muted',
+              )}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
         <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
           <Button variant="primary" size="sm" onClick={() => setApplied(draft)}>
             Filtrovat
@@ -206,6 +242,28 @@ function LogRow({ event, onOpenTimeline }: { event: AuditEvent; onOpenTimeline: 
             <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase', LEVEL_CLS[event.level])}>{event.level}</span>
             <span className="font-mono text-[12px] text-accent">{event.module}.{event.action}</span>
             <span className="text-[12px] text-subtle">{event.actor_label ?? event.actor_user_id ?? event.actor_type}</span>
+            {/* ⚠ THE CHIP IS NEUTRAL AND CARRIES NO NAME (v11, D291/D292).
+
+                Neutral, because an assistant's write is an ordinary change with a
+                known origin — and after v11 it will be the Log's most common row.
+                Styling it as an incident would be a lie about what it is, and
+                would make the one screen whose job is an honest record cry wolf
+                on every second line.
+
+                And no name, because the actor immediately to its left already
+                reads "Karel · Claude (notebook)": the backend builds that label
+                from the token at write time. A chip repeating it would say the
+                same thing twice in one row — and would need a join this response
+                does not carry, which is exactly how a blank chip gets shipped. */}
+            {event.via === 'mcp' && (
+              <span
+                title={cs.mcp.viaChipTitle}
+                className="inline-flex h-5 flex-none items-center gap-1 whitespace-nowrap rounded-md border border-border bg-s3 px-1.5 font-mono text-[10.5px] font-semibold text-muted"
+              >
+                <span aria-hidden>⌁</span>
+                {cs.mcp.viaChip}
+              </span>
+            )}
             {event.change_count > 0 && <span className="text-[11px] text-subtle">· {event.change_count}×Δ</span>}
           </span>
           <EventSummary event={event} className="mt-0.5 block text-sm text-fg" />

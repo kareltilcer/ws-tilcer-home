@@ -1,8 +1,14 @@
-// Administrace (PRD §V5-7, HANDOFF-design §v5 §1/§3/§4/§5/§7).
+// Administrace (PRD §V5-7, HANDOFF-design §v5 §1/§3/§4/§5/§7; §v9 §7; §v11 item 6).
 //
-// Admin-only, four tabs, no reader state — for a non-admin the module does not
-// exist (the nav omits it and the route refuses it). The one notification
-// surface everyone DOES get lives in Nastavení → Oznámení instead.
+// Admin-only, no reader state — for a non-admin the module does not exist (the
+// nav omits it and the route refuses it). The one notification surface everyone
+// DOES get lives in Nastavení → Oznámení instead.
+//
+// ⚠ THIS PARAGRAPH USED TO SAY "four tabs" AND HAS SAID IT SINCE v5, through a
+// sixth tab, a seventh and now an eighth. The count is in TAB_GROUPS below and
+// nowhere else; every prose copy of it in this file, in D202 and in the design
+// bundle has been wrong at some point, which is what a number repeated in five
+// places does.
 
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -25,11 +31,18 @@ import { ConditionsBuilder, conditionsForSave, conditionsPhrase, conditionsValid
 import { StorageTab } from './StorageTab'
 import { PrivateItemsTab } from './PrivateItemsTab'
 import { LimitsTab } from './LimitsTab'
+import { McpTokensTab } from './McpTokensTab'
 
-type Tab = 'send' | 'rules' | 'summaries' | 'deliveries' | 'storage' | 'private' | 'limits'
+type Tab = 'send' | 'rules' | 'summaries' | 'deliveries' | 'storage' | 'private' | 'limits' | 'mcp-tokens'
 
 /**
- * Administrace's navigation, at six tabs (v9).
+ * Administrace’s navigation, at EIGHT tabs in THREE groups (v11).
+ *
+ * ⚠ COUNT THE LIST BELOW RATHER THAN TRUSTING ANY PROSE ABOUT IT, this
+ * paragraph included. It said "six tabs" through v10 and v10.1 while the list
+ * said seven, D202’s own text says six and is stale by two, and the citation on
+ * the storage group named a decision about a threshold verb. The number moves
+ * every version; the array is the only thing that cannot lie about it.
  *
  * ⚠ TWO LEVELS, NOT ONE FLAT ROW. Six pills overflow horizontally at 375 px, and
  * the six are not peers anyway: four configure NOTIFICATIONS and two are storage
@@ -46,6 +59,12 @@ const TAB_GROUPS = [
   // rather than environment variables — and an operator setting that has to be
   // changed in Coolify is not editable in Administrace, which is what D236 answers.
   { key: 'store', label: 'Správa úložiště', tabs: ['storage', 'private', 'limits'] },
+  // v11 (D316): a third group of ONE tab. It is a group rather than an eighth
+  // pill in an existing one because it is not a peer of either — notifications
+  // configure what the household is TOLD, storage is maintenance, and this is
+  // credentials. A lone tab in its own group reads as a subject; the same tab
+  // filed under "Správa úložiště" would read as a mistake.
+  { key: 'mcp', label: cs.mcp.adminGroup, tabs: ['mcp-tokens'] },
 ] as const satisfies readonly { key: string; label: string; tabs: readonly Tab[] }[]
 
 /** Mirrors maxCoalesceWindowSeconds in admin/service.go — the editor must not be
@@ -65,6 +84,7 @@ const TAB_LABELS: Record<Tab, string> = {
   storage: cs.storage.title,
   private: cs.privateItems.title,
   limits: cs.storage.limitsTab,
+  'mcp-tokens': cs.mcp.adminTab,
 }
 
 export function AdministracePage() {
@@ -143,6 +163,7 @@ export function AdministracePage() {
       {tab === 'storage' && <StorageTab />}
       {tab === 'private' && <PrivateItemsTab />}
       {tab === 'limits' && <LimitsTab />}
+      {tab === 'mcp-tokens' && <McpTokensTab />}
     </div>
   )
 }
