@@ -21,10 +21,10 @@ func TestWindowResolveAnchors(t *testing.T) {
 	anchors := SeasonAnchors{Year: 2027, LastFrost: dp("2027-05-15"), FirstFrost: dp("2027-10-05")}
 
 	cases := []struct {
-		name     string
-		win      Window
-		from, to string
-		wantOK   bool
+		name       string
+		win        Window
+		from, to   string
+		wantOK     bool
 	}{
 		{"week 10 to 13", Window{AnchorWeek, 10, 13}, "2027-03-08", "2027-04-04", true},
 		{"single week", Window{AnchorWeek, 1, 1}, "2027-01-04", "2027-01-10", true},

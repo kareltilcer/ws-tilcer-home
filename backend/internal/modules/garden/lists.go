@@ -25,12 +25,12 @@ import (
 // garden.frost_sensitive_now. "How many things are ripe" is a number nobody
 // asked for; WHICH things are ripe is the whole message.
 const (
-	ListTasksDue7d        = MetricTasksDue7d
-	ListTasksOverdue      = MetricTasksOverdue
-	ListPlanWarnings      = MetricPlanWarnings
-	ListBedsUnplanned     = MetricBedsUnplanned
-	ListHarvestReady      = "garden.harvest_ready"
-	ListFrostSensitiveNow = "garden.frost_sensitive_now"
+	ListTasksDue7d          = MetricTasksDue7d
+	ListTasksOverdue        = MetricTasksOverdue
+	ListPlanWarnings        = MetricPlanWarnings
+	ListBedsUnplanned       = MetricBedsUnplanned
+	ListHarvestReady        = "garden.harvest_ready"
+	ListFrostSensitiveNow   = "garden.frost_sensitive_now"
 )
 
 type listProvider struct{ svc *Service }

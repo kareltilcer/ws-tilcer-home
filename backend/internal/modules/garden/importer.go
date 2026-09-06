@@ -33,14 +33,14 @@ import (
 
 // ImportItemResult is one element's outcome.
 type ImportItemResult struct {
-	Index          int            `json:"index"`
-	Action         string         `json:"action"` // create | update | skip | reject
-	OK             bool           `json:"ok"`
-	TargetID       *string        `json:"target_id"`
-	Name           *string        `json:"name"`
-	Diff           map[string]any `json:"diff,omitempty"`
-	UnmappedFields []string       `json:"unmapped_fields,omitempty"`
-	Errors         []string       `json:"errors,omitempty"`
+	Index          int               `json:"index"`
+	Action         string            `json:"action"` // create | update | skip | reject
+	OK             bool              `json:"ok"`
+	TargetID       *string           `json:"target_id"`
+	Name           *string           `json:"name"`
+	Diff           map[string]any    `json:"diff,omitempty"`
+	UnmappedFields []string          `json:"unmapped_fields,omitempty"`
+	Errors         []string          `json:"errors,omitempty"`
 }
 
 // ImportSummary counts the outcomes.

@@ -48,10 +48,10 @@ type Provenance struct {
 type PlantCore struct {
 	NameLatin *string `json:"name_latin"`
 
-	FeederClass *string  `json:"feeder_class"`
-	RootDepth   *string  `json:"root_depth"`
-	Sun         *string  `json:"sun"`
-	WaterNeed   *string  `json:"water_need"`
+	FeederClass *string `json:"feeder_class"`
+	RootDepth   *string `json:"root_depth"`
+	Sun         *string `json:"sun"`
+	WaterNeed   *string `json:"water_need"`
 	SoilPHMin   *float64 `json:"soil_ph_min"`
 	SoilPHMax   *float64 `json:"soil_ph_max"`
 
@@ -62,8 +62,8 @@ type PlantCore struct {
 	NeedsPrickingOut *bool   `json:"needs_pricking_out"`
 	// The three care flags below are what turn a crop into work: each one is the
 	// sole reason its task kind is ever generated (§7 derivation table).
-	NeedsSupport   *bool `json:"needs_support"`
-	WantsMulch     *bool `json:"wants_mulch"`
+	NeedsSupport  *bool `json:"needs_support"`
+	WantsMulch    *bool `json:"wants_mulch"`
 	WantsPestCheck *bool `json:"wants_pest_check"`
 
 	HardeningDays  *int     `json:"hardening_days"`
@@ -79,10 +79,10 @@ type PlantCore struct {
 	DaysToMaturityMin  *int `json:"days_to_maturity_min"`
 	DaysToMaturityMax  *int `json:"days_to_maturity_max"`
 
-	WinSowIndoor  *Window `json:"win_sow_indoor"`
-	WinSowDirect  *Window `json:"win_sow_direct"`
+	WinSowIndoor *Window `json:"win_sow_indoor"`
+	WinSowDirect *Window `json:"win_sow_direct"`
 	WinTransplant *Window `json:"win_transplant"`
-	WinHarvest    *Window `json:"win_harvest"`
+	WinHarvest   *Window `json:"win_harvest"`
 
 	HarvestUnit   *string  `json:"harvest_unit"`
 	YieldPerM2    *float64 `json:"yield_per_m2"`
@@ -314,18 +314,18 @@ type Task struct {
 
 // Harvest (sklizeň).
 type Harvest struct {
-	ID          string  `json:"id"`
-	PlantingID  string  `json:"planting_id"`
-	PlantName   string  `json:"plant_name,omitempty"`
-	BedCode     *string `json:"bed_code"`
-	HarvestedOn string  `json:"harvested_on"`
-	Quantity    float64 `json:"quantity"`
-	Unit        string  `json:"unit"`
-	Destination *string `json:"destination"`
-	Quality     *string `json:"quality"`
-	Note        *string `json:"note"`
-	CreatedBy   *string `json:"created_by"`
-	CreatedAt   string  `json:"created_at"`
+	ID          string   `json:"id"`
+	PlantingID  string   `json:"planting_id"`
+	PlantName   string   `json:"plant_name,omitempty"`
+	BedCode     *string  `json:"bed_code"`
+	HarvestedOn string   `json:"harvested_on"`
+	Quantity    float64  `json:"quantity"`
+	Unit        string   `json:"unit"`
+	Destination *string  `json:"destination"`
+	Quality     *string  `json:"quality"`
+	Note        *string  `json:"note"`
+	CreatedBy   *string  `json:"created_by"`
+	CreatedAt   string   `json:"created_at"`
 }
 
 // StorageItem (sklad). Garden produce only (D121) — not a general pantry.
@@ -333,21 +333,21 @@ type Harvest struct {
 // spine's field diffs already answer "when did we eat the last jar", so there is
 // no movements table.
 type StorageItem struct {
-	ID                string  `json:"id"`
-	HarvestID         *string `json:"harvest_id"`
-	PlantingID        *string `json:"planting_id"`
-	ProductName       string  `json:"product_name"`
-	Method            string  `json:"method"`
-	Location          *string `json:"location"`
-	QuantityInitial   float64 `json:"quantity_initial"`
-	QuantityRemaining float64 `json:"quantity_remaining"`
-	Unit              string  `json:"unit"`
-	StoredOn          string  `json:"stored_on"`
-	BestBefore        *string `json:"best_before"`
-	Status            string  `json:"status"`
-	Note              *string `json:"note"`
-	CreatedAt         string  `json:"created_at"`
-	UpdatedAt         string  `json:"updated_at"`
+	ID                string   `json:"id"`
+	HarvestID         *string  `json:"harvest_id"`
+	PlantingID        *string  `json:"planting_id"`
+	ProductName       string   `json:"product_name"`
+	Method            string   `json:"method"`
+	Location          *string  `json:"location"`
+	QuantityInitial   float64  `json:"quantity_initial"`
+	QuantityRemaining float64  `json:"quantity_remaining"`
+	Unit              string   `json:"unit"`
+	StoredOn          string   `json:"stored_on"`
+	BestBefore        *string  `json:"best_before"`
+	Status            string   `json:"status"`
+	Note              *string  `json:"note"`
+	CreatedAt         string   `json:"created_at"`
+	UpdatedAt         string   `json:"updated_at"`
 }
 
 // Rule is one compatibility or succession rule. Pairs are stored in CANONICAL
@@ -478,10 +478,10 @@ type CheckResult struct {
 
 // Dismissal is one silenced warning, scoped to a season.
 type Dismissal struct {
-	Key         string  `json:"key"`
-	Note        *string `json:"note"`
-	DismissedBy *string `json:"dismissed_by"`
-	DismissedAt string  `json:"dismissed_at"`
+	Key          string  `json:"key"`
+	Note         *string `json:"note"`
+	DismissedBy  *string `json:"dismissed_by"`
+	DismissedAt  string  `json:"dismissed_at"`
 }
 
 // BedSeasonHistory is what occupied one bed in one CLOSED season.
@@ -543,10 +543,10 @@ func parseDatePtr(s *string) *dates.Date {
 	return &d
 }
 
-func sp(s string) *string   { return &s }
-func ip(v int) *int         { return &v }
+func sp(s string) *string { return &s }
+func ip(v int) *int       { return &v }
 func fp(v float64) *float64 { return &v }
-func bp(v bool) *bool       { return &v }
+func bp(v bool) *bool     { return &v }
 
 func derefS(s *string) string {
 	if s == nil {

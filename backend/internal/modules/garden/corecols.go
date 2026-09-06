@@ -42,30 +42,30 @@ var coreColumnCount = len(strings.Split(strings.ReplaceAll(coreColumns, "\n", ""
 // SQLite hands booleans back as INTEGER and floats as either INTEGER or REAL
 // depending on what was stored, and the Null* types convert predictably.
 type coreRow struct {
-	NameLatin, FeederClass, RootDepth, Sun, WaterNeed        sql.NullString
-	SoilPHMin, SoilPHMax                                     sql.NullFloat64
-	RotationBreakYears                                       sql.NullInt64
-	SowMethod                                                sql.NullString
-	NeedsPrickingOut, NeedsSupport                           sql.NullInt64
-	WantsMulch, WantsPestCheck                               sql.NullInt64
-	HardeningDays                                            sql.NullInt64
-	SowDepthCM, SpacingRowCM, SpacingPlantCM, PlantsPerM2    sql.NullFloat64
+	NameLatin, FeederClass, RootDepth, Sun, WaterNeed sql.NullString
+	SoilPHMin, SoilPHMax                              sql.NullFloat64
+	RotationBreakYears                                sql.NullInt64
+	SowMethod                                         sql.NullString
+	NeedsPrickingOut, NeedsSupport                    sql.NullInt64
+	WantsMulch, WantsPestCheck                        sql.NullInt64
+	HardeningDays                                     sql.NullInt64
+	SowDepthCM, SpacingRowCM, SpacingPlantCM, PlantsPerM2 sql.NullFloat64
 	DaysToGerminateMin, DaysToGerminateMax, GerminationTempC sql.NullInt64
 	DaysToMaturityMin, DaysToMaturityMax                     sql.NullInt64
 
-	WinSowIndoorAnchor                 sql.NullString
-	WinSowIndoorFrom, WinSowIndoorTo   sql.NullInt64
-	WinSowDirectAnchor                 sql.NullString
-	WinSowDirectFrom, WinSowDirectTo   sql.NullInt64
-	WinTransplantAnchor                sql.NullString
+	WinSowIndoorAnchor            sql.NullString
+	WinSowIndoorFrom, WinSowIndoorTo sql.NullInt64
+	WinSowDirectAnchor            sql.NullString
+	WinSowDirectFrom, WinSowDirectTo sql.NullInt64
+	WinTransplantAnchor            sql.NullString
 	WinTransplantFrom, WinTransplantTo sql.NullInt64
-	WinHarvestAnchor                   sql.NullString
-	WinHarvestFrom, WinHarvestTo       sql.NullInt64
+	WinHarvestAnchor            sql.NullString
+	WinHarvestFrom, WinHarvestTo sql.NullInt64
 
 	HarvestUnit               sql.NullString
 	YieldPerM2, YieldPerPlant sql.NullFloat64
 
-	StorageMethods                               sql.NullString
+	StorageMethods                              sql.NullString
 	StorageTempC, StorageHumidity, ShelfLifeDays sql.NullInt64
 
 	Pests, Diseases, NotesMD sql.NullString
