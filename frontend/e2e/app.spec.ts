@@ -66,16 +66,26 @@ test('create an event in Okno → appears in the month list', async ({ page }) =
 })
 
 test('a11y: no serious/critical axe violations (both themes × 375/1440)', async ({ page }) => {
+  // 2 themes × 2 viewports × 4 paths = 16 loads, each with a reload and a full
+  // axe pass, in ONE test — the config's 30s per-test budget is a fifth of what
+  // that needs. Raised here rather than globally so a genuinely hung page in any
+  // other test still fails fast.
+  test.setTimeout(150_000)
+
   for (const theme of ['dark', 'light'] as const) {
     for (const vp of [
       { width: 375, height: 800 },
       { width: 1440, height: 900 },
     ]) {
       await page.setViewportSize(vp)
-      // '/' (dashboard), '/okno' (a primary accent button + form controls) and
+      // '/' (dashboard), '/okno' (a primary accent button + form controls),
       // '/nastaveni' — the screen v10.2 moved sign-out onto, and the one that now
-      // carries the app's only destructive-looking control (D273).
-      for (const path of ['/', '/okno', '/nastaveni']) {
+      // carries the app's only destructive-looking control (D273) — and
+      // '/administrace', which lands on its default Rozeslat tab: with nobody
+      // subscribed in a fresh DB, RecipientEcho draws the 12px text-warn line that
+      // caught the light theme's --warn at 4.08:1 on white. The dev-bypass actor
+      // is an admin, so the route renders the page, not RequireAdmin's refusal.
+      for (const path of ['/', '/okno', '/nastaveni', '/administrace']) {
         await page.goto(path)
         await page.evaluate((t) => localStorage.setItem('home-theme', t), theme)
         await page.reload()
