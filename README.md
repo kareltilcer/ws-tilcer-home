@@ -90,8 +90,9 @@ docker compose up --build     # → http://localhost:7001 as the fake dev admin
 Each is a separate Coolify app built from its own Dockerfile in this repo, and
 **both are mapped to `home.tilcer.cz`** — Coolify/Traefik path-routes between them:
 
-- **`home-backend`** — the API-only Go image. Domains: **`home.tilcer.cz/api`** and
-  **`home.tilcer.cz/ws`** (path routing; these prefixes go to the backend).
+- **`home-backend`** — the API-only Go image. Domains: **`home.tilcer.cz/api`**,
+  **`home.tilcer.cz/ws`** and — new in v11 — **`home.tilcer.cz/mcp`** (path
+  routing; these prefixes go to the backend).
 - **`home-frontend`** — the static Nginx SPA image. Domain: **`home.tilcer.cz`**
   (the catch-all; serves the bundle for everything not claimed above).
 
@@ -109,6 +110,22 @@ own port, so `/healthz` + `/readyz` need no public route.
 > If the backend app is **not** mapped to `home.tilcer.cz/api` (+`/ws`), those
 > requests fall through to the SPA (or 404), and **login fails** — that path
 > routing is the whole mechanism.
+>
+> ⚠ **`/mcp` is the backend's THIRD path route (v11), and its failure mode is
+> the nastiest one here.** Without the route the request never reaches the Go
+> binary at all: it lands on the frontend's Nginx, which serves `index.html`
+> **with a 200**, and the MCP client reports a protocol error against a server
+> that is perfectly healthy. The Go router has an identical-looking bug it now
+> guards against (`/mcp` joins `/ws` in the SPA exclusion) — **same symptom,
+> different layer**, so check both, in this order:
+>
+> ```bash
+> curl -si -X POST https://home.tilcer.cz/mcp -H 'content-type: application/json' -d '{}'
+> ```
+>
+> Expect **JSON**. HTML means one of the two layers; hit the container directly
+> on `:7999` to find out which. Strip Prefix stays **off** for `/mcp` as it does
+> for the other two.
 
 ### Backend app (`home-backend`)
 
@@ -118,7 +135,7 @@ own port, so `/healthz` + `/readyz` need no public route.
 | Base Directory      | `/` (repo-root context — the image needs `backend/`, `litestream.yml`, `docker-entrypoint.sh`) |
 | Dockerfile Location | `/backend/Dockerfile`  |
 | Port                | `7999` (matches `HOME_ADDR`) |
-| Domains             | `home.tilcer.cz/api` and `home.tilcer.cz/ws` (path-routed) |
+| Domains             | `home.tilcer.cz/api`, `home.tilcer.cz/ws` and `home.tilcer.cz/mcp` (path-routed) |
 | Health check path   | `/readyz`              |
 | Persistent volume   | mount at `/data` (holds the SQLite DB) |
 
@@ -144,6 +161,16 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 | `HOME_RRULE_MAX_OCCURRENCES` | expansion cap | `500` (default) |
 | `HOME_RRULE_MAX_WINDOW_MONTHS` | window-span cap | `24` (default) |
 | `HOME_LOG_RETENTION_DAYS` | audit prune threshold; `0` = keep forever | `0` (default) |
+| `HOME_NOTES_IMAGE_MAX_UPLOAD_MB` | hard per-image cap for a note's pasted/dropped images; over it the upload is `413`. The bytes reuse the documents bucket under a `note-images/` prefix | `10` (default) |
+| `HOME_STORAGE_WARN_TOTAL_MB` | warning threshold on the modules' primary-bucket total. ⚠ Nothing is ever blocked by it — no upload fails, there is no per-user quota. It exists so an R2 bill is a decision rather than a surprise. `0` disables it | `1024` (default) |
+| `HOME_STORAGE_CACHE_SECONDS` | in-process TTL for the Úložiště snapshot; `?refresh=true` bypasses it either way. Nothing survives a restart, so nothing can be wrong for longer than this | `60` (default) |
+| `HOME_CHAT_TRASH_DAYS` | how long a deleted conversation sits in the koš before the drain destroys its bytes. ⚠ Bounded at **1**, not 0: a zero-day koš is not "delete immediately", it is a koš whose Obnovit button races the drain. Deleting the bytes now is `?hard=true` | `7` (default) |
+| `HOME_MCP_ENABLED` | the v11 MCP front door at `/mcp`. ⚠ **Defaults ON** on purpose: the real gate is that a human must mint a token in Nastavení, and a flag defaulting to off is a second thing to forget on a surface whose failure mode is silence. `false` makes `/mcp` a **404** — a disabled feature should look absent, not forbidden. Its state is on the `config loaded` boot line, once | `true` (default) |
+| `HOME_MCP_RATE_PER_MIN` | calls per token per minute; the 121st in a minute is refused `429` (1–6000) | `120` (default) |
+| `HOME_MCP_CALL_TIMEOUT_SEC` | hard per-call deadline on the context, so a pathological query cannot hold the **one** database connection after the client has given up (1–60) | `20` (default) |
+| `HOME_MCP_MAX_RESULT_KB` | cap on a tool result and on a resource read, enforced by the host rather than by each provider; truncation is stated in the result, never silent (1–4096) | `256` (default) |
+| `HOME_MCP_MAX_TOKENS_PER_USER` | live (non-revoked, non-expired) tokens per member. ⚠ Not a security boundary — a hygiene one: a list nobody can read is a list nobody revokes from (1–100) | `10` (default) |
+| `HOME_MCP_SEARCH_LIMIT` | search budget **per module**, not globally. 40 chat messages and no notes is a worse answer than 8 of each (1–100) | `10` (default) |
 | `LITESTREAM_ENABLED` | run under Litestream | `true` |
 | `LITESTREAM_R2_ENDPOINT` | R2 S3 endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
 | `LITESTREAM_R2_BUCKET` | R2 bucket | *(bucket name)* |
@@ -167,6 +194,14 @@ image serves no static assets, so `HOME_STATIC_DIR` stays **unset**.
 > signal a log line inside the restart loop. Values *below* the floor are still
 > refused (they always were, so nothing deployed carries one), and
 > `HOME_WS_REVALIDATE_MINUTES` is new in v10 and refused at both ends.
+
+> ⚠ **The six `HOME_MCP_*` variables are refused at both ends too, and for the
+> same reason as `HOME_WS_REVALIDATE_MINUTES` rather than the clamping one:**
+> nothing is upgrading into them. They are new in v11, so no deployment can
+> already be carrying an out-of-range value, and a value out of range can only
+> be a fresh mistake — which is exactly what a boot should refuse rather than
+> quietly correct. **None of them is a secret**, and v11 adds no secret at all:
+> no VAPID, no R2 key, no new outbound dependency.
 
 **Documents (v4) — the `documents` module stores file BYTES in its own R2 bucket**
 (SQLite keeps only metadata). This bucket is **separate from the Litestream DB

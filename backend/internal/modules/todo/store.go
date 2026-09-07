@@ -381,6 +381,56 @@ func (s *Store) DeleteCard(ctx context.Context, tx DBTX, id string) error {
 	return err
 }
 
+// CardHit is one row of the cross-module search (v11).
+type CardHit struct {
+	ID         string
+	Title      string
+	UpdatedAt  string
+	BoardName  string
+	ColumnName string
+}
+
+// SearchCards scans card titles across every board for the MCP catalog's
+// cross-module search.
+//
+// ⚠ A TITLE SCAN, NOT AN FTS5 INDEX, AND THAT IS A DECISION. `cards` has no
+// external-content FTS table and adding one would mean a migration over a table
+// carrying the household’s whole board, for a corpus of a few hundred short
+// titles where LIKE is already instant. The modules that DO have an index —
+// notes, documents, garden, chat, logging — use it; the four that do not scan,
+// and mcp.Hit carries no score, so the two kinds of provider are indistinguishable
+// downstream (D300).
+//
+// ⚠ ARCHIVED CARDS ARE EXCLUDED. Archiving is what "delete" means to this
+// household, so a search that surfaced them would be answering with things
+// somebody has already put away.
+func (s *Store) SearchCards(ctx context.Context, q string, limit int) ([]CardHit, error) {
+	q = strings.TrimSpace(q)
+	if q == "" || limit <= 0 {
+		return nil, nil
+	}
+	// ⚠ The term is escaped and the query carries ESCAPE — see appdb.LikeContains.
+	// `100%` in a household search is a literal, not a wildcard somebody meant to
+	// type, and the difference is a wrong answer rather than an error.
+	pattern := appdb.LikeContains(q)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.title, c.updated_at, b.name, col.name
+		  FROM cards c
+		  JOIN columns col ON col.id = c.column_id
+		  JOIN boards b ON b.id = col.board_id
+		 WHERE c.archived = 0 AND b.archived = 0 AND c.title LIKE ? ESCAPE '\'
+		 ORDER BY c.updated_at DESC
+		 LIMIT ?`, pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	return appdb.Collect(rows, func(row appdb.Scanner) (CardHit, error) {
+		var h CardHit
+		err := row.Scan(&h.ID, &h.Title, &h.UpdatedAt, &h.BoardName, &h.ColumnName)
+		return h, err
+	})
+}
+
 // ---- Card links ----
 
 func (s *Store) ListCardLinks(ctx context.Context, q DBTX, cardID string) ([]CardLink, error) {

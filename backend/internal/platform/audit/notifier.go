@@ -41,6 +41,23 @@ type Entry struct {
 	Level      string
 	RequestID  string
 	Meta       map[string]any
+	// Via is how the change was made: "mcp" when it came through an MCP token,
+	// "" for the browser and for every system-initiated job (v11, D290).
+	//
+	// ⚠ IT IS A COLUMN, NOT A FOURTH actor_type, and that is a decision rather
+	// than a shortcut: actor_type is CHECK-constrained, SQLite cannot ALTER a
+	// CHECK, and audit_events is the parent of audit_changes with ON DELETE
+	// CASCADE — so widening the enum would mean a rebuild that fires that cascade
+	// and destroys the household's entire change history while reporting success.
+	// See 01003_audit_via.sql and TestActorTypeStaysThree.
+	//
+	// ⚠ IT IS ON Entry EVEN THOUGH NOTHING IN v11 RENDERS IT FROM HERE. The outbox
+	// tailer's column list is hand-written (see scanOnce), so an Entry that could
+	// not carry these would silently read a stale shape the first time somebody
+	// widened it again — which is exactly how this struct and that SELECT last
+	// drifted.
+	Via        string
+	ViaTokenID string
 	// Redacted is set by Redact when this copy has had a private item's details
 	// removed (v9, D187). It is never read from the database — it describes the
 	// COPY, not the row — and it exists so a consumer can render "podrobnosti
@@ -221,7 +238,7 @@ func (n *Notifier) scanOnce(ctx context.Context) (int, error) {
 
 	rows, err := n.db.QueryContext(ctx,
 		`SELECT id, ts, actor_user_id, actor_type, actor_label, module, action,
-		        entity_type, entity_id, summary, level, request_id, meta
+		        entity_type, entity_id, summary, level, request_id, meta, via, via_token_id
 		   FROM audit_events
 		  WHERE id > ?
 		  ORDER BY id
@@ -235,10 +252,10 @@ func (n *Notifier) scanOnce(ctx context.Context) (int, error) {
 			e                                                  Entry
 			ts                                                 string
 			actorUser, actorLabel, entityType, entityID, level sql.NullString
-			requestID, meta                                    sql.NullString
+			requestID, meta, via, viaToken                     sql.NullString
 		)
 		if err := rows.Scan(&e.ID, &ts, &actorUser, &e.ActorType, &actorLabel, &e.Module, &e.Action,
-			&entityType, &entityID, &e.Summary, &level, &requestID, &meta); err != nil {
+			&entityType, &entityID, &e.Summary, &level, &requestID, &meta, &via, &viaToken); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -246,6 +263,7 @@ func (n *Notifier) scanOnce(ctx context.Context) (int, error) {
 		e.ActorUser, e.ActorLabel = actorUser.String, actorLabel.String
 		e.EntityType, e.EntityID = entityType.String, entityID.String
 		e.Level, e.RequestID = level.String, requestID.String
+		e.Via, e.ViaTokenID = via.String, viaToken.String
 		if meta.Valid && meta.String != "" {
 			_ = json.Unmarshal([]byte(meta.String), &e.Meta)
 		}

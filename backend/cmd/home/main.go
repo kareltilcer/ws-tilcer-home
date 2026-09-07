@@ -43,6 +43,7 @@ import (
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/mcp"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/registry"
@@ -171,6 +172,12 @@ func run(logger *slog.Logger) error {
 	defer stopBackground()
 	notifier := startBackground(bgCtx, cfg, sqldb, sink, app, logger)
 
+	// 5e. v11: the MCP front door. It is built here rather than in buildModules
+	// because it needs the auth config from step 3 — a token resolves to the same
+	// identity a session does, on the same re-mint threshold and with the same
+	// fail-closed decision.
+	mcpHost := buildMCP(cfg, sqldb, sink, authp, pushp, app, logger)
+
 	// 6. HTTP server.
 	handler := httpx.NewRouter(httpx.Deps{
 		Logger:       logger,
@@ -184,9 +191,14 @@ func run(logger *slog.Logger) error {
 			// /api/push/** is platform, not a module: every member (reader included)
 			// manages their own device here, whether or not any module sends anything.
 			pushp.handler.Mount(api)
+			// /api/mcp/tokens is platform too, and it is the ORDINARY /api surface:
+			// session cookie, CSRF, the lot. It is how a credential for the other
+			// half comes to exist; the two never meet.
+			mcpHost.MountTokens(api)
 			app.mountAPI(api)
 		},
 		WS:        wsHandler,
+		MountMCP:  mcpHost.Mount,
 		StaticDir: cfg.StaticDir,
 	})
 
@@ -343,6 +355,67 @@ func buildAuth(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, hub *ws.Hub, 
 	}
 }
 
+// buildMCP wires the v11 MCP front door (D275/D276/D283).
+//
+// ⚠ IT ADDS NO MODULE, NO MIGRATION BLOCK AND NO NAV ENTRY. What it adds is a
+// SECOND FRONT DOOR to all eleven: a bearer credential, a JSON-RPC endpoint
+// outside the /api group, and the fifth registered catalog through which every
+// module publishes tools without importing another.
+//
+// ⚠ THE TOKEN STORE LIVES IN platform/auth AND THE ROUTES IN platform/mcp, and
+// the split is deliberate: the store is a CREDENTIAL store and belongs beside
+// the session store; the routes are the MCP feature's own surface. platform/mcp
+// imports platform/auth and nothing imports back.
+func buildMCP(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, authp authParts, pushp pushParts, app appModules, logger *slog.Logger) *mcp.Host {
+	tokens := auth.NewMCPTokenStore(sqldb)
+	// ⚠ THE SERVER VERSION IS cfg.Status.Release OR THE STRING "dev", AND NOTHING
+	// IS INVENTED. There is no build-time version in this binary — VITE_APP_COMMIT
+	// is a Vite arg with no backend twin, and STATUS_RELEASE is the only backend
+	// release identifier that exists, free-form and defaulting to empty (D278).
+	version := cfg.Status.Release
+	if version == "" {
+		version = "dev"
+	}
+	return mcp.New(mcp.Deps{
+		Registry: app.mcpRegistry,
+		Auth:     auth.MCPAuth{Cfg: authp.conf, Tokens: tokens},
+		Tokens:   tokens,
+		DB:       sqldb,
+		Sink:     sink,
+		Activity: audit.NewActivityReader(sqldb),
+		Metrics:  app.metrics,
+		Lists:    app.lists,
+		// ⚠ THE DIRECTORY IS platform/push's PROJECTION, not a second query over
+		// `sessions`. Home has no user table; that projection already knows to take
+		// the FRESHEST row per member rather than the newest, and a second one here
+		// is how two screens come to disagree about somebody's name.
+		Names: func(ctx context.Context) (map[string]string, error) {
+			members, err := pushp.store.Members(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[string]string, len(members))
+			for _, m := range members {
+				out[m.UserID] = m.DisplayName
+			}
+			return out, nil
+		},
+		Config: mcp.Config{
+			Enabled:          cfg.MCP.Enabled,
+			RatePerMin:       cfg.MCP.RatePerMin,
+			CallTimeout:      cfg.MCP.CallTimeout,
+			MaxResultBytes:   cfg.MCP.MaxResultKB << 10,
+			MaxTokensPerUser: cfg.MCP.MaxTokensPerUser,
+			SearchLimit:      cfg.MCP.SearchLimit,
+			AllowedOrigins:   cfg.AllowedOrigins,
+			ServerVersion:    version,
+			Timezone:         cfg.Timezone,
+			TimezoneName:     cfg.TimezoneName,
+		},
+		Logger: logger,
+	})
+}
+
 // pushParts is the shared Web Push channel and its HTTP surface.
 type pushParts struct {
 	svc     *push.Service
@@ -455,6 +528,17 @@ func wsConfig(cfg *config.Config, a authParts) ws.Config {
 // the server and the background workers still need by name.
 type appModules struct {
 	mountAPI func(chi.Router)
+
+	// The three catalogs the v11 MCP host reads. They are returned rather than
+	// consumed here because the host also needs the auth config, which is built
+	// in step 3 and is not this function's business.
+	//
+	// ⚠ mcpRegistry IS THE FIFTH REGISTERED CATALOG (D276) and it is assembled
+	// exactly as the third and fourth are: an optional interface, type-asserted
+	// at composition, never a change to registry.Module.
+	mcpRegistry *mcp.Registry
+	metrics     *metrics.Registry
+	lists       *lists.Registry
 
 	admin  *admin.Service
 	garden *garden.Service
@@ -692,6 +776,20 @@ func buildModules(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, hub *ws.Hu
 	if err != nil {
 		return appModules{}, err
 	}
+
+	// 5d. v11: the MCP catalog — the FIFTH registered catalog, beside widgets,
+	// audit actions, the metric/list pair and storage. A module opts in by
+	// implementing the OPTIONAL mcp.Source; nine of the eleven will, and the two
+	// that do not (dashboard at all, logging for tools) are not errors.
+	//
+	// ⚠ COLLECTED FROM THE FULL MODULE SET, IN MODULE ORDER, and the order is
+	// load-bearing rather than incidental: it is the third tiebreak of the search
+	// merge (D300), so a stable order is what makes a search return the same page
+	// twice.
+	mcpRegistry, err := mcp.Collect(toAny(modules)...)
+	if err != nil {
+		return appModules{}, err
+	}
 	adminSvc.SetStorage(admin.NewStorageService(admin.StorageDeps{
 		DB:            sqldb,
 		DBPath:        cfg.DBPath,
@@ -712,15 +810,18 @@ func buildModules(cfg *config.Config, sqldb *sql.DB, sink audit.Sink, hub *ws.Hu
 	}))
 
 	return appModules{
-		mountAPI: func(api chi.Router) { registry.MountAll(api, modules) },
-		admin:    adminSvc,
-		garden:   gardenSvc,
-		chat:     chatSvc,
-		docs:     docsSvc,
-		notes:    notesSvc,
-		preview:  previewWorker,
-		blob:     docsBlob,
-		backup:   docsBackup,
+		mountAPI:    func(api chi.Router) { registry.MountAll(api, modules) },
+		mcpRegistry: mcpRegistry,
+		metrics:     metricRegistry,
+		lists:       listRegistry,
+		admin:       adminSvc,
+		garden:      gardenSvc,
+		chat:        chatSvc,
+		docs:        docsSvc,
+		notes:       notesSvc,
+		preview:     previewWorker,
+		blob:        docsBlob,
+		backup:      docsBackup,
 	}, nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/idgen"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/mcpctx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
 )
 
@@ -45,6 +46,17 @@ func (w *Writer) Record(ctx context.Context, tx *sql.Tx, e Event) (string, error
 
 	actor, _ := reqctx.ActorFrom(ctx)
 	req, _ := reqctx.RequestFrom(ctx)
+	// ⚠ HOW THE CHANGE ARRIVED IS READ FROM THE CTX, NEVER FROM e — the same rule
+	// the actor follows, for the same reason: a handler cannot forge who did what,
+	// and it must not be able to forge that a change came from a person when it came
+	// from an assistant. It is also why Record grew NO PARAMETER for v11: there are
+	// 28 non-test call sites — 21 across ten feature modules and 7 in platform
+	// itself — and not one of them knows a token exists.
+	viaToken, viaMCP := mcpctx.TokenFrom(ctx)
+	via := ""
+	if viaMCP {
+		via = ViaMCP
+	}
 
 	actorType := actor.Type
 	if actorType == "" {
@@ -100,11 +112,13 @@ func (w *Writer) Record(ctx context.Context, tx *sql.Tx, e Event) (string, error
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO audit_events
 		   (id, ts, actor_user_id, actor_type, actor_label, module, action,
-		    entity_type, entity_id, summary, level, request_id, ip, user_agent, site, meta)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		    entity_type, entity_id, summary, level, request_id, ip, user_agent, site, meta,
+		    via, via_token_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, ts, ns(actor.UserID), actorType, ns(actor.Label), e.Module, e.Action,
 		ns(e.EntityType), ns(e.EntityID), e.Summary, level,
 		ns(req.RequestID), ns(req.IP), ns(req.UserAgent), site, metaJSON,
+		ns(via), ns(viaToken),
 	); err != nil {
 		return "", fmt.Errorf("audit: insert event: %w", err)
 	}
