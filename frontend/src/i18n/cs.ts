@@ -1973,4 +1973,149 @@ export const cs = {
     sendFailed: 'Zprávu se nepodařilo odeslat.',
     actionFailed: 'Akci se nepodařilo dokončit.',
   },
+  // ---- Asistenti (MCP), v11 ----
+  //
+  // ⚠ v11 ADDS NO MODULE, NO ROUTE AND NO NAV ENTRY. It adds a CREDENTIAL — the
+  // first one this application has ever asked a person to hold — so every string
+  // here belongs to two screens that already existed rather than to a new one.
+  //
+  // ⚠ AND THE EMPTY STATE IS THE ONLY PLACE THIS FEATURE EVER EXPLAINS ITSELF.
+  // There is no onboarding, no tour and no widget. One short paragraph: what a
+  // token is, that it acts as you, that it can be revoked at any moment.
+  mcp: {
+    title: 'Asistenti (MCP)',
+    empty:
+      'Zatím nemáte žádný token. Token umožní AI asistentovi číst vaše data a zapisovat do nich vaším jménem. Kdykoli ho můžete odvolat.',
+    mint: 'Vytvořit token',
+    loadFailed: 'Tokeny se nepodařilo načíst.',
+
+    // ---- the mint dialog ----
+    mintTitle: 'Nový token',
+    mintLead: 'Token jedná vaším jménem a s vašimi oprávněními. Kdykoli ho můžete odvolat.',
+    nameLabel: 'Název',
+    namePlaceholder: 'Claude na notebooku',
+    nameHint: 'Jméno uvidíte v Logu vedle svého. Napište si ho tak, abyste za rok poznali, co to bylo.',
+    expiryLabel: 'Platnost',
+    ttl30: '30 dní',
+    ttl90: '90 dní',
+    ttl365: '1 rok',
+    ttlNone: 'bez omezení',
+    expiryHint:
+      'Čtyři možnosti, ne kalendář: datum, které nikdo neumí obhájit, není rozhodnutí. Platnost se zapíše jednou a už se nikdy nehýbe.',
+    scopeLabel: 'Rozsah',
+    scopeAll: 'Všechny moduly',
+    scopeAllTitle: 'Token vidí všechno, co vidí jeho vlastník',
+    // ⚠ ROZSAH IS NOT A SECURITY CONTROL (D288) and this line is what says so.
+    // The section carries no lock, no shield and no other privacy signal for the
+    // same reason: it narrows what the assistant is OFFERED, and does not narrow
+    // one thing about what the member may see.
+    scopeHelp: 'Omezí, co asistent uvidí. Nemění vaše oprávnění.',
+    cancel: 'Zrušit',
+    mintFailed: 'Token se nepodařilo vytvořit.',
+
+    // ---- the reveal: the one screen in this app that cannot be re-opened ----
+    revealTitle: (name: string) => `Token „${name}“ je vytvořený`,
+    revealWarning: 'Token se zobrazí jen jednou. Zkopírujte si ho teď.',
+    snippetHint: 'Vložte do konfigurace svého MCP klienta.',
+    copyConfig: 'Kopírovat konfiguraci',
+    copyToken: 'Kopírovat jen token',
+    copiedConfig: 'Zkopírováno — celá konfigurace',
+    copiedToken: 'Zkopírováno — jen token',
+    // ⚠ A COPY THAT SILENTLY FAILED IS INDISTINGUISHABLE FROM ONE THAT WORKED
+    // until the paste — and here the paste is the only chance there will ever be.
+    copyFailed: 'Zkopírovat se nepodařilo — označte text a zkopírujte ho ručně.',
+    revealFoot: 'Až tohle zavřete, token už nikde nepůjde zobrazit — uložený je jen jeho hash.',
+    done: 'Hotovo',
+
+    // ---- the list ----
+    colName: 'název · prefix',
+    colScope: 'rozsah',
+    colExpiry: 'platnost do',
+    colLastUsed: 'naposledy použito',
+    colOwner: 'vlastník',
+    colCreated: 'vytvořen',
+    colLastUsedIP: 'naposledy · IP',
+    expiryNone: 'bez omezení',
+    // ⚠ THE MOST IMPORTANT COLUMN ON THE SCREEN, and therefore not the smallest
+    // text on it: a token list is only useful if a person can look at it in
+    // eighteen months and answer "do I still need this?".
+    lastUsedNever: 'nepoužito',
+    lastUsedNeverTitle: 'Token ještě nikdy nic nezavolal — konfigurace pravděpodobně nedojela',
+    // Four states, and they are NOT four colours. "Vyprší brzy" is deliberately
+    // not the attention register and never the danger family: an expiry a member
+    // chose is not a problem, it is the thing working.
+    markSoon: 'vyprší brzy',
+    markExpired: (date: string) => `vypršel ${date}`,
+    markRevoked: (date: string) => `odvolán ${date}`,
+    keepNote:
+      'Odvolané a vypršelé tokeny ze seznamu nemizí — token pojmenovaný v Logu musí být identifikovatelný i za roky.',
+
+    // ---- revoke: the one destructive action on either screen ----
+    revoke: 'Odvolat',
+    revokeTitle: (name: string) => `Odvolat token „${name}“? Asistent ztratí přístup okamžitě.`,
+    // ⚠ THE OWNER IS PARENTHESISED RATHER THAN PUT AFTER „člena“, and that is
+    // grammar rather than taste: „člena“ governs the genitive and Czech personal
+    // names decline, so „člena Karel“ is wrong and „člena Karla“ is not something
+    // a display name in the nominative can be turned into. A label in its own
+    // slot reads correctly whatever the name is.
+    revokeTitleAdmin: (name: string, owner: string) =>
+      `Odvolat token „${name}“ (vlastník: ${owner})? Asistent ztratí přístup okamžitě.`,
+    revokeBody:
+      'Odvolání platí od nejbližšího dalšího volání. Řádek zůstane v seznamu s datem — nový token si můžete udělat kdykoli.',
+    revokeDone: (name: string) => `Token „${name}“ odvolán — přístup skončil`,
+    revokeFailed: 'Token se nepodařilo odvolat.',
+
+    // ⚠ THE CEILING HAS NO STRINGS OF ITS OWN, AND THAT IS THE DESIGN. The server
+    // refuses an eleventh token with a 422 that names the remedy, and the mint
+    // form renders that message through `apiErrorMessage` — so there is no dialog
+    // and no title for one. Two strings for the dialog that was not built stood
+    // here until a review round noticed nothing referenced them; `knip` does not
+    // check object members, so nothing else ever would have.
+
+    // ---- Administrace → Asistenti → Tokeny ----
+    adminGroup: 'Asistenti',
+    adminTab: 'Tokeny',
+    adminHeading: 'Tokeny asistentů',
+    adminLead:
+      'Každý token každého člena: kdo ho vlastní, jak se jmenuje, co vidí, odkud naposledy volal. Token jedná jménem svého vlastníka a s jeho oprávněními — odvolání je okamžité.',
+    // ⚠ THERE IS NO ADMIN MINT AND THERE MUST BE NO AFFORDANCE THAT LOOKS LIKE
+    // ONE (D316). D240's shape — names and sizes, and no way in — applied to
+    // credentials. The note says the absence out loud rather than leaving it to be
+    // noticed, because an absence nobody names is an absence somebody adds back.
+    adminNoMint:
+      'Token za někoho jiného tady vytvořit nejde — a nikdy nepůjde. Správce vidí, že klíč existuje, a může ho odebrat; udělat ho cizím jménem není pravomoc, která by měla existovat.',
+    adminOwnerFilter: 'Vlastník',
+    adminClearFilter: 'Vyčistit',
+    adminUnknownOwner: 'neznámý člen',
+    adminEmpty: 'Žádný člen zatím nemá token asistenta.',
+    adminSortNote:
+      'Řazeno podle „naposledy použito“ klesající, nepoužité nakonec. Odvolané a vypršelé řádky zůstávají.',
+
+    // ---- the Log's origin filter and chip ----
+    viaAll: 'Vše',
+    viaUi: 'V aplikaci',
+    viaMcp: 'Přes asistenta',
+    viaGroup: 'Původ zápisu',
+    // ⚠ THE CHIP DOES NOT REPEAT THE TOKEN NAME. The actor line already reads
+    // "Karel · Claude (notebook)" (D291), so a chip carrying it again would say the
+    // same thing twice in one row. And it is NEUTRAL rather than a warning: an
+    // assistant's write is an ordinary change with a known origin, and styling the
+    // Log's most common future row as an incident would be a lie about it.
+    viaChip: 'Přes asistenta',
+    viaChipTitle: 'Zapsáno přes asistenta (MCP)',
+
+    // The module vocabulary a scope may name. ⚠ These are the SCREEN’s names
+    // rather than the wire’s: a member picks "Okno", never "events".
+    modules: {
+      todo: 'Úkoly',
+      events: 'Okno',
+      notes: 'Poznámky',
+      documents: 'Dokumenty',
+      finance: 'Finance',
+      garden: 'Zahrada',
+      electricity: 'Elektřina',
+      chat: 'Chat',
+      admin: 'Administrace',
+    },
+  },
 } as const

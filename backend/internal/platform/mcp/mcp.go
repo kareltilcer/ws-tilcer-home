@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
@@ -308,6 +309,70 @@ func KnownModule(name string) bool {
 		}
 	}
 	return false
+}
+
+// TrimHits cuts a provider's merged hits to the budget the host handed out,
+// in the SAME order the host merges by.
+//
+// ⚠ THE BUDGET IS PER MODULE, NOT PER ROOT (D301), and this exists because two
+// providers read TWO roots each: `notes` and `documents` each answer over the
+// household's shared tree AND the caller's own private one. Taking the whole
+// budget from each spends double what the host allocated and reports a count
+// the host's own budget contradicts.
+//
+// ⚠ THE ORDER IS THE HOST'S — exact title match, then recency — so what
+// survives here is what would have survived there: a private item is never
+// dropped for being private, only for being older. A trim on any other order
+// would decide, in the provider, a question the merge exists to answer.
+func TrimHits(hits []Hit, limit int) []Hit {
+	if limit <= 0 || len(hits) <= limit {
+		return hits
+	}
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].ExactHit != hits[j].ExactHit {
+			return hits[i].ExactHit
+		}
+		return hits[i].UpdatedAt.After(hits[j].UpdatedAt)
+	})
+	return hits[:limit]
+}
+
+// Plural renders a Czech count with the right form of the noun after it.
+//
+// ⚠ CZECH HAS THREE FORMS, NOT TWO, AND EVERY COUNT IN THIS CATALOG WAS SPELLED
+// IN THE LAST OF THEM: "1 měsíců", "1 zpráv", "1 odečtů", "1 konverzací". These
+// strings are Czech data on their way to a household verbatim — the same rule
+// that keeps every other Czech value in this package unedited — so a count that
+// reads as broken Czech is a sentence somebody has read to them.
+//
+// ⚠ ONE (1), FEW (2–4), MANY (EVERYTHING ELSE, ZERO INCLUDED) is the whole rule
+// at these magnitudes, and it is deliberately NOT `n%10 == 1`: twenty-one takes
+// the many form in Czech ("21 měsíců"), which is exactly where the borrowed
+// English-plus-Slavic rule of thumb goes wrong.
+func Plural(n int, one, few, many string) string {
+	switch {
+	case n == 1:
+		return fmt.Sprintf("%d %s", n, one)
+	case n >= 2 && n <= 4:
+		return fmt.Sprintf("%d %s", n, few)
+	default:
+		return fmt.Sprintf("%d %s", n, many)
+	}
+}
+
+// NoTools is embedded by a provider that publishes only Search — `logging`.
+//
+// ⚠ IT IS A NAMED THING TO EMBED RATHER THAN THREE EMPTY METHODS, because "this
+// module publishes no tool" is a DECISION (FR-M2) and not an oversight: the
+// Log's questions are already answered by home_activity, and a second tool over
+// the same table would be a second redaction path. What logging does contribute
+// is a fifth of the search corpus, which is why it implements Source at all.
+type NoTools struct{}
+
+func (NoTools) Tools() []Tool { return nil }
+
+func (NoTools) Call(_ context.Context, name string, _ json.RawMessage) (Result, error) {
+	return Result{}, UnknownToolError(name)
 }
 
 // ---- Registry ----

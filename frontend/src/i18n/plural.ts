@@ -76,4 +76,8 @@ export const PLURAL = {
   // nepřečtené zprávy". The badge itself shows only the numeral, so this string is
   // the whole of what a screen-reader user gets.
   unreadMessages: ['nepřečtená zpráva', 'nepřečtené zprávy', 'nepřečtených zpráv'],
+  // v11 — Asistenti (MCP). ⚠ `modules` above already counts modules and is what
+  // a token's scope summary uses; this is the token itself, which the two list
+  // headers count.
+  tokens: ['token', 'tokeny', 'tokenů'],
 } satisfies Record<string, PluralForms>

@@ -179,6 +179,8 @@ var actionLabels = map[string]string{
 	// filed under `chat`, because the setting is an admin's to change and the
 	// subject is chat's.
 	"chat.threshold.update": "Když správce změní limity úložiště chatu",
+	// v11 — a READ, not a change, and only ever an MCP token's.
+	"chat.read": "Když asistent čte konverzaci",
 }
 
 // ActionLabel returns the human Czech phrase for an action, falling back to the

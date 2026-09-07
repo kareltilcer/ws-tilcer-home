@@ -1,0 +1,688 @@
+package garden
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/mcp"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+)
+
+// The garden module's MCP provider (v11, PRD §V11-4 FR-M4).
+//
+// ⚠ `season_close` AND `season_reopen` ARE ABSENT, AND THIS IS THE ABSENCE MOST
+// EASILY MISREAD AS OVER-CAUTION (D295). `CloseSeason` runs `closeOutTasks`,
+// which marks every still-open task `TaskSkipped` — it DESTROYS work rather than
+// regenerating it — and the closed year then becomes the rotation history checks
+// C3 and C8 read (`check.go` states that dependency outright: they read CLOSED
+// seasons only). `ReopenSeason` is this module's ONLY admin-gated action, and
+// *"přepisuje se tím historie střídání plodin"* is its audit summary — not UI
+// copy, and not a confirmation string anybody has ever seen. Neither belongs on
+// a surface where nobody is watching the screen.
+//
+// ⚠ ALSO ABSENT: every delete, every plant and variety mutation, every bed verb,
+// `ShiftTasks`, the LLM import, and the storage (sklad) verbs. The six that ship
+// are the ones a person does standing in the garden with a phone.
+
+type mcpProvider struct {
+	mcp.NoResources
+	svc *Service
+}
+
+// MCPProvider implements mcp.Source.
+func (m *Module) MCPProvider() mcp.Provider { return &mcpProvider{svc: m.svc} }
+
+func (p *mcpProvider) Module() string { return "garden" }
+
+const (
+	toolTasks          = "home_garden_tasks"
+	toolTaskCreate     = "home_garden_task_create"
+	toolTaskComplete   = "home_garden_task_complete"
+	toolPlan           = "home_garden_plan"
+	toolPlantingCreate = "home_garden_planting_create"
+	toolHarvestLog     = "home_garden_harvest_log"
+)
+
+func (p *mcpProvider) Tools() []mcp.Tool {
+	return []mcp.Tool{
+		{
+			Name:        toolTasks,
+			Title:       "Garden work",
+			Description: "Returns the garden jobs whose window overlaps a date range — sowing, transplanting, watering, harvesting — with which are overdue; defaults to the next fourteen days.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "from": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to today."},
+    "to": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to 14 days after from."},
+    "status": {"type": "string", "enum": ["open", "done", "skipped"], "description": "Filter by status. Omit for every status."},
+    "bed_id": {"type": "string", "description": "A bed id from home_garden_plan. An id that names no bed is refused rather than answered with an empty list."},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+  },
+  "additionalProperties": false
+}`),
+			ReadOnly: true,
+		},
+		{
+			Name:        toolTaskCreate,
+			Title:       "Add a garden job",
+			Description: "Adds a manual job to the current season with a Czech title and a date window; the season must be open, because a closed year is the rotation history the plan checks read.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "title_cs": {"type": "string", "minLength": 1, "description": "What to do, in Czech — this is what appears on the work list."},
+    "window_from": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
+    "window_to": {"type": "string", "description": "ISO date (YYYY-MM-DD), on or after window_from."},
+    "kind": {
+      "type": "string",
+      "description": "What kind of job it is. Use \"other\" when none of the rest fits.",
+      "enum": ["bed_prep", "sow_indoor", "prick_out", "harden_off", "sow_direct", "transplant",
+               "thin", "support", "feed", "mulch", "pest_check", "prune", "spray", "harvest",
+               "process", "store", "clear", "water", "weed", "other"]
+    },
+    "season_year": {"type": "integer", "description": "Defaults to the season the window falls in."},
+    "planting_id": {"type": "string", "description": "A planting id from home_garden_plan. An id that names no planting is refused."},
+    "bed_id": {"type": "string", "description": "A bed id from home_garden_plan — the id, not the code the work list prints. An id that names no bed is refused."},
+    "notes_md": {"type": "string"}
+  },
+  "required": ["title_cs", "window_from", "window_to", "kind"],
+  "additionalProperties": false
+}`),
+		},
+		{
+			Name:        toolTaskComplete,
+			Title:       "Tick off a garden job",
+			Description: "Marks one garden job done; reopening one is deliberately not available here, because undoing somebody else's record of work they did is not an assistant's call.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {"id": {"type": "string"}},
+  "required": ["id"],
+  "additionalProperties": false
+}`),
+		},
+		{
+			Name:        toolPlan,
+			Title:       "Season plan",
+			Description: "Returns one season's plantings — what is in which bed, with planned and actual dates — plus the season's frost anchors and status; defaults to the current year.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "year": {"type": "integer", "description": "Defaults to the current year."},
+    "bed_id": {"type": "string", "description": "A bed id from this same tool. An id that names no bed is refused rather than answered with an empty plan."},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+  },
+  "additionalProperties": false
+}`),
+			ReadOnly: true,
+		},
+		{
+			Name:  toolPlantingCreate,
+			Title: "Plant something",
+			// ⚠ THE SIZE IS EXACTLY ONE OF area_m2 AND plant_count, AND THE
+			// DESCRIPTION SAYS SO BECAUSE THE SCHEMA ALONE IS NOT WHAT A MODEL PLANS
+			// FROM. `oneOf` below states it formally; this sentence is what gets read.
+			Description: "Records a planting of one crop in one bed for a season, which is what generates its sowing, transplanting and harvest jobs; give its size as EITHER area_m2 OR plant_count — exactly one of the two, never both and never neither — and call home_garden_plan first for the bed and crop ids.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "plant_id": {"type": "string", "description": "The crop, from the knowledge base."},
+    "variety_id": {"type": "string"},
+    "bed_id": {"type": "string"},
+    "location_label": {"type": "string", "description": "For a planting that is not in a numbered bed."},
+    "season_year": {"type": "integer", "description": "Defaults to the current year. The season must already exist and be open."},
+    "area_m2": {"type": "number", "exclusiveMinimum": 0, "description": "Square metres. Give this OR plant_count — never both, never neither."},
+    "plant_count": {"type": "integer", "exclusiveMinimum": 0, "description": "Number of plants. Give this OR area_m2 — never both, never neither."},
+    "notes_md": {"type": "string"}
+  },
+  "required": ["plant_id"],
+  "oneOf": [{"required": ["area_m2"]}, {"required": ["plant_count"]}],
+  "additionalProperties": false
+}`),
+		},
+		{
+			Name:        toolHarvestLog,
+			Title:       "Record a harvest",
+			Description: "Records what was picked from one planting, on a date, in a unit — the quantity must be strictly positive, because a zero row still flips the planting to harvesting and makes the real figure un-enterable later.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "planting_id": {"type": "string"},
+    "quantity": {"type": "number", "exclusiveMinimum": 0},
+    "unit": {
+      "type": "string",
+      "description": "Defaults to the crop's own unit, which is usually the one to keep.",
+      "enum": ["kg", "ks", "l", "svazek"]
+    },
+    "harvested_on": {"type": "string", "description": "ISO date (YYYY-MM-DD). Defaults to today."},
+    "destination": {
+      "type": "string",
+      "description": "Where it went: eaten fresh, into storage, given away, or composted.",
+      "enum": ["fresh", "storage", "gift", "compost"]
+    },
+    "quality": {"type": "string", "description": "Free text."},
+    "note": {"type": "string"}
+  },
+  "required": ["planting_id", "quantity"],
+  "additionalProperties": false
+}`),
+		},
+	}
+}
+
+func (p *mcpProvider) Call(ctx context.Context, name string, args json.RawMessage) (mcp.Result, error) {
+	switch name {
+	case toolTasks:
+		return p.tasks(ctx, args)
+	case toolTaskCreate:
+		return p.taskCreate(ctx, args)
+	case toolTaskComplete:
+		return p.taskComplete(ctx, args)
+	case toolPlan:
+		return p.plan(ctx, args)
+	case toolPlantingCreate:
+		return p.plantingCreate(ctx, args)
+	case toolHarvestLog:
+		return p.harvestLog(ctx, args)
+	default:
+		return mcp.Result{}, mcp.UnknownToolError(name)
+	}
+}
+
+type tasksArgs struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Status string `json:"status"`
+	BedID  string `json:"bed_id"`
+	Limit  int    `json:"limit"`
+}
+
+func (p *mcpProvider) tasks(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
+	var in tasksArgs
+	if err := mcp.DecodeArgs(args, &in); err != nil {
+		return mcp.Result{}, err
+	}
+	from := in.From
+	if from == "" {
+		from = p.svc.today().String()
+	} else if err := validGardenDate(from, "from"); err != nil {
+		return mcp.Result{}, err
+	}
+	to := in.To
+	if to == "" {
+		start, err := time.Parse("2006-01-02", from)
+		if err != nil {
+			return mcp.Result{}, httpx.ErrUnprocessable("from musí být ve tvaru RRRR-MM-DD.")
+		}
+		to = start.AddDate(0, 0, 14).Format("2006-01-02")
+	} else if err := validGardenDate(to, "to"); err != nil {
+		return mcp.Result{}, err
+	}
+	// ⚠ AN UNRECOGNISED STATUS IS REFUSED, NOT BOUND. The store appends
+	// `AND t.status = ?` with whatever it is given, so "pending" or "todo" — the
+	// words a model reaches for when the description says only *e.g. "open"* —
+	// matched no row and the tool answered "(nic v tomto okně)". The household is
+	// then told there is no garden work when what was wrong was the filter. The
+	// legal values are already declared as EnumTaskStatus; this is that enum,
+	// enforced, the way `via` and the module allowlist are.
+	if in.Status != "" && !Valid(EnumTaskStatus, in.Status) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"status musí být jedna z hodnot: " + strings.Join(Values(EnumTaskStatus), ", ") + ".")
+	}
+	if err := p.requireBed(ctx, in.BedID); err != nil {
+		return mcp.Result{}, err
+	}
+	page, err := p.svc.ListTasks(ctx, TaskFilter{
+		From: from, To: to, Status: in.Status, BedID: in.BedID,
+	}, in.Limit, "")
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Práce %s – %s (%s):\n", from, to,
+		mcp.Plural(len(page.Items), "úkol", "úkoly", "úkolů"))
+	for _, t := range page.Items {
+		fmt.Fprintf(&b, "\n• %s (id %s) — %s až %s", t.TitleCS, t.ID, t.WindowFrom, t.WindowTo)
+		if t.BedCode != nil {
+			fmt.Fprintf(&b, ", záhon %s", *t.BedCode)
+		}
+		if t.PlantName != nil {
+			fmt.Fprintf(&b, ", %s", *t.PlantName)
+		}
+		if t.Overdue {
+			b.WriteString(" [po termínu]")
+		}
+		if t.Status != TaskOpen {
+			fmt.Fprintf(&b, " [%s]", t.Status)
+		}
+	}
+	if len(page.Items) == 0 {
+		b.WriteString("\n(nic v tomto okně)")
+	}
+	return mcp.TextResult(b.String(), page)
+}
+
+type taskCreateArgs struct {
+	TitleCS    string  `json:"title_cs"`
+	WindowFrom string  `json:"window_from"`
+	WindowTo   string  `json:"window_to"`
+	Kind       string  `json:"kind"`
+	SeasonYear *int    `json:"season_year"`
+	PlantingID *string `json:"planting_id"`
+	BedID      *string `json:"bed_id"`
+	NotesMD    *string `json:"notes_md"`
+}
+
+// taskCreate validates before the service (D311).
+func (p *mcpProvider) taskCreate(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
+	var in taskCreateArgs
+	if err := mcp.DecodeArgs(args, &in); err != nil {
+		return mcp.Result{}, err
+	}
+	title := strings.TrimSpace(in.TitleCS)
+	if title == "" {
+		return mcp.Result{}, httpx.ErrUnprocessable("Název práce nesmí být prázdný.")
+	}
+	if err := validGardenDate(in.WindowFrom, "window_from"); err != nil {
+		return mcp.Result{}, err
+	}
+	if err := validGardenDate(in.WindowTo, "window_to"); err != nil {
+		return mcp.Result{}, err
+	}
+	if in.WindowTo < in.WindowFrom {
+		return mcp.Result{}, httpx.ErrUnprocessable("window_to nesmí být dřív než window_from.")
+	}
+	// ⚠ `kind` IS REQUIRED, AND CALLING IT OPTIONAL MADE THIS TOOL UNUSABLE.
+	// `validateTask` refuses an empty kind — `Valid(EnumTaskKind, "")` is false —
+	// so a model that followed the schema and omitted it was refused EVERY time,
+	// with the service's "Neznámý druh práce." for a field it had been told it
+	// could leave out. The HTTP twin requires it too.
+	//
+	// ⚠ AND IT IS REFUSED RATHER THAN DEFAULTED TO `other`. Silently picking a
+	// kind is what `Coerce`'s own doc comment refuses for a crop, for the same
+	// reason: the kind is what decides which work list the job appears on, and a
+	// wrong one chosen on the caller's behalf is never noticed.
+	if !Valid(EnumTaskKind, in.Kind) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"kind musí být jedna z hodnot: " + strings.Join(Values(EnumTaskKind), ", ") + ".")
+	}
+	// ⚠ THE TWO OPTIONAL IDS ARE CHECKED HERE OR NOT AT ALL, AND UNCHECKED THEY
+	// ANSWERED WITH THE INTERNAL ERROR. `CreateTask` carries no existence check for
+	// either — `garden_tasks.planting_id` and `.bed_id` are plain REFERENCES — so an
+	// id that names nothing reached the INSERT, tripped the foreign key, and came
+	// back as an untyped error the host maps onto "Došlo k chybě, zkuste to prosím
+	// znovu.". That is the one refusal D311 exists to keep off this door: an agent
+	// RETRIES a 500 and gives up on a 422, so a mistyped id became a loop instead of
+	// a correction. `CreatePlanting` checks its own bed inside the transaction,
+	// which is why the sibling write never had this — the gap is CreateTask's.
+	//
+	// ⚠ AND THE MISTAKE IS THE OBVIOUS ONE: the work list prints "záhon A1" — the
+	// bed's CODE — and the only place a bed *id* appears is home_garden_plan's
+	// structuredContent. Refusing the code by name is what turns that into one
+	// corrected call rather than a retry loop, and it is what requireBed already
+	// does for this module's two read tools.
+	//
+	// ⚠ THEY ARE CHECKED BEFORE THE SEASON, deliberately: these are ids the caller
+	// TYPED, while the year below is usually the provider's own default. The
+	// refusal that names something they wrote is the more useful of the two.
+	if in.BedID != nil {
+		if err := p.requireBed(ctx, *in.BedID); err != nil {
+			return mcp.Result{}, err
+		}
+	}
+	if in.PlantingID != nil {
+		if err := p.requirePlanting(ctx, *in.PlantingID); err != nil {
+			return mcp.Result{}, err
+		}
+	}
+	year := in.SeasonYear
+	if year == nil {
+		y, err := time.Parse("2006-01-02", in.WindowFrom)
+		if err != nil {
+			return mcp.Result{}, httpx.ErrUnprocessable("window_from musí být ve tvaru RRRR-MM-DD.")
+		}
+		v := y.Year()
+		year = &v
+	}
+	if err := p.requireSeason(ctx, *year); err != nil {
+		return mcp.Result{}, err
+	}
+	kind := in.Kind
+	input := TaskInput{
+		TitleCS: &title, WindowFrom: &in.WindowFrom, WindowTo: &in.WindowTo, Kind: &kind,
+		PlantingID: in.PlantingID, BedID: in.BedID, NotesMD: in.NotesMD, SeasonYear: year,
+	}
+	t, err := p.svc.CreateTask(ctx, input)
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	return mcp.TextResult(fmt.Sprintf("Práce „%s“ přidána na %s–%s (id %s).",
+		t.TitleCS, t.WindowFrom, t.WindowTo, t.ID), t)
+}
+
+type idArgs struct {
+	ID string `json:"id"`
+}
+
+func (p *mcpProvider) taskComplete(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
+	var in idArgs
+	if err := mcp.DecodeArgs(args, &in); err != nil {
+		return mcp.Result{}, err
+	}
+	if strings.TrimSpace(in.ID) == "" {
+		return mcp.Result{}, httpx.ErrUnprocessable("Chybí id práce.")
+	}
+	t, err := p.svc.CompleteTask(ctx, in.ID, nil)
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	return mcp.TextResult(fmt.Sprintf("Práce „%s“ hotová.", t.TitleCS), t)
+}
+
+type planArgs struct {
+	Year  *int   `json:"year"`
+	BedID string `json:"bed_id"`
+	Limit int    `json:"limit"`
+}
+
+func (p *mcpProvider) plan(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
+	var in planArgs
+	if err := mcp.DecodeArgs(args, &in); err != nil {
+		return mcp.Result{}, err
+	}
+	year := in.Year
+	if year == nil {
+		y := p.svc.today().Y
+		year = &y
+	}
+	if err := p.requireBed(ctx, in.BedID); err != nil {
+		return mcp.Result{}, err
+	}
+	page, err := p.svc.ListPlantings(ctx, PlantingFilter{Year: year, BedID: in.BedID}, in.Limit, "")
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Plán %d (%s):\n", *year,
+		mcp.Plural(len(page.Items), "výsadba", "výsadby", "výsadeb"))
+	// The season's own row carries the frost anchors every planned date is
+	// derived from — a plan without them is a list of dates nobody can check.
+	if season, err := p.svc.GetSeason(ctx, *year); err == nil {
+		fmt.Fprintf(&b, "Sezóna %d: %s", season.Year, season.Status)
+		if season.LastFrostOn != nil {
+			fmt.Fprintf(&b, ", poslední mráz %s", *season.LastFrostOn)
+		}
+		if season.FirstFrostOn != nil {
+			fmt.Fprintf(&b, ", první mráz %s", *season.FirstFrostOn)
+		}
+		b.WriteString("\n")
+	}
+	for _, pl := range page.Items {
+		fmt.Fprintf(&b, "\n• %s", pl.PlantName)
+		if pl.VarietyName != nil {
+			fmt.Fprintf(&b, " (%s)", *pl.VarietyName)
+		}
+		if pl.BedCode != nil {
+			fmt.Fprintf(&b, " — záhon %s", *pl.BedCode)
+		} else if pl.LocationLabel != nil {
+			fmt.Fprintf(&b, " — %s", *pl.LocationLabel)
+		}
+		fmt.Fprintf(&b, " (id %s)", pl.ID)
+	}
+	return mcp.TextResult(b.String(), page)
+}
+
+type plantingCreateArgs struct {
+	PlantID       string   `json:"plant_id"`
+	VarietyID     *string  `json:"variety_id"`
+	BedID         *string  `json:"bed_id"`
+	LocationLabel *string  `json:"location_label"`
+	SeasonYear    *int     `json:"season_year"`
+	AreaM2        *float64 `json:"area_m2"`
+	PlantCount    *int     `json:"plant_count"`
+	NotesMD       *string  `json:"notes_md"`
+}
+
+func (p *mcpProvider) plantingCreate(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
+	var in plantingCreateArgs
+	if err := mcp.DecodeArgs(args, &in); err != nil {
+		return mcp.Result{}, err
+	}
+	if strings.TrimSpace(in.PlantID) == "" {
+		return mcp.Result{}, httpx.ErrUnprocessable("Plodina je povinná.")
+	}
+	if in.AreaM2 != nil && *in.AreaM2 < 0 {
+		return mcp.Result{}, httpx.ErrUnprocessable("Plocha nesmí být záporná.")
+	}
+	if in.PlantCount != nil && *in.PlantCount < 0 {
+		return mcp.Result{}, httpx.ErrUnprocessable("Počet rostlin nesmí být záporný.")
+	}
+	// ⚠ THE SIZE IS EXACTLY ONE OF THE TWO, AND THE SCHEMA SAYING OTHERWISE MADE
+	// THIS TOOL UNUSABLE. `validatePlantingShape` refuses `hasArea == hasCount` —
+	// both, or neither — so a model that read `required: ["plant_id"]` and sent a
+	// crop and a season was refused EVERY time, with a message about two fields it
+	// had been told it could leave out. It is the same defect `kind` and `rates`
+	// carried, in the one write tool no test had ever called successfully.
+	//
+	// ⚠ AND ZERO IS NEITHER, NOT A SIZE. `minimum: 0` published zero as legal;
+	// `normalizePlantingSize` then nils it and the refusal lands anyway, one step
+	// further from the field that caused it. The schema now says
+	// `exclusiveMinimum`, and this says it again in Czech.
+	hasArea := in.AreaM2 != nil && *in.AreaM2 > 0
+	hasCount := in.PlantCount != nil && *in.PlantCount > 0
+	if hasArea == hasCount {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"Zadejte velikost výsadby buď jako area_m2, nebo jako plant_count — právě jedno z toho, kladné.")
+	}
+	year := in.SeasonYear
+	if year == nil {
+		y := p.svc.today().Y
+		year = &y
+	}
+	if err := p.requireSeason(ctx, *year); err != nil {
+		return mcp.Result{}, err
+	}
+	pl, err := p.svc.CreatePlanting(ctx, PlantingInput{
+		PlantID: &in.PlantID, VarietyID: in.VarietyID, BedID: in.BedID,
+		LocationLabel: in.LocationLabel, AreaM2: in.AreaM2, PlantCount: in.PlantCount,
+		NotesMD: in.NotesMD, SeasonYear: year,
+	})
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	return mcp.TextResult(fmt.Sprintf("Výsadba %s zapsána (id %s).", pl.PlantName, pl.ID), pl)
+}
+
+type harvestArgs struct {
+	PlantingID  string   `json:"planting_id"`
+	Quantity    *float64 `json:"quantity"`
+	Unit        string   `json:"unit"`
+	HarvestedOn string   `json:"harvested_on"`
+	Destination *string  `json:"destination"`
+	Quality     *string  `json:"quality"`
+	Note        *string  `json:"note"`
+}
+
+func (p *mcpProvider) harvestLog(ctx context.Context, args json.RawMessage) (mcp.Result, error) {
+	var in harvestArgs
+	if err := mcp.DecodeArgs(args, &in); err != nil {
+		return mcp.Result{}, err
+	}
+	if strings.TrimSpace(in.PlantingID) == "" {
+		return mcp.Result{}, httpx.ErrUnprocessable("Výsadba je povinná.")
+	}
+	// ⚠ STRICTLY POSITIVE, which is what the service says too and what the
+	// description explains: a zero row still stamps first_harvest_on, flips the
+	// planting to `harvesting` and makes yield_actual non-null, so the season
+	// review reads "už zapsáno" and never offers the box for the real figure.
+	if in.Quantity == nil || *in.Quantity <= 0 {
+		return mcp.Result{}, httpx.ErrUnprocessable("Množství musí být kladné.")
+	}
+	if in.HarvestedOn != "" {
+		if err := validGardenDate(in.HarvestedOn, "harvested_on"); err != nil {
+			return mcp.Result{}, err
+		}
+	}
+	// ⚠ TWO CLOSED ENUMS PUBLISHED AS FREE STRINGS ARE TWO GUESSES A MODEL CANNOT
+	// WIN. `CreateHarvest` matches both against the enum's exact CODE — `Valid` is
+	// strict, aliases are the importer's leniency and not this door's — so "kg" is
+	// accepted and "kilogram" is not, and `destination` had no description at all
+	// while accepting only fresh/storage/gift/compost. The schema now names both
+	// sets, and these two refusals are the half the tool can answer without a read
+	// (§7.4), in the same shape `kind` and `status` already use in this file.
+	if in.Unit != "" && !Valid(EnumHarvestUnit, in.Unit) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"unit musí být jedna z hodnot: " + strings.Join(Values(EnumHarvestUnit), ", ") + ".")
+	}
+	if in.Destination != nil && *in.Destination != "" && !Valid(EnumDestination, *in.Destination) {
+		return mcp.Result{}, httpx.ErrUnprocessable(
+			"destination musí být jedna z hodnot: " + strings.Join(Values(EnumDestination), ", ") + ".")
+	}
+	input := HarvestInput{
+		PlantingID: &in.PlantingID, Quantity: in.Quantity,
+		Destination: in.Destination, Quality: in.Quality, Note: in.Note,
+	}
+	if in.Unit != "" {
+		input.Unit = &in.Unit
+	}
+	if in.HarvestedOn != "" {
+		input.HarvestedOn = &in.HarvestedOn
+	}
+	h, err := p.svc.CreateHarvest(ctx, input)
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	return mcp.TextResult(fmt.Sprintf("Sklizeň %s: %g %s (id %s).",
+		h.HarvestedOn, h.Quantity, h.Unit, h.ID), h)
+}
+
+// Search reads the crop knowledge base over `garden_plants_fts`.
+//
+// ⚠ D302: an actor-less ctx is an ERROR, never an empty slice.
+func (p *mcpProvider) Search(ctx context.Context, q mcp.Query) ([]mcp.Hit, error) {
+	if _, ok := reqctx.ActorFrom(ctx); !ok {
+		return nil, fmt.Errorf("garden: search without an actor")
+	}
+	page, err := p.svc.ListPlants(ctx, PlantFilter{Query: q.Text}, q.Limit, "")
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]mcp.Hit, 0, len(page.Items))
+	for _, pl := range page.Items {
+		updated, _ := time.Parse(tsFormat, pl.UpdatedAt)
+		hits = append(hits, mcp.Hit{
+			Kind:      "garden.plant",
+			ID:        pl.ID,
+			Title:     pl.NameCS,
+			Snippet:   pl.Family,
+			UpdatedAt: updated,
+			ExactHit:  strings.EqualFold(strings.TrimSpace(pl.NameCS), strings.TrimSpace(q.Text)),
+		})
+	}
+	return hits, nil
+}
+
+// Get answers home_get for this module's kinds.
+func (p *mcpProvider) Get(ctx context.Context, kind, id string) (mcp.Result, error) {
+	switch kind {
+	case "garden.plant":
+		pl, err := p.svc.GetPlant(ctx, id)
+		if err != nil {
+			if mcp.IsNotFound(err) {
+				return mcp.NotFoundResult(), nil
+			}
+			return mcp.Result{}, err
+		}
+		return mcp.TextResult(fmt.Sprintf("%s (%s, id %s)", pl.NameCS, pl.Family, pl.ID), pl)
+	case "garden.task":
+		t, err := p.svc.GetTask(ctx, id)
+		if err != nil {
+			if mcp.IsNotFound(err) {
+				return mcp.NotFoundResult(), nil
+			}
+			return mcp.Result{}, err
+		}
+		return mcp.TextResult(fmt.Sprintf("%s — %s až %s (id %s)", t.TitleCS, t.WindowFrom, t.WindowTo, t.ID), t)
+	default:
+		return mcp.NotFoundResult(), nil
+	}
+}
+
+// requireBed refuses a bed_id that names no bed, rather than letting it narrow
+// the query to nothing.
+//
+// ⚠ IT IS THE `status` DEFECT IN ITS OTHER SHAPE. The store appends `AND bed_id =
+// ?` with whatever it is given, so a mis-copied id matched no row and the tool
+// answered "(nic v tomto okně)" or "0 výsadeb" — the household told there is no
+// garden work when what was wrong was the filter. One indexed read is what the
+// difference costs, and `Service.GetBed` is the read the detail route uses.
+//
+// ⚠ AND IT GUARDS THE WRITE TOO, which is the sharper of the two cases: on
+// `home_garden_task_create` an unchecked bed_id is a foreign-key violation rather
+// than an empty answer, and it reaches the caller as the internal error. See
+// requirePlanting.
+func (p *mcpProvider) requireBed(ctx context.Context, bedID string) error {
+	if strings.TrimSpace(bedID) == "" {
+		return nil
+	}
+	if _, err := p.svc.GetBed(ctx, bedID); err != nil {
+		if mcp.IsNotFound(err) {
+			return httpx.ErrUnprocessable("Záhon " + bedID + " neexistuje.")
+		}
+		return err
+	}
+	return nil
+}
+
+// requirePlanting refuses a planting_id that names no planting, naming it.
+//
+// ⚠ IT IS requireBed's TWIN AND FOR THE SAME REASON, one step further along: on
+// `home_garden_task_create` an unchecked id is not a narrowed query but a FOREIGN
+// KEY violation, which leaves this package untyped and reaches the caller as the
+// internal error. The garden is household-visible and hides nothing, so the id
+// goes back in words rather than through leak row 9's bare "Nenalezeno.".
+func (p *mcpProvider) requirePlanting(ctx context.Context, plantingID string) error {
+	if strings.TrimSpace(plantingID) == "" {
+		return nil
+	}
+	if _, err := p.svc.GetPlanting(ctx, plantingID); err != nil {
+		if mcp.IsNotFound(err) {
+			return httpx.ErrUnprocessable("Výsadba " + plantingID + " neexistuje.")
+		}
+		return err
+	}
+	return nil
+}
+
+// requireSeason refuses a year with no season row, naming it.
+//
+// ⚠ THE YEAR IS OFTEN THE PROVIDER'S OWN CHOICE — both write tools default it,
+// one from today and one from window_from — so the caller may never have typed
+// the number they are being refused about. `resolveSeason` answers a missing
+// season with httpx.ErrNotFound, which the host collapses onto the bare
+// "Nenalezeno." leak row 9 reserves for ownership and membership surfaces; the
+// garden is household-visible and hides nothing, so the year goes back in words.
+// A CLOSED season is left to the service: that refusal is a 409 and its sentence
+// already survives intact.
+func (p *mcpProvider) requireSeason(ctx context.Context, year int) error {
+	if _, err := p.svc.GetSeason(ctx, year); err != nil {
+		if mcp.IsNotFound(err) {
+			return httpx.ErrUnprocessable(fmt.Sprintf(
+				"Sezóna %d zatím neexistuje — nejdřív ji někdo musí založit.", year))
+		}
+		return err
+	}
+	return nil
+}
+
+func validGardenDate(s, field string) error {
+	if strings.TrimSpace(s) == "" {
+		return httpx.ErrUnprocessable("Chybí " + field + ".")
+	}
+	if _, err := time.Parse("2006-01-02", s); err != nil {
+		return httpx.ErrUnprocessable(field + " musí být ve tvaru RRRR-MM-DD.")
+	}
+	return nil
+}

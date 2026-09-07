@@ -38,6 +38,10 @@ calls the API host-relative (relative `/api`, websocket to `location.host` — s
 
 ```
 backend/    Go 1.26 + modernc SQLite; cmd/home is the entrypoint; Dockerfile here
+backend/mcp-manifest.json  the MCP surface’s contract (v11) — GENERATED from the live
+            registry and committed, because openapi cannot describe JSON-RPC with a
+            JSON Schema per tool. Regenerate and READ THE DIFF:
+            go test ./internal/platform/mcp/ -run TestManifestMatchesTheCommittedFile -update
 frontend/   Vite + React 19 + TS SPA
 litestream.yml         Litestream → Cloudflare R2 replica config (prefix `home`)
 docker-entrypoint.sh   restore-if-absent then run the app under litestream -exec
@@ -126,6 +130,43 @@ own port, so `/healthz` + `/readyz` need no public route.
 > Expect **JSON**. HTML means one of the two layers; hit the container directly
 > on `:7999` to find out which. Strip Prefix stays **off** for `/mcp` as it does
 > for the other two.
+
+#### Connecting an assistant (v11)
+
+There is no server-side setup beyond the route above. A member opens **Nastavení
+→ Asistenti (MCP)**, presses *Vytvořit token*, gives it a name and an expiry, and
+gets back a ready-to-paste client configuration with the token already in it.
+
+⚠ **The secret is shown once and is not recoverable.** Only its SHA-256 is stored,
+so there is no route, no screen and no support path that can show it again — a
+member who closes that dialog without copying mints another. The dialog therefore
+refuses Escape and an outside click, on purpose, and *Hotovo* is its only exit.
+
+What lands in the client config is the origin the page was served from plus `/mcp`,
+and a bearer header:
+
+```json
+{
+  "mcpServers": {
+    "home": {
+      "url": "https://home.tilcer.cz/mcp",
+      "headers": { "Authorization": "Bearer hmcp_…" }
+    }
+  }
+}
+```
+
+⚠ **A token acts as its owner and carries no roles of its own.** Household
+visibility, ownership and membership are enforced underneath it exactly as they are
+for a browser session, and the `modules` scope on the mint dialog **narrows what the
+assistant is offered and is not an access control** (D288). Every write it makes is
+attributed: the Log shows *Karel · Claude (notebook)* and a neutral **Přes asistenta**
+chip, filterable at **Log → Původ zápisu**.
+
+Revoking is immediate and takes effect on the assistant’s very next call — from the
+member’s own list, or, for anybody’s token, from **Administrace → Asistenti →
+Tokeny**. ⚠ There is deliberately **no way for an admin to mint a token in another
+member’s name** (D316): an admin may see that a key exists and take it away.
 
 ### Backend app (`home-backend`)
 

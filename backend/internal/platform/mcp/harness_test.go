@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,17 +17,27 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/admin"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/chat"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/documents"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/electricity"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/events"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/finance"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/garden"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/logging"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/notes"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/modules/todo"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/audit"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/auth"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/blobstore"
 	appdb "github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/db"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/httpx"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/lists"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/mcp"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/metrics"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/push"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/reqctx"
+	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/storage"
 	"github.com/kareltilcer/ws-tilcer-home/backend/internal/platform/testsupport"
 )
 
@@ -51,11 +62,27 @@ type harness struct {
 	tokens  *auth.MCPTokenStore
 	notes   *notes.Service
 	todo    *todo.Service
+	chat    *chat.Service
+	docs    *documents.Service
+	// elec and garden are held so a fixture can reach the verbs v11 deliberately
+	// does NOT publish — a billing period, a season — which is exactly what the
+	// tools that read them need in front of them.
+	elec   *electricity.Service
+	garden *garden.Service
 	// notesProv is the notes provider the registry holds, reachable directly so a
 	// test can hand it a budget of its own. ⚠ The host always passes
 	// resourceListLimit (200), so the only way to assert that a provider reading
 	// TWO roots spends ONE budget is to ask it with a number a fixture can reach.
 	notesProv mcp.Provider
+	// registry is the assembled catalog, so a test can walk EVERY provider rather
+	// than the handful it happened to name. ⚠ That is the difference between a
+	// rule asserted for three modules and a rule asserted for nine — the one that
+	// forgets is the one nobody wrote a test for.
+	registry *mcp.Registry
+	// host is the assembled MCP host, for the manifest generator — which needs the
+	// LIVE surface rather than the wire, because a manifest built from tools/list
+	// would describe what one token was offered.
+	host *mcp.Host
 }
 
 const (
@@ -134,27 +161,89 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	sink := audit.NewSink()
 	notify := func(context.Context, string, any) {}
 
+	loc, tzErr := time.LoadLocation("Europe/Prague")
+	if tzErr != nil {
+		t.Fatalf("load timezone: %v", tzErr)
+	}
+
 	todoSvc := todo.NewService(db, sink, notify)
 	eventsSvc := events.NewService(db, sink, notify, 500, 24)
 	notesSvc := notes.NewService(db, sink, notify, nil, notes.ImageOptions{}, logger)
-
-	loc, err := time.LoadLocation("Europe/Prague")
+	// ⚠ A REAL (FILESYSTEM) BLOB STORE, not nil. `documents` and `chat` both serve
+	// BYTES over the resource surface, and a nil store makes every one of those
+	// paths answer "not configured" — which is a green test proving the wrong
+	// thing. The temp dir goes with the test.
+	blob, err := blobstore.NewFS(t.TempDir())
 	if err != nil {
-		t.Fatalf("load timezone: %v", err)
+		t.Fatalf("blob store: %v", err)
 	}
+	docsSvc := documents.NewService(db, sink, notify, blob, documents.Options{MaxUploadBytes: 1 << 20}, logger)
+	financeSvc := finance.NewService(db, sink, notify)
+	// ⚠ THE HOUSEHOLD TIMEZONE, NOT THE ZERO VALUE. garden.NewService defaults a
+	// nil Location to UTC, and garden’s own tools default their date window to
+	// s.today() — so a harness without it exercises a different day boundary from
+	// the one production runs, for an hour every evening.
+	gardenSvc := garden.NewService(db, sink, notify, garden.Options{Location: loc})
+	chatSvc := chat.NewService(db, sink, nil, nil, nil, chat.Options{TrashDays: 7, Blob: blob, Upload: chat.UploadOptions{MaxBytes: 1 << 20}})
+	adminSvc := admin.NewService(db, sink, admin.Options{Logger: logger})
+
 	todoMod := todo.NewModule(todoSvc)
 	eventsMod := events.NewModule(eventsSvc, loc, 30)
 	notesMod := notes.NewModule(notesSvc)
+	docsMod := documents.NewModule(docsSvc)
+	financeMod := finance.NewModule(financeSvc, loc)
+	gardenMod := garden.NewModule(gardenSvc)
+	elecSvc := electricity.NewService(db, sink, notify, loc)
+	elecMod := electricity.NewModule(elecSvc)
+	chatMod := chat.NewModule(chatSvc)
+	loggingMod := logging.New(db)
+	adminMod := admin.NewModule(adminSvc)
 
-	registry, err := mcp.Collect(todoMod, eventsMod, notesMod)
+	// ⚠ THE ORDER IS THE COMPOSITION ROOT'S, and it is load-bearing rather than
+	// cosmetic: module registration order is the third tiebreak of the search
+	// merge (D300). A harness that collected them in a different order would
+	// exercise a different merge from the one production runs.
+	allModules := []any{
+		loggingMod, todoMod, eventsMod, notesMod, docsMod,
+		financeMod, gardenMod, elecMod, chatMod, adminMod,
+	}
+	registry, err := mcp.Collect(allModules...)
 	if err != nil {
 		t.Fatalf("collect mcp providers: %v", err)
 	}
-	metricReg, err := metrics.Collect(todoMod, eventsMod, notesMod)
+	// ⚠ THE ÚLOŽIŠTĚ SNAPSHOT IS WIRED IN, AS THE COMPOSITION ROOT DOES. Without it
+	// `admin.Storage()` is nil, `home_admin_status` short-circuits on
+	// ErrNotImplemented, and the host maps that onto the internal error — so the ONE
+	// tool the admin module publishes could be listed, gated and refused by every
+	// test in this package and still never once RUN. That is the exact shape of the
+	// four defects rounds 1 and 2 found: a surface asserted and a behaviour never
+	// called.
+	storageCatalog, err := storage.Collect(allModules...)
+	if err != nil {
+		t.Fatalf("collect storage declarations: %v", err)
+	}
+	// The path is asked of SQLite rather than threaded down from testsupport.NewDB,
+	// which does not hand it back — one pragma read beats a second constructor.
+	var dbPath string
+	if err := db.QueryRow(`SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&dbPath); err != nil {
+		t.Fatalf("resolve the test database path: %v", err)
+	}
+	adminSvc.SetStorage(admin.NewStorageService(admin.StorageDeps{
+		DB: db, DBPath: dbPath, Catalog: storageCatalog,
+		Primary: blob, PrimaryBucket: "home-test",
+		Members: push.NewStore(db), WarnTotalMB: 1024, CacheSeconds: 30,
+	}))
+	// ⚠ THE METRIC AND LIST CATALOGS TAKE THE *CONTRIBUTING* SIX, not all ten —
+	// `electricity` (D147) and `chat` (D252) are deliberately absent from both, and
+	// so is `admin`, which reads them rather than publishing into them. Collecting
+	// everything here would let home_today answer with a figure production cannot
+	// produce.
+	contributing := []any{todoMod, eventsMod, notesMod, docsMod, financeMod, gardenMod}
+	metricReg, err := metrics.Collect(contributing...)
 	if err != nil {
 		t.Fatalf("collect metrics: %v", err)
 	}
-	listReg, err := lists.Collect(todoMod, eventsMod, notesMod)
+	listReg, err := lists.Collect(contributing...)
 	if err != nil {
 		t.Fatalf("collect lists: %v", err)
 	}
@@ -204,7 +293,8 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	})
 
 	h := &harness{t: t, db: db, tokens: tokens, notes: notesSvc, todo: todoSvc,
-		notesProv: notesMod.MCPProvider()}
+		chat: chatSvc, docs: docsSvc, elec: elecSvc, garden: gardenSvc,
+		notesProv: notesMod.MCPProvider(), registry: registry, host: host}
 	h.handler = httpx.NewRouter(httpx.Deps{
 		Logger:   logger,
 		DB:       db,
@@ -221,6 +311,8 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 			todoMod.RegisterRoutes(api)
 			eventsMod.RegisterRoutes(api)
 			notesMod.RegisterRoutes(api)
+			docsMod.RegisterRoutes(api)
+			chatMod.RegisterRoutes(api)
 		},
 		// ⚠ StaticDir IS SET, and it has to be for leak row 2 to mean anything: the
 		// bug guarded against is a mistyped /mcp path falling through to the SPA, and
@@ -579,4 +671,105 @@ func splitRoles(text string) []string {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	return parts
+}
+
+// searchCounts reads the PER-MODULE counts out of a home_search result.
+//
+// ⚠ IT EXISTS BECAUSE A TOTAL IS THE WRONG ASSERTION. The budget is per module
+// (D301) and the corpus spans nine providers — one of which, `logging`, finds the
+// audit event every other module's fixture wrote. A test that counted hits would
+// move every time an unrelated provider learned to answer, which is the kind of
+// test that gets its number bumped rather than read.
+func searchCounts(t *testing.T, result map[string]any) map[string]int {
+	t.Helper()
+	raw, ok := result["structuredContent"]
+	if !ok {
+		t.Fatalf("the search result carries no structuredContent: %#v", result)
+	}
+	payload, _ := raw.(map[string]any)
+	counts, _ := payload["counts"].(map[string]any)
+	out := make(map[string]int, len(counts))
+	for module, v := range counts {
+		n, _ := v.(float64)
+		out[module] = int(n)
+	}
+	return out
+}
+
+// seedDocument uploads one small text document into a member's chosen root.
+//
+// ⚠ IT GOES THROUGH THE REAL UPLOAD PIPELINE rather than inserting a row, because
+// what the resource tests read back are BYTES: a hand-written row would point at
+// an object that does not exist, and every read would fail for a reason that has
+// nothing to do with the rule under test.
+func (h *harness) seedDocument(userID, title, scope string) string {
+	h.t.Helper()
+	ctx := testsupport.CtxUser(userID, "editor")
+	d, err := h.docs.Upload(ctx, documents.UploadInput{
+		Filename: title + ".txt",
+		File:     strings.NewReader("obsah dokumentu " + title),
+		Title:    title,
+		Scope:    scope,
+	})
+	if err != nil {
+		h.t.Fatalf("seed %s document %q: %v", scope, title, err)
+	}
+	return d.ID
+}
+
+// seedAttachment sends one file into a conversation, through the real multipart
+// route, and returns the attachment's id.
+//
+// ⚠ IT GOES THROUGH THE ROUTE rather than the store because the upload pipeline
+// is what puts BYTES under the key the resource read then fetches. A row written
+// by hand would point at nothing, and every read would fail for a reason
+// unrelated to the access rule under test.
+func (h *harness) seedAttachment(conversationID, author, filename, body string) string {
+	h.t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("files", filename)
+	if err != nil {
+		h.t.Fatalf("multipart: %v", err)
+	}
+	if _, err := part.Write([]byte(body)); err != nil {
+		h.t.Fatalf("multipart write: %v", err)
+	}
+	_ = w.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/conversations/"+conversationID+"/messages", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+	// ⚠ THE ROUTER IS BUILT FOR THIS ONE AUTHOR. The harness's own /api half is
+	// member A; an attachment belonging to member B has to be uploaded AS B, or
+	// the membership assertions are testing A reading A's own file.
+	h.routerAs(author).ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		h.t.Fatalf("seed attachment: %d %s", rr.Code, rr.Body.String())
+	}
+	var msg struct {
+		Attachments []struct {
+			ID string `json:"id"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &msg); err != nil {
+		h.t.Fatalf("decode message: %v", err)
+	}
+	if len(msg.Attachments) != 1 {
+		h.t.Fatalf("expected one attachment, got %d", len(msg.Attachments))
+	}
+	return msg.Attachments[0].ID
+}
+
+// routerAs builds a second router authenticated as another member, for the
+// fixtures that must be written by somebody other than member A.
+//
+// ⚠ IT IS A SECOND ROUTER RATHER THAN A SWITCHED ACTOR, because the harness's own
+// SessionMW is built once with a fixed bypass actor — which is exactly what makes
+// the /api half a fixture tool rather than a thing under test.
+func (h *harness) routerAs(userID string) http.Handler {
+	h.t.Helper()
+	return testsupport.RouterAs(h.t, h.db,
+		reqctx.Actor{UserID: userID, Type: "user", Label: userID, Roles: []string{"editor"}},
+		func(api chi.Router) { chat.NewModule(h.chat).RegisterRoutes(api) })
 }

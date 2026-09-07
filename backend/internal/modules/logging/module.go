@@ -22,11 +22,16 @@ var MigrationsFS embed.FS
 // this module owns the audit TABLES (its migrations) and the read-side browser.
 type Module struct {
 	handler *HTTPHandler
+	// store is held for the v11 MCP provider, which publishes NO TOOL and only a
+	// Search over audit_events_fts. Until v11 the handler was the store's only
+	// reader, which is why this was a one-field struct.
+	store *Store
 }
 
 // New builds the logging module over db.
 func New(db *sql.DB) *Module {
-	return &Module{handler: NewHTTPHandler(NewStore(db))}
+	store := NewStore(db)
+	return &Module{handler: NewHTTPHandler(store), store: store}
 }
 
 func (m *Module) Name() string { return "logging" }

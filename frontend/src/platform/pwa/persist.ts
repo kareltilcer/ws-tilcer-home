@@ -32,6 +32,13 @@ function isPrivateItemsKey(queryKey: readonly unknown[]): boolean {
   return qk.adminPrivateItemsAll.every((segment, i) => queryKey[i] === segment)
 }
 
+/** isAdminMcpTokensKey matches the household-wide token listing — see
+ *  mayPersistKey for why it must never reach disk. Through the key factory, like
+ *  its neighbour above, so a restructured key cannot silently stop matching. */
+function isAdminMcpTokensKey(queryKey: readonly unknown[]): boolean {
+  return qk.adminMcpTokens.every((segment, i) => queryKey[i] === segment)
+}
+
 /**
  * mayPersistKey decides whether one query is allowed to reach the disk.
  *
@@ -66,6 +73,20 @@ export function mayPersistKey(queryKey: readonly unknown[]): boolean {
   // between sessions. It is the one query whose value is strictly worse offline
   // than absent.
   if (isPrivateItemsKey(queryKey)) return false
+  // ⚠ NOR EITHER MCP TOKEN LISTING (v11). Neither list is secret — no secret and
+  // no hash is returned by any read route, by construction — but a token list is
+  // the answer to "who in this household has connected an assistant, and when did
+  // it last do something", and the admin one carries every member's. That is the
+  // v9 purge-listing reasoning applied to credentials, on the same shared kitchen
+  // laptop: the offline convenience of a rehydrated token list is worth nothing,
+  // because there is not one useful thing a member can do with it while the
+  // network is gone. Minting, renaming and revoking are all writes.
+  //
+  // ⚠ The whole 'mcp' PREFIX rather than the one key, matching the chat rule
+  // above: a key added later would otherwise reach disk because nobody remembered
+  // to extend a list.
+  if (key === 'mcp') return false
+  if (isAdminMcpTokensKey(queryKey)) return false
   return true
 }
 

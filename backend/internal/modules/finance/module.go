@@ -24,6 +24,10 @@ var MigrationsFS embed.FS
 // It lives in the sibling finance/seed package as its own migration source, which
 // only the server entrypoint includes (D91) — see seed/embed.go.
 type Module struct {
+	// svc is held for the v11 MCP provider. ⚠ The handler already had it and
+	// nothing else did, which is why it was not a field: a module that only mounts
+	// routes never needs the service by name. A provider does.
+	svc     *Service
 	handler *Handler
 	widgets []registry.WidgetProvider
 	metrics *metricProvider
@@ -34,6 +38,7 @@ type Module struct {
 // decides where the month boundary falls for the widget's "current month".
 func NewModule(svc *Service, loc *time.Location) *Module {
 	return &Module{
+		svc:     svc,
 		handler: NewHandler(svc),
 		widgets: []registry.WidgetProvider{newRozpocetProvider(svc.store, loc)},
 		metrics: &metricProvider{store: svc.store, loc: loc},

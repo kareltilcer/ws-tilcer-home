@@ -160,11 +160,19 @@ func TestAnnotationsAreTruthfulAndCarryNoDestructiveHint(t *testing.T) {
 	if len(env.Result.Tools) == 0 {
 		t.Fatal("tools/list returned nothing")
 	}
+	// ⚠ THE LIST IS WRITTEN OUT RATHER THAN DERIVED FROM THE TOOL NAMES, because
+	// deriving it would be the same guess the code makes and would agree with any
+	// mistake. Sixteen writers across nine modules; everything else is a read.
 	writers := map[string]bool{
 		"home_todo_card_create": true, "home_todo_card_update": true,
 		"home_todo_card_move": true, "home_todo_checklist": true,
 		"home_events_create": true, "home_events_update": true, "home_events_complete": true,
 		"home_notes_create": true, "home_notes_update": true, "home_notes_pin": true,
+		"home_documents_update": true, "home_documents_pin": true,
+		"home_finance_month_create": true, "home_finance_month_update": true,
+		"home_garden_task_create": true, "home_garden_task_complete": true,
+		"home_garden_planting_create": true, "home_garden_harvest_log": true,
+		"home_electricity_reading_add": true, "home_electricity_advance_add": true,
 	}
 	for _, tool := range env.Result.Tools {
 		if want := !writers[tool.Name]; tool.Annotations.ReadOnly != want {

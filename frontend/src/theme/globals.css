@@ -94,14 +94,48 @@
   --border-strong: oklch(0.400 0.014 264);
   --text: oklch(0.945 0.006 264);
   --muted: oklch(0.740 0.010 264);
-  /* Raised from 0.560 → 0.660 so 12px meta text clears WCAG AA (4.5:1) on the
-     darkest surfaces; caught by the axe pass. Still dimmer than --muted. */
-  --subtle: oklch(0.660 0.012 264);
+  /* Raised 0.560 → 0.660 (v5) so 12px meta text clears WCAG AA (4.5:1) on the
+     darkest surfaces; caught by the axe pass. Still dimmer than --muted.
+
+     v11: 0.660 → 0.700. THE ONE TOKEN v11 CHANGES, and it closes a defect open
+     since v10.2 — s1 6.77 · s2 6.30 · s3 5.65 · s4 4.92, all clear of 4.5:1.
+     Asistenti forced it: prefix, dates, scope and "naposledy použito" are all
+     secondary text, which makes those two screens the worst possible place to
+     inherit a metadata colour that does not measure.
+
+     ⚠ AND METADATA ON --accent-soft USES --muted ANYWAY. Against the OLD
+     --accent-soft (0.360) this token measured 4.05 there and had to; against the
+     corrected one below (0.300) it is 5.12 dark and 4.82 light, so the pairing
+     now passes and the --muted swaps in NastaveniPage, the chat author label and
+     every v11 cell are a register choice rather than a contrast workaround. They
+     stay: --muted is the right weight for a selected control's metadata. */
+  --subtle: oklch(0.700 0.012 264);
   --accent: oklch(0.680 0.120 256);
   /* Dark theme accent is intentionally bright (bloom-safe), so its foreground
      must be DARK to clear WCAG AA — white text on it is only 2.76:1. */
   --accent-fg: oklch(0.220 0.040 256);
-  --accent-soft: oklch(0.360 0.070 256);
+  /* v11: 0.360 → 0.300, and it is a CONTRAST fix rather than a taste one.
+
+     --accent ON --accent-soft is the selected state of eight controls across the
+     app — the side nav, the Administrace tab strip, the audience picker, the
+     conditions and schedule builders, the private-items filter, the note toolbar
+     and the widget badge — and it measured 3.77:1 in this theme and 4.33:1 in the
+     light one. Both are under AA, at 12.5–13 px, nowhere near the large-text
+     exemption. It is now 4.74 and 4.57 — the same two figures §V11-12 and the
+     CHANGELOG quote, because a measurement written down three times has to be
+     the same measurement all three.
+
+     ⚠ FIXED IN THE TOKEN, NOT AT THE EIGHT CALL SITES, and NastaveniPage’s own
+     v10.2 note is what asked for that: "the pairing itself is wider than this
+     screen and belongs to the design bundle’s tokens, not to a per-usage fix
+     here". Swapping eight components to --fg would have changed how the app’s
+     primary navigation looks, in a version whose design bundle says "no new
+     colour, one corrected value".
+
+     ⚠ AND v11 IS ONLY THE VERSION THAT MEASURED IT. The defect is as old as the
+     token; nothing had ever run axe over /administrace, because the sweep visits
+     the screens a version touched and no version had touched that one. */
+  --accent-soft: oklch(0.300 0.070 256);
   --now: oklch(0.780 0.110 78);
   --now-soft: oklch(0.360 0.055 78);
   --focus: oklch(0.780 0.130 256);
@@ -340,10 +374,19 @@
   --border-strong: oklch(0.840 0.008 264);
   --text: oklch(0.240 0.014 264);
   --muted: oklch(0.470 0.014 264);
-  --subtle: oklch(0.580 0.012 264);
+  /* v11: 0.580 → 0.515. The light theme was the worse half and the one v10.2
+     measured and left open — s1 4.29 · s2 4.04 · s3 3.76, every one of them under
+     AA, on a token whose whole job is small text. Now s1 5.60 · s2 5.26 · s3 4.91
+     · s4 4.56. Five per-usage swaps to --muted were shipped in v10.2 and v10.1
+     while the pairing itself went unfixed; this is the version that fixes it, and
+     those swaps stay because --accent-soft still takes --muted (see the dark
+     block above). */
+  --subtle: oklch(0.515 0.012 264);
   --accent: oklch(0.530 0.150 256);
   --accent-fg: oklch(0.990 0.004 256);
-  --accent-soft: oklch(0.930 0.045 256);
+  /* v11: 0.930 → 0.950 — the light half of the same fix. 4.33 → 4.57 against
+     --accent; --text is 14.1 and --muted 5.9 on it, both comfortable. */
+  --accent-soft: oklch(0.950 0.045 256);
   --now: oklch(0.640 0.130 66);
   --now-soft: oklch(0.945 0.050 78);
   --focus: oklch(0.550 0.150 256);
