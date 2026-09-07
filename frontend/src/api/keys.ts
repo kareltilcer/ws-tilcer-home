@@ -167,4 +167,20 @@ export const qk = {
    * it, and it names the two listings a room's own state can actually change.
    */
   chatAll: ['chat'] as const,
+
+  // v11 — Asistenti (MCP). TWO lists, and they are SIBLINGS rather than one
+  // nested under the other.
+  //
+  // ⚠ THE HAZARD IS SEGMENT NESTING, NOT A STRING PREFIX — the lesson v10 paid
+  // for above. The obvious shape, ['mcp','tokens'] and ['mcp','tokens','admin'],
+  // makes the member's own key a PREFIX of the admin one, so a member revoking
+  // their own token would refetch every member’s — and on a non-admin that
+  // request is a 403 the screen has no way to explain. Distinct heads make the
+  // two invalidations independent, which is what they are.
+  //
+  // ⚠ NEITHER IS PERSISTED (platform/pwa/persist.ts). A rehydrated list of
+  // another member's token names sitting on a shared laptop's disk is the v9
+  // purge-listing reasoning exactly.
+  mcpTokens: ['mcp', 'tokens'] as const,
+  adminMcpTokens: ['admin', 'mcp-tokens'] as const,
 }

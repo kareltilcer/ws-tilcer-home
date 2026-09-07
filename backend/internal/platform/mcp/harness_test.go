@@ -79,6 +79,10 @@ type harness struct {
 	// rule asserted for three modules and a rule asserted for nine — the one that
 	// forgets is the one nobody wrote a test for.
 	registry *mcp.Registry
+	// host is the assembled MCP host, for the manifest generator — which needs the
+	// LIVE surface rather than the wire, because a manifest built from tools/list
+	// would describe what one token was offered.
+	host *mcp.Host
 }
 
 const (
@@ -290,7 +294,7 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 
 	h := &harness{t: t, db: db, tokens: tokens, notes: notesSvc, todo: todoSvc,
 		chat: chatSvc, docs: docsSvc, elec: elecSvc, garden: gardenSvc,
-		notesProv: notesMod.MCPProvider(), registry: registry}
+		notesProv: notesMod.MCPProvider(), registry: registry, host: host}
 	h.handler = httpx.NewRouter(httpx.Deps{
 		Logger:   logger,
 		DB:       db,

@@ -69,6 +69,33 @@ export function daysUntilLabel(n: number): string {
   return `před ${a} ${czPlural(a, ['dnem', 'dny', 'dny'])}`
 }
 
+/**
+ * sinceLabel renders a PAST timestamp relatively — `dnes 14:20`, `včera`,
+ * `před 3 dny`, `před 2 měsíci` (v11).
+ *
+ * ⚠ IT IS RELATIVE BECAUSE THE UNDERLYING VALUE IS NOT PRECISE. A token’s
+ * `last_used_at` is written under an hour’s granularity so that forty tool calls
+ * are not forty writes to one row on a pool of one connection (D286) — rendering
+ * it as a clock time would claim a precision the column does not have. The exact
+ * stamp goes in the `title`, where a person who wants it can find it and nobody
+ * else is misled by it.
+ *
+ * ⚠ AND A FUTURE STAMP FALLS BACK TO `dnes`, rather than producing "před −2 dny".
+ * Clock skew between a member’s laptop and the droplet is ordinary, and the one
+ * shape this label must never take is a negative one.
+ */
+export function sinceLabel(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso)
+  if (Number.isNaN(then.getTime())) return ''
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.floor((midnight(now) - midnight(then)) / 86_400_000)
+  if (days <= 0) return `dnes ${fmtTime(iso)}`
+  if (days === 1) return 'včera'
+  if (days < 30) return `před ${days} ${czPlural(days, ['dnem', 'dny', 'dny'])}`
+  const months = Math.floor(days / 30)
+  return `před ${months} ${czPlural(months, ['měsícem', 'měsíci', 'měsíci'])}`
+}
+
 /** fmtNumber renders a number with Czech grouping/decimals. */
 export function fmtNumber(n: number): string {
   return czNumber.format(n)

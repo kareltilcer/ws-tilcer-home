@@ -266,3 +266,97 @@ export interface PublishRequest {
   folder_id?: string | null
   position?: string
 }
+
+// ---- Asistenti (MCP), v11 ----
+
+/**
+ * The modules a token's scope may name — openapi's `McpModule`, in the same
+ * order, which is `mcp.KnownModules` on the backend.
+ *
+ * ⚠ `dashboard` AND `logging` ARE ABSENT ON PURPOSE (FR-M2). The dashboard is the
+ * member's screen rather than their data, and logging publishes only a search the
+ * cross-module `home_search` already reaches. A tenth entry here would be a scope
+ * a member could pick that narrows a token to nothing at all.
+ */
+export type McpModule =
+  | 'todo'
+  | 'events'
+  | 'notes'
+  | 'documents'
+  | 'finance'
+  | 'garden'
+  | 'electricity'
+  | 'chat'
+  | 'admin'
+
+/**
+ * One personal access token as its owner sees it.
+ *
+ * ⚠ THERE IS NO `secret` AND NO `hash` FIELD, BY CONSTRUCTION. Only
+ * `McpTokenCreated` below carries a secret, and it exists for exactly one
+ * response — a client cannot log a value it never received.
+ */
+export interface McpToken {
+  id: string
+  /** The member's own label. Appears in the Log beside their display name as
+   *  "Karel · Claude (notebook)" (D291), which is why the mint dialog's hint asks
+   *  for something recognisable in a year. */
+  name: string
+  /** The secret's first 8 characters, so a row can be matched to a config file by
+   *  eye without revealing anything. */
+  prefix: string
+  /** Empty ⇒ every module the owner can see. Narrows only; never an access
+   *  control (D288). */
+  modules: McpModule[]
+  created_at: string
+  /** null ⇒ bez omezení. Written once at mint and never touched again (D285). */
+  expires_at: string | null
+  /**
+   * ⚠ ACCURATE TO WITHIN ONE HOUR, NOT TO THE CALL (D286). The backend writes it
+   * under the same granularity that keeps a session from writing on every
+   * request — on a pool of one connection, forty tool calls must not be forty
+   * writes to this row. So "naposledy použito" is rendered relatively (*před 3
+   * dny*), which is the precision it actually has.
+   */
+  last_used_at: string | null
+  last_used_ip: string | null
+  /** Non-null once revoked. The row is KEPT rather than deleted, so an audit
+   *  event's `via_token_id` still resolves to a name years later. */
+  revoked_at: string | null
+}
+
+/**
+ * `McpToken` plus the secret — the response of POST /api/mcp/tokens and of
+ * nothing else in the contract, ever.
+ *
+ * ⚠ THE FIELD IS WHY THE REVEAL DIALOG CANNOT BE DISMISSED BY OUTSIDE-CLICK OR
+ * ESCAPE (D315). There is no route that re-reads it and no cache that may hold
+ * it: only the SHA-256 is stored, so a member who dismisses without copying has
+ * lost the token and must mint another.
+ */
+export interface McpTokenCreated extends McpToken {
+  secret: string
+}
+
+export interface McpTokenCreate {
+  name: string
+  /** null ⇒ bez omezení. Not an arbitrary integer — four choices, so the UI and
+   *  the contract cannot disagree (D285). */
+  expires_in_days: 30 | 90 | 365 | null
+  modules?: McpModule[]
+}
+
+/** ⚠ Name and modules only — no expiry field exists to send (D285). */
+export interface McpTokenUpdate {
+  name?: string
+  modules?: McpModule[]
+}
+
+/** `McpToken` plus the owner, for Administrace → Asistenti → Tokeny. No secret,
+ *  no hash, and no mint route (D316). */
+export interface McpTokenAdmin extends McpToken {
+  user_id: string
+  /** Projected from `sessions` the way the chat directory is, so a member who has
+   *  never logged in shows as null — and cannot have a token either. */
+  display_name: string | null
+}

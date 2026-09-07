@@ -19,6 +19,21 @@ export interface LogFilters {
   entity_type?: string
   entity_id?: string
   level?: string
+  /**
+   * How the change was made: `mcp` through an assistant, `ui` in the browser,
+   * absent for both (v11, D292).
+   *
+   * ⚠ AN UNKNOWN VALUE IS A 422, never a silently ignored filter. Every other
+   * filter on this route is an equality bind, so a nonsense value narrows to
+   * nothing; this one is a SWITCH on the server, and falling through it would
+   * return every row as though nothing had been filtered.
+   *
+   * ⚠ THE EMPTY STRING IS NOT AN UNKNOWN VALUE. `query.go` has an explicit
+   * `case "":` meaning both, so `via=` is accepted — the client drops the
+   * parameter when *Vše* is chosen because a request should say what it means,
+   * not because a blank would be refused.
+   */
+  via?: 'mcp' | 'ui' | ''
   q?: string
   limit?: number
   cursor?: string
