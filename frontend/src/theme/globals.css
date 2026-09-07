@@ -101,7 +101,14 @@
   /* Dark theme accent is intentionally bright (bloom-safe), so its foreground
      must be DARK to clear WCAG AA — white text on it is only 2.76:1. */
   --accent-fg: oklch(0.220 0.040 256);
-  --accent-soft: oklch(0.360 0.070 256);
+  /* Darkened from 0.360, where --accent on it measured 3.77:1 — axe's serious
+     violation on /administrace's selected tab chip and audience chip, both
+     `bg-accent-soft text-accent`. 4.91:1 here, and --subtle on it goes 3.50 →
+     4.55 (the active row in the mobile "more" sheet, AppShell). ⚠ This is the
+     token --bub-mine aliases, so the chat fills move with it; the v10 note below
+     carries the new numbers. Only DARKER works: --accent sits at L 0.680, so
+     lightening --accent-soft walks it toward the foreground, not away. */
+  --accent-soft: oklch(0.290 0.070 256);
   --now: oklch(0.780 0.110 78);
   --now-soft: oklch(0.360 0.055 78);
   --focus: oklch(0.780 0.130 256);
@@ -220,8 +227,8 @@
   /* ---- v10: Chat introduces NO NEW COLOUR ----
 
      Three aliases over surfaces and families that already exist. The reason is
-     recorded rather than assumed: measured on the canvas in sRGB, --bub-mine
-     against --bub-theirs is 1.55:1 in dark and 1.16:1 in light — DELIBERATELY
+     recorded rather than assumed: measured in sRGB, --bub-mine against
+     --bub-theirs is 1.19:1 in dark and 1.08:1 in light — DELIBERATELY
      below 3:1, because the own-versus-others distinction must NOT rest on colour.
      Alignment and the author label carry it; the tint only reinforces.
 
@@ -236,15 +243,18 @@
   --bub-mine: var(--accent-soft);
   --bub-theirs: var(--s2);
   /* The bubble's 1px edge, which is what actually draws its SHAPE. The fills sit
-     at 1.55:1 / 1.16:1 against each other and cannot be relied on to say where one
+     at 1.19:1 / 1.08:1 against each other and cannot be relied on to say where one
      bubble stops — so the outline and the tail corner do that, and the two edges
      are the accent and the ordinary border respectively, matching the fills they
      wrap. Aliases like the two above: measured against the design, `--accent` and
      `--border` already hold the exact values v10 specifies in both themes. */
   --bub-mine-edge: var(--accent);
   --bub-theirs-edge: var(--border);
-  /* The author label inside a FOREIGN bubble. ⚠ --muted, not --subtle: measured on
-     --s2 in the light theme, --subtle falls to 4.04:1, under the AA bar. */
+  /* The author label inside a FOREIGN bubble. ⚠ --muted, not --subtle. v10 chose
+     it because --subtle measured 4.04:1 on --s2 in the light theme, under the AA
+     bar; that specific reason is now gone — the light --subtle was darkened and
+     reads 5.17:1 there. The choice stands on what is left: the name of whoever is
+     speaking is not the dimmest thing in the bubble. */
   --bub-label: var(--muted);
   /* A REMOVED attachment's epitaph (PR 3, D243). ⚠ --unmeasured promoted to a
      SECOND MEANING OF THE SAME IDEA: a thing that is deliberately not there,
@@ -340,15 +350,55 @@
   --border-strong: oklch(0.840 0.008 264);
   --text: oklch(0.240 0.014 264);
   --muted: oklch(0.470 0.014 264);
-  --subtle: oklch(0.580 0.012 264);
+  /* Darkened from 0.580, the mirror of what v11 did to the dark --subtle above
+     and for the same reason: at 0.580 it measured 4.29:1 on --s1, and axe flagged
+     two nodes of it on /administrace (a 10px mono label and an 11.5px caption).
+     Now 5.51 on --s1, 5.17 on --s2, 4.83 on --s3, 4.77 on --accent-soft.
+     ⚠ --s4 is 4.48 and stays under: --s4 carries no text anywhere in the app (its
+     one use is a 4px progress rail in CardTile), and the same hole exists in the
+     dark theme at 4.23. Text on --s4 needs a re-measure here first.
+     ⚠ The gap to --muted narrows to 0.05 L, which is the cost of AA — --subtle is
+     still the dimmer of the two, and nothing else separates them. */
+  --subtle: oklch(0.520 0.012 264);
   --accent: oklch(0.530 0.150 256);
   --accent-fg: oklch(0.990 0.004 256);
-  --accent-soft: oklch(0.930 0.045 256);
+  /* Lightened from 0.930 0.045, where --accent on it measured 4.31:1 — the same
+     two chips as the dark theme above.
+     ⚠ AND THE CHROMA WAS NEVER REAL. Hue 256 leaves sRGB at C 0.0340 by L 0.930,
+     so the old declaration was 0.045 against a 0.0340 ceiling and what actually
+     painted was the browser's gamut mapping of it, not this file's value. 0.022
+     at L 0.950 is inside the gamut, so the declared colour is the painted one.
+     Measured: --accent 4.62:1, --subtle 4.77:1, --text 14.23:1. */
+  --accent-soft: oklch(0.950 0.022 256);
   --now: oklch(0.640 0.130 66);
   --now-soft: oklch(0.945 0.050 78);
   --focus: oklch(0.550 0.150 256);
   --good: oklch(0.520 0.120 150);
-  --warn: oklch(0.600 0.130 66);
+  /* Darkened from the design's 0.600 0.130, which measured 4.08:1 on --s1 — the
+     serious axe color-contrast violation on Rozeslat's "nobody is subscribed"
+     line (12px body text). v11 corrected the DARK --subtle and left this one;
+     /administrace is in the axe sweep now, and adding it turned up two more —
+     the light --subtle and --accent-soft in both themes, all corrected above.
+
+     ⚠ THE CHROMA CAME DOWN WITH THE LIGHTNESS. Hue 66 leaves sRGB at C 0.1091 by
+     L 0.490 — the old pair sat on that boundary too, 0.130 against a 0.1336
+     ceiling — so holding 0.130 while darkening would have handed the browser's
+     own gamut mapping, rather than this value, the decision about what is painted.
+
+     ⚠ MEASURED AGAINST THE WASH, NOT ONLY THE SURFACE: text-warn is also drawn on
+     its own bg-warn/10…/20 tints, which darken with the token, so those are the
+     tighter pairs. Everything the app actually draws, in sRGB — plain on
+     --s1…--s4 5.24–6.44:1; warn/10 on --s1/--s2/--s3 5.57 / 5.24 / 4.91;
+     warn/15 on --s1/--s2 5.16 / 4.87; and warn/20 on --s1 4.77, the audit log's
+     level chip at 10px bold, which is the tightest pair in the app and the one
+     that set this value. Dark is untouched and unaffected — its worst drawn pair
+     is 5.68:1.
+
+     ⚠ warn/20 on --s3 (4.25), and warn/15 (4.27) and warn/20 (3.97) on --s4, do
+     NOT clear AA — warn/10 on --s4 does, at 4.57. None of them is drawn:
+     bg-warn/20 appears once, on a bg-s1 row, and --s4 carries no text at all. A
+     warn wash on a deeper surface has to be re-measured here first. */
+  --warn: oklch(0.490 0.105 66);
   --danger: oklch(0.550 0.170 25);
   --l-byt: oklch(0.500 0.140 250);
   --l-fin: oklch(0.480 0.120 150);

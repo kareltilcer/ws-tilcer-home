@@ -1080,8 +1080,8 @@ function LiveBubble({
           // No transition while the finger is down — the bubble tracks it — and one
           // on the way back, so a released swipe settles instead of snapping.
           gestures.swipeX === 0 && 'transition-transform',
-          // ⚠ COLOUR ONLY REINFORCES. The two bubble tints are measured at 1.55:1
-          // dark / 1.16:1 light against each other — deliberately below 3:1 — so
+          // ⚠ COLOUR ONLY REINFORCES. The two bubble tints are measured at 1.19:1
+          // dark / 1.08:1 light against each other — deliberately below 3:1 — so
           // ALIGNMENT, the tail corner and the author label are what actually carry
           // own-versus-others. The squared corner is the load-bearing half: it
           // survives greyscale, low brightness and both themes, which the fill does
@@ -1099,8 +1099,11 @@ function LiveBubble({
           gestures.swipeArmed && 'border-accent',
         )}
       >
-        {/* ⚠ `--bub-label` IS `--muted`, NOT `--subtle`: measured on `--s2` in the
-            light theme, --subtle falls to 4.04:1, under the AA bar. */}
+        {/* ⚠ `--bub-label` IS `--muted`, NOT `--subtle`. v10 chose it because
+            --subtle measured 4.04:1 on `--s2` in the light theme, under the AA bar;
+            that reason is gone — the light --subtle was darkened and reads 5.17:1
+            there. --muted stands on hierarchy: the name of whoever is speaking is
+            not the dimmest thing in the bubble. See theme/globals.css. */}
         {!mine && (
           <div className="mb-1 text-[11px] font-bold text-bub-label">{message.author_label}</div>
         )}

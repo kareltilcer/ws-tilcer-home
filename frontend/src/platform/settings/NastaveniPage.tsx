@@ -65,11 +65,13 @@ export function NastaveniPage() {
           {/* ⚠ --muted, NOT --subtle, ON BOTH OF THESE. v10.2 put /nastaveni into the
               axe sweep (e2e/app.spec.ts) and it came back with two serious
               color-contrast violations that had been on this screen since v5:
-              --subtle on --s1 measures 4.29:1 in the LIGHT theme, under the 4.5:1 AA
+              --subtle on --s1 measured 4.29:1 in the LIGHT theme, under the 4.5:1 AA
               bar, and neither 10 px nor 11.5 px is anywhere near the large-text
-              exemption. Same swap, same reason, as the foreign bubble's author label
-              in theme/globals.css. The pairing itself is wider than this screen and
-              belongs to the design bundle's tokens, not to a per-usage fix here. */}
+              exemption. That comment ended by saying the pairing belonged to the
+              tokens rather than to a per-usage fix, and it has since been fixed
+              there — the light --subtle was darkened and reads 5.51:1 on --s1. Both
+              of these would pass as --subtle now; --muted is kept as the choice, not
+              as the workaround it started as. */}
           <span className="inline-flex h-6 items-center rounded-full border border-border px-2.5 font-mono text-[10px] uppercase tracking-wide text-muted">
             {cs.settings.thisDevice}
           </span>
@@ -254,11 +256,13 @@ function DeviceState({
         <Smartphone size={16} aria-hidden />
         <span className="ml-2">{cs.settings.enable}</span>
       </Button>
-      {/* ⚠ --muted, AND THE AXE SWEEP DID NOT FIND THIS ONE. It is the same 4.29:1
+      {/* ⚠ --muted, AND THE AXE SWEEP DID NOT FIND THIS ONE. It was the same 4.29:1
           pairing the two tags above were swapped for, on the same screen the sweep
           now covers — it survived only because this line renders after the browser
-          prompt has been dismissed, a state no e2e run reaches. A green suite is
-          evidence about the states it visited, never about a screen. */}
+          prompt has been dismissed, a state no e2e run reaches. The token has since
+          been darkened, so the pairing would pass either way, but the point stands
+          and is why it is written down: a green suite is evidence about the states
+          it visited, never about a screen. */}
       {state.dismissed && <p className="text-[12.5px] text-muted">{cs.settings.dismissed}</p>}
       {!online && <p className="text-[12.5px] text-muted">{cs.settings.offlineHint}</p>}
       {state.error && <p className="text-[12.5px] text-danger">{state.error}</p>}
