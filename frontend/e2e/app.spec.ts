@@ -67,8 +67,9 @@ test('create an event in Okno → appears in the month list', async ({ page }) =
 
 test('a11y: no serious/critical axe violations (both themes × 375/1440)', async ({ page }) => {
   // 2 themes × 2 viewports × 4 paths = 16 loads, each with a reload and a full
-  // axe pass, in ONE test — the config's 30s per-test budget is a fifth of what
-  // that needs. Raised here rather than globally so a genuinely hung page in any
+  // axe pass, in ONE test. Measured at ~39s against the config's 30s per-test
+  // budget, so the fourth path is what pushed it over. Raised here rather than
+  // globally, with room for a slower machine, so a genuinely hung page in any
   // other test still fails fast.
   test.setTimeout(150_000)
 

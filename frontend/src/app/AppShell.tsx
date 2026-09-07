@@ -479,12 +479,13 @@ function SideLink({ item, admin }: { item: NavItem; admin?: boolean }) {
           <UnreadBadge count={item.badge} />
         </span>
       )}
-      {/* ⚠ --muted, NOT --subtle, AND THE E2E SWEEP IS WHY. axe has been failing on
-          this tag at light/1440 since the day the Log entry got it: --subtle on --s1
-          is 4.29:1 in the light theme, under the 4.5:1 AA bar, and 9.5 px is nowhere
-          near the large-text exemption. Same swap and same measurement as the
-          foreign bubble's author label in theme/globals.css. The pairing is wider
-          than these two tags and belongs to the design bundle's tokens. */}
+      {/* ⚠ --muted, NOT --subtle. The sweep is why it was swapped: axe failed on
+          this tag at light/1440 from the day the Log entry got it, because --subtle
+          on --s1 was 4.29:1 in the light theme and 9.5 px is nowhere near the
+          large-text exemption. That pairing has since been fixed at the token — the
+          light --subtle was darkened and reads 5.51:1 on --s1 — so --muted is no
+          longer forced here, only preferred: a role tag should not be the faintest
+          thing in the row. Same story as the foreign bubble's author label. */}
       {admin && (
         <span className="ml-auto font-mono text-[9.5px] uppercase tracking-wide text-muted" aria-hidden>
           admin
@@ -557,13 +558,13 @@ function UnreadBadge({ count: n }: { count: number }) {
  * own is noise; a `title` alone would not be announced at all, since this is not an
  * interactive element and title is only surfaced on some of those.
  *
- * ⚠ --muted, NOT THE --subtle THE ARTBOARDS SPECIFY, and it is the same measurement
- * theme/globals.css already made for the foreign bubble's author label: --subtle on
- * --s1 is 4.29:1 in the LIGHT theme, under the 4.5:1 AA bar for text this size, and
- * 10.5 px is nowhere near the large-text exemption. --muted is 6.81:1 light and
- * 7.88:1 dark. The label is quiet either way; the hierarchy it loses to the role
- * line above it is a step of grey, and the alternative is a line the person who
- * needs it most cannot read.
+ * ⚠ --muted, NOT THE --subtle THE ARTBOARDS SPECIFY. The reason was AA: --subtle on
+ * --s1 measured 4.29:1 in the LIGHT theme, under the bar for text this size, and
+ * 10.5 px is nowhere near the large-text exemption. The token has since been
+ * darkened and reads 5.51:1, so --subtle would now pass here and the artboards
+ * could be honoured; --muted is kept because the label is quiet either way and
+ * re-dimming it buys back only a step of grey against the role line above it.
+ * --muted is 6.83:1 light and 7.88:1 dark.
  */
 function VersionLabel({ className }: { className?: string }) {
   return (

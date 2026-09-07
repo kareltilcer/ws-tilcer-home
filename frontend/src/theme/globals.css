@@ -103,7 +103,7 @@
   --accent-fg: oklch(0.220 0.040 256);
   /* Darkened from 0.360, where --accent on it measured 3.77:1 — axe's serious
      violation on /administrace's selected tab chip and audience chip, both
-     `bg-accent-soft text-accent`. 4.91:1 here, and --subtle on it goes 3.72 →
+     `bg-accent-soft text-accent`. 4.91:1 here, and --subtle on it goes 3.50 →
      4.55 (the active row in the mobile "more" sheet, AppShell). ⚠ This is the
      token --bub-mine aliases, so the chat fills move with it; the v10 note below
      carries the new numbers. Only DARKER works: --accent sits at L 0.680, so
@@ -394,9 +394,10 @@
      that set this value. Dark is untouched and unaffected — its worst drawn pair
      is 5.68:1.
 
-     ⚠ warn/20 on --s3 (4.25) and any wash on --s4 do NOT clear AA, and neither is
-     drawn: bg-warn/20 appears once, on a bg-s1 row, and --s4 carries no text at
-     all. A warn wash on a deeper surface has to be re-measured here first. */
+     ⚠ warn/20 on --s3 (4.25), and warn/15 (4.27) and warn/20 (3.97) on --s4, do
+     NOT clear AA — warn/10 on --s4 does, at 4.57. None of them is drawn:
+     bg-warn/20 appears once, on a bg-s1 row, and --s4 carries no text at all. A
+     warn wash on a deeper surface has to be re-measured here first. */
   --warn: oklch(0.490 0.105 66);
   --danger: oklch(0.550 0.170 25);
   --l-byt: oklch(0.500 0.140 250);
