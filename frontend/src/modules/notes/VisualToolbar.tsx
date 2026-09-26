@@ -1,7 +1,7 @@
 import { cs } from '@/i18n/cs'
 import type { NoteFormatCommand } from './noteFormat'
 
-// VisualToolbar is the formatting bar of the Vizuální mode — the one thing the design
+// VisualToolbar is the formatting bar of the WYSIWYG (Upravit) mode — the one thing the design
 // has drawn since v3 that the WYSIWYG surface shipped without, leaving every heading,
 // bold and list to Markdown syntax the visual editor exists to spare people.
 //

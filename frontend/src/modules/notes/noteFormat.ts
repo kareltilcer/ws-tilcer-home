@@ -20,13 +20,13 @@ import {
 } from '@milkdown/kit/preset/commonmark'
 import { toggleLinkCommand } from '@milkdown/kit/component/link-tooltip'
 
-// The Vizuální toolbar's contract with the editor, kept in its own module so the three
+// The WYSIWYG toolbar's contract with the editor, kept in its own module so the three
 // files that share it — the bar, its host, and the editor — do not all have to reach into
 // MilkdownEditor (and so the mapping below can be exercised without evaluating Crepe).
 // The bar and the host import ONLY the types from here, which erase at build, so
 // ProseMirror stays out of the landing bundle exactly as it does today.
 
-// NoteFormatCommand is the closed set the Vizuální toolbar can ask for: the minimal bar
+// NoteFormatCommand is the closed set the WYSIWYG toolbar can ask for: the minimal bar
 // the design draws (headings, bold/italic, list, quote, code, link) and no more — this is
 // a household notes app, not a CMS.
 export type NoteFormatCommand = 'h1' | 'h2' | 'bold' | 'italic' | 'bulletList' | 'quote' | 'code' | 'link'

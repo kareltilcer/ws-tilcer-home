@@ -19,7 +19,7 @@ import type { NoteEditorHandle } from './noteFormat'
 
 // Milkdown (Crepe) is heavy (ProseMirror + CodeMirror). Lazy-load it so it stays
 // out of the landing bundle and is fetched only when someone opens the WYSIWYG
-// ("Vizuální") mode — the read/Markdown modes need none of it. VisualToolbar is
+// ("Upravit") mode — the read/Markdown modes need none of it. VisualToolbar is
 // deliberately NOT part of that chunk: it only names commands (a type-only import,
 // erased at build), so the bar can render while Crepe is still being fetched.
 const MilkdownEditor = lazy(() => import('./MilkdownEditor').then((m) => ({ default: m.MilkdownEditor })))
@@ -66,13 +66,13 @@ const clearDraftMirror = (id: string) => {
 //
 // The Markdown tab is a plain textarea with no image pipeline. Copying markdown/HTML
 // source that embeds an image as an oversized base64 `data:` URI would land it inline —
-// which blows the API body cap and the server rejects (the same guard the Vizuální editor
+// which blows the API body cap and the server rejects (the same guard the WYSIWYG editor
 // sidesteps by uploading). So before such an image reference reaches the draft we upload
-// it and swap in the small reference URL — the text equivalent of the Vizuální editor's
+// it and swap in the small reference URL — the text equivalent of the WYSIWYG editor's
 // upload plugin. (A pasted image FILE is handled separately, on the same event.)
 //
 // The match is scoped to IMAGE-REFERENCE position only — `![alt](data:…)` or a raw-HTML
-// `<img … src="data:…">` — mirroring the Vizuální editor's "image nodes only" rule. A
+// `<img … src="data:…">` — mirroring the WYSIWYG editor's "image nodes only" rule. A
 // bare `data:image…` token sitting in prose or a fenced code block (e.g. a base64 sample
 // a user is documenting) is deliberately left verbatim, never silently rewritten into an
 // upload reference — even though the server still rejects an oversized one, which is the
@@ -147,7 +147,7 @@ const isBlank = (text: string) => text.trim() === ''
 
 // NoteView is the standalone note read/edit surface reused verbatim by both the
 // Poznámky pane and the Nástěnka overlay (FR-P8). It owns the note fetch, the
-// three-mode editor (Číst · Vizuální · Markdown over one body_md), autosave
+// three-mode editor (Číst · Upravit · Markdown over one body_md), autosave
 // (last-write-wins), the two-scope pin control, copy-link, and the "změněno
 // jinde" advisory. Structural actions (move/delete) are delegated to the host
 // via callbacks so the same component works inside an overlay that has no tree.
@@ -195,7 +195,7 @@ export function NoteView({
   const staleSeed = useRef(false) // the WYSIWYG editor was seeded from a draft holding placeholders
   const draftRef = useRef<string | null>(null) // latest draft, readable from the []-deps unmount flush
   draftRef.current = draft
-  const editorRef = useRef<NoteEditorHandle>(null) // the Vizuální toolbar's way into the editor
+  const editorRef = useRef<NoteEditorHandle>(null) // the WYSIWYG toolbar's way into the editor
 
   // openEditor is the ONE way an edit session starts, so the three ways in — the tab
   // click, a draft rescued on mount, and the empty note that opens itself — cannot
@@ -214,7 +214,7 @@ export function NoteView({
       untouched.current = seed.initial === seed.stored
     }
     // An empty note is an invitation to write, so the surface being entered takes the
-    // caret — which is what raises the keyboard on a phone, where tapping "Vizuální"
+    // caret — which is what raises the keyboard on a phone, where tapping "Upravit"
     // otherwise opens an editor you still have to tap a second time to type a word in.
     // Only when it IS empty: taking the caret on a note that already has text would
     // slide half of it under a keyboard nobody asked for. A tab click into a session
@@ -224,7 +224,7 @@ export function NoteView({
       // Crepe reads `defaultValue` once per `reseed` value and never again, so a new
       // seed needs a new editor. Seeding it from a draft that still holds an upload
       // placeholder gives it a token it cannot resolve; remember that so the re-seed
-      // effect below re-seeds it once the uploads land. (Entering Vizuální with
+      // effect below re-seeds it once the uploads land. (Entering Upravit with
       // nothing in flight seeds clean — the common case.)
       setReseed((r) => r + 1)
       staleSeed.current = pendingTokens.current.size > 0
@@ -569,7 +569,7 @@ export function NoteView({
     staleSeed.current = false
     // The other half of adoptStored's rule: a re-seed the user did not ask for drops any
     // standing focus request. A note CAN be blank with an upload still in flight — paste
-    // an image, then delete the node again while it uploads — and re-entering Vizuální
+    // an image, then delete the node again while it uploads — and re-entering Upravit
     // there arms the request and this re-seed at once, so without this the remount would
     // pull the caret back out of wherever the wait had left the user.
     setAutoFocus(false)
@@ -653,7 +653,7 @@ export function NoteView({
   // draft can trigger a save) and released in `finally`, whichever way the upload ends.
   // The token is tracked alongside the counter so the unmount flush can strip the
   // placeholders that will never resolve out of the body it rescues. It returns the URL
-  // so the Vizuální editor can point its own node at it (see beginInlineImageUpload).
+  // so the WYSIWYG editor can point its own node at it (see beginInlineImageUpload).
   const resolveUploadToken = async (
     token: string,
     source: () => Promise<File | Blob>,
@@ -678,7 +678,7 @@ export function NoteView({
     }
   }
 
-  // beginInlineImageUpload is the Vizuální editor's way into this SAME pipeline for an
+  // beginInlineImageUpload is the WYSIWYG editor's way into this SAME pipeline for an
   // image pasted as HTML (a data:/blob: node its own onUpload never sees). Routing it
   // through here rather than letting the editor upload on its own is what makes the two
   // surfaces behave alike: one autosave hold, one durable mirror, one unmount rescue. It
@@ -693,7 +693,7 @@ export function NoteView({
 
   // The Markdown surface is a plain textarea with no image pipeline, so a pasted image
   // would land as a multi-megabyte base64 data: URI — which the server rejects (the
-  // body-cap guard the Vizuální editor sidesteps by uploading). Give it the same path
+  // body-cap guard the WYSIWYG editor sidesteps by uploading). Give it the same path
   // for both vectors: a pasted image FILE (clipboard image / copied from a page), and
   // markdown/HTML TEXT that embeds an oversized `data:image…` image reference. Either way
   // we insert a placeholder at the caret NOW (so the caret and any concurrent typing are
@@ -982,7 +982,7 @@ export function NoteView({
         )}
       </div>
 
-      {/* Formatting bar — Vizuální only, and outside the scroller below so it stays put
+      {/* Formatting bar — Upravit only, and outside the scroller below so it stays put
           while a long note scrolls under it. */}
       {mode === 'visual' && <VisualToolbar onCommand={(command) => editorRef.current?.format(command)} />}
 
@@ -994,7 +994,7 @@ export function NoteView({
             // Empty note: the caret starts here, so a phone raises its keyboard on the
             // tab tap itself — React focuses an autoFocus element during the same commit,
             // which keeps the tap and the focus one gesture as far as iOS is concerned.
-            // The Vizuální surface cannot promise that (see MilkdownEditor).
+            // The WYSIWYG surface cannot promise that (see MilkdownEditor).
             autoFocus={autoFocus}
             value={body}
             spellCheck={false}
