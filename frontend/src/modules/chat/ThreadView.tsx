@@ -1077,6 +1077,17 @@ function LiveBubble({
         {...gestures.handlers}
         className={cn(
           'max-w-[min(560px,86%)] border px-3 py-2.5 text-fg lg:max-w-[min(560px,78%)]',
+          // ⚠ THE FLOOR IS YOUR OWN FOOTER, AND IT IS THE SAME FOR BOTH SIDES. A bubble
+          // is as wide as its widest line, and on a short message that line is the
+          // footer — which carries three verbs on your own messages and one on
+          // everybody else's. So *ok* measured 270 px when you sent it and 130 when
+          // somebody answered it, and the other person's replies were the cramped
+          // ones. 270 is `14:20 · Odpovědět · Upravit · Smazat zprávu` on one line —
+          // 244 px of 10 px mono, the padding and the border — so a short message is
+          // one width whichever side it is on, and your own cards do not move. The
+          // percentage is the cap's, so the floor can never out-grow it on a narrow
+          // phone.
+          'min-w-[min(270px,86%)] lg:min-w-[min(270px,78%)]',
           // No transition while the finger is down — the bubble tracks it — and one
           // on the way back, so a released swipe settles instead of snapping.
           gestures.swipeX === 0 && 'transition-transform',
@@ -1280,7 +1291,7 @@ function ReactionRow({
  *
  * ⚠ THE STRIP IS WHAT THIS FIXES. In the flow it resized the message card the moment
  * it opened, which the row's own note above spells out: the bar is ~380 px wide and a
- * bubble is as wide as what somebody typed.
+ * short bubble is only as wide as its 270 px floor.
  *
  * ⚠ AND IT STILL DOES NOT REPOSITION ON SCROLL, which was the strip's whole argument.
  * It is absolute against the row, and the row is inside the scroll box — so it travels
