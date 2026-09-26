@@ -1,4 +1,4 @@
-// The rule the Vizuální editor asks before it moves the caret on an empty note, kept in
+// The rule the WYSIWYG editor asks before it moves the caret on an empty note, kept in
 // its own module for the same reason noteFormat.ts is: MilkdownEditor evaluates Crepe at
 // import and jsdom cannot load it, so anything left in there cannot be exercised by a
 // test. This half is pure DOM predicate — no ProseMirror, no Crepe — so out here it can be.
@@ -28,7 +28,7 @@ const isTextEntry = (el: Element): boolean =>
 //   - nothing focused at all (a page load, or a tap that focused nothing, leaves body);
 //   - an ANCESTOR of the root — the Nástěnka overlay's Radix dialog focuses itself on open;
 //   - anything already inside the editor;
-//   - the same element we mounted under — Chrome leaves the "Vizuální" tab button focused
+//   - the same element we mounted under — Chrome leaves the "Upravit" tab button focused
 //     after the tap that opened us, and taking the caret off a button costs nothing.
 //
 // …EXCEPT when that last one is a field the user could be writing in. The rename pencil one

@@ -14,7 +14,7 @@ import { uploadNoteImage } from './api/endpoints'
 import { cs } from '@/i18n/cs'
 import { MAX_INLINE_IMAGE_DATA_LEN } from './inlineImage'
 
-// MilkdownEditor is the WYSIWYG ("Vizuální") surface — Milkdown's batteries-
+// MilkdownEditor is the WYSIWYG ("Upravit") surface — Milkdown's batteries-
 // included Crepe editor (ProseMirror). It serializes to Markdown, so it round-trips
 // the one canonical body_md (D30) — no HTML is persisted.
 //
@@ -30,7 +30,7 @@ import { MAX_INLINE_IMAGE_DATA_LEN } from './inlineImage'
 //
 // The plugin acts only on a src that CANNOT be persisted as it stands (see needsUpload),
 // which is what makes its scan safe to run on mount as well as after a paste: the scan
-// fires on every editor mount (switching to Vizuální remounts it). A small inline data:
+// fires on every editor mount (switching to Upravit remounts it). A small inline data:
 // image the server accepts is left exactly where it is.
 //
 // WHERE THE SRC CAME FROM decides what a failed upload may do to it, because that decides

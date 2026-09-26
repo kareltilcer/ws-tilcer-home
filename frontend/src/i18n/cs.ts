@@ -140,7 +140,11 @@ export const cs = {
     pickPrompt: 'Vyberte poznámku ze stromu složek.',
     // editor / view
     modeRead: 'Číst',
-    modeVisual: 'Vizuální',
+    // Was "Vizuální", which named how the surface LOOKS rather than what it is for: a
+    // household member who had used it for weeks still would not look under it for
+    // editing. Markdown edits too, but it says so by being the raw syntax; this is the
+    // tab a person who wants to change a note should find without being told.
+    modeVisual: 'Upravit',
     modeMarkdown: 'Markdown',
     changedElsewhere: 'Tuto poznámku mezitím upravil někdo jiný. Tvoje změny se uloží jako poslední (přepíší).',
     reloadTheirs: 'Načíst jejich verzi',
@@ -158,7 +162,7 @@ export const cs = {
     goneBody: 'Někdo ji mezitím smazal. Zavři toto okno.',
     bodyPlaceholder: 'Piš v Markdownu…',
     visualPlaceholder: 'Začni psát…',
-    // Vizuální formatting bar. `toolbar` names the group; the rest are the tooltip
+    // WYSIWYG (Upravit) formatting bar. `toolbar` names the group; the rest are the tooltip
     // and the accessible name of one button each — the button FACE is the design's
     // glyph (H1, B, •, …), which reads as nothing useful when spoken aloud.
     toolbar: 'Formátování',
@@ -208,7 +212,7 @@ export const cs = {
     badgeBoth: 'Pro všechny',
     // sharing
     copyLink: 'Odkaz',
-    // The face says only "Odkaz", which the Vizuální toolbar's link button is also
+    // The face says only "Odkaz", which the WYSIWYG toolbar's link button is also
     // called: spoken aloud the two were indistinguishable, so this one says which.
     copyLinkLabel: 'Kopírovat odkaz',
     copyLinkTitle: 'Zkopírovat odkaz — otevře se jen přihlášeným členům domácnosti',

@@ -9,7 +9,7 @@ import type { NoteDetail } from './api/types'
 import { NoteView } from './NoteView'
 
 // WHICH TAB A NOTE OPENS ON. Číst has nothing to render for a note with no body, and
-// an empty note is nearly always one just created — so it opens in Vizuální instead,
+// an empty note is nearly always one just created — so it opens in Upravit instead,
 // and the note that already has text still opens in Číst. The cases below pin both
 // halves plus the three things the default must not run over: a reader (who has no
 // editor to be dropped into), a rescued draft (Markdown, so the recovered text is
@@ -37,12 +37,12 @@ vi.mock('@/app/auth', () => ({
 }))
 
 // Crepe is lazy-loaded and needs a real DOM/ProseMirror; the stub stands in for the
-// Vizuální surface, echoes what it was seeded with, and offers a button that emits an
+// WYSIWYG surface, echoes what it was seeded with, and offers a button that emits an
 // edit — the one thing a test cannot do by typing into a ProseMirror that isn't there.
 // It also records the formatting commands the toolbar sends down its handle, and reports
 // whether the caret was asked for — which is as far as either can be proven without a
 // real editor under it: putting the caret in a document is milkdown's half of that.
-const EMITTED = vi.hoisted(() => 'napsáno ve Vizuálním')
+const EMITTED = vi.hoisted(() => 'napsáno ve WYSIWYG editoru')
 const PASTED_IMAGE = vi.hoisted(() => 'data:image/png;base64,AAAA')
 const formatted = vi.hoisted(() => [] as string[])
 vi.mock('./MilkdownEditor', () => ({
@@ -146,7 +146,7 @@ const formatBar = () => screen.queryByRole('group', { name: cs.notes.toolbar })
 describe('NoteView opening mode', () => {
   beforeEach(resetApi)
 
-  it('opens an empty note in Vizuální', async () => {
+  it('opens an empty note in Upravit', async () => {
     getNote.mockResolvedValue(note(''))
     renderNote()
     expect(await screen.findByTestId('visual-editor')).toBeInTheDocument()
@@ -154,15 +154,15 @@ describe('NoteView opening mode', () => {
 
   // A note the API returns with a null body is the same empty note, and the create
   // endpoint is free to send either.
-  it('opens a null-bodied note in Vizuální', async () => {
+  it('opens a null-bodied note in Upravit', async () => {
     getNote.mockResolvedValue(note(null))
     renderNote()
     expect(await screen.findByTestId('visual-editor')).toBeInTheDocument()
   })
 
   // Blank is not the same as empty, and the user cannot tell the two apart: a body of
-  // whitespace renders as nothing in Číst, so it opens in Vizuální too.
-  it('opens a whitespace-only note in Vizuální', async () => {
+  // whitespace renders as nothing in Číst, so it opens in Upravit too.
+  it('opens a whitespace-only note in Upravit', async () => {
     getNote.mockResolvedValue(note('\n\n   \n'))
     renderNote()
     expect(await screen.findByTestId('visual-editor')).toBeInTheDocument()
@@ -207,7 +207,7 @@ describe('NoteView opening mode', () => {
 
   // Emptying a note in the editor must not yank the tab out from under the person
   // doing the emptying: the default decides once, on open.
-  it('does not snap back to Vizuální when a note is emptied from Markdown', async () => {
+  it('does not snap back to Upravit when a note is emptied from Markdown', async () => {
     getNote.mockResolvedValue(note('mléko'))
     renderNote()
     await screen.findByText('mléko')
@@ -322,13 +322,13 @@ describe('NoteView auto-opened editor and the changed-elsewhere advisory', () =>
   })
 })
 
-// The Vizuální formatting bar. What the commands DO belongs to milkdown and is stubbed
+// The WYSIWYG formatting bar. What the commands DO belongs to milkdown and is stubbed
 // out here; what this view owns is which tab the bar belongs to and that pressing a
 // button reaches the editor at all — the two halves that were simply missing.
-describe('NoteView Vizuální toolbar', () => {
+describe('NoteView WYSIWYG toolbar', () => {
   beforeEach(resetApi)
 
-  it('shows the formatting bar on the Vizuální tab', async () => {
+  it('shows the formatting bar on the Upravit tab', async () => {
     getNote.mockResolvedValue(note(''))
     renderNote()
     await screen.findByTestId('visual-editor')
@@ -373,7 +373,7 @@ describe('NoteView Vizuální toolbar', () => {
 })
 
 // WHERE THE CARET GOES. Someone who opens a blank page means to write on it, and on a
-// phone the caret is what raises the keyboard — without it the Vizuální tab lands you in
+// phone the caret is what raises the keyboard — without it the Upravit tab lands you in
 // an editor that needs a second tap before a single letter can be typed. A note that
 // already HAS text is the opposite case: it was opened to be read, and pulling the caret
 // into it would slide half of it under a keyboard nobody asked for.
@@ -448,7 +448,7 @@ describe('NoteView autofocus on an empty note', () => {
 
   // The OTHER re-seed the user never asked for: the one that waits for a pasted image's
   // upload. A note can be blank with an upload still in flight — paste an image, delete
-  // the node again — so re-entering Vizuální there arms the request and that re-seed at
+  // the node again — so re-entering Upravit there arms the request and that re-seed at
   // once, and the remount it performs must drop the request just as the adopt above does.
   it('does not grab the caret when the upload re-seed remounts the editor', async () => {
     // beginInlineImageUpload reads the pasted src's bytes with fetch(); jsdom has no
